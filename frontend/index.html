@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="cortana">
+<html lang="en" data-theme="halcy">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -48,18 +48,18 @@
             <div class="flex items-center gap-2">
                 <div class="w-3 h-3 rounded-full bg-cyan-400 box-glow-cyan animate-pulse"></div>
                 <h1 class="font-orbitron font-bold text-lg text-cyan-400 tracking-wider glow-cyan flex items-center gap-2">
-                    AETHER <span id="hud-agent-name" class="text-xs px-2 py-0.5 border border-cyan-500/50 rounded text-cyan-300 font-mono">CORTANA</span>
+                    AETHER <span id="hud-agent-name" class="text-xs px-2 py-0.5 border border-cyan-500/50 rounded text-cyan-300 font-mono">HALCY</span>
                 </h1>
             </div>
 
-            <!-- THEME PICKER PILLS -->
+            <!-- AVATAR PICKER PILLS -->
             <div class="hidden lg:flex items-center gap-1 bg-black/40 p-1 rounded border border-cyan-500/30 text-xs font-mono">
-                <span class="text-slate-400 px-1 text-[10px]">THEME:</span>
-                <button class="theme-pill px-2 py-0.5 rounded text-cyan-300 hover:bg-cyan-950/60" data-theme-val="cortana">🔷 Cortana</button>
-                <button class="theme-pill px-2 py-0.5 rounded text-green-400 hover:bg-green-950/60 font-bold" data-theme-val="nexus">🟢 The Nexus</button>
-                <button class="theme-pill px-2 py-0.5 rounded text-amber-400 hover:bg-amber-950/60 font-bold" data-theme-val="simaris">🔶 Simaris</button>
-                <button class="theme-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-theme-val="suda">🟣 Suda</button>
-                <button class="theme-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-theme-val="red">🔴 R.E.D. 9000</button>
+                <span class="text-slate-400 px-1 text-[10px]">AVATAR:</span>
+                <button class="avatar-pill px-2 py-0.5 rounded text-cyan-300 hover:bg-cyan-950/60" data-avatar-val="halcy">🔷 hAlcy</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-green-400 hover:bg-green-950/60 font-bold" data-avatar-val="nexus">🟢 The Nexus</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-amber-400 hover:bg-amber-950/60 font-bold" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-avatar-val="red">🔴 R.E.D. 9000</button>
             </div>
 
             <div class="flex items-center gap-2">
@@ -232,7 +232,7 @@
                     <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
                     <span class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">NEURAL DIALOGUE STREAM</span>
                 </div>
-                <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: CORTANA</span>
+                <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: HALCY</span>
             </div>
 
             <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
@@ -262,15 +262,27 @@
                 <button id="btn-close-settings" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
             </div>
 
-            <!-- SECTION: THEME SELECTOR -->
+            <!-- SECTION: AVATAR SELECTOR (3D shape) -->
             <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
-                <label class="text-xs font-mono text-cyan-300 block font-bold">🎨 VISUAL THEME & 3D AVATAR PRESET</label>
+                <label class="text-xs font-mono text-cyan-300 block font-bold">🎭 3D AVATAR PRESET</label>
                 <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                    <button class="theme-btn cyber-btn text-xs py-2 justify-center" data-theme="cortana">🔷 Cortana</button>
-                    <button class="theme-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-theme="nexus">🟢 The Nexus</button>
-                    <button class="theme-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-theme="simaris">🔶 Simaris</button>
-                    <button class="theme-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-theme="suda">🟣 Suda</button>
-                    <button class="theme-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-theme="red">🔴 R.E.D. 9000</button>
+                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center" data-avatar="halcy">🔷 hAlcy</button>
+                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-avatar="nexus">🟢 The Nexus</button>
+                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-avatar="arx-limes">🔶 A.R.X.LIMES</button>
+                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-avatar="arx-logos">🟣 A.R.X.LOGOS</button>
+                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-avatar="red">🔴 R.E.D. 9000</button>
+                </div>
+            </div>
+
+            <!-- SECTION: COLOR THEME SELECTOR (cosmetic palette, independent of avatar shape) -->
+            <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                <label class="text-xs font-mono text-cyan-300 block font-bold">🎨 COLOR THEME</label>
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center" data-color-theme="halcy">🔷 hAlcy Cyan</button>
+                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-color-theme="nexus">🟢 Nexus Green</button>
+                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-color-theme="arx-limes">🔶 A.R.X.LIMES Amber</button>
+                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 A.R.X.LOGOS Magenta</button>
+                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
                 </div>
             </div>
 
@@ -286,15 +298,15 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div class="space-y-1">
                         <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
-                        <input id="setting-agent-name" type="text" placeholder="e.g. CORTANA, R.E.D. 9000, THE NEXUS, SIMARIS" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                     <div class="space-y-1">
                         <label class="text-xs font-mono text-cyan-300 block">BASE PERSONA DIRECTIVE</label>
                         <select id="setting-persona" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="cortana">Cortana (Halo AI & Omarchy OS)</option>
+                            <option value="halcy">hAlcy (Holographic Adaptive Companion)</option>
                             <option value="red9000">R.E.D. 9000 (Reactive Engine Daemon)</option>
                             <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
-                            <option value="simaris">Cephalon Simaris (Warframe Sanctuary Synthesizer)</option>
+                            <option value="arx-limes">A.R.X.LIMES (Archival, Reasoning, matriX — Limes)</option>
                             <option value="tactical">Tactical Military HUD</option>
                             <option value="cyberpunk">Cyberpunk Netrunner</option>
                             <option value="custom">Custom Dynamic Directive</option>
@@ -375,10 +387,10 @@
                 <div class="space-y-1">
                     <label class="text-xs font-mono text-cyan-300 block">NEURAL VOICE SYNTHESIS</label>
                     <select id="setting-voice" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <option value="en-US-AriaNeural">en-US-AriaNeural (Cortana Primary)</option>
+                        <option value="en-US-AriaNeural">en-US-AriaNeural (hAlcy Primary)</option>
                         <option value="en-US-GuyNeural">en-US-GuyNeural (R.E.D. 9000 / Tactical)</option>
                         <option value="en-GB-SoniaNeural">en-GB-SoniaNeural (The Nexus / Sophisticated)</option>
-                        <option value="en-US-JennyNeural">en-US-JennyNeural (Cortana Alternative)</option>
+                        <option value="en-US-JennyNeural">en-US-JennyNeural (hAlcy Alternative)</option>
                         <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural (Cyberpunk Tokyo)</option>
                     </select>
                 </div>

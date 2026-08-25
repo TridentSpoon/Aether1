@@ -1,8 +1,8 @@
 """
-Generate Cyberpunk / Cortana & Cephalon Simaris Robot Emoticon Icons.
+Generate Cyberpunk / hAlcy & A.R.X.LIMES Robot Emoticon Icons.
 Creates high-resolution holographic Robot Emoticon (🤖) variants:
-- icon_cyan.png (Active / Standby - Cortana)
-- icon_gold.png (Cephalon Simaris Sanctuary Amber)
+- icon_cyan.png (Active / Standby - hAlcy)
+- icon_gold.png (A.R.X.LIMES Archival Amber)
 - icon_green.png (Voice Listening)
 - icon_purple.png (Thinking / Processing)
 - icon_amber.png (Alert / Offline)
@@ -95,9 +95,9 @@ def generate_robot_emoticon_icon(filename: str, primary_color: tuple, glow_color
     return out_path
 
 def generate_all_icons():
-    # Cortana Cyan (Default)
+    # hAlcy Cyan (Default)
     generate_robot_emoticon_icon("icon_cyan.png", (0, 240, 255, 255), (0, 180, 255, 180))
-    # Cephalon Simaris Sanctuary Gold/Amber
+    # A.R.X.LIMES Archival Gold/Amber
     generate_robot_emoticon_icon("icon_gold.png", (255, 170, 0, 255), (255, 100, 0, 180))
     # Voice Listening Green
     generate_robot_emoticon_icon("icon_green.png", (0, 255, 170, 255), (0, 255, 120, 180))

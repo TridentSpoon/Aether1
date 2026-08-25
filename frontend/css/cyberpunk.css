@@ -58,14 +58,14 @@
   --bg-grid-color: rgba(0, 255, 102, 0.04);
 }
 
-/* CEPHALON SIMARIS THEME (WARFRAME SANCTUARY GOLD & AMBER) */
-[data-theme="simaris"] {
+/* A.R.X.LIMES THEME (ARCHIVAL GOLD & AMBER) */
+[data-theme="arx-limes"] {
   --bg-core: #0e0600;
   --bg-panel: rgba(28, 13, 2, 0.8);
   --bg-panel-hover: rgba(45, 22, 4, 0.9);
   --border-neon: rgba(255, 170, 0, 0.4);
   --border-neon-bright: #ffaa00;
-  --neon-cyan: #ffaa00; /* Simaris Gold */
+  --neon-cyan: #ffaa00; /* A.R.X.LIMES Gold */
   --neon-blue: #ff6600;
   --neon-purple: #ff3300;
   --neon-green: #ffdd44;
@@ -77,8 +77,8 @@
   --bg-grid-color: rgba(255, 170, 0, 0.035);
 }
 
-/* CEPHALON SUDA / CYBERPUNK MAGENTA THEME */
-[data-theme="suda"] {
+/* A.R.X.LOGOS / CYBERPUNK MAGENTA THEME */
+[data-theme="arx-logos"] {
   --bg-core: #0b0214;
   --bg-panel: rgba(24, 6, 38, 0.8);
   --bg-panel-hover: rgba(38, 10, 60, 0.9);

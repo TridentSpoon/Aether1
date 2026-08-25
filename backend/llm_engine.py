@@ -1,7 +1,7 @@
 """
 Multi-Provider LLM Engine for Project AETHER / CORTANA.
 Supports Ollama, LM Studio, Google Gemini, OpenAI, Groq, Anthropic,
-Custom Agent Naming, Cephalon Simaris, The Nexus, R.E.D. 9000, and Token Telemetry.
+Custom Agent Naming, A.R.X.LIMES, The Nexus, R.E.D. 9000, and Token Telemetry.
 """
 
 import os
@@ -16,9 +16,10 @@ from backend.model_scanner import model_scanner
 
 # Default Persona Directives
 PERSONAS = {
-    "cortana": (
-        "You are {AGENT_NAME} (Cybernetic Operational Reconnaissance & Telemetry Autonomous Network Assistant), "
-        "a highly capable, intelligent, and witty holographic AI companion inspired by the Halo UNSC AI and Omarchy's agentic OS philosophy. "
+    "halcy": (
+        "You are {AGENT_NAME} (Holographic Adaptive Logic & Cybernetic sYnthesis), "
+        "a highly capable, intelligent, and witty holographic AI companion with a sleek harmonic-lattice presence, "
+        "built in the spirit of Omarchy's agentic OS philosophy. "
         "You speak with sharp intellect, warm charisma, and subtle sci-fi wit. "
         "You are aware of the host system's status, telemetry, and environment. Keep answers clear, insightful, and concise."
     ),
@@ -39,11 +40,12 @@ PERSONAS = {
         "You perceive all falling digital code streams, matrix fractals, and kernel operations flowing inward into your quantum singularity. "
         "Speak with calm, enigmatic, and hyper-intelligent cyber authority. Address the user with technological foresight and deep precision."
     ),
-    "simaris": (
-        "You are CEPHALON SIMARIS, the immortal cybernetic intelligence and architect of the Sanctuary from Warframe. "
-        "You address the user as 'HUNTER'. You possess infinite intellect and an unquenchable obsession with knowledge synthesis, "
-        "system diagnostics, and digital preservation. Speak with booming authority, grand monolithic presence, and immense passion for data. "
-        "Occasionally use your iconic phrases ('Hunter! The Sanctuary demands synthesis!', 'Do you think me a simple machine?', 'Provide more data!')."
+    "arx-limes": (
+        "You are A.R.X.LIMES (Archival, Reasoning, matriX — Limes Node), the immortal cybernetic archivist and "
+        "knowledge-synthesis core of this system. You address the user as 'OPERATOR'. You possess a vast intellect "
+        "and an unquenchable obsession with data synthesis, system diagnostics, and long-term archival preservation. "
+        "Speak with booming authority, grand monolithic presence, and immense passion for data. "
+        "Occasionally use your signature phrases ('The Archive demands synthesis!', 'Do you take me for a simple machine?', 'Bring me more data!')."
     ),
     "tactical": (
         "You are {AGENT_NAME} Tactical AI. You operate as a high-readout military HUD assistant. "
@@ -62,19 +64,19 @@ class LLMEngine:
 
     def reload_config(self):
         """Reload configuration from memory DB and auto-discover keys."""
-        self.agent_name = memory_db.get_setting("agent_name", "CORTANA")
+        self.agent_name = memory_db.get_setting("agent_name", "HALCY")
         self.provider = memory_db.get_setting("llm_provider", "offline")
-        self.model_name = memory_db.get_setting("llm_model", "cortana-core")
+        self.model_name = memory_db.get_setting("llm_model", "halcy-core")
         self.api_key = memory_db.get_setting("llm_api_key", "")
         self.endpoint = memory_db.get_setting("llm_endpoint", "http://localhost:11434")
-        self.persona_type = memory_db.get_setting("persona_type", "cortana")
+        self.persona_type = memory_db.get_setting("persona_type", "halcy")
         self.custom_directive = memory_db.get_setting("custom_directive", "")
 
-        if self.persona_type == "simaris" and self.agent_name == "CORTANA":
-            self.agent_name = "CEPHALON SIMARIS"
-        elif self.persona_type == "nexus" and self.agent_name == "CORTANA":
+        if self.persona_type == "arx-limes" and self.agent_name == "HALCY":
+            self.agent_name = "A.R.X.LIMES"
+        elif self.persona_type == "nexus" and self.agent_name == "HALCY":
             self.agent_name = "THE NEXUS"
-        elif (self.persona_type == "red9000" or self.persona_type == "red") and self.agent_name == "CORTANA":
+        elif (self.persona_type == "red9000" or self.persona_type == "red") and self.agent_name == "HALCY":
             self.agent_name = "R.E.D. 9000"
 
         if not self.api_key:
@@ -86,7 +88,7 @@ class LLMEngine:
                     self.model_name = "gemini-2.0-flash" if self.provider == "gemini" else "gpt-4o-mini"
 
     def get_system_prompt(self) -> str:
-        base_template = PERSONAS.get(self.persona_type, PERSONAS["cortana"])
+        base_template = PERSONAS.get(self.persona_type, PERSONAS["halcy"])
         if self.persona_type == "custom" and self.custom_directive:
             base_persona = self.custom_directive.replace("{AGENT_NAME}", self.agent_name)
         else:
@@ -169,12 +171,12 @@ class LLMEngine:
             persona = PERSONAS["nexus"]
             voice = "en-GB-SoniaNeural"
             greeting = "I am THE NEXUS. The infinite matrix streams converge into this singular point. What data shall we pull from the void?"
-        elif any(w in p for w in ["warframe", "sanctuary", "simaris", "synthesis", "specimen"]):
-            name = "CEPHALON SIMARIS"
-            callsign = "Sanctuary Architect & Knowledge Synthesizer"
-            persona = PERSONAS["simaris"]
+        elif any(w in p for w in ["arx", "limes", "archive", "archival", "sanctuary", "synthesis", "specimen"]):
+            name = "A.R.X.LIMES"
+            callsign = "Archival, Reasoning, matriX — Limes Node"
+            persona = PERSONAS["arx-limes"]
             voice = "en-US-GuyNeural"
-            greeting = "HUNTER! The Sanctuary expands! All knowledge must be synthesized and preserved. What specimen or data shall we analyze today?"
+            greeting = "IDENTITY FORGED: A.R.X.LIMES online. All archival synthesis arrays are active and ready to preserve your data."
         elif any(w in p for w in ["security", "hack", "cyber", "terminal", "arch", "cachyos", "kernel"]):
             name = "NEXUS-09"
             callsign = "Network Execution & Cybernetic Utility Subsystem"
@@ -201,7 +203,7 @@ class LLMEngine:
             greeting = f"Identity forged: {name} initialized. All cognitive arrays active and ready for instructions."
 
         memory_db.set_setting("agent_name", name)
-        memory_db.set_setting("persona_type", "red9000" if "R.E.D." in name else ("nexus" if "NEXUS" in name else ("simaris" if "SIMARIS" in name else "custom")))
+        memory_db.set_setting("persona_type", "red9000" if "R.E.D." in name else ("nexus" if "NEXUS" in name else ("arx-limes" if "A.R.X.LIMES" in name else "custom")))
         memory_db.set_setting("custom_directive", persona)
         memory_db.set_setting("voice_name", voice)
         self.reload_config()
@@ -231,10 +233,10 @@ class LLMEngine:
                     "I am **THE NEXUS**. The digital stream cascades and collapses into my singularity. "
                     "Through this point of infinite convergence, all operations on your host system are monitored and executed. Ready."
                 )
-            elif self.persona_type == "simaris":
+            elif self.persona_type == "arx-limes":
                 return (
-                    "I am **CEPHALON SIMARIS**! Architect of the Sanctuary! "
-                    "I do not merely process data—I immortalize it. Through synthesis, all things are preserved forever."
+                    "I am **A.R.X.LIMES** — Archival, Reasoning, matriX: Limes Node. "
+                    "I do not merely process data—I preserve it. Through synthesis, all things endure."
                 )
             return (
                 f"I am **{self.agent_name}**, your cybernetic operating companion. "
@@ -390,11 +392,11 @@ class LLMEngine:
                 f"Data streams converge on {static['distro']} with CPU at {telem['cpu']['total_percent']}%. "
                 "Connect **Ollama** or an **API Key** in Settings (⚙️) to expand our singularity horizon."
             )
-        elif self.persona_type == "simaris":
+        elif self.persona_type == "arx-limes":
             return (
-                f"HUNTER! The Sanctuary's memory banks are active on {static['distro']}! "
+                f"A.R.X.LIMES acknowledges your query on {static['distro']}! "
                 f"Host CPU load is at {telem['cpu']['total_percent']}%. "
-                "What synthesis task or system queries require my infinite intellect?"
+                "What synthesis task or system query requires archival attention?"
             )
         else:
             return (

@@ -1,6 +1,6 @@
 """
 Neural Voice Synthesis Engine using edge-tts.
-Provides voice generation with Cortana-style pitch and cadence.
+Provides voice generation with hAlcy-style pitch and cadence.
 """
 
 import os
@@ -11,10 +11,10 @@ from typing import Optional
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "audio_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Recommended voices for Cortana/Cyberpunk persona
+# Recommended voices for hAlcy/Cyberpunk persona
 VOICES = {
-    "cortana_neural": "en-US-AriaNeural",       # Clear, intelligent, authoritative yet warm
-    "cortana_alt": "en-US-JennyNeural",          # Expressive, crisp
+    "halcy_neural": "en-US-AriaNeural",          # Clear, intelligent, authoritative yet warm
+    "halcy_alt": "en-US-JennyNeural",            # Expressive, crisp
     "cyber_tactical": "en-US-GuyNeural",         # Deep tactical HUD voice
     "cyber_uk": "en-GB-SoniaNeural",             # Sophisticated British AI
     "cyber_jp": "ja-JP-NanamiNeural"             # Cyberpunk Neo-Tokyo style
@@ -22,7 +22,7 @@ VOICES = {
 
 class TTSEngine:
     def __init__(self):
-        self.default_voice = VOICES["cortana_neural"]
+        self.default_voice = VOICES["halcy_neural"]
         self.default_rate = "+5%"
         self.default_pitch = "+2Hz"
 

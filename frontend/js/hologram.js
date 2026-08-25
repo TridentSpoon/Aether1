@@ -1,36 +1,52 @@
 /**
  * 3D Holographic Avatar Engine (Three.js)
- * Supports:
- * 1. UNSC Cortana Harmonic Particle Lattice & Orbital Rings (Cyan/Blue)
- * 2. Cephalon Simaris Floating 3D Voxel Hypercubes & Crystalline Monolith (Warframe Amber)
- * 3. The Nexus: Inward Falling Digital Letters into a Gravitational Singularity (Matrix Green)
- * 4. R.E.D. 9000 (HAL 9000): Central Glowing Red Sphere with One Blue Circle and One Cyan Circle
- * 5. Cephalon Suda: Jagged Geometric Star with Magenta Particle Burst
+ * Avatars (3D shape) and Color Themes (palette) are independently selectable.
+ * Avatars:
+ * 1. hAlcy: Harmonic Particle Lattice & Orbital Rings
+ * 2. A.R.X.LIMES: Floating 3D Voxel Hypercubes & Crystalline Monolith
+ * 3. The Nexus: Inward Falling Particles into a Gravitational Singularity
+ * 4. R.E.D. 9000 (HAL 9000): Central Glowing Sphere with Two Orbit Circles
+ * 5. A.R.X.LOGOS: Jagged Geometric Star with Neon Particle Burst
  * 6. Real-time Audio Frequency and State deformation.
+ *
+ * Color Themes: halcy (cyan), nexus (green), arx-limes (amber), arx-logos (magenta), red (crimson)
+ * Any color theme can be applied to any avatar shape.
  */
+
+const THEME_PALETTES = {
+    halcy:      { r: 0.0, g: 0.9, b: 1.0, hex: 0x00f0ff, hex2: 0x00a2ff, hex3: 0xb026ff },
+    nexus:      { r: 0.1, g: 1.0, b: 0.4, hex: 0x00ff66, hex2: 0x00cc55, hex3: 0x00ffaa },
+    'arx-limes': { r: 1.0, g: 0.67, b: 0.0, hex: 0xffaa00, hex2: 0xff5500, hex3: 0xff3300 },
+    'arx-logos': { r: 0.88, g: 0.14, b: 0.76, hex: 0xe024c3, hex2: 0x9d00ff, hex3: 0xff00ff },
+    red:        { r: 1.0, g: 0.07, b: 0.13, hex: 0xff1133, hex2: 0x0066ff, hex3: 0x00f0ff }
+};
 
 class HologramAvatar {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.state = 'IDLE'; // IDLE, LISTENING, THINKING, SPEAKING
-        this.currentTheme = 'cortana'; // cortana, simaris, nexus, red/crimson, suda
+        this.currentAvatar = 'halcy'; // halcy, arx-limes, nexus, red, arx-logos
+        this.currentColorTheme = 'halcy'; // halcy, nexus, arx-limes, arx-logos, red
+        this.activePalette = THEME_PALETTES.halcy;
         this.audioData = new Uint8Array(64);
-        
+
         this.scene = null;
         this.camera = null;
         this.renderer = null;
-        
-        // 1. Cortana structures
+
+        // 1. hAlcy structures
         this.particleSystem = null;
         this.particleCount = 2800;
         this.basePositions = [];
         this.rings = [];
         this.coreOrb = null;
 
-        // 2. Cephalon Simaris structures
-        this.simarisGroup = null;
-        this.simarisCubes = [];
-        this.simarisCore = null;
+        // 2. A.R.X.LIMES structures
+        this.arxLimesGroup = null;
+        this.arxLimesCubes = [];
+        this.arxLimesCore = null;
+        this.arxLimesCrystalMat = null;
+        this.arxLimesCubeMat = null;
 
         // 3. The Nexus Matrix Singularity structures
         this.nexusGroup = null;
@@ -40,7 +56,7 @@ class HologramAvatar {
         this.nexusSingularity = null;
         this.nexusSingularityGlow = null;
 
-        // 4. R.E.D. 9000 / HAL 9000 structures (Central Red Sphere + Blue Circle + Cyan Circle)
+        // 4. R.E.D. 9000 / HAL 9000 structures (Central Sphere + Two Orbit Circles)
         this.redGroup = null;
         this.redCoreSphere = null;
         this.redLensOuter = null;
@@ -48,12 +64,13 @@ class HologramAvatar {
         this.redBlueCircle = null;
         this.redCyanCircle = null;
 
-        // 5. Cephalon Suda - Jagged Geometric Star
-        this.sudaGroup = null;
-        this.sudaStarPoints = [];
-        this.sudaInnerCore = null;
-        this.sudaRings = [];
-        
+        // 5. A.R.X.LOGOS - Jagged Geometric Star
+        this.arxLogosGroup = null;
+        this.arxLogosStarPoints = [];
+        this.arxLogosInnerCore = null;
+        this.arxLogosRings = [];
+        this.arxLogosSpikeMat = null;
+
         this.clock = null;
         this.mouseX = 0;
         this.mouseY = 0;
@@ -83,14 +100,15 @@ class HologramAvatar {
         this.clock = new THREE.Clock();
 
         // Build all avatar architectures
-        this.buildCortanaAvatar();
-        this.buildSimarisAvatar();
+        this.buildHalcyAvatar();
+        this.buildArxLimesAvatar();
         this.buildNexusAvatar();
         this.buildRed9000Avatar();
-        this.buildSudaAvatar();
+        this.buildArxLogosAvatar();
 
-        // Initial theme setup
-        this.setTheme(this.currentTheme);
+        // Initial avatar shape + color theme setup (independent of each other)
+        this.setAvatar(this.currentAvatar);
+        this.setColorTheme(this.currentColorTheme);
 
         window.addEventListener('mousemove', (e) => {
             this.mouseX = (e.clientX - window.innerWidth / 2) * 0.0005;
@@ -102,7 +120,22 @@ class HologramAvatar {
         this.animate();
     }
 
-    buildCortanaAvatar() {
+    // Shared soft glow sprite texture (theme-neutral white so vertex colors tint it cleanly)
+    createGlowSpriteTexture(size = 32) {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        gradient.addColorStop(0, 'rgba(255,255,255,1)');
+        gradient.addColorStop(0.3, 'rgba(255,255,255,0.8)');
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    buildHalcyAvatar() {
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(this.particleCount * 3);
         const colors = new Float32Array(this.particleCount * 3);
@@ -130,18 +163,7 @@ class HologramAvatar {
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-        const canvas = document.createElement('canvas');
-        canvas.width = 32;
-        canvas.height = 32;
-        const ctx = canvas.getContext('2d');
-        const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-        gradient.addColorStop(0, 'rgba(255,255,255,1)');
-        gradient.addColorStop(0.3, 'rgba(0,240,255,0.8)');
-        gradient.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, 32, 32);
-
-        const texture = new THREE.CanvasTexture(canvas);
+        const texture = this.createGlowSpriteTexture(32);
 
         const material = new THREE.PointsMaterial({
             size: 3.2,
@@ -191,9 +213,9 @@ class HologramAvatar {
         this.scene.add(this.coreOrb);
     }
 
-    buildSimarisAvatar() {
-        this.simarisGroup = new THREE.Group();
-        
+    buildArxLimesAvatar() {
+        this.arxLimesGroup = new THREE.Group();
+
         const coreGeom = new THREE.BoxGeometry(28, 28, 28);
         const coreMat = new THREE.MeshBasicMaterial({
             color: 0xffaa00,
@@ -202,21 +224,21 @@ class HologramAvatar {
             opacity: 0.8,
             blending: THREE.AdditiveBlending
         });
-        this.simarisCore = new THREE.Mesh(coreGeom, coreMat);
-        this.simarisGroup.add(this.simarisCore);
+        this.arxLimesCore = new THREE.Mesh(coreGeom, coreMat);
+        this.arxLimesGroup.add(this.arxLimesCore);
 
         const crystalGeom = new THREE.OctahedronGeometry(14, 0);
-        const crystalMat = new THREE.MeshBasicMaterial({
+        this.arxLimesCrystalMat = new THREE.MeshBasicMaterial({
             color: 0xff5500,
             transparent: true,
             opacity: 0.9,
             blending: THREE.AdditiveBlending
         });
-        const crystal = new THREE.Mesh(crystalGeom, crystalMat);
-        this.simarisCore.add(crystal);
+        const crystal = new THREE.Mesh(crystalGeom, this.arxLimesCrystalMat);
+        this.arxLimesCore.add(crystal);
 
         const cubeGeom = new THREE.BoxGeometry(8, 8, 8);
-        const cubeMat = new THREE.MeshBasicMaterial({
+        this.arxLimesCubeMat = new THREE.MeshBasicMaterial({
             color: 0xffaa00,
             wireframe: true,
             transparent: true,
@@ -226,7 +248,7 @@ class HologramAvatar {
 
         const numCubes = 54;
         for (let i = 0; i < numCubes; i++) {
-            const cube = new THREE.Mesh(cubeGeom, cubeMat);
+            const cube = new THREE.Mesh(cubeGeom, this.arxLimesCubeMat);
             const radius = 45 + (i % 3) * 22;
             const phi = Math.acos(-1 + (2 * i) / numCubes);
             const theta = Math.sqrt(numCubes * Math.PI) * phi;
@@ -244,11 +266,11 @@ class HologramAvatar {
                 rotSpeedY: (Math.random() - 0.5) * 0.04,
                 radius: radius
             };
-            this.simarisCubes.push(cube);
-            this.simarisGroup.add(cube);
+            this.arxLimesCubes.push(cube);
+            this.arxLimesGroup.add(cube);
         }
 
-        this.scene.add(this.simarisGroup);
+        this.scene.add(this.arxLimesGroup);
     }
 
     buildNexusAvatar() {
@@ -276,21 +298,7 @@ class HologramAvatar {
         this.nexusSingularityGlow = new THREE.Mesh(haloGeom, haloMat);
         this.nexusGroup.add(this.nexusSingularityGlow);
 
-        const canvas = document.createElement('canvas');
-        canvas.width = 64;
-        canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, 64, 64);
-        ctx.font = 'bold 36px monospace';
-        ctx.fillStyle = '#00ff66';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.shadowColor = '#00ffaa';
-        ctx.shadowBlur = 10;
-        ctx.fillText('0', 32, 32);
-
-        const matrixTexture = new THREE.CanvasTexture(canvas);
+        const matrixTexture = this.createGlowSpriteTexture(64);
 
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(this.nexusParticleCount * 3);
@@ -344,7 +352,7 @@ class HologramAvatar {
     buildRed9000Avatar() {
         this.redGroup = new THREE.Group();
 
-        // 1. Central Glowing Red Sphere (HAL / Reactive Daemon Eye)
+        // 1. Central Glowing Sphere (HAL / Reactive Daemon Eye)
         const coreGeom = new THREE.SphereGeometry(26, 32, 32);
         const coreMat = new THREE.MeshBasicMaterial({
             color: 0xff1133,
@@ -377,7 +385,7 @@ class HologramAvatar {
         this.redPupil = new THREE.Mesh(pupilGeom, pupilMat);
         this.redGroup.add(this.redPupil);
 
-        // 2. One Electric Blue Circle (Ring 1)
+        // 2. First Orbit Circle (Ring 1)
         const blueGeom = new THREE.RingGeometry(64, 67, 64);
         const blueMat = new THREE.MeshBasicMaterial({
             color: 0x0066ff,
@@ -392,7 +400,7 @@ class HologramAvatar {
         this.redBlueCircle.userData = { speed: 0.018 };
         this.redGroup.add(this.redBlueCircle);
 
-        // 3. One Neon Cyan Circle (Ring 2)
+        // 3. Second Orbit Circle (Ring 2)
         const cyanGeom = new THREE.RingGeometry(84, 87, 64);
         const cyanMat = new THREE.MeshBasicMaterial({
             color: 0x00f0ff,
@@ -410,11 +418,11 @@ class HologramAvatar {
         this.scene.add(this.redGroup);
     }
 
-    buildSudaAvatar() {
-        this.sudaGroup = new THREE.Group();
+    buildArxLogosAvatar() {
+        this.arxLogosGroup = new THREE.Group();
 
         // Jagged Geometric Star — built from sharp spike tetrahedra radiating from center
-        const spikeMat = new THREE.MeshBasicMaterial({
+        this.arxLogosSpikeMat = new THREE.MeshBasicMaterial({
             color: 0xe024c3,
             wireframe: true,
             transparent: true,
@@ -427,7 +435,7 @@ class HologramAvatar {
             // Each spike is a narrow cone (tetrahedron) pointing outward
             const height = 55 + (i % 3) * 20; // jagged varying lengths
             const coneGeom = new THREE.ConeGeometry(6 + (i % 3) * 3, height, 4); // 4 sides = diamond spike
-            const spike = new THREE.Mesh(coneGeom, spikeMat);
+            const spike = new THREE.Mesh(coneGeom, this.arxLogosSpikeMat);
 
             // Distribute spikes in a star sphere pattern
             const phi = Math.acos(-1 + (2 * i) / spikeCount);
@@ -452,8 +460,8 @@ class HologramAvatar {
                 len: height
             };
 
-            this.sudaStarPoints.push(spike);
-            this.sudaGroup.add(spike);
+            this.arxLogosStarPoints.push(spike);
+            this.arxLogosGroup.add(spike);
         }
 
         // Inner dense core — compressed icosahedron
@@ -465,10 +473,10 @@ class HologramAvatar {
             opacity: 0.85,
             blending: THREE.AdditiveBlending
         });
-        this.sudaInnerCore = new THREE.Mesh(coreGeom, coreMat);
-        this.sudaGroup.add(this.sudaInnerCore);
+        this.arxLogosInnerCore = new THREE.Mesh(coreGeom, coreMat);
+        this.arxLogosGroup.add(this.arxLogosInnerCore);
 
-        // Two thin magenta orbit rings around the star
+        // Two thin orbit rings around the star
         const ring1Geom = new THREE.RingGeometry(90, 92, 48);
         const ring1Mat = new THREE.MeshBasicMaterial({
             color: 0xe024c3,
@@ -477,11 +485,11 @@ class HologramAvatar {
             opacity: 0.55,
             blending: THREE.AdditiveBlending
         });
-        const sudaRing1 = new THREE.Mesh(ring1Geom, ring1Mat);
-        sudaRing1.rotation.x = 0.5;
-        sudaRing1.userData = { speed: 0.022 };
-        this.sudaRings.push(sudaRing1);
-        this.sudaGroup.add(sudaRing1);
+        const arxLogosRing1 = new THREE.Mesh(ring1Geom, ring1Mat);
+        arxLogosRing1.rotation.x = 0.5;
+        arxLogosRing1.userData = { speed: 0.022 };
+        this.arxLogosRings.push(arxLogosRing1);
+        this.arxLogosGroup.add(arxLogosRing1);
 
         const ring2Geom = new THREE.RingGeometry(110, 112, 48);
         const ring2Mat = new THREE.MeshBasicMaterial({
@@ -491,35 +499,80 @@ class HologramAvatar {
             opacity: 0.45,
             blending: THREE.AdditiveBlending
         });
-        const sudaRing2 = new THREE.Mesh(ring2Geom, ring2Mat);
-        sudaRing2.rotation.x = -0.9;
-        sudaRing2.rotation.y = 0.6;
-        sudaRing2.userData = { speed: -0.016 };
-        this.sudaRings.push(sudaRing2);
-        this.sudaGroup.add(sudaRing2);
+        const arxLogosRing2 = new THREE.Mesh(ring2Geom, ring2Mat);
+        arxLogosRing2.rotation.x = -0.9;
+        arxLogosRing2.rotation.y = 0.6;
+        arxLogosRing2.userData = { speed: -0.016 };
+        this.arxLogosRings.push(arxLogosRing2);
+        this.arxLogosGroup.add(arxLogosRing2);
 
-        this.scene.add(this.sudaGroup);
+        this.scene.add(this.arxLogosGroup);
     }
 
-    setTheme(theme) {
-        this.currentTheme = theme;
-        const isSimaris = theme === 'simaris';
-        const isNexus = theme === 'nexus' || theme === 'matrix';
-        const isRed = theme === 'red' || theme === 'crimson';
-        const isSuda = theme === 'suda';
-        const isCortana = !isSimaris && !isNexus && !isRed && !isSuda;
+    // Which 3D shape is visible / animated. Independent of color theme.
+    setAvatar(avatar) {
+        this.currentAvatar = avatar;
+        const isArxLimes = avatar === 'arx-limes';
+        const isNexus = avatar === 'nexus' || avatar === 'matrix';
+        const isRed = avatar === 'red' || avatar === 'crimson';
+        const isArxLogos = avatar === 'arx-logos';
+        const isHalcy = !isArxLimes && !isNexus && !isRed && !isArxLogos;
 
-        // Toggle visibility
-        if (this.particleSystem) this.particleSystem.visible = isCortana;
-        this.rings.forEach(r => r.visible = isCortana);
-        if (this.coreOrb) this.coreOrb.visible = isCortana;
+        if (this.particleSystem) this.particleSystem.visible = isHalcy;
+        this.rings.forEach(r => r.visible = isHalcy);
+        if (this.coreOrb) this.coreOrb.visible = isHalcy;
 
-        if (this.simarisGroup) this.simarisGroup.visible = isSimaris;
+        if (this.arxLimesGroup) this.arxLimesGroup.visible = isArxLimes;
         if (this.nexusGroup) this.nexusGroup.visible = isNexus;
         if (this.redGroup) this.redGroup.visible = isRed;
-        if (this.sudaGroup) this.sudaGroup.visible = isSuda;
+        if (this.arxLogosGroup) this.arxLogosGroup.visible = isArxLogos;
     }
 
+    // Which color palette tints the currently active (and future) avatar shapes.
+    setColorTheme(theme) {
+        this.currentColorTheme = theme;
+        this.applyColorPalette();
+    }
+
+    applyColorPalette() {
+        const p = THEME_PALETTES[this.currentColorTheme] || THEME_PALETTES.halcy;
+        this.activePalette = p;
+
+        // hAlcy particle lattice + rings + core
+        if (this.particleSystem) {
+            const colors = this.particleSystem.geometry.attributes.color.array;
+            for (let i = 0; i < this.particleCount; i++) {
+                colors[i * 3] = p.r;
+                colors[i * 3 + 1] = Math.min(1, p.g + Math.random() * 0.15);
+                colors[i * 3 + 2] = p.b;
+            }
+            this.particleSystem.geometry.attributes.color.needsUpdate = true;
+        }
+        if (this.rings[0]) this.rings[0].material.color.setHex(p.hex);
+        if (this.rings[1]) this.rings[1].material.color.setHex(p.hex2);
+        if (this.rings[2]) this.rings[2].material.color.setHex(p.hex3);
+        if (this.coreOrb) this.coreOrb.material.color.setHex(p.hex);
+
+        // Nexus glow halo (particle stream colors are recomputed per-frame from activePalette)
+        if (this.nexusSingularityGlow) this.nexusSingularityGlow.material.color.setHex(p.hex);
+
+        // A.R.X.LIMES voxel cubes
+        if (this.arxLimesCore) this.arxLimesCore.material.color.setHex(p.hex);
+        if (this.arxLimesCrystalMat) this.arxLimesCrystalMat.color.setHex(p.hex2);
+        if (this.arxLimesCubeMat) this.arxLimesCubeMat.color.setHex(p.hex);
+
+        // A.R.X.LOGOS jagged star
+        if (this.arxLogosSpikeMat) this.arxLogosSpikeMat.color.setHex(p.hex);
+        if (this.arxLogosInnerCore) this.arxLogosInnerCore.material.color.setHex(p.hex3);
+        if (this.arxLogosRings[0]) this.arxLogosRings[0].material.color.setHex(p.hex);
+        if (this.arxLogosRings[1]) this.arxLogosRings[1].material.color.setHex(p.hex2);
+
+        // R.E.D. 9000
+        if (this.redCoreSphere) this.redCoreSphere.material.color.setHex(p.hex);
+        if (this.redLensOuter) this.redLensOuter.material.color.setHex(p.hex);
+        if (this.redBlueCircle) this.redBlueCircle.material.color.setHex(p.hex2);
+        if (this.redCyanCircle) this.redCyanCircle.material.color.setHex(p.hex3);
+    }
 
     setState(newState) {
         this.state = newState;
@@ -533,24 +586,24 @@ class HologramAvatar {
         requestAnimationFrame(() => this.animate());
 
         const elapsedTime = this.clock.getElapsedTime();
-        
+
         let audioSum = 0;
         for (let i = 0; i < 16; i++) {
             audioSum += this.audioData[i] || 0;
         }
         const audioIntensity = audioSum / (16 * 255);
 
-        if (this.currentTheme === 'suda') {
+        if (this.currentAvatar === 'arx-logos') {
             // ==============================================================
-            // CEPHALON SUDA: JAGGED GEOMETRIC STAR WITH MAGENTA NEON SPIKES
+            // A.R.X.LOGOS: JAGGED GEOMETRIC STAR WITH NEON SPIKES
             // ==============================================================
-            if (this.sudaGroup) {
-                this.sudaGroup.rotation.y += 0.007 + (this.state === 'THINKING' ? 0.03 : 0);
-                this.sudaGroup.rotation.x = Math.sin(elapsedTime * 0.5) * 0.12 + this.mouseY;
-                this.sudaGroup.rotation.z = Math.cos(elapsedTime * 0.4) * 0.06 + this.mouseX;
+            if (this.arxLogosGroup) {
+                this.arxLogosGroup.rotation.y += 0.007 + (this.state === 'THINKING' ? 0.03 : 0);
+                this.arxLogosGroup.rotation.x = Math.sin(elapsedTime * 0.5) * 0.12 + this.mouseY;
+                this.arxLogosGroup.rotation.z = Math.cos(elapsedTime * 0.4) * 0.06 + this.mouseX;
             }
 
-            if (this.sudaInnerCore) {
+            if (this.arxLogosInnerCore) {
                 let coreScale = 1.0;
                 if (this.state === 'SPEAKING') {
                     coreScale = 1.0 + audioIntensity * 1.4;
@@ -559,13 +612,13 @@ class HologramAvatar {
                 } else {
                     coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.12;
                 }
-                this.sudaInnerCore.scale.set(coreScale, coreScale, coreScale);
-                this.sudaInnerCore.rotation.y += 0.025;
-                this.sudaInnerCore.rotation.x += 0.015;
+                this.arxLogosInnerCore.scale.set(coreScale, coreScale, coreScale);
+                this.arxLogosInnerCore.rotation.y += 0.025;
+                this.arxLogosInnerCore.rotation.x += 0.015;
             }
 
             // Animate each spike — jagged pulsing outward
-            this.sudaStarPoints.forEach((spike, idx) => {
+            this.arxLogosStarPoints.forEach((spike, idx) => {
                 let pulseFactor = 1.0;
                 if (this.state === 'SPEAKING') {
                     const fVal = (this.audioData[idx % 16] || 0) / 255;
@@ -584,20 +637,20 @@ class HologramAvatar {
 
             // Orbit rings
             const sRingSpeed = this.state === 'THINKING' ? 3.5 : (this.state === 'SPEAKING' ? 1.8 : 1.0);
-            this.sudaRings.forEach(ring => {
+            this.arxLogosRings.forEach(ring => {
                 ring.rotation.z += ring.userData.speed * sRingSpeed;
             });
 
-        } else if (this.currentTheme === 'red' || this.currentTheme === 'crimson') {
+        } else if (this.currentAvatar === 'red' || this.currentAvatar === 'crimson') {
             // ==============================================================
-            // R.E.D. 9000: CENTRAL RED SPHERE + BLUE CIRCLE + CYAN CIRCLE
+            // R.E.D. 9000: CENTRAL SPHERE + TWO ORBIT CIRCLES
             // ==============================================================
             if (this.redGroup) {
                 this.redGroup.rotation.y = Math.sin(elapsedTime * 0.3) * 0.15 + this.mouseY;
                 this.redGroup.rotation.x = Math.sin(elapsedTime * 0.2) * 0.1 + this.mouseX;
             }
 
-            // Central Red Sphere Pulse with Audio / State
+            // Central Sphere Pulse with Audio / State
             if (this.redCoreSphere) {
                 let coreScale = 1.0;
                 if (this.state === 'SPEAKING') {
@@ -622,7 +675,7 @@ class HologramAvatar {
                 this.redPupil.scale.set(pupilScale, pupilScale, pupilScale);
             }
 
-            // Rotating Blue and Cyan Circles
+            // Rotating Orbit Circles
             const ringSpeedMult = this.state === 'THINKING' ? 3.8 : (this.state === 'SPEAKING' ? 1.8 : 1.0);
 
             if (this.redBlueCircle) {
@@ -635,9 +688,9 @@ class HologramAvatar {
                 this.redCyanCircle.rotation.y = 0.9 + Math.cos(elapsedTime * 0.8) * 0.1;
             }
 
-        } else if (this.currentTheme === 'nexus' || this.currentTheme === 'matrix') {
+        } else if (this.currentAvatar === 'nexus' || this.currentAvatar === 'matrix') {
             // ==============================================================
-            // THE NEXUS: INWARD FALLING LETTERS & GRAVITATIONAL SINGULARITY
+            // THE NEXUS: INWARD FALLING PARTICLES & GRAVITATIONAL SINGULARITY
             // ==============================================================
             if (this.nexusGroup) {
                 this.nexusGroup.rotation.y += 0.005 + (this.state === 'THINKING' ? 0.02 : 0);
@@ -667,6 +720,7 @@ class HologramAvatar {
             if (this.nexusParticles) {
                 const positions = this.nexusParticles.geometry.attributes.position.array;
                 const colors = this.nexusParticles.geometry.attributes.color.array;
+                const pal = this.activePalette || THEME_PALETTES.halcy;
 
                 const speedMult = this.state === 'THINKING' ? 2.5 : (this.state === 'SPEAKING' ? 1.5 : 1.0);
 
@@ -692,30 +746,30 @@ class HologramAvatar {
                     positions[i * 3 + 2] = z;
 
                     const brightness = Math.min(1.0, 1.2 - (data.radius / 150));
-                    colors[i * 3] = 0.1 * brightness;
-                    colors[i * 3 + 1] = brightness;
-                    colors[i * 3 + 2] = 0.4 * brightness;
+                    colors[i * 3] = pal.r * brightness;
+                    colors[i * 3 + 1] = pal.g * brightness;
+                    colors[i * 3 + 2] = pal.b * brightness;
                 }
 
                 this.nexusParticles.geometry.attributes.position.needsUpdate = true;
                 this.nexusParticles.geometry.attributes.color.needsUpdate = true;
             }
 
-        } else if (this.currentTheme === 'simaris') {
+        } else if (this.currentAvatar === 'arx-limes') {
             // ==========================================
-            // CEPHALON SIMARIS (WARFRAME VOXEL CUBES)
+            // A.R.X.LIMES (VOXEL CUBES)
             // ==========================================
-            if (this.simarisGroup) {
+            if (this.arxLimesGroup) {
                 let groupRotSpeed = 0.006;
                 if (this.state === 'THINKING') groupRotSpeed = 0.035;
                 if (this.state === 'SPEAKING') groupRotSpeed = 0.015;
 
-                this.simarisGroup.rotation.y += groupRotSpeed;
-                this.simarisGroup.rotation.x = Math.sin(elapsedTime * 0.5) * 0.15 + this.mouseY;
-                this.simarisGroup.rotation.z = this.mouseX;
+                this.arxLimesGroup.rotation.y += groupRotSpeed;
+                this.arxLimesGroup.rotation.x = Math.sin(elapsedTime * 0.5) * 0.15 + this.mouseY;
+                this.arxLimesGroup.rotation.z = this.mouseX;
             }
 
-            if (this.simarisCore) {
+            if (this.arxLimesCore) {
                 let coreScale = 1.0;
                 if (this.state === 'SPEAKING') {
                     coreScale = 1.0 + audioIntensity * 1.2;
@@ -724,12 +778,12 @@ class HologramAvatar {
                 } else {
                     coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.15;
                 }
-                this.simarisCore.scale.set(coreScale, coreScale, coreScale);
-                this.simarisCore.rotation.x += 0.02;
-                this.simarisCore.rotation.y += 0.03;
+                this.arxLimesCore.scale.set(coreScale, coreScale, coreScale);
+                this.arxLimesCore.rotation.x += 0.02;
+                this.arxLimesCore.rotation.y += 0.03;
             }
 
-            this.simarisCubes.forEach((cube, idx) => {
+            this.arxLimesCubes.forEach((cube, idx) => {
                 cube.rotation.x += cube.userData.rotSpeedX;
                 cube.rotation.y += cube.userData.rotSpeedY;
 
@@ -750,11 +804,11 @@ class HologramAvatar {
 
         } else {
             // ==========================================
-            // CORTANA / DEFAULT PARTICLE ANIMATIONS
+            // HALCY / DEFAULT PARTICLE ANIMATIONS
             // ==========================================
             if (this.particleSystem) {
                 const positions = this.particleSystem.geometry.attributes.position.array;
-                
+
                 for (let i = 0; i < this.particleCount; i++) {
                     const base = this.basePositions[i];
                     let displacement = 0;

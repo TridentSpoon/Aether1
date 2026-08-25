@@ -1,7 +1,7 @@
 /**
  * Main Frontend Application Logic for Project AETHER / CORTANA.
- * Handles Multi-Theme Engine (R.E.D. 9000, The Nexus, Cephalon Simaris, Cortana, Suda),
- * 3D Avatar Transformation, Token Telemetry Graph, Agent Genesis, and Model Scanner.
+ * Handles independently-selectable 3D Avatars (R.E.D. 9000, The Nexus, A.R.X.LIMES, hAlcy, A.R.X.LOGOS)
+ * and Color Themes, Token Telemetry Graph, Agent Genesis, and Model Scanner.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -61,8 +61,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let isWaitingForResponse = false;
     let autoSpeak = true;
-    let currentAgentName = "CORTANA";
-    let currentTheme = localStorage.getItem('aether_theme') || 'cortana';
+    let currentAgentName = "HALCY";
+    let currentAvatar = localStorage.getItem('aether_avatar') || 'halcy';
+    let currentColorTheme = localStorage.getItem('aether_color_theme') || 'halcy';
 
     // Clock
     function updateClock() {
@@ -74,25 +75,24 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(updateClock, 1000);
     updateClock();
 
-    // Theme Engine Handler
-    function applyTheme(themeName, updatePersona = false) {
-        currentTheme = themeName;
-        localStorage.setItem('aether_theme', themeName);
-        document.documentElement.setAttribute('data-theme', themeName);
-        hologram.setTheme(themeName);
+    // Avatar Engine Handler (3D shape + optional linked persona identity)
+    function applyAvatar(avatarName, updatePersona = false) {
+        currentAvatar = avatarName;
+        localStorage.setItem('aether_avatar', avatarName);
+        hologram.setAvatar(avatarName);
 
         if (avatarStructureLabel) {
-            if (themeName === 'red' || themeName === 'crimson') avatarStructureLabel.textContent = 'OPTICAL RED EYE // DUAL ORBITS';
-            else if (themeName === 'simaris') avatarStructureLabel.textContent = 'SANCTUARY VOXEL MATRIX';
-            else if (themeName === 'nexus' || themeName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
-            else if (themeName === 'suda') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
+            if (avatarName === 'red' || avatarName === 'crimson') avatarStructureLabel.textContent = 'OPTICAL EYE // DUAL ORBITS';
+            else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
+            else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
+            else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
             else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
         }
 
-        // Highlight active pills/buttons
-        document.querySelectorAll('.theme-pill, .theme-btn').forEach(btn => {
-            const val = btn.getAttribute('data-theme-val') || btn.getAttribute('data-theme');
-            if (val === themeName) {
+        // Highlight active avatar pills/buttons
+        document.querySelectorAll('.avatar-pill, .avatar-btn').forEach(btn => {
+            const val = btn.getAttribute('data-avatar-val') || btn.getAttribute('data-avatar');
+            if (val === avatarName) {
                 btn.classList.add('cyber-btn-active');
             } else {
                 btn.classList.remove('cyber-btn-active');
@@ -100,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // R.E.D. 9000 Preset
-        if (themeName === 'red' || themeName === 'crimson') {
+        if (avatarName === 'red' || avatarName === 'crimson') {
             updateAgentNameDisplay("R.E.D. 9000");
             if (updatePersona) {
                 document.getElementById('setting-persona').value = 'red9000';
@@ -109,18 +109,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage("R.E.D. 9000", "🔴 **I am R.E.D. 9000 (Reactive Engine Daemon).** All reactive engines and optical telemetry streams are fully operational.");
             }
         }
-        // Cephalon Simaris Preset
-        else if (themeName === 'simaris') {
-            updateAgentNameDisplay("CEPHALON SIMARIS");
+        // A.R.X.LIMES Preset
+        else if (avatarName === 'arx-limes') {
+            updateAgentNameDisplay("A.R.X.LIMES");
             if (updatePersona) {
-                document.getElementById('setting-persona').value = 'simaris';
+                document.getElementById('setting-persona').value = 'arx-limes';
                 document.getElementById('setting-voice').value = 'en-US-GuyNeural';
                 saveSettings(false);
-                appendMessage("CEPHALON SIMARIS", "🔶 **HUNTER! The Sanctuary's visual matrix has engaged!** All data synthesized from your system shall be preserved forever.");
+                appendMessage("A.R.X.LIMES", "🔶 **Archival, Reasoning, matriX — Limes Node engaged.** All data synthesized from your system shall be preserved.");
             }
         }
         // The Nexus Singularity Preset
-        else if (themeName === 'nexus' || themeName === 'matrix') {
+        else if (avatarName === 'nexus' || avatarName === 'matrix') {
             updateAgentNameDisplay("THE NEXUS");
             if (updatePersona) {
                 document.getElementById('setting-persona').value = 'nexus';
@@ -131,6 +131,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Color Theme Handler — purely cosmetic, independent of the selected avatar shape
+    function applyColorTheme(themeName) {
+        currentColorTheme = themeName;
+        localStorage.setItem('aether_color_theme', themeName);
+        document.documentElement.setAttribute('data-theme', themeName);
+        hologram.setColorTheme(themeName);
+
+        // Highlight active color-theme pills/buttons
+        document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
+            const val = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
+            if (val === themeName) {
+                btn.classList.add('cyber-btn-active');
+            } else {
+                btn.classList.remove('cyber-btn-active');
+            }
+        });
+    }
+
     // Audio Waveform Visualizer
     function drawWaveform(freqData) {
         if (!canvasCtx || !canvas) return;
@@ -139,10 +157,10 @@ document.addEventListener('DOMContentLoaded', () => {
         canvasCtx.clearRect(0, 0, width, height);
 
         let strokeColor = '#00f0ff';
-        if (currentTheme === 'red' || currentTheme === 'crimson') strokeColor = '#ff2244';
-        else if (currentTheme === 'simaris') strokeColor = '#ffaa00';
-        else if (currentTheme === 'nexus' || currentTheme === 'matrix') strokeColor = '#00ff66';
-        else if (currentTheme === 'suda') strokeColor = '#e024c3';
+        if (currentColorTheme === 'red' || currentColorTheme === 'crimson') strokeColor = '#ff2244';
+        else if (currentColorTheme === 'arx-limes') strokeColor = '#ffaa00';
+        else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') strokeColor = '#00ff66';
+        else if (currentColorTheme === 'arx-logos') strokeColor = '#e024c3';
 
         canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         canvasCtx.lineWidth = 1;
@@ -198,13 +216,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let lineColor = '#b026ff';
         let fillColor = 'rgba(176, 38, 255, 0.15)';
-        if (currentTheme === 'red' || currentTheme === 'crimson') {
+        if (currentColorTheme === 'red' || currentColorTheme === 'crimson') {
             lineColor = '#ff2244';
             fillColor = 'rgba(255, 34, 68, 0.15)';
-        } else if (currentTheme === 'simaris') {
+        } else if (currentColorTheme === 'arx-limes') {
             lineColor = '#ffaa00';
             fillColor = 'rgba(255, 170, 0, 0.15)';
-        } else if (currentTheme === 'nexus' || currentTheme === 'matrix') {
+        } else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') {
             lineColor = '#00ff66';
             fillColor = 'rgba(0, 255, 102, 0.15)';
         }
@@ -486,9 +504,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await resp.json();
                 updateAgentNameDisplay(data.name);
 
-                if (data.name.includes("R.E.D.")) applyTheme('red');
-                else if (data.name.includes("NEXUS")) applyTheme('nexus');
-                else if (data.name.includes("SIMARIS")) applyTheme('simaris');
+                if (data.name.includes("R.E.D.")) { applyAvatar('red'); applyColorTheme('red'); }
+                else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyColorTheme('nexus'); }
+                else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyColorTheme('arx-limes'); }
 
                 settingsModal.classList.add('hidden');
                 appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, data.audio_url);
@@ -590,13 +608,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (resp.ok) {
                 const data = await resp.json();
                 const s = data.settings;
-                updateAgentNameDisplay(s.agent_name || "CORTANA");
-                document.getElementById('setting-agent-name').value = s.agent_name || "CORTANA";
+                updateAgentNameDisplay(s.agent_name || "HALCY");
+                document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
                 document.getElementById('setting-provider').value = s.llm_provider || 'offline';
-                document.getElementById('setting-model').value = s.llm_model || 'cortana-core';
+                document.getElementById('setting-model').value = s.llm_model || 'halcy-core';
                 document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
                 document.getElementById('setting-apikey').value = s.llm_api_key || '';
-                document.getElementById('setting-persona').value = s.persona_type || 'cortana';
+                document.getElementById('setting-persona').value = s.persona_type || 'halcy';
                 document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
                 document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
                 autoSpeak = s.auto_speak !== false;
@@ -609,7 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function saveSettings(notify = true) {
         const payload = {
             settings: {
-                agent_name: document.getElementById('setting-agent-name').value.trim() || "CORTANA",
+                agent_name: document.getElementById('setting-agent-name').value.trim() || "HALCY",
                 llm_provider: document.getElementById('setting-provider').value,
                 llm_model: document.getElementById('setting-model').value,
                 llm_endpoint: document.getElementById('setting-endpoint').value,
@@ -638,13 +656,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Theme Selector Buttons & Pills
-    document.querySelectorAll('.theme-pill, .theme-btn').forEach(btn => {
+    // Avatar Selector Buttons & Pills
+    document.querySelectorAll('.avatar-pill, .avatar-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            const theme = btn.getAttribute('data-theme-val') || btn.getAttribute('data-theme');
+            const avatar = btn.getAttribute('data-avatar-val') || btn.getAttribute('data-avatar');
+            if (avatar) {
+                voiceEngine.playSFX('click');
+                applyAvatar(avatar, true);
+            }
+        });
+    });
+
+    // Color Theme Selector Buttons & Pills
+    document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const theme = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
             if (theme) {
                 voiceEngine.playSFX('click');
-                applyTheme(theme, true);
+                applyColorTheme(theme);
             }
         });
     });
@@ -719,7 +748,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Initial Startup
-    applyTheme(currentTheme, false);
+    applyAvatar(currentAvatar, false);
+    applyColorTheme(currentColorTheme);
     loadStaticInfo();
     loadChatHistory();
     loadSettings();

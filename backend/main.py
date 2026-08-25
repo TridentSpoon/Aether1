@@ -183,12 +183,12 @@ async def delete_memory(key: str):
 async def get_settings():
     current_settings = memory_db.get_all_settings()
     defaults = {
-        "agent_name": "CORTANA",
+        "agent_name": "HALCY",
         "llm_provider": "offline",
-        "llm_model": "cortana-core",
+        "llm_model": "halcy-core",
         "llm_endpoint": "http://localhost:11434",
         "llm_api_key": "",
-        "persona_type": "cortana",
+        "persona_type": "halcy",
         "custom_directive": "",
         "voice_name": "en-US-AriaNeural",
         "enable_sfx": True,

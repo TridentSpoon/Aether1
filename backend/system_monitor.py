@@ -155,7 +155,7 @@ class SystemMonitor:
         return procs[:limit]
 
     def get_diagnostic_report(self) -> str:
-        """Generate a concise Cortana-styled tactical diagnostic report."""
+        """Generate a concise hAlcy-styled tactical diagnostic report."""
         telem = self.get_telemetry()
         static = self.get_static_info()
         

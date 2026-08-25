@@ -27,8 +27,8 @@ class CortanaTrayApp:
         self.icon_amber = Image.open(os.path.join(ICONS_DIR, "icon_amber.png"))
         
         self.current_state = "offline"
-        self.agent_name = "CORTANA"
-        self.active_theme = "cortana"
+        self.agent_name = "HALCY"
+        self.active_theme = "halcy"
         self.tray = None
         self.running = True
 
@@ -72,14 +72,14 @@ class CortanaTrayApp:
                 resp = requests.get(f"{BACKEND_URL}/api/health", timeout=2.0)
                 if resp.status_code == 200:
                     data = resp.json()
-                    self.agent_name = data.get("agent_name", "CORTANA")
+                    self.agent_name = data.get("agent_name", "HALCY")
                     uptime = data.get("uptime", "")
-                    
+
                     if self.current_state != "online":
                         self.current_state = "online"
                         if self.tray:
                             # Choose icon based on persona
-                            if "simaris" in self.agent_name.lower():
+                            if "limes" in self.agent_name.lower():
                                 self.tray.icon = self.icon_gold
                             else:
                                 self.tray.icon = self.icon_cyan
