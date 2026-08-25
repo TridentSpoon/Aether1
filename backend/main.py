@@ -1,5 +1,5 @@
 """
-Main FastAPI Server for Project AETHER / CORTANA.
+Main FastAPI Server for Project AETHER1.
 Hosts REST APIs, WebSockets for live telemetry and chat streaming,
 Agent Identity Genesis, Local Model Auto-Scanner, and Token Telemetry.
 """
@@ -22,7 +22,7 @@ from backend.token_tracker import token_tracker
 from backend.model_scanner import model_scanner
 
 app = FastAPI(
-    title="AETHER / CORTANA AI Core",
+    title="AETHER1 AI Core",
     description="Cybernetic Operational Reconnaissance & Telemetry Autonomous Network Assistant",
     version="2.1.0"
 )
@@ -63,7 +63,7 @@ async def health_check():
     return {
         "status": "ONLINE",
         "agent_name": llm_engine.agent_name,
-        "system": "AETHER_CORTANA_CORE_V2",
+        "system": "AETHER1_CORE_V2",
         "distro": static["distro"],
         "telemetry_status": telem["status"],
         "uptime": telem["uptime"]
@@ -239,7 +239,7 @@ async def root():
     index_file = os.path.join(FRONTEND_DIR, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)
-    return {"message": "AETHER / CORTANA Core Running. Frontend directory not initialized."}
+    return {"message": "AETHER1 Core Running. Frontend directory not initialized."}
 
 if __name__ == "__main__":
     import uvicorn

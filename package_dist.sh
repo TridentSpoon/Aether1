@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Project AETHER / CORTANA AI - Distribution Packager
+# Project AETHER1 AI - Distribution Packager
 # Builds clean portable .tar.gz and .zip packages for transfer to your second machine (Fedora)
 # ==============================================================================
 
@@ -14,7 +14,7 @@ PKG_NAME="cortana-ai-portable"
 TEMP_BUILD="$DIST_DIR/$PKG_NAME"
 
 echo "======================================================================"
-echo "📦 PACKAGING AETHER / CORTANA AI FOR DISTRIBUTION"
+echo "📦 PACKAGING AETHER1 AI FOR DISTRIBUTION"
 echo "======================================================================"
 
 # Clean previous build

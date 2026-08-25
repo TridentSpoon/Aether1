@@ -1,9 +1,9 @@
 @echo off
-title AETHER CORTANA AI Launcher
+title AETHER1 AI Launcher
 cd /d "%~dp0"
 
 echo ======================================================================
-echo Launching AETHER / CORTANA AI Companion
+echo Launching AETHER1 AI Companion
 echo ======================================================================
 
 if not exist "venv" (
@@ -27,6 +27,6 @@ echo Opening Holographic Cyberpunk HUD...
 start http://localhost:8378
 
 echo ======================================================================
-echo AETHER is active. Close this window when done.
+echo AETHER1 is active. Close this window when done.
 echo ======================================================================
 pause

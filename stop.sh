@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Project AETHER / CORTANA AI - Stop Script
-# Gracefully terminates all background AETHER / CORTANA services
+# Project AETHER1 AI - Stop Script
+# Gracefully terminates all background AETHER1 services
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 PID_FILE="$SCRIPT_DIR/logs/cortana.pid"
 
-echo "🛑 Stopping AETHER / CORTANA services..."
+echo "🛑 Stopping AETHER1 services..."
 
 STOPPED=0
 
@@ -27,4 +27,4 @@ fi
 pkill -f "uvicorn backend.main:app" 2>/dev/null || true
 pkill -f "desktop/tray_app.py" 2>/dev/null || true
 
-echo "✔ AETHER / CORTANA services stopped successfully."
+echo "✔ AETHER1 services stopped successfully."

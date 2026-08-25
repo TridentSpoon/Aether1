@@ -1,5 +1,5 @@
 """
-Token Usage & Availability Telemetry Tracker for Project AETHER / CORTANA.
+Token Usage & Availability Telemetry Tracker for Project AETHER1.
 Tracks prompt tokens, completion tokens, tokens-per-second, session totals,
 and historical consumption for HUD visualization.
 """

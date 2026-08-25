@@ -1,5 +1,5 @@
 """
-Multi-Provider LLM Engine for Project AETHER / CORTANA.
+Multi-Provider LLM Engine for Project AETHER1.
 Supports Ollama, LM Studio, Google Gemini, OpenAI, Groq, Anthropic,
 Custom Agent Naming, A.R.X.LIMES, The Nexus, R.E.D. 9000, and Token Telemetry.
 """

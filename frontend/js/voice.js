@@ -1,5 +1,5 @@
 /**
- * Voice & Audio Synthesis Pipeline for Project AETHER / CORTANA.
+ * Voice & Audio Synthesis Pipeline for Project AETHER1.
  * Features:
  * - Web Audio API Sci-Fi Sound Effects Synthesizer
  * - Speech-to-Text (STT) via Web Speech API

@@ -1,5 +1,5 @@
 """
-Linux Notification Bar & System Tray Companion for Project AETHER / CORTANA.
+Linux Notification Bar & System Tray Companion for Project AETHER1.
 Renders Robot Emoticon (🤖) in CachyOS (Arch) & Fedora top panels.
 Provides status indicator, quick actions menu, and desktop notifications.
 """
@@ -112,7 +112,7 @@ class CortanaTrayApp:
         )
 
         self.tray = pystray.Icon(
-            "AETHER_CORTANA",
+            "AETHER1",
             self.icon_cyan,
             f"{self.agent_name} 🤖 Online",
             menu

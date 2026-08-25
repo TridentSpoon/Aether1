@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Project AETHER / CORTANA AI Companion - Setup Script
+# Project AETHER1 AI Companion - Setup Script
 # Auto-configures Python virtualenv and system dependencies for CachyOS / Fedora
 # ==============================================================================
 
@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "======================================================================"
-echo "⚡ INITIALIZING AETHER / CORTANA AI SETUP"
+echo "⚡ INITIALIZING AETHER1 AI SETUP"
 echo "======================================================================"
 
 # 1. Detect Linux Distribution
@@ -63,6 +63,6 @@ cp desktop/icons/icon.png "$HOME/.local/share/icons/hicolor/256x256/apps/cortana
 echo ""
 echo "======================================================================"
 echo "✨ SETUP COMPLETE!"
-echo "To start AETHER / CORTANA AI:"
+echo "To start AETHER1 AI:"
 echo "   ./start.sh"
 echo "======================================================================"

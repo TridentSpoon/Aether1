@@ -1,8 +1,18 @@
 /**
- * Main Frontend Application Logic for Project AETHER / CORTANA.
+ * Main Frontend Application Logic for Project AETHER1.
  * Handles independently-selectable 3D Avatars (R.E.D. 9000, The Nexus, A.R.X.LIMES, hAlcy, A.R.X.LOGOS)
  * and Color Themes, Token Telemetry Graph, Agent Genesis, and Model Scanner.
  */
+
+const AVATAR_DISPLAY_NAMES = {
+    halcy: 'HALCY',
+    nexus: 'THE NEXUS',
+    matrix: 'THE NEXUS',
+    'arx-limes': 'A.R.X.LIMES',
+    'arx-logos': 'A.R.X.LOGOS',
+    red: 'R.E.D. 9000',
+    crimson: 'R.E.D. 9000'
+};
 
 document.addEventListener('DOMContentLoaded', () => {
     const hologram = new HologramAvatar('hologram-viewport');
@@ -80,6 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentAvatar = avatarName;
         localStorage.setItem('aether_avatar', avatarName);
         hologram.setAvatar(avatarName);
+        updateAvatarBadge(avatarName);
 
         if (avatarStructureLabel) {
             if (avatarName === 'red' || avatarName === 'crimson') avatarStructureLabel.textContent = 'OPTICAL EYE // DUAL ORBITS';
@@ -353,12 +364,20 @@ document.addEventListener('DOMContentLoaded', () => {
         drawTokenGraph(tokens.sparkline);
     }
 
+    // Updates the active LLM persona/identity (chat terminal label, sender names, settings
+    // field). This is independent of the avatar badge, so Genesis-forged custom names
+    // (e.g. SYNAPSE, VALKYRIE) always remain visible here regardless of the current avatar shape.
     function updateAgentNameDisplay(name) {
         currentAgentName = name;
-        if (hudAgentName) hudAgentName.textContent = name;
         if (terminalAgentLabel) terminalAgentLabel.textContent = `AGENT: ${name.toUpperCase()}`;
         const inputName = document.getElementById('setting-agent-name');
         if (inputName) inputName.value = name;
+    }
+
+    // Updates the header badge (next to "AETHER1", before the AVATAR: pills) to show
+    // whichever 3D avatar shape is currently active.
+    function updateAvatarBadge(avatarName) {
+        if (hudAgentName) hudAgentName.textContent = AVATAR_DISPLAY_NAMES[avatarName] || avatarName.toUpperCase();
     }
 
     async function loadStaticInfo() {

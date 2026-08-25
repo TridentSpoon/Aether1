@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Project AETHER / CORTANA AI - Background Daemon Launcher
+# Project AETHER1 AI - Background Daemon Launcher
 # Starts all services silently in the background (No terminal window needed!)
 # ==============================================================================
 
@@ -20,7 +20,7 @@ fi
 if [ -f "$PID_FILE" ]; then
     OLD_PID=$(head -n 1 "$PID_FILE" 2>/dev/null || true)
     if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" > /dev/null 2>&1; then
-        echo "✔ AETHER / CORTANA is already running in background (PID: $OLD_PID)."
+        echo "✔ AETHER1 is already running in background (PID: $OLD_PID)."
         if command -v xdg-open &> /dev/null; then
             xdg-open "http://localhost:8378" > /dev/null 2>&1 &
         fi
@@ -28,7 +28,7 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
-echo "🚀 Launching AETHER / CORTANA in background daemon mode..."
+echo "🚀 Launching AETHER1 in background daemon mode..."
 
 # 1. Start Backend Server in background
 nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8378 >> "$LOG_FILE" 2>&1 &
@@ -58,7 +58,7 @@ elif command -v python3 &> /dev/null; then
 fi
 
 echo "======================================================================"
-echo "✨ AETHER / CORTANA IS RUNNING IN THE BACKGROUND!"
+echo "✨ AETHER1 IS RUNNING IN THE BACKGROUND!"
 echo "  - Web HUD: http://localhost:8378"
 echo "  - Notification Bar: 🤖 Robot icon active in your panel"
 echo "  - Logs: $LOG_FILE"

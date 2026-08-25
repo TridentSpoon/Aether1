@@ -1,5 +1,5 @@
 """
-System Telemetry and Diagnostics Module for Project AETHER / CORTANA.
+System Telemetry and Diagnostics Module for Project AETHER1.
 Provides real-time CPU, RAM, Disk, Network, Battery, and process monitoring
 inspired by Omarchy system integration.
 """

@@ -1,5 +1,5 @@
 """
-Automated Test Suite for AETHER / CORTANA Enhancements:
+Automated Test Suite for AETHER1 Enhancements:
 - Agent Naming & Identity Genesis
 - Model Scanner & Antigravity/Gemini Key Auto-Discovery
 - Real-Time Token Telemetry & Usage Tracker

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Project AETHER / CORTANA AI - 1-Click Launch Script
+# Project AETHER1 AI - 1-Click Launch Script
 # Starts FastAPI Backend, System Tray Notification App, and Opens HUD
 # ==============================================================================
 
@@ -13,7 +13,7 @@ if [ ! -d "venv" ]; then
 fi
 
 echo "======================================================================"
-echo "🌐 LAUNCHING AETHER / CORTANA AI CORE"
+echo "🌐 LAUNCHING AETHER1 AI CORE"
 echo "======================================================================"
 
 # Start Backend Server
@@ -41,7 +41,7 @@ elif command -v python3 &> /dev/null; then
 fi
 
 echo ""
-echo "✔ AETHER / CORTANA AI is running!"
+echo "✔ AETHER1 AI is running!"
 echo "  - Web HUD: http://localhost:8378"
 echo "  - System Tray: Active in your notification panel"
 echo "  - Press Ctrl+C to terminate all services"
@@ -50,7 +50,7 @@ echo "======================================================================"
 # Trap termination signals to kill both background processes
 cleanup() {
     echo ""
-    echo "🛑 Shutting down AETHER / CORTANA services..."
+    echo "🛑 Shutting down AETHER1 services..."
     if [ -n "$BACKEND_PID" ]; then
         kill "$BACKEND_PID" 2>/dev/null || true
     fi

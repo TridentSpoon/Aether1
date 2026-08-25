@@ -1,5 +1,5 @@
 """
-Auto-Discovery & Model Scanner Module for Project AETHER / CORTANA.
+Auto-Discovery & Model Scanner Module for Project AETHER1.
 Discovers Antigravity/Gemini environment keys, probes local Ollama and LM Studio
 services, and provides 1-click small model downloads.
 """

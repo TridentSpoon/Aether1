@@ -1,4 +1,4 @@
-# 🌌 AETHER // CORTANA AI Companion
+# 🌌 AETHER1 AI Companion
 
 An advanced, self-hosted, cybernetic AI companion and HUD inspired by the UNSC AI **Cortana** (Halo & original OS concept) and the agentic OS philosophy of **Omarchy**.
 
@@ -49,7 +49,7 @@ chmod +x setup.sh start.sh package_dist.sh
 
 ## 📦 Transferring and Running on Fedora (Second System)
 
-To transfer AETHER / CORTANA to your second machine running Fedora:
+To transfer AETHER1 to your second machine running Fedora:
 
 ### 1. On your laptop (CachyOS), generate the distribution bundle:
 ```bash

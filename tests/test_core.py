@@ -1,5 +1,5 @@
 """
-Automated Test Suite for AETHER / CORTANA Core Services.
+Automated Test Suite for AETHER1 Core Services.
 Tests:
 1. System Telemetry & Static Info
 2. SQLite Memory DB CRUD Operations
