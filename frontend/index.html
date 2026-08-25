@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="cortana">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AETHER // CYBERNETIC AI HUD</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            cyan: 'var(--neon-cyan)',
+                            blue: 'var(--neon-blue)',
+                            purple: 'var(--neon-purple)',
+                            green: 'var(--neon-green)',
+                            amber: 'var(--neon-amber)',
+                            dark: 'var(--bg-core)',
+                            panel: 'var(--bg-panel)'
+                        }
+                    },
+                    fontFamily: {
+                        orbitron: ['Orbitron', 'sans-serif'],
+                        rajdhani: ['Rajdhani', 'sans-serif'],
+                        mono: ['"Share Tech Mono"', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/css/cyberpunk.css">
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body class="bg-cyber-dark text-slate-100 flex flex-col h-screen select-none">
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+
+    <!-- TOP HUD BAR -->
+    <header class="w-full bg-slate-950/80 border-b border-cyan-500/30 px-6 py-2.5 flex items-center justify-between z-20 backdrop-blur-md">
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-cyan-400 box-glow-cyan animate-pulse"></div>
+                <h1 class="font-orbitron font-bold text-lg text-cyan-400 tracking-wider glow-cyan flex items-center gap-2">
+                    AETHER <span id="hud-agent-name" class="text-xs px-2 py-0.5 border border-cyan-500/50 rounded text-cyan-300 font-mono">CORTANA</span>
+                </h1>
+            </div>
+
+            <!-- THEME PICKER PILLS -->
+            <div class="hidden lg:flex items-center gap-1 bg-black/40 p-1 rounded border border-cyan-500/30 text-xs font-mono">
+                <span class="text-slate-400 px-1 text-[10px]">THEME:</span>
+                <button class="theme-pill px-2 py-0.5 rounded text-cyan-300 hover:bg-cyan-950/60" data-theme-val="cortana">🔷 Cortana</button>
+                <button class="theme-pill px-2 py-0.5 rounded text-green-400 hover:bg-green-950/60 font-bold" data-theme-val="nexus">🟢 The Nexus</button>
+                <button class="theme-pill px-2 py-0.5 rounded text-amber-400 hover:bg-amber-950/60 font-bold" data-theme-val="simaris">🔶 Simaris</button>
+                <button class="theme-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-theme-val="suda">🟣 Suda</button>
+                <button class="theme-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-theme-val="red">🔴 R.E.D. 9000</button>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <span class="text-xs font-mono text-slate-400">STATE:</span>
+                <span id="status-badge" class="px-2 py-0.5 text-xs font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
+                    IDLE
+                </span>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <div id="live-clock" class="hidden sm:block font-mono text-xs text-cyan-300/80">
+                00:00:00 // 2026-08-24
+            </div>
+            <button id="btn-genesis-quick" class="cyber-btn text-xs py-1 px-2.5 text-purple-300 border-purple-500/50 hover:bg-purple-950/40">
+                ⚡ Genesis
+            </button>
+            <button id="btn-sfx" class="cyber-btn text-xs py-1 px-2.5">
+                🔊 SFX: ON
+            </button>
+            <button id="btn-clear-chat" class="cyber-btn text-xs py-1 px-2.5 text-slate-400 hover:text-red-400">
+                🗑️ Clear
+            </button>
+            <button id="btn-settings" class="cyber-btn text-xs py-1 px-3">
+                ⚙️ Settings
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN DASHBOARD CONTENT (3-COLUMN HUD) -->
+    <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 overflow-hidden z-10">
+        
+        <!-- LEFT PANEL: SYSTEM & TOKEN TELEMETRY GAUGES (3 Cols) -->
+        <section class="lg:col-span-3 flex flex-col gap-3 overflow-y-auto pr-1">
+            <!-- Hardware Telemetry -->
+            <div class="hud-panel p-4 rounded flex flex-col gap-3">
+                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                    <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg>
+                        HARDWARE TELEMETRY
+                    </h2>
+                    <span class="text-[10px] font-mono text-cyan-500">LIVE</span>
+                </div>
+
+                <!-- CPU Gauge -->
+                <div class="space-y-1">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">CPU LOAD</span>
+                        <span id="cpu-percent-val" class="text-cyan-400 font-bold">0%</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="cpu-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+
+                <!-- RAM Gauge -->
+                <div class="space-y-1">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">SYSTEM MEMORY</span>
+                        <span id="ram-percent-val" class="text-cyan-400 font-bold">0%</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="ram-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+
+                <!-- Disk Gauge -->
+                <div class="space-y-1">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">STORAGE (/)</span>
+                        <span id="disk-percent-val" class="text-cyan-400 font-bold">0%</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="disk-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+
+                <!-- Network Speeds -->
+                <div class="grid grid-cols-2 gap-2 pt-1 border-t border-cyan-500/20 text-xs font-mono">
+                    <div class="bg-slate-900/60 p-2 rounded border border-cyan-500/20">
+                        <div class="text-[10px] text-slate-400">NET DOWN ↓</div>
+                        <div id="net-download-val" class="text-cyan-300 font-bold">0.0 KB/s</div>
+                    </div>
+                    <div class="bg-slate-900/60 p-2 rounded border border-cyan-500/20">
+                        <div class="text-[10px] text-slate-400">NET UP ↑</div>
+                        <div id="net-upload-val" class="text-cyan-300 font-bold">0.0 KB/s</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Token Usage & Availability Telemetry -->
+            <div class="hud-panel p-4 rounded flex flex-col gap-3">
+                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                    <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        COGNITIVE TOKEN TELEMETRY
+                    </h2>
+                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">0.0 TPS</span>
+                </div>
+
+                <!-- Daily Budget / Availability Bar -->
+                <div class="space-y-1">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">SESSION TOKENS</span>
+                        <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="tokens-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #7000ff, #b026ff); box-shadow: 0 0 8px rgba(176, 38, 255, 0.8);"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>Used: <strong id="tokens-used-pct" class="text-purple-300">0%</strong></span>
+                        <span>Available: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
+                    </div>
+                </div>
+
+                <!-- Token History Graph / Canvas -->
+                <div class="space-y-1 pt-1">
+                    <div class="text-[10px] font-mono text-slate-400 flex justify-between">
+                        <span>CONSUMPTION GRAPH</span>
+                        <span>BURST SPARKLINE</span>
+                    </div>
+                    <div class="bg-black/60 p-1.5 rounded border border-purple-500/30">
+                        <canvas id="tokens-graph-canvas" width="280" height="50" class="w-full"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tactical Commands -->
+            <div class="hud-panel p-4 rounded flex flex-col gap-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">
+                    TACTICAL QUICK COMMANDS
+                </h3>
+                <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="status">
+                        📊 Status
+                    </button>
+                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="diagnostics">
+                        🩺 Diagnostics
+                    </button>
+                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="show memories">
+                        🧠 Memories
+                    </button>
+                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="help">
+                        ❓ Help Info
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR (4 Cols) -->
+        <section class="lg:col-span-4 flex flex-col items-center justify-center relative hud-panel rounded overflow-hidden">
+            <div id="hologram-viewport" class="w-full h-full min-h-[300px] flex items-center justify-center relative cursor-grab active:cursor-grabbing"></div>
+
+            <div class="absolute top-3 left-3 text-[10px] font-mono text-cyan-400/70 pointer-events-none">
+                STRUCTURE: <span id="avatar-structure-label">HARMONIC LATTICE</span>
+            </div>
+            <div class="absolute top-3 right-3 text-[10px] font-mono text-cyan-400/70 pointer-events-none">
+                HOLOGRAM: ACTIVE
+            </div>
+
+            <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent">
+                <canvas id="audio-waveform" width="360" height="36" class="w-full"></canvas>
+            </div>
+        </section>
+
+        <!-- RIGHT PANEL: NEURAL TERMINAL & CHAT CONSOLE (5 Cols) -->
+        <section class="lg:col-span-5 flex flex-col hud-panel rounded overflow-hidden">
+            <div class="bg-slate-950/60 border-b border-cyan-500/20 px-4 py-2.5 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+                    <span class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">NEURAL DIALOGUE STREAM</span>
+                </div>
+                <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: CORTANA</span>
+            </div>
+
+            <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
+
+            <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
+                <div class="flex items-center gap-2">
+                    <button id="btn-mic" title="Toggle Voice Recognition" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+                    </button>
+                    <input id="chat-input" type="text" placeholder="Type tactical directive or speak to agent..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
+                        Send
+                    </button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- SETTINGS & IDENTITY MATRIX MODAL -->
+    <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-5 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    ⚙️ COGNITIVE CORE & THEME MATRIX
+                </h2>
+                <button id="btn-close-settings" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
+            </div>
+
+            <!-- SECTION: THEME SELECTOR -->
+            <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                <label class="text-xs font-mono text-cyan-300 block font-bold">🎨 VISUAL THEME & 3D AVATAR PRESET</label>
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <button class="theme-btn cyber-btn text-xs py-2 justify-center" data-theme="cortana">🔷 Cortana</button>
+                    <button class="theme-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-theme="nexus">🟢 The Nexus</button>
+                    <button class="theme-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-theme="simaris">🔶 Simaris</button>
+                    <button class="theme-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-theme="suda">🟣 Suda</button>
+                    <button class="theme-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-theme="red">🔴 R.E.D. 9000</button>
+                </div>
+            </div>
+
+            <!-- SECTION: AGENT IDENTITY & GENESIS -->
+            <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-orbitron text-xs font-bold text-purple-300 tracking-wider flex items-center gap-1.5">
+                        ⚡ AGENT IDENTITY & GENESIS FORGE
+                    </h3>
+                    <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME & PERSONA</span>
+                </div>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="space-y-1">
+                        <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
+                        <input id="setting-agent-name" type="text" placeholder="e.g. CORTANA, R.E.D. 9000, THE NEXUS, SIMARIS" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-xs font-mono text-cyan-300 block">BASE PERSONA DIRECTIVE</label>
+                        <select id="setting-persona" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <option value="cortana">Cortana (Halo AI & Omarchy OS)</option>
+                            <option value="red9000">R.E.D. 9000 (Reactive Engine Daemon)</option>
+                            <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
+                            <option value="simaris">Cephalon Simaris (Warframe Sanctuary Synthesizer)</option>
+                            <option value="tactical">Tactical Military HUD</option>
+                            <option value="cyberpunk">Cyberpunk Netrunner</option>
+                            <option value="custom">Custom Dynamic Directive</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="pt-2 border-t border-purple-500/30 space-y-2">
+                    <label class="text-xs font-mono text-purple-200 block">
+                        ✨ Or let the AI choose its name based on your mission / tasks:
+                    </label>
+                    <div class="flex gap-2">
+                        <input id="genesis-purpose-input" type="text" placeholder="e.g., 'I want a tactical Reactive Engine Daemon to manage all operations'" class="flex-1 bg-slate-900 border border-purple-500/40 rounded p-2 text-xs text-purple-100 font-mono">
+                        <button id="btn-forge-identity" class="cyber-btn text-xs py-1.5 px-3 border-purple-400 text-purple-300 hover:bg-purple-900/60">
+                            ⚡ Forge Identity
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION: AUTO-DISCOVERY & LOCAL SCANNER -->
+            <div class="bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
+                        🔍 LOCAL MODEL & ANTIGRAVITY SCANNER
+                    </h3>
+                    <button id="btn-scan-system" class="cyber-btn text-[11px] py-1 px-2.5">
+                        🔄 Scan System & Keys
+                    </button>
+                </div>
+
+                <div id="scanner-results-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
+                    <div>Status: Click Scan to detect Antigravity keys, Ollama, and LM Studio.</div>
+                </div>
+
+                <div class="flex items-center justify-between pt-1">
+                    <span class="text-xs font-mono text-slate-400">Need a fast local offline model?</span>
+                    <button id="btn-pull-llama" class="cyber-btn text-xs py-1 px-3 text-cyan-300">
+                        📥 Pull Llama-3.2 (1B)
+                    </button>
+                </div>
+            </div>
+
+            <!-- SECTION: PROVIDER & API KEYS -->
+            <div class="space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="space-y-1">
+                        <label class="text-xs font-mono text-cyan-300 block">LLM PROVIDER</label>
+                        <select id="setting-provider" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <option value="offline">Offline Standby (Instant Local Fallback)</option>
+                            <option value="ollama">Ollama (Local Private LLM)</option>
+                            <option value="lmstudio">LM Studio (Local OpenAI API)</option>
+                            <option value="gemini">Google Gemini / Antigravity API</option>
+                            <option value="groq">Groq (Ultra-Fast Cloud)</option>
+                            <option value="openai">OpenAI (ChatGPT)</option>
+                            <option value="anthropic">Anthropic Claude</option>
+                        </select>
+                    </div>
+
+                    <div class="space-y-1">
+                        <label class="text-xs font-mono text-cyan-300 block">MODEL NAME / ID</label>
+                        <input id="setting-model" type="text" placeholder="e.g. llama3, gemini-2.0-flash, gpt-4o-mini" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="space-y-1">
+                        <label class="text-xs font-mono text-cyan-300 block">ENDPOINT (for Ollama / LM Studio)</label>
+                        <input id="setting-endpoint" type="text" placeholder="http://localhost:11434" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+
+                    <div class="space-y-1">
+                        <label class="text-xs font-mono text-cyan-300 block">API KEY (stored securely in SQLite)</label>
+                        <input id="setting-apikey" type="password" placeholder="API Key for Gemini / OpenAI / Groq / Claude" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">NEURAL VOICE SYNTHESIS</label>
+                    <select id="setting-voice" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <option value="en-US-AriaNeural">en-US-AriaNeural (Cortana Primary)</option>
+                        <option value="en-US-GuyNeural">en-US-GuyNeural (R.E.D. 9000 / Tactical)</option>
+                        <option value="en-GB-SoniaNeural">en-GB-SoniaNeural (The Nexus / Sophisticated)</option>
+                        <option value="en-US-JennyNeural">en-US-JennyNeural (Cortana Alternative)</option>
+                        <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural (Cyberpunk Tokyo)</option>
+                    </select>
+                </div>
+
+                <div class="flex items-center gap-2 pt-1">
+                    <input id="setting-autospeak" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                    <label for="setting-autospeak" class="text-xs font-mono text-slate-300">Auto-speak AI responses aloud with neural voice</label>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-3 pt-3 border-t border-cyan-500/30">
+                <button id="btn-save-settings" class="cyber-btn cyber-btn-active text-xs py-2 px-6">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/hologram.js"></script>
+    <script src="/static/js/voice.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

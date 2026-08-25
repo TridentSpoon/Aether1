@@ -1,0 +1,19 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Runtime data — machine-specific, may contain API keys pasted into Settings
+backend/cortana_memory.db
+backend/audio_cache/
+logs/
+*.pid
+*.log
+
+# Packaged distribution bundle
+dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

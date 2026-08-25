@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=AETHER AI Assistant
+GenericName=Holographic AI Companion
+Comment=Cybernetic Operational Reconnaissance & Telemetry Autonomous Network Assistant
+Exec=/bin/bash -c "cd %k/.. && ./start_daemon.sh"
+Icon=cortana-ai
+Terminal=false
+Type=Application
+Categories=Utility;Development;System;
+Keywords=AI;Cortana;Assistant;Cyberpunk;HUD;Omarchy;Simaris;
+StartupNotify=true
