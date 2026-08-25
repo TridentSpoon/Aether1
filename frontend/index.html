@@ -34,7 +34,7 @@
             }
         }
     </script>
-    <link rel="stylesheet" href="/static/css/cyberpunk.css?v=3">
+    <link rel="stylesheet" href="/static/css/cyberpunk.css?v=4">
     <!-- Three.js CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
@@ -60,6 +60,18 @@
                 <button class="avatar-pill px-2 py-0.5 rounded text-amber-400 hover:bg-amber-950/60 font-bold" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-avatar-val="red">🔴 R.E.D. 9000</button>
+            </div>
+
+            <!-- COLOR THEME QUICK PICKER -->
+            <div class="hidden lg:flex items-center gap-1 bg-black/40 p-1 rounded border border-cyan-500/30 text-xs font-mono">
+                <span class="text-slate-400 px-1 text-[10px]">THEME:</span>
+                <select id="color-theme-select" class="bg-slate-900 border border-cyan-500/40 rounded px-1.5 py-0.5 text-cyan-300 font-mono text-xs focus:outline-none focus:border-cyan-400">
+                    <option value="halcy">🔷 hAlcy Cyan</option>
+                    <option value="nexus">🟢 Nexus Green</option>
+                    <option value="arx-limes">🔶 A.R.X.LIMES Amber</option>
+                    <option value="arx-logos">🟣 A.R.X.LOGOS Magenta</option>
+                    <option value="red">🔴 Crimson</option>
+                </select>
             </div>
 
             <div class="flex items-center gap-2">
@@ -410,8 +422,8 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/static/js/hologram.js?v=3"></script>
-    <script src="/static/js/voice.js?v=3"></script>
-    <script src="/static/js/app.js?v=3"></script>
+    <script src="/static/js/hologram.js?v=4"></script>
+    <script src="/static/js/voice.js?v=4"></script>
+    <script src="/static/js/app.js?v=4"></script>
 </body>
 </html>

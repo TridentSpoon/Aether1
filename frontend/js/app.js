@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudAgentName = document.getElementById('hud-agent-name');
     const terminalAgentLabel = document.getElementById('terminal-agent-label');
     const avatarStructureLabel = document.getElementById('avatar-structure-label');
+    const colorThemeSelect = document.getElementById('color-theme-select');
 
     // Model Scanner Elements
     const btnScanSystem = document.getElementById('btn-scan-system');
@@ -148,6 +149,8 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('aether_color_theme', themeName);
         document.documentElement.setAttribute('data-theme', themeName);
         hologram.setColorTheme(themeName);
+
+        if (colorThemeSelect && colorThemeSelect.value !== themeName) colorThemeSelect.value = themeName;
 
         // Highlight active color-theme pills/buttons
         document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
@@ -696,6 +699,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     });
+
+    // Color Theme Quick Dropdown (header)
+    if (colorThemeSelect) {
+        colorThemeSelect.addEventListener('change', () => {
+            voiceEngine.playSFX('click');
+            applyColorTheme(colorThemeSelect.value);
+        });
+    }
 
     btnSend.addEventListener('click', () => handleSendMessage());
     chatInput.addEventListener('keydown', (e) => {
