@@ -5,7 +5,7 @@
  * 1. hAlcy: Harmonic Particle Lattice & Orbital Rings
  * 2. A.R.X.LIMES: Faceted Floating Hub with a Fractured Convex Dome of Plates
  * 3. The Nexus: Inward Falling Particles into a Gravitational Singularity
- * 4. R.E.D. 9000 (HAL 9000): Central Glowing Sphere with Two Orbit Circles
+ * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Static Eyelid Arcs
  * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
  * 6. Real-time Audio Frequency and State deformation.
  *
@@ -61,11 +61,10 @@ class HologramAvatar {
         this.nexusSingularity = null;
         this.nexusSingularityGlow = null;
 
-        // 4. R.E.D. 9000 / HAL 9000 structures (Central Sphere + Two Orbit Circles)
+        // 4. R.E.D. 9000 / HAL 9000 structures -- obsidian eye with lens shell + eyelid arcs
         this.redGroup = null;
         this.redCoreSphere = null;
         this.redLensOuter = null;
-        this.redPupil = null;
         this.redBlueCircle = null;
         this.redCyanCircle = null;
 
@@ -448,41 +447,35 @@ class HologramAvatar {
     buildRed9000Avatar() {
         this.redGroup = new THREE.Group();
 
-        // 1. Central Glowing Sphere (HAL / Reactive Daemon Eye)
-        const coreGeom = new THREE.SphereGeometry(26, 32, 32);
-        const coreMat = new THREE.MeshBasicMaterial({
-            color: 0xff1133,
+        // 1. Obsidian inner core (HAL / Reactive Daemon Eye) -- fixed dark glossy material,
+        // a touch smaller than the old glowing-red sphere, not theme-tinted.
+        const coreGeom = new THREE.SphereGeometry(22, 32, 32);
+        const coreMat = new THREE.MeshPhongMaterial({
+            color: 0x0a0505,
+            specular: 0xff6a55,
+            shininess: 90,
             transparent: true,
-            opacity: 0.92,
-            blending: THREE.AdditiveBlending
+            opacity: 0.97
         });
         this.redCoreSphere = new THREE.Mesh(coreGeom, coreMat);
         this.redGroup.add(this.redCoreSphere);
 
-        // Outer Tactical Wireframe Lens Shell
-        const lensGeom = new THREE.SphereGeometry(34, 24, 24);
+        // Outer Tactical Wireframe Lens Shell -- a faint accent, kept sparse and dim so it
+        // doesn't mask the obsidian core underneath.
+        const lensGeom = new THREE.SphereGeometry(34, 10, 10);
         const lensMat = new THREE.MeshBasicMaterial({
             color: 0xff3355,
             wireframe: true,
             transparent: true,
-            opacity: 0.4,
+            opacity: 0.12,
             blending: THREE.AdditiveBlending
         });
         this.redLensOuter = new THREE.Mesh(lensGeom, lensMat);
         this.redGroup.add(this.redLensOuter);
 
-        // Center intense white pupil
-        const pupilGeom = new THREE.SphereGeometry(8, 16, 16);
-        const pupilMat = new THREE.MeshBasicMaterial({
-            color: 0xffffff,
-            transparent: true,
-            opacity: 0.95
-        });
-        this.redPupil = new THREE.Mesh(pupilGeom, pupilMat);
-        this.redGroup.add(this.redPupil);
-
-        // 2. First Orbit Circle (Ring 1)
-        const blueGeom = new THREE.RingGeometry(64, 67, 64);
+        // 2. Eyelid arcs -- flat partial rings cupping the core from above and below,
+        // replacing the old two full tilted orbit rings.
+        const blueGeom = new THREE.RingGeometry(58, 62, 48, 1, 0.35, 2.44);
         const blueMat = new THREE.MeshBasicMaterial({
             color: 0x0066ff,
             side: THREE.DoubleSide,
@@ -491,13 +484,9 @@ class HologramAvatar {
             blending: THREE.AdditiveBlending
         });
         this.redBlueCircle = new THREE.Mesh(blueGeom, blueMat);
-        this.redBlueCircle.rotation.x = 1.1;
-        this.redBlueCircle.rotation.y = 0.3;
-        this.redBlueCircle.userData = { speed: 0.018 };
         this.redGroup.add(this.redBlueCircle);
 
-        // 3. Second Orbit Circle (Ring 2)
-        const cyanGeom = new THREE.RingGeometry(84, 87, 64);
+        const cyanGeom = new THREE.RingGeometry(58, 62, 48, 1, Math.PI + 0.35, 2.44);
         const cyanMat = new THREE.MeshBasicMaterial({
             color: 0x00f0ff,
             side: THREE.DoubleSide,
@@ -506,9 +495,6 @@ class HologramAvatar {
             blending: THREE.AdditiveBlending
         });
         this.redCyanCircle = new THREE.Mesh(cyanGeom, cyanMat);
-        this.redCyanCircle.rotation.x = -0.7;
-        this.redCyanCircle.rotation.y = 0.9;
-        this.redCyanCircle.userData = { speed: -0.014 };
         this.redGroup.add(this.redCyanCircle);
 
         this.scene.add(this.redGroup);
@@ -652,8 +638,7 @@ class HologramAvatar {
         if (this.arxLogosArmMatFar) this.arxLogosArmMatFar.color.setHex(p.hex3);
         if (this.arxLogosOuterDotMat) this.arxLogosOuterDotMat.color.setHex(p.hex3);
 
-        // R.E.D. 9000
-        if (this.redCoreSphere) this.redCoreSphere.material.color.setHex(p.hex);
+        // R.E.D. 9000 (the obsidian core is a fixed material, not theme-tinted -- see buildRed9000Avatar)
         if (this.redLensOuter) this.redLensOuter.material.color.setHex(p.hex);
         if (this.redBlueCircle) this.redBlueCircle.material.color.setHex(p.hex2);
         if (this.redCyanCircle) this.redCyanCircle.material.color.setHex(p.hex3);
@@ -752,23 +737,11 @@ class HologramAvatar {
                 this.redLensOuter.scale.set(lensScale, lensScale, lensScale);
             }
 
-            if (this.redPupil) {
-                const pupilScale = 1.0 + audioIntensity * 1.8;
-                this.redPupil.scale.set(pupilScale, pupilScale, pupilScale);
-            }
-
-            // Rotating Orbit Circles
-            const ringSpeedMult = this.state === 'THINKING' ? 3.8 : (this.state === 'SPEAKING' ? 1.8 : 1.0);
-
-            if (this.redBlueCircle) {
-                this.redBlueCircle.rotation.z += this.redBlueCircle.userData.speed * ringSpeedMult;
-                this.redBlueCircle.rotation.x = 1.1 + Math.sin(elapsedTime * 0.8) * 0.1;
-            }
-
-            if (this.redCyanCircle) {
-                this.redCyanCircle.rotation.z += this.redCyanCircle.userData.speed * ringSpeedMult;
-                this.redCyanCircle.rotation.y = 0.9 + Math.cos(elapsedTime * 0.8) * 0.1;
-            }
+            // Eyelid arcs stay static, cupping the core -- only a faint audio-reactive
+            // opacity flicker while speaking, no continuous rotation.
+            const lidOpacity = this.state === 'SPEAKING' ? 0.85 + audioIntensity * 0.15 : 0.85;
+            if (this.redBlueCircle) this.redBlueCircle.material.opacity = lidOpacity;
+            if (this.redCyanCircle) this.redCyanCircle.material.opacity = lidOpacity;
 
         } else if (this.currentAvatar === 'nexus' || this.currentAvatar === 'matrix') {
             // ==============================================================
