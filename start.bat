@@ -16,15 +16,15 @@ if not exist "venv" (
     call venv\Scripts\activate.bat
 )
 
-echo Starting FastAPI Backend on http://localhost:8000...
-start "" "%~dp0venv\Scripts\uvicorn.exe" backend.main:app --host 0.0.0.0 --port 8000
+echo Starting FastAPI Backend on http://localhost:8378...
+start "" "%~dp0venv\Scripts\uvicorn.exe" backend.main:app --host 0.0.0.0 --port 8378
 
 timeout /t 2 >nul
 echo Starting System Tray Notification Bar App...
 start "" "%~dp0venv\Scripts\python.exe" desktop\tray_app.py
 
 echo Opening Holographic Cyberpunk HUD...
-start http://localhost:8000
+start http://localhost:8378
 
 echo ======================================================================
 echo AETHER is active. Close this window when done.

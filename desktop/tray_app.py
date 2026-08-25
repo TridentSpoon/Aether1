@@ -15,7 +15,7 @@ from PIL import Image
 import pystray
 from pystray import MenuItem as item
 
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = "http://localhost:8378"
 ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 
 class CortanaTrayApp:

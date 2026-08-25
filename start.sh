@@ -17,8 +17,8 @@ echo "🌐 LAUNCHING AETHER / CORTANA AI CORE"
 echo "======================================================================"
 
 # Start Backend Server
-echo "🚀 Starting FastAPI Backend on http://localhost:8000..."
-./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 &
+echo "🚀 Starting FastAPI Backend on http://localhost:8378..."
+./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8378 &
 BACKEND_PID=$!
 
 # Wait briefly for backend to initialize
@@ -35,14 +35,14 @@ fi
 # Open HUD in default browser
 echo "💻 Opening Holographic Cyberpunk HUD in Browser..."
 if command -v xdg-open &> /dev/null; then
-    xdg-open "http://localhost:8000" &
+    xdg-open "http://localhost:8378" &
 elif command -v python3 &> /dev/null; then
-    python3 -m webbrowser "http://localhost:8000" &
+    python3 -m webbrowser "http://localhost:8378" &
 fi
 
 echo ""
 echo "✔ AETHER / CORTANA AI is running!"
-echo "  - Web HUD: http://localhost:8000"
+echo "  - Web HUD: http://localhost:8378"
 echo "  - System Tray: Active in your notification panel"
 echo "  - Press Ctrl+C to terminate all services"
 echo "======================================================================"

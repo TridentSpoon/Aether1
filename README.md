@@ -41,7 +41,7 @@ chmod +x setup.sh start.sh package_dist.sh
 ```
 `start.sh` will:
 1. Initialize the Python virtual environment and install all dependencies.
-2. Start the FastAPI backend server on `http://localhost:8000`.
+2. Start the FastAPI backend server on `http://localhost:8378`.
 3. Launch the System Tray app in your notification panel.
 4. Open the Holographic HUD in your default web browser.
 
@@ -106,4 +106,4 @@ If you prefer running via Docker on either machine:
 ```bash
 docker compose up --build -d
 ```
-Navigate to `http://localhost:8000` in your browser.
+Navigate to `http://localhost:8378` in your browser.

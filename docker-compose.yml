@@ -6,7 +6,7 @@ services:
     container_name: aether-cortana-core
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8378:8378"
     volumes:
       - ./backend/cortana_memory.db:/app/backend/cortana_memory.db
       - ./backend/audio_cache:/app/backend/audio_cache

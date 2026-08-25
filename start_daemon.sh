@@ -22,7 +22,7 @@ if [ -f "$PID_FILE" ]; then
     if [ -n "$OLD_PID" ] && ps -p "$OLD_PID" > /dev/null 2>&1; then
         echo "✔ AETHER / CORTANA is already running in background (PID: $OLD_PID)."
         if command -v xdg-open &> /dev/null; then
-            xdg-open "http://localhost:8000" > /dev/null 2>&1 &
+            xdg-open "http://localhost:8378" > /dev/null 2>&1 &
         fi
         exit 0
     fi
@@ -31,7 +31,7 @@ fi
 echo "🚀 Launching AETHER / CORTANA in background daemon mode..."
 
 # 1. Start Backend Server in background
-nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000 >> "$LOG_FILE" 2>&1 &
+nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8378 >> "$LOG_FILE" 2>&1 &
 BACKEND_PID=$!
 
 # Wait briefly for backend
@@ -52,14 +52,14 @@ fi
 
 # 3. Open HUD in default browser
 if command -v xdg-open &> /dev/null; then
-    xdg-open "http://localhost:8000" > /dev/null 2>&1 &
+    xdg-open "http://localhost:8378" > /dev/null 2>&1 &
 elif command -v python3 &> /dev/null; then
-    python3 -m webbrowser "http://localhost:8000" > /dev/null 2>&1 &
+    python3 -m webbrowser "http://localhost:8378" > /dev/null 2>&1 &
 fi
 
 echo "======================================================================"
 echo "✨ AETHER / CORTANA IS RUNNING IN THE BACKGROUND!"
-echo "  - Web HUD: http://localhost:8000"
+echo "  - Web HUD: http://localhost:8378"
 echo "  - Notification Bar: 🤖 Robot icon active in your panel"
 echo "  - Logs: $LOG_FILE"
 echo "  - To stop at any time: ./stop.sh"
