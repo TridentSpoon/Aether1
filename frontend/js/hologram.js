@@ -148,7 +148,8 @@ class HologramAvatar {
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(this.particleCount * 3);
         const colors = new Float32Array(this.particleCount * 3);
-        const radius = 60;
+        const radius = 34;
+        this.halcyLatticeRadius = radius;
 
         for (let i = 0; i < this.particleCount; i++) {
             const phi = Math.acos(-1 + (2 * i) / this.particleCount);
@@ -200,7 +201,7 @@ class HologramAvatar {
         this.scene.add(this.coreOrb);
 
         // Static outer ring — fixed cyan, unaffected by color theme
-        const outerRingGeom = new THREE.RingGeometry(100, 102.5, 64);
+        const outerRingGeom = new THREE.RingGeometry(76, 78.5, 64);
         const outerRingMat = new THREE.MeshBasicMaterial({
             color: 0x00f0ff,
             side: THREE.DoubleSide,
@@ -217,7 +218,8 @@ class HologramAvatar {
         // Inner ultramarine equalizer ring — segmented so its circumference can "thicken" per-bar
         // like an audio equalizer while speaking, and the whole ring can sway on its Z axis.
         this.halcyInnerRingGroup = new THREE.Group();
-        const innerRingRadius = 80;
+        this.halcyInnerRingGroup.userData = { speed: 0.01 };
+        const innerRingRadius = 58;
         const segmentCount = 40;
         const segMat = new THREE.MeshBasicMaterial({
             color: 0x2b3eff,
@@ -849,7 +851,7 @@ class HologramAvatar {
                         displacement = Math.sin(elapsedTime * 2 + base.y * 0.05) * 3;
                     }
 
-                    const scale = 1 + displacement / 60;
+                    const scale = 1 + displacement / this.halcyLatticeRadius;
                     positions[i * 3] = base.x * scale;
                     positions[i * 3 + 1] = base.y * scale;
                     positions[i * 3 + 2] = base.z * scale;
@@ -875,7 +877,8 @@ class HologramAvatar {
             }
 
             // Inner ultramarine equalizer ring — each segment thickens along the circumference
-            // to the live audio frequencies while speaking, and the ring sways on its Z axis.
+            // to the live audio frequencies while speaking. The segments are children of the
+            // rotating group, so the thickening pattern rotates together with the ring itself.
             this.halcyInnerSegments.forEach((seg, idx) => {
                 let lenScale = 1.0;
                 if (this.state === 'SPEAKING') {
@@ -892,9 +895,12 @@ class HologramAvatar {
             });
 
             if (this.halcyInnerRingGroup) {
-                const swayAmplitude = this.state === 'SPEAKING' ? 0.28 : 0.05;
-                const swaySpeed = this.state === 'SPEAKING' ? 2.6 : 0.6;
-                this.halcyInnerRingGroup.rotation.z = Math.sin(elapsedTime * swaySpeed) * swayAmplitude;
+                const spinMultiplier = this.state === 'THINKING' ? 3.0 : (this.state === 'SPEAKING' ? 1.6 : 1.0);
+                this.halcyInnerRingGroup.rotation.z += this.halcyInnerRingGroup.userData.speed * spinMultiplier;
+
+                const swayAmplitude = this.state === 'SPEAKING' ? 0.24 : 0.05;
+                const swaySpeed = this.state === 'SPEAKING' ? 2.4 : 0.6;
+                this.halcyInnerRingGroup.rotation.x = Math.sin(elapsedTime * swaySpeed) * swayAmplitude;
             }
 
             if (this.coreOrb) {
