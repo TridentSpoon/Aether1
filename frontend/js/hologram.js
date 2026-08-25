@@ -6,7 +6,7 @@
  * 2. A.R.X.LIMES: Floating 3D Voxel Hypercubes & Crystalline Monolith
  * 3. The Nexus: Inward Falling Particles into a Gravitational Singularity
  * 4. R.E.D. 9000 (HAL 9000): Central Glowing Sphere with Two Orbit Circles
- * 5. A.R.X.LOGOS: Jagged Geometric Star with Neon Particle Burst
+ * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
  * 6. Real-time Audio Frequency and State deformation.
  *
  * Color Themes: halcy (cyan), nexus (green), arx-limes (amber), arx-logos (magenta), red (crimson)
@@ -66,12 +66,16 @@ class HologramAvatar {
         this.redBlueCircle = null;
         this.redCyanCircle = null;
 
-        // 5. A.R.X.LOGOS - Jagged Geometric Star
+        // 5. A.R.X.LOGOS - Central Hexagon with Six Spiraling Hexagon Arms + Dotted Outer Ring
         this.arxLogosGroup = null;
-        this.arxLogosStarPoints = [];
-        this.arxLogosInnerCore = null;
-        this.arxLogosRings = [];
-        this.arxLogosSpikeMat = null;
+        this.arxLogosCentralFill = null;
+        this.arxLogosCentralOutline = null;
+        this.arxLogosArmHexes = []; // { mesh, armIndex, stepIndex }
+        this.arxLogosOuterDots = [];
+        this.arxLogosArmMatNear = null;
+        this.arxLogosArmMatMid = null;
+        this.arxLogosArmMatFar = null;
+        this.arxLogosOuterDotMat = null;
 
         this.clock = null;
         this.mouseX = 0;
@@ -142,6 +146,29 @@ class HologramAvatar {
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, size, size);
         return new THREE.CanvasTexture(canvas);
+    }
+
+    // Regular hexagon helpers (used by A.R.X.LOGOS). rotationOffset=0 gives flat top/bottom,
+    // pointy left/right; rotationOffset=Math.PI/2 gives pointy top/bottom, flat left/right.
+    hexVertices(radius, rotationOffset, cx = 0, cy = 0) {
+        const pts = [];
+        for (let i = 0; i < 6; i++) {
+            const angle = rotationOffset + i * (Math.PI / 3);
+            pts.push(new THREE.Vector3(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius, 0));
+        }
+        return pts;
+    }
+
+    buildHexOutline(radius, rotationOffset, material, cx = 0, cy = 0) {
+        const geom = new THREE.BufferGeometry().setFromPoints(this.hexVertices(radius, rotationOffset, cx, cy));
+        return new THREE.LineLoop(geom, material);
+    }
+
+    buildHexFill(radius, rotationOffset, material, cx = 0, cy = 0) {
+        const geom = new THREE.CircleGeometry(radius, 6, rotationOffset);
+        const mesh = new THREE.Mesh(geom, material);
+        mesh.position.set(cx, cy, 0);
+        return mesh;
     }
 
     buildHalcyAvatar() {
@@ -449,90 +476,78 @@ class HologramAvatar {
     buildArxLogosAvatar() {
         this.arxLogosGroup = new THREE.Group();
 
-        // Jagged Geometric Star — built from sharp spike tetrahedra radiating from center
-        this.arxLogosSpikeMat = new THREE.MeshBasicMaterial({
+        // --- Centerpiece: large regular hexagon, flat top/bottom, pointy left/right ---
+        const centralRadius = 26;
+        const centralFillMat = new THREE.MeshBasicMaterial({
             color: 0xe024c3,
-            wireframe: true,
             transparent: true,
-            opacity: 0.90,
+            opacity: 0.22,
             blending: THREE.AdditiveBlending
         });
+        const centralOutlineMat = new THREE.LineBasicMaterial({
+            color: 0xe024c3,
+            transparent: true,
+            opacity: 0.95
+        });
+        this.arxLogosCentralFill = this.buildHexFill(centralRadius, 0, centralFillMat);
+        this.arxLogosCentralOutline = this.buildHexOutline(centralRadius, 0, centralOutlineMat);
+        this.arxLogosGroup.add(this.arxLogosCentralFill);
+        this.arxLogosGroup.add(this.arxLogosCentralOutline);
 
-        const spikeCount = 12;
-        for (let i = 0; i < spikeCount; i++) {
-            // Each spike is a narrow cone (tetrahedron) pointing outward
-            const height = 55 + (i % 3) * 20; // jagged varying lengths
-            const coneGeom = new THREE.ConeGeometry(6 + (i % 3) * 3, height, 4); // 4 sides = diamond spike
-            const spike = new THREE.Mesh(coneGeom, this.arxLogosSpikeMat);
+        // --- Spiraling arms: 6 identical arms radiating from the central hex's 6 flat edges ---
+        this.arxLogosArmMatNear = new THREE.LineBasicMaterial({ color: 0xe024c3, transparent: true, opacity: 0.9 });
+        this.arxLogosArmMatMid = new THREE.LineBasicMaterial({ color: 0x9d00ff, transparent: true, opacity: 0.85 });
+        this.arxLogosArmMatFar = new THREE.LineBasicMaterial({ color: 0xff00ff, transparent: true, opacity: 0.8 });
 
-            // Distribute spikes in a star sphere pattern
-            const phi = Math.acos(-1 + (2 * i) / spikeCount);
-            const theta = Math.sqrt(spikeCount * Math.PI) * phi;
+        const hexPerArm = 8;
+        const apothem = centralRadius * Math.cos(Math.PI / 6); // distance from center to a flat edge
 
-            const x = Math.cos(theta) * Math.sin(phi);
-            const y = Math.sin(theta) * Math.sin(phi);
-            const z = Math.cos(phi);
+        for (let a = 0; a < 6; a++) {
+            const baseAngle = (Math.PI / 6) + a * (Math.PI / 3); // edge-normal directions: 30,90,...,330 deg
+            let curAngle = baseAngle;
+            let hexSize = 15;
+            let curDist = apothem + hexSize * 0.8;
 
-            // Position spike tip at its direction, rotated to point outward
-            spike.position.set(x * height * 0.55, y * height * 0.55, z * height * 0.55);
+            for (let i = 0; i < hexPerArm; i++) {
+                const mat = i < 3 ? this.arxLogosArmMatNear : (i < 6 ? this.arxLogosArmMatMid : this.arxLogosArmMatFar);
+                const x = Math.cos(curAngle) * curDist;
+                const y = Math.sin(curAngle) * curDist;
+                const hex = this.buildHexOutline(hexSize, 0, mat, x, y);
+                hex.userData = { armIndex: a, stepIndex: i, baseX: x, baseY: y, phase: a * 0.9 + i * 0.5 };
+                this.arxLogosArmHexes.push(hex);
+                this.arxLogosGroup.add(hex);
 
-            // Align cone to point outward along its position vector
-            spike.lookAt(x * 200, y * 200, z * 200);
-            spike.rotateX(Math.PI / 2);
-
-            spike.userData = {
-                baseX: x * height * 0.55,
-                baseY: y * height * 0.55,
-                baseZ: z * height * 0.55,
-                phase: (i / spikeCount) * Math.PI * 2,
-                len: height
-            };
-
-            this.arxLogosStarPoints.push(spike);
-            this.arxLogosGroup.add(spike);
+                // Clockwise spiral: tight curve near the core, straightening toward the tail
+                const angleStep = (0.62 * Math.pow(0.7, i));
+                curAngle -= angleStep;
+                curDist += hexSize * 1.3;
+                hexSize *= 0.8;
+            }
         }
 
-        // Inner dense core — compressed icosahedron
-        const coreGeom = new THREE.IcosahedronGeometry(16, 1);
-        const coreMat = new THREE.MeshBasicMaterial({
+        // --- Outer boundary ring: large hex frame, rotated 90 deg, traced by tiny dot-hexagons ---
+        const outerRadius = 112;
+        const dotsPerEdge = 10;
+        this.arxLogosOuterDotMat = new THREE.MeshBasicMaterial({
             color: 0xff00ff,
-            wireframe: true,
             transparent: true,
-            opacity: 0.85,
+            opacity: 0.75,
             blending: THREE.AdditiveBlending
         });
-        this.arxLogosInnerCore = new THREE.Mesh(coreGeom, coreMat);
-        this.arxLogosGroup.add(this.arxLogosInnerCore);
-
-        // Two thin orbit rings around the star
-        const ring1Geom = new THREE.RingGeometry(90, 92, 48);
-        const ring1Mat = new THREE.MeshBasicMaterial({
-            color: 0xe024c3,
-            side: THREE.DoubleSide,
-            transparent: true,
-            opacity: 0.55,
-            blending: THREE.AdditiveBlending
-        });
-        const arxLogosRing1 = new THREE.Mesh(ring1Geom, ring1Mat);
-        arxLogosRing1.rotation.x = 0.5;
-        arxLogosRing1.userData = { speed: 0.022 };
-        this.arxLogosRings.push(arxLogosRing1);
-        this.arxLogosGroup.add(arxLogosRing1);
-
-        const ring2Geom = new THREE.RingGeometry(110, 112, 48);
-        const ring2Mat = new THREE.MeshBasicMaterial({
-            color: 0x9d00ff,
-            side: THREE.DoubleSide,
-            transparent: true,
-            opacity: 0.45,
-            blending: THREE.AdditiveBlending
-        });
-        const arxLogosRing2 = new THREE.Mesh(ring2Geom, ring2Mat);
-        arxLogosRing2.rotation.x = -0.9;
-        arxLogosRing2.rotation.y = 0.6;
-        arxLogosRing2.userData = { speed: -0.016 };
-        this.arxLogosRings.push(arxLogosRing2);
-        this.arxLogosGroup.add(arxLogosRing2);
+        const outerVerts = this.hexVertices(outerRadius, Math.PI / 2);
+        for (let e = 0; e < 6; e++) {
+            const v0 = outerVerts[e];
+            const v1 = outerVerts[(e + 1) % 6];
+            for (let d = 0; d < dotsPerEdge; d++) {
+                const t = d / dotsPerEdge;
+                const x = v0.x + (v1.x - v0.x) * t;
+                const y = v0.y + (v1.y - v0.y) * t;
+                const dot = this.buildHexFill(2.6, 0, this.arxLogosOuterDotMat, x, y);
+                dot.userData = { baseScale: 1.0, phase: (e * dotsPerEdge + d) * 0.35 };
+                this.arxLogosOuterDots.push(dot);
+                this.arxLogosGroup.add(dot);
+            }
+        }
 
         this.scene.add(this.arxLogosGroup);
     }
@@ -587,11 +602,13 @@ class HologramAvatar {
         if (this.arxLimesCrystalMat) this.arxLimesCrystalMat.color.setHex(p.hex2);
         if (this.arxLimesCubeMat) this.arxLimesCubeMat.color.setHex(p.hex);
 
-        // A.R.X.LOGOS jagged star
-        if (this.arxLogosSpikeMat) this.arxLogosSpikeMat.color.setHex(p.hex);
-        if (this.arxLogosInnerCore) this.arxLogosInnerCore.material.color.setHex(p.hex3);
-        if (this.arxLogosRings[0]) this.arxLogosRings[0].material.color.setHex(p.hex);
-        if (this.arxLogosRings[1]) this.arxLogosRings[1].material.color.setHex(p.hex2);
+        // A.R.X.LOGOS hexagon spiral
+        if (this.arxLogosCentralFill) this.arxLogosCentralFill.material.color.setHex(p.hex);
+        if (this.arxLogosCentralOutline) this.arxLogosCentralOutline.material.color.setHex(p.hex);
+        if (this.arxLogosArmMatNear) this.arxLogosArmMatNear.color.setHex(p.hex);
+        if (this.arxLogosArmMatMid) this.arxLogosArmMatMid.color.setHex(p.hex2);
+        if (this.arxLogosArmMatFar) this.arxLogosArmMatFar.color.setHex(p.hex3);
+        if (this.arxLogosOuterDotMat) this.arxLogosOuterDotMat.color.setHex(p.hex3);
 
         // R.E.D. 9000
         if (this.redCoreSphere) this.redCoreSphere.material.color.setHex(p.hex);
@@ -621,50 +638,47 @@ class HologramAvatar {
 
         if (this.currentAvatar === 'arx-logos') {
             // ==============================================================
-            // A.R.X.LOGOS: JAGGED GEOMETRIC STAR WITH NEON SPIKES
+            // A.R.X.LOGOS: CENTRAL HEXAGON WITH SIX SPIRALING HEXAGON ARMS
             // ==============================================================
             if (this.arxLogosGroup) {
-                this.arxLogosGroup.rotation.y += 0.007 + (this.state === 'THINKING' ? 0.03 : 0);
-                this.arxLogosGroup.rotation.x = Math.sin(elapsedTime * 0.5) * 0.12 + this.mouseY;
-                this.arxLogosGroup.rotation.z = Math.cos(elapsedTime * 0.4) * 0.06 + this.mouseX;
+                const spinSpeed = this.state === 'THINKING' ? 0.02 : (this.state === 'SPEAKING' ? 0.01 : 0.004);
+                this.arxLogosGroup.rotation.z -= spinSpeed; // clockwise, matching the arm winding
+                this.arxLogosGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.1 + this.mouseY;
+                this.arxLogosGroup.rotation.y = Math.cos(elapsedTime * 0.35) * 0.1 + this.mouseX;
             }
 
-            if (this.arxLogosInnerCore) {
+            if (this.arxLogosCentralFill && this.arxLogosCentralOutline) {
                 let coreScale = 1.0;
                 if (this.state === 'SPEAKING') {
-                    coreScale = 1.0 + audioIntensity * 1.4;
+                    coreScale = 1.0 + audioIntensity * 0.5;
                 } else if (this.state === 'THINKING') {
-                    coreScale = 1.0 + Math.sin(elapsedTime * 18) * 0.4;
+                    coreScale = 1.0 + Math.sin(elapsedTime * 16) * 0.18;
                 } else {
-                    coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.12;
+                    coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.08;
                 }
-                this.arxLogosInnerCore.scale.set(coreScale, coreScale, coreScale);
-                this.arxLogosInnerCore.rotation.y += 0.025;
-                this.arxLogosInnerCore.rotation.x += 0.015;
+                this.arxLogosCentralFill.scale.set(coreScale, coreScale, coreScale);
+                this.arxLogosCentralOutline.scale.set(coreScale, coreScale, coreScale);
             }
 
-            // Animate each spike — jagged pulsing outward
-            this.arxLogosStarPoints.forEach((spike, idx) => {
+            // Arm hexagons — energy pulses outward along each arm while speaking, gentle
+            // synchronized breathing otherwise.
+            this.arxLogosArmHexes.forEach(hex => {
                 let pulseFactor = 1.0;
                 if (this.state === 'SPEAKING') {
-                    const fVal = (this.audioData[idx % 16] || 0) / 255;
-                    pulseFactor = 1.0 + fVal * 0.7 + Math.sin(elapsedTime * 10 + spike.userData.phase) * 0.2;
+                    const fVal = (this.audioData[hex.userData.stepIndex % 16] || 0) / 255;
+                    pulseFactor = 1.0 + fVal * 0.6 + Math.sin(elapsedTime * 10 + hex.userData.phase) * 0.15;
                 } else if (this.state === 'THINKING') {
-                    pulseFactor = 1.0 + Math.sin(elapsedTime * 14 + spike.userData.phase) * 0.45;
+                    pulseFactor = 1.0 + Math.sin(elapsedTime * 12 + hex.userData.phase) * 0.3;
                 } else {
-                    pulseFactor = 1.0 + Math.sin(elapsedTime * 3 + spike.userData.phase) * 0.1;
+                    pulseFactor = 1.0 + Math.sin(elapsedTime * 2.5 + hex.userData.phase) * 0.08;
                 }
-                spike.position.set(
-                    spike.userData.baseX * pulseFactor,
-                    spike.userData.baseY * pulseFactor,
-                    spike.userData.baseZ * pulseFactor
-                );
+                hex.scale.set(pulseFactor, pulseFactor, pulseFactor);
             });
 
-            // Orbit rings
-            const sRingSpeed = this.state === 'THINKING' ? 3.5 : (this.state === 'SPEAKING' ? 1.8 : 1.0);
-            this.arxLogosRings.forEach(ring => {
-                ring.rotation.z += ring.userData.speed * sRingSpeed;
+            // Outer dotted boundary ring — subtle shimmer
+            this.arxLogosOuterDots.forEach(dot => {
+                const shimmer = 1.0 + Math.sin(elapsedTime * 2 + dot.userData.phase) * (this.state === 'SPEAKING' ? 0.35 : 0.15);
+                dot.scale.set(shimmer, shimmer, shimmer);
             });
 
         } else if (this.currentAvatar === 'red' || this.currentAvatar === 'crimson') {
