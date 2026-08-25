@@ -4,7 +4,8 @@
  * Avatars:
  * 1. hAlcy: Harmonic Particle Lattice & Orbital Rings
  * 2. A.R.X.LIMES: Faceted Floating Hub with a Fractured Convex Dome of Plates
- * 3. The Nexus: Inward Falling Particles into a Gravitational Singularity
+ * 3. The Nexus: Squid/Brain Creature with Trailing Tentacles that Hunts the Cursor,
+ *    Set Against Falling NEXUS Letter Rain
  * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Static Eyelid Arcs
  * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
  * 6. Real-time Audio Frequency and State deformation.
@@ -53,13 +54,16 @@ class HologramAvatar {
         this.arxLimesMainFillMat = null;
         this.arxLimesWingFillMat = null;
 
-        // 3. The Nexus Matrix Singularity structures
+        // 3. The Nexus: squid/brain hunting the cursor, trailing tentacles, NEXUS letter rain
         this.nexusGroup = null;
-        this.nexusParticles = null;
-        this.nexusParticleCount = 1400;
-        this.nexusData = [];
-        this.nexusSingularity = null;
-        this.nexusSingularityGlow = null;
+        this.nexusCreatureGroup = null; // head + tentacles; rotates to face the cursor
+        this.nexusHeadMesh = null;
+        this.nexusHeadOutline = null;
+        this.nexusTentacleMat = null;
+        this.nexusTentacles = []; // { segments, baseAngle, spreadRadius }
+        this.nexusRainDrops = []; // sprites, fall straight down and wrap top-to-bottom
+        this.nexusRainMaterials = []; // one shared material per NEXUS letter
+        this.nexusFacing = { yaw: 0, pitch: 0 }; // eased hunting orientation
 
         // 4. R.E.D. 9000 / HAL 9000 structures -- obsidian eye with lens shell + eyelid arcs
         this.redGroup = null;
@@ -147,6 +151,23 @@ class HologramAvatar {
         gradient.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    // A single glowing glyph on a transparent canvas (used by The Nexus's letter rain).
+    // Rendered white so material.color can tint it per the active color theme.
+    createLetterSpriteTexture(char, size = 64) {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.font = `bold ${Math.round(size * 0.7)}px "Share Tech Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = 'rgba(255,255,255,0.9)';
+        ctx.shadowBlur = size * 0.15;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(char, size / 2, size / 2 + size * 0.03);
         return new THREE.CanvasTexture(canvas);
     }
 
@@ -371,76 +392,78 @@ class HologramAvatar {
     buildNexusAvatar() {
         this.nexusGroup = new THREE.Group();
 
-        // 1. Singular Gravitational Core Point
-        const singGeom = new THREE.SphereGeometry(6, 32, 32);
-        const singMat = new THREE.MeshBasicMaterial({
-            color: 0xffffff,
-            transparent: true,
-            opacity: 1.0,
-            blending: THREE.AdditiveBlending
-        });
-        this.nexusSingularity = new THREE.Mesh(singGeom, singMat);
-        this.nexusGroup.add(this.nexusSingularity);
-
-        const haloGeom = new THREE.SphereGeometry(14, 32, 32);
-        const haloMat = new THREE.MeshBasicMaterial({
+        // --- NEXUS letter rain: real glyphs (not abstract points), falling straight down
+        // and wrapping top-to-bottom. This replaces the old inward-spiral vortex entirely. ---
+        const letters = ['N', 'E', 'X', 'U', 'S'];
+        this.nexusRainMaterials = letters.map(ch => new THREE.SpriteMaterial({
+            map: this.createLetterSpriteTexture(ch),
             color: 0x00ff66,
-            wireframe: true,
             transparent: true,
-            opacity: 0.45,
-            blending: THREE.AdditiveBlending
-        });
-        this.nexusSingularityGlow = new THREE.Mesh(haloGeom, haloMat);
-        this.nexusGroup.add(this.nexusSingularityGlow);
-
-        const matrixTexture = this.createGlowSpriteTexture(64);
-
-        const geometry = new THREE.BufferGeometry();
-        const positions = new Float32Array(this.nexusParticleCount * 3);
-        const colors = new Float32Array(this.nexusParticleCount * 3);
-
-        for (let i = 0; i < this.nexusParticleCount; i++) {
-            const radius = 60 + Math.random() * 110;
-            const angle = Math.random() * Math.PI * 2;
-            const y = (Math.random() - 0.5) * 160;
-
-            const x = radius * Math.cos(angle);
-            const z = radius * Math.sin(angle);
-
-            positions[i * 3] = x;
-            positions[i * 3 + 1] = y;
-            positions[i * 3 + 2] = z;
-
-            this.nexusData.push({
-                radius: radius,
-                angle: angle,
-                y: y,
-                fallSpeed: 0.8 + Math.random() * 1.5,
-                spiralSpeed: 0.02 + Math.random() * 0.03,
-                inwardSpeed: 0.4 + Math.random() * 0.6
-            });
-
-            colors[i * 3] = 0.1;
-            colors[i * 3 + 1] = 0.9 + Math.random() * 0.1;
-            colors[i * 3 + 2] = 0.4;
-        }
-
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-        const mat = new THREE.PointsMaterial({
-            size: 4.5,
-            vertexColors: true,
-            map: matrixTexture,
-            transparent: true,
-            opacity: 0.85,
+            opacity: 0.8,
             blending: THREE.AdditiveBlending,
             depthWrite: false
+        }));
+
+        const rainCount = 90;
+        const rainHalfWidth = 130;
+        const rainTopY = 110;
+        const rainBottomY = -110;
+        for (let i = 0; i < rainCount; i++) {
+            const mat = this.nexusRainMaterials[Math.floor(Math.random() * letters.length)];
+            const sprite = new THREE.Sprite(mat);
+            const scale = 9 + Math.random() * 7;
+            sprite.scale.set(scale, scale, 1);
+            sprite.position.set(
+                (Math.random() - 0.5) * rainHalfWidth * 2,
+                rainTopY + Math.random() * (rainTopY - rainBottomY),
+                (Math.random() - 0.5) * 110
+            );
+            sprite.userData = {
+                speed: 26 + Math.random() * 38,
+                flickerPhase: Math.random() * Math.PI * 2
+            };
+            this.nexusRainDrops.push(sprite);
+            this.nexusGroup.add(sprite);
+        }
+
+        // --- Squid/brain creature: a mantle-like head with trailing tentacles, held in its
+        // own sub-group so it can rotate independently to hunt the cursor without spinning
+        // the rain field along with it. ---
+        this.nexusCreatureGroup = new THREE.Group();
+
+        const headGeom = new THREE.IcosahedronGeometry(17, 1);
+        headGeom.scale(1, 0.82, 1.2);
+        const headMat = new THREE.MeshBasicMaterial({
+            color: 0x00ff66, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending
         });
+        this.nexusHeadMesh = new THREE.Mesh(headGeom, headMat);
+        this.nexusCreatureGroup.add(this.nexusHeadMesh);
 
-        this.nexusParticles = new THREE.Points(geometry, mat);
-        this.nexusGroup.add(this.nexusParticles);
+        const headEdges = new THREE.EdgesGeometry(headGeom, 15);
+        const headOutlineMat = new THREE.LineBasicMaterial({ color: 0x00ffaa, transparent: true, opacity: 0.9 });
+        this.nexusHeadOutline = new THREE.LineSegments(headEdges, headOutlineMat);
+        this.nexusCreatureGroup.add(this.nexusHeadOutline);
 
+        // Tentacles trail behind (local +Z) while the head faces local -Z toward the cursor.
+        const tentacleCount = 6;
+        const segmentsPerTentacle = 7;
+        this.nexusTentacleMat = new THREE.MeshBasicMaterial({
+            color: 0x00ff66, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending
+        });
+        for (let t = 0; t < tentacleCount; t++) {
+            const baseAngle = (t / tentacleCount) * Math.PI * 2;
+            const segments = [];
+            for (let s = 0; s < segmentsPerTentacle; s++) {
+                const size = 4.5 * (1 - s / segmentsPerTentacle) + 1;
+                const geom = new THREE.SphereGeometry(size, 8, 8);
+                const seg = new THREE.Mesh(geom, this.nexusTentacleMat);
+                this.nexusCreatureGroup.add(seg);
+                segments.push(seg);
+            }
+            this.nexusTentacles.push({ segments, baseAngle, spreadRadius: 9 });
+        }
+
+        this.nexusGroup.add(this.nexusCreatureGroup);
         this.scene.add(this.nexusGroup);
     }
 
@@ -621,8 +644,11 @@ class HologramAvatar {
             this.particleSystem.geometry.attributes.color.needsUpdate = true;
         }
 
-        // Nexus glow halo (particle stream colors are recomputed per-frame from activePalette)
-        if (this.nexusSingularityGlow) this.nexusSingularityGlow.material.color.setHex(p.hex);
+        // The Nexus: squid/brain creature + letter rain
+        if (this.nexusHeadMesh) this.nexusHeadMesh.material.color.setHex(p.hex);
+        if (this.nexusHeadOutline) this.nexusHeadOutline.material.color.setHex(p.hex3);
+        if (this.nexusTentacleMat) this.nexusTentacleMat.color.setHex(p.hex2);
+        this.nexusRainMaterials.forEach(mat => mat.color.setHex(p.hex));
 
         // A.R.X.LIMES fractured dome
         if (this.arxLimesHubFillMat) this.arxLimesHubFillMat.color.setHex(p.hex);
@@ -745,70 +771,66 @@ class HologramAvatar {
 
         } else if (this.currentAvatar === 'nexus' || this.currentAvatar === 'matrix') {
             // ==============================================================
-            // THE NEXUS: INWARD FALLING PARTICLES & GRAVITATIONAL SINGULARITY
+            // THE NEXUS: SQUID/BRAIN HUNTING THE CURSOR + NEXUS LETTER RAIN
             // ==============================================================
-            if (this.nexusGroup) {
-                this.nexusGroup.rotation.y += 0.005 + (this.state === 'THINKING' ? 0.02 : 0);
-                this.nexusGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.1 + this.mouseY;
-                this.nexusGroup.rotation.z = this.mouseX;
+
+            // Rain falls straight down and wraps top-to-bottom -- no inward spiral/vortex.
+            const rainSpeedMult = this.state === 'THINKING' ? 1.8 : (this.state === 'SPEAKING' ? 1.3 : 1.0);
+            this.nexusRainDrops.forEach(drop => {
+                drop.position.y -= drop.userData.speed * 0.016 * rainSpeedMult;
+                if (drop.position.y < -110) {
+                    drop.position.y = 110;
+                    drop.position.x = (Math.random() - 0.5) * 260;
+                }
+                drop.material.opacity = 0.55 + Math.sin(elapsedTime * 4 + drop.userData.flickerPhase) * 0.25;
+            });
+
+            // Hunt the cursor: ease the creature's facing toward the mouse instead of
+            // snapping to it, for a predatory tracking feel. No idle spin.
+            if (this.nexusCreatureGroup) {
+                const targetYaw = this.mouseX * 2.2;
+                const targetPitch = this.mouseY * 1.6;
+                this.nexusFacing.yaw += (targetYaw - this.nexusFacing.yaw) * 0.04;
+                this.nexusFacing.pitch += (targetPitch - this.nexusFacing.pitch) * 0.04;
+                this.nexusCreatureGroup.rotation.y = this.nexusFacing.yaw;
+                this.nexusCreatureGroup.rotation.x = this.nexusFacing.pitch;
             }
 
-            if (this.nexusSingularity) {
-                let singScale = 1.0;
+            if (this.nexusHeadMesh) {
+                let headScale = 1.0;
                 if (this.state === 'SPEAKING') {
-                    singScale = 1.0 + audioIntensity * 2.0;
+                    headScale = 1.0 + audioIntensity * 0.3;
                 } else if (this.state === 'THINKING') {
-                    singScale = 1.0 + Math.sin(elapsedTime * 20) * 0.5;
+                    headScale = 1.0 + Math.sin(elapsedTime * 10) * 0.08;
                 } else {
-                    singScale = 1.0 + Math.sin(elapsedTime * 4) * 0.15;
+                    headScale = 1.0 + Math.sin(elapsedTime * 2) * 0.04;
                 }
-                this.nexusSingularity.scale.set(singScale, singScale, singScale);
+                this.nexusHeadMesh.scale.set(headScale, headScale, headScale);
+                if (this.nexusHeadOutline) this.nexusHeadOutline.scale.set(headScale, headScale, headScale);
             }
 
-            if (this.nexusSingularityGlow) {
-                let glowScale = 1.0 + audioIntensity * 1.5 + Math.sin(elapsedTime * 3) * 0.1;
-                this.nexusSingularityGlow.scale.set(glowScale, glowScale, glowScale);
-                this.nexusSingularityGlow.rotation.y -= 0.03;
-                this.nexusSingularityGlow.rotation.x += 0.02;
-            }
-
-            if (this.nexusParticles) {
-                const positions = this.nexusParticles.geometry.attributes.position.array;
-                const colors = this.nexusParticles.geometry.attributes.color.array;
-                const pal = this.activePalette || THEME_PALETTES.halcy;
-
-                const speedMult = this.state === 'THINKING' ? 2.5 : (this.state === 'SPEAKING' ? 1.5 : 1.0);
-
-                for (let i = 0; i < this.nexusParticleCount; i++) {
-                    const data = this.nexusData[i];
-
-                    data.angle += data.spiralSpeed * speedMult;
-                    data.radius -= data.inwardSpeed * speedMult;
-                    data.y -= data.fallSpeed * speedMult;
-                    data.y *= 0.985;
-
-                    if (data.radius <= 6 || Math.abs(data.y) > 130) {
-                        data.radius = 120 + Math.random() * 50;
-                        data.angle = Math.random() * Math.PI * 2;
-                        data.y = (Math.random() - 0.5) * 160;
-                    }
-
-                    const x = data.radius * Math.cos(data.angle);
-                    const z = data.radius * Math.sin(data.angle);
-
-                    positions[i * 3] = x;
-                    positions[i * 3 + 1] = data.y;
-                    positions[i * 3 + 2] = z;
-
-                    const brightness = Math.min(1.0, 1.2 - (data.radius / 150));
-                    colors[i * 3] = pal.r * brightness;
-                    colors[i * 3 + 1] = pal.g * brightness;
-                    colors[i * 3 + 2] = pal.b * brightness;
-                }
-
-                this.nexusParticles.geometry.attributes.position.needsUpdate = true;
-                this.nexusParticles.geometry.attributes.color.needsUpdate = true;
-            }
+            // Tentacles fan outward from the head along their own angle, each undulating
+            // perpendicular to its own length, and all trailing backward (+Z, away from
+            // whatever the head is currently facing) and slightly down, like flowing behind
+            // a creature swimming through the code rain.
+            const waveSpeed = this.state === 'SPEAKING' ? 6 : (this.state === 'THINKING' ? 4.5 : 3);
+            this.nexusTentacles.forEach(tentacle => {
+                const dirX = Math.cos(tentacle.baseAngle);
+                const dirY = Math.sin(tentacle.baseAngle) * 0.6;
+                const perpX = -dirY;
+                const perpY = dirX;
+                tentacle.segments.forEach((seg, sIdx) => {
+                    const along = sIdx + 1;
+                    const wavePhase = elapsedTime * waveSpeed + tentacle.baseAngle * 3;
+                    const sway = Math.sin(wavePhase - along * 0.7) * (along * 0.9);
+                    const outDist = tentacle.spreadRadius + along * 2.8;
+                    seg.position.set(
+                        dirX * outDist + perpX * sway,
+                        dirY * outDist - along * 1.0 + perpY * sway * 0.5,
+                        along * 4.0 + Math.sin(wavePhase * 0.6) * 2
+                    );
+                });
+            });
 
         } else if (this.currentAvatar === 'arx-limes') {
             // ==========================================
