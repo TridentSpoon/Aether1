@@ -31,48 +31,48 @@ Designed natively for **CachyOS (Arch)** and **Fedora (GNOME / KDE / Wayland / X
 
 ---
 
-## 🚀 Quick Start (CachyOS / Arch Linux)
+## 🚀 Quick Start (New Machine)
 
-### 1. Launching on your current laptop:
+This repo is **private**, so cloning it needs your GitHub account's SSH key set
+up on the new machine first (one-time, per machine):
+
+### 1. Add an SSH key to GitHub (skip if this machine already has one)
 ```bash
-cd /home/trident/.gemini/antigravity/scratch/cortana-ai
-chmod +x setup.sh start.sh package_dist.sh
-./start.sh
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "$(hostname)"
+cat ~/.ssh/id_ed25519.pub
 ```
-`start.sh` will:
-1. Initialize the Python virtual environment and install all dependencies.
-2. Start the FastAPI backend server on `http://localhost:8378`.
-3. Launch the System Tray app in your notification panel.
-4. Open the Holographic HUD in your default web browser.
+Copy the printed key into **[github.com/settings/ssh/new](https://github.com/settings/ssh/new)**.
 
----
-
-## 📦 Transferring and Running on Fedora (Second System)
-
-To transfer AETHER1 to your second machine running Fedora:
-
-### 1. On your laptop (CachyOS), generate the distribution bundle:
+### 2. Clone, set up, and launch — one line
 ```bash
-./package_dist.sh
+git clone git@github.com:TridentSpoon/Aether1.git ~/Aether1 && cd ~/Aether1 && ./setup.sh && ./start_daemon.sh
 ```
-This generates `dist/cortana-ai-portable.tar.gz`.
+`setup.sh` will:
+1. Install system dependencies for your distro (CachyOS/Arch, Fedora, or Debian/Ubuntu — auto-detected via `/etc/os-release`).
+2. Create the Python virtual environment and install all backend dependencies.
+3. Generate the tray icons and install the desktop launcher entry.
 
-### 2. Copy the file to your Fedora machine:
-You can transfer it via USB drive, SCP, or local network:
+It's safe to re-run `./setup.sh` any time (e.g. after pulling updates) — every step is idempotent.
+
+`start_daemon.sh` then launches the backend, system tray app, and opens the Holographic HUD in your browser — all in the background, no terminal window needed. Use `./start.sh` instead if you'd rather keep it in the foreground of a terminal.
+
+### Updating an existing install
 ```bash
-scp dist/cortana-ai-portable.tar.gz user@fedora-pc:~/
+cd ~/Aether1 && git pull && ./setup.sh && ./stop.sh && ./start_daemon.sh
 ```
 
-### 3. On your Fedora machine:
-Open terminal on Fedora and run:
+### Alternative: offline `.tar.gz` transfer (no GitHub access needed)
+If the new machine can't reach GitHub, package a portable bundle from a machine
+that already has the project instead:
+```bash
+./package_dist.sh                                # produces dist/cortana-ai-portable.tar.gz
+scp dist/cortana-ai-portable.tar.gz user@new-pc:~/
+```
+Then on the new machine:
 ```bash
 tar -xzf cortana-ai-portable.tar.gz
 cd cortana-ai-portable
-./start.sh
-```
-*Note for Fedora users:* If needed, ensure Python and dev packages are present:
-```bash
-sudo dnf install python3 python3-pip libnotify
+./setup.sh && ./start_daemon.sh
 ```
 
 ---
