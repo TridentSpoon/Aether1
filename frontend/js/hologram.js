@@ -38,8 +38,10 @@ class HologramAvatar {
         this.particleSystem = null;
         this.particleCount = 2800;
         this.basePositions = [];
-        this.rings = [];
-        this.coreOrb = null;
+        this.coreOrb = null; // obsidian inner sphere — fixed color, not theme-tinted
+        this.halcyOuterRing = null; // static cyan ring — fixed color, not theme-tinted
+        this.halcyInnerRingGroup = null; // ultramarine equalizer ring — fixed color, not theme-tinted
+        this.halcyInnerSegments = [];
 
         // 2. A.R.X.LIMES structures
         this.arxLimesGroup = null;
@@ -90,6 +92,13 @@ class HologramAvatar {
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
         this.camera.position.z = 240;
+
+        // Lights only affect the hAlcy obsidian core (MeshPhongMaterial) — every other avatar
+        // uses MeshBasicMaterial, which ignores scene lighting entirely.
+        this.scene.add(new THREE.AmbientLight(0x30304a, 1.4));
+        const obsidianHighlight = new THREE.PointLight(0x9fb4ff, 2.4, 700);
+        obsidianHighlight.position.set(90, 130, 220);
+        this.scene.add(obsidianHighlight);
 
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setSize(width, height);
@@ -178,39 +187,56 @@ class HologramAvatar {
         this.particleSystem = new THREE.Points(geometry, material);
         this.scene.add(this.particleSystem);
 
-        const ringConfigs = [
-            { radius: 82, width: 1.5, rotX: 0.6, rotY: 0.2, color: 0x00f0ff, speed: 0.015 },
-            { radius: 92, width: 1.0, rotX: -0.4, rotY: 0.8, color: 0x00a2ff, speed: -0.012 },
-            { radius: 104, width: 0.8, rotX: 1.2, rotY: -0.5, color: 0xb026ff, speed: 0.008 }
-        ];
-
-        ringConfigs.forEach(cfg => {
-            const geom = new THREE.RingGeometry(cfg.radius - cfg.width, cfg.radius, 64);
-            const mat = new THREE.MeshBasicMaterial({
-                color: cfg.color,
-                side: THREE.DoubleSide,
-                transparent: true,
-                opacity: 0.45,
-                blending: THREE.AdditiveBlending
-            });
-            const ring = new THREE.Mesh(geom, mat);
-            ring.rotation.x = cfg.rotX;
-            ring.rotation.y = cfg.rotY;
-            ring.userData = { speed: cfg.speed, baseRotX: cfg.rotX, baseRotY: cfg.rotY };
-            this.rings.push(ring);
-            this.scene.add(ring);
-        });
-
+        // Obsidian inner sphere — solid glossy dark core, fixed color regardless of color theme
         const coreGeom = new THREE.SphereGeometry(18, 32, 32);
-        const coreMat = new THREE.MeshBasicMaterial({
-            color: 0x00f0ff,
+        const coreMat = new THREE.MeshPhongMaterial({
+            color: 0x0a0a0f,
+            specular: 0x8fa8ff,
+            shininess: 90,
             transparent: true,
-            opacity: 0.35,
-            wireframe: true,
-            blending: THREE.AdditiveBlending
+            opacity: 0.97
         });
         this.coreOrb = new THREE.Mesh(coreGeom, coreMat);
         this.scene.add(this.coreOrb);
+
+        // Static outer ring — fixed cyan, unaffected by color theme
+        const outerRingGeom = new THREE.RingGeometry(100, 102.5, 64);
+        const outerRingMat = new THREE.MeshBasicMaterial({
+            color: 0x00f0ff,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.5,
+            blending: THREE.AdditiveBlending
+        });
+        this.halcyOuterRing = new THREE.Mesh(outerRingGeom, outerRingMat);
+        this.halcyOuterRing.rotation.x = 0.6;
+        this.halcyOuterRing.rotation.y = 0.2;
+        this.halcyOuterRing.userData = { speed: 0.012, baseRotX: 0.6, baseRotY: 0.2 };
+        this.scene.add(this.halcyOuterRing);
+
+        // Inner ultramarine equalizer ring — segmented so its circumference can "thicken" per-bar
+        // like an audio equalizer while speaking, and the whole ring can sway on its Z axis.
+        this.halcyInnerRingGroup = new THREE.Group();
+        const innerRingRadius = 80;
+        const segmentCount = 40;
+        const segMat = new THREE.MeshBasicMaterial({
+            color: 0x2b3eff,
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE.AdditiveBlending
+        });
+        for (let i = 0; i < segmentCount; i++) {
+            const angle = (i / segmentCount) * Math.PI * 2;
+            const segGeom = new THREE.BoxGeometry(2.4, 6, 1.6);
+            segGeom.translate(0, 3, 0); // pivot at inner edge so it only extends outward when scaled
+            const seg = new THREE.Mesh(segGeom, segMat);
+            seg.position.set(Math.cos(angle) * innerRingRadius, Math.sin(angle) * innerRingRadius, 0);
+            seg.rotation.z = angle - Math.PI / 2;
+            seg.userData = { angle };
+            this.halcyInnerSegments.push(seg);
+            this.halcyInnerRingGroup.add(seg);
+        }
+        this.scene.add(this.halcyInnerRingGroup);
     }
 
     buildArxLimesAvatar() {
@@ -519,7 +545,8 @@ class HologramAvatar {
         const isHalcy = !isArxLimes && !isNexus && !isRed && !isArxLogos;
 
         if (this.particleSystem) this.particleSystem.visible = isHalcy;
-        this.rings.forEach(r => r.visible = isHalcy);
+        if (this.halcyOuterRing) this.halcyOuterRing.visible = isHalcy;
+        if (this.halcyInnerRingGroup) this.halcyInnerRingGroup.visible = isHalcy;
         if (this.coreOrb) this.coreOrb.visible = isHalcy;
 
         if (this.arxLimesGroup) this.arxLimesGroup.visible = isArxLimes;
@@ -538,7 +565,8 @@ class HologramAvatar {
         const p = THEME_PALETTES[this.currentColorTheme] || THEME_PALETTES.halcy;
         this.activePalette = p;
 
-        // hAlcy particle lattice + rings + core
+        // hAlcy particle lattice (the obsidian core + both rings have fixed colors by design,
+        // independent of the color theme — see buildHalcyAvatar)
         if (this.particleSystem) {
             const colors = this.particleSystem.geometry.attributes.color.array;
             for (let i = 0; i < this.particleCount; i++) {
@@ -548,10 +576,6 @@ class HologramAvatar {
             }
             this.particleSystem.geometry.attributes.color.needsUpdate = true;
         }
-        if (this.rings[0]) this.rings[0].material.color.setHex(p.hex);
-        if (this.rings[1]) this.rings[1].material.color.setHex(p.hex2);
-        if (this.rings[2]) this.rings[2].material.color.setHex(p.hex3);
-        if (this.coreOrb) this.coreOrb.material.color.setHex(p.hex);
 
         // Nexus glow halo (particle stream colors are recomputed per-frame from activePalette)
         if (this.nexusSingularityGlow) this.nexusSingularityGlow.material.color.setHex(p.hex);
@@ -842,21 +866,45 @@ class HologramAvatar {
                 this.particleSystem.rotation.z = this.mouseX;
             }
 
-            this.rings.forEach((ring, idx) => {
+            // Static outer ring — gentle idle rotation, fixed cyan
+            if (this.halcyOuterRing) {
                 const speedMultiplier = this.state === 'THINKING' ? 3.5 : (this.state === 'SPEAKING' ? 1.8 : 1.0);
-                ring.rotation.z += ring.userData.speed * speedMultiplier;
-                ring.rotation.x = ring.userData.baseRotX + Math.sin(elapsedTime * 0.8 + idx) * 0.08 + this.mouseY;
-                ring.rotation.y = ring.userData.baseRotY + Math.cos(elapsedTime * 0.8 + idx) * 0.08 + this.mouseX;
+                this.halcyOuterRing.rotation.z += this.halcyOuterRing.userData.speed * speedMultiplier;
+                this.halcyOuterRing.rotation.x = this.halcyOuterRing.userData.baseRotX + Math.sin(elapsedTime * 0.8) * 0.08 + this.mouseY;
+                this.halcyOuterRing.rotation.y = this.halcyOuterRing.userData.baseRotY + Math.cos(elapsedTime * 0.8) * 0.08 + this.mouseX;
+            }
+
+            // Inner ultramarine equalizer ring — each segment thickens along the circumference
+            // to the live audio frequencies while speaking, and the ring sways on its Z axis.
+            this.halcyInnerSegments.forEach((seg, idx) => {
+                let lenScale = 1.0;
+                if (this.state === 'SPEAKING') {
+                    const fVal = (this.audioData[idx % 32] || 0) / 255;
+                    lenScale = 1.0 + fVal * 2.4;
+                } else if (this.state === 'THINKING') {
+                    lenScale = 1.0 + Math.sin(elapsedTime * 14 + seg.userData.angle * 6) * 0.35;
+                } else if (this.state === 'LISTENING') {
+                    lenScale = 1.0 + Math.sin(elapsedTime * 6 + seg.userData.angle * 4) * 0.15;
+                } else {
+                    lenScale = 1.0 + Math.sin(elapsedTime * 2 + seg.userData.angle * 3) * 0.08;
+                }
+                seg.scale.y = lenScale;
             });
+
+            if (this.halcyInnerRingGroup) {
+                const swayAmplitude = this.state === 'SPEAKING' ? 0.28 : 0.05;
+                const swaySpeed = this.state === 'SPEAKING' ? 2.6 : 0.6;
+                this.halcyInnerRingGroup.rotation.z = Math.sin(elapsedTime * swaySpeed) * swayAmplitude;
+            }
 
             if (this.coreOrb) {
                 let coreScale = 1.0;
                 if (this.state === 'SPEAKING') {
-                    coreScale = 1.0 + audioIntensity * 0.8;
+                    coreScale = 1.0 + audioIntensity * 0.5;
                 } else if (this.state === 'THINKING') {
-                    coreScale = 1.0 + Math.sin(elapsedTime * 15) * 0.35;
+                    coreScale = 1.0 + Math.sin(elapsedTime * 15) * 0.2;
                 } else {
-                    coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.12;
+                    coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.08;
                 }
                 this.coreOrb.scale.set(coreScale, coreScale, coreScale);
                 this.coreOrb.rotation.y -= 0.02;
