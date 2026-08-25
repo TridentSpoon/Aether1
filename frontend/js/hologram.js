@@ -3,7 +3,7 @@
  * Avatars (3D shape) and Color Themes (palette) are independently selectable.
  * Avatars:
  * 1. hAlcy: Harmonic Particle Lattice & Orbital Rings
- * 2. A.R.X.LIMES: Floating 3D Voxel Hypercubes & Crystalline Monolith
+ * 2. A.R.X.LIMES: Faceted Floating Hub with a Fractured Convex Dome of Plates
  * 3. The Nexus: Inward Falling Particles into a Gravitational Singularity
  * 4. R.E.D. 9000 (HAL 9000): Central Glowing Sphere with Two Orbit Circles
  * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
@@ -43,12 +43,15 @@ class HologramAvatar {
         this.halcyInnerRingGroup = null; // ultramarine equalizer ring — fixed color, not theme-tinted
         this.halcyInnerSegments = [];
 
-        // 2. A.R.X.LIMES structures
+        // 2. A.R.X.LIMES structures — floating faceted hub + fractured dome plates
         this.arxLimesGroup = null;
-        this.arxLimesCubes = [];
-        this.arxLimesCore = null;
-        this.arxLimesCrystalMat = null;
-        this.arxLimesCubeMat = null;
+        this.arxLimesHubMesh = null;
+        this.arxLimesHubOutline = null;
+        this.arxLimesPlates = []; // { group, baseAngle, baseRadius, phase, tier }
+        this.arxLimesHubFillMat = null;
+        this.arxLimesOutlineMat = null;
+        this.arxLimesMainFillMat = null;
+        this.arxLimesWingFillMat = null;
 
         // 3. The Nexus Matrix Singularity structures
         this.nexusGroup = null;
@@ -171,6 +174,37 @@ class HologramAvatar {
         return mesh;
     }
 
+    // Builds one flat-ish irregular polygon "shard" (used by A.R.X.LIMES). points2D form a
+    // convex loop in local space; the loop is bulged along Z (root at y=0 stays flat, the
+    // outward tip recedes) so a cluster of shards reads as facets of one convex dome. Returns
+    // a Group containing both the translucent fill and a bright edge outline.
+    buildPolygonShard(points2D, bulge, fillMat, outlineMat) {
+        const maxDist = Math.max(...points2D.map(p => Math.hypot(p.x, p.y)), 1);
+        const verts = points2D.map(p => {
+            const d = Math.hypot(p.x, p.y);
+            return new THREE.Vector3(p.x, p.y, -bulge * (d / maxDist));
+        });
+
+        const positions = [];
+        for (let i = 1; i < verts.length - 1; i++) {
+            positions.push(verts[0].x, verts[0].y, verts[0].z);
+            positions.push(verts[i].x, verts[i].y, verts[i].z);
+            positions.push(verts[i + 1].x, verts[i + 1].y, verts[i + 1].z);
+        }
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geom.computeVertexNormals();
+        const fillMesh = new THREE.Mesh(geom, fillMat);
+
+        const outlineGeom = new THREE.BufferGeometry().setFromPoints(verts);
+        const outline = new THREE.LineLoop(outlineGeom, outlineMat);
+
+        const group = new THREE.Group();
+        group.add(fillMesh);
+        group.add(outline);
+        return group;
+    }
+
     buildHalcyAvatar() {
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(this.particleCount * 3);
@@ -271,59 +305,60 @@ class HologramAvatar {
     buildArxLimesAvatar() {
         this.arxLimesGroup = new THREE.Group();
 
-        const coreGeom = new THREE.BoxGeometry(28, 28, 28);
-        const coreMat = new THREE.MeshBasicMaterial({
-            color: 0xffaa00,
-            wireframe: true,
-            transparent: true,
-            opacity: 0.8,
-            blending: THREE.AdditiveBlending
+        // Shared materials -- one bright outline tone threads through every shard.
+        this.arxLimesHubFillMat = new THREE.MeshBasicMaterial({
+            color: 0xffaa00, side: THREE.DoubleSide, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending
         });
-        this.arxLimesCore = new THREE.Mesh(coreGeom, coreMat);
-        this.arxLimesGroup.add(this.arxLimesCore);
-
-        const crystalGeom = new THREE.OctahedronGeometry(14, 0);
-        this.arxLimesCrystalMat = new THREE.MeshBasicMaterial({
-            color: 0xff5500,
-            transparent: true,
-            opacity: 0.9,
-            blending: THREE.AdditiveBlending
+        this.arxLimesOutlineMat = new THREE.LineBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.95 });
+        this.arxLimesMainFillMat = new THREE.MeshBasicMaterial({
+            color: 0xffaa00, side: THREE.DoubleSide, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending
         });
-        const crystal = new THREE.Mesh(crystalGeom, this.arxLimesCrystalMat);
-        this.arxLimesCore.add(crystal);
-
-        const cubeGeom = new THREE.BoxGeometry(8, 8, 8);
-        this.arxLimesCubeMat = new THREE.MeshBasicMaterial({
-            color: 0xffaa00,
-            wireframe: true,
-            transparent: true,
-            opacity: 0.65,
-            blending: THREE.AdditiveBlending
+        this.arxLimesWingFillMat = new THREE.MeshBasicMaterial({
+            color: 0xff5500, side: THREE.DoubleSide, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending
         });
 
-        const numCubes = 54;
-        for (let i = 0; i < numCubes; i++) {
-            const cube = new THREE.Mesh(cubeGeom, this.arxLimesCubeMat);
-            const radius = 45 + (i % 3) * 22;
-            const phi = Math.acos(-1 + (2 * i) / numCubes);
-            const theta = Math.sqrt(numCubes * Math.PI) * phi;
+        // --- Central Hub: small, semi-transparent faceted anchor. Touches nothing. ---
+        const hubGeom = new THREE.OctahedronGeometry(9, 0);
+        this.arxLimesHubMesh = new THREE.Mesh(hubGeom, this.arxLimesHubFillMat);
+        const hubEdges = new THREE.EdgesGeometry(hubGeom);
+        this.arxLimesHubOutline = new THREE.LineSegments(hubEdges, this.arxLimesOutlineMat);
+        this.arxLimesGroup.add(this.arxLimesHubMesh);
+        this.arxLimesGroup.add(this.arxLimesHubOutline);
 
-            const bx = radius * Math.cos(theta) * Math.sin(phi);
-            const by = radius * Math.sin(theta) * Math.sin(phi);
-            const bz = radius * Math.cos(phi);
+        // --- Plate shapes, all defined locally extending toward +Y ("outward"), so every
+        // plate can share the same angle -> world orientation formula regardless of type. ---
+        const topShape = [{ x: -9, y: 0 }, { x: 9, y: 0 }, { x: 5, y: 22 }, { x: -5, y: 22 }];
+        // Bottom anchor is larger than the top one, per spec.
+        const bottomShape = [{ x: -11, y: 0 }, { x: 11, y: 0 }, { x: 6, y: 26 }, { x: -6, y: 26 }];
+        // Elongated, irregular wing blade swept toward +X; mirrored (negate x) for the left side.
+        const wingShapeRight = [{ x: -2, y: 0 }, { x: 2, y: 0 }, { x: 15, y: 24 }, { x: 4, y: 29 }];
+        const wingShapeLeft = wingShapeRight.map(p => ({ x: -p.x, y: p.y }));
 
-            cube.position.set(bx, by, bz);
-            cube.userData = {
-                baseX: bx,
-                baseY: by,
-                baseZ: bz,
-                rotSpeedX: (Math.random() - 0.5) * 0.04,
-                rotSpeedY: (Math.random() - 0.5) * 0.04,
-                radius: radius
-            };
-            this.arxLimesCubes.push(cube);
-            this.arxLimesGroup.add(cube);
-        }
+        const gap = 24; // floating gap: plates never touch the hub or each other
+        const addPlate = (shape, fillMat, worldAngleDeg, tier, tiltBack) => {
+            const worldAngle = worldAngleDeg * Math.PI / 180;
+            const plateGroup = this.buildPolygonShard(shape, 6, fillMat, this.arxLimesOutlineMat);
+            plateGroup.position.set(Math.cos(worldAngle) * gap, Math.sin(worldAngle) * gap, 0);
+            plateGroup.rotation.z = worldAngle - Math.PI / 2;
+            plateGroup.rotateX(tiltBack); // sweeps the plate backward in Z for a 3D dome feel
+            this.arxLimesGroup.add(plateGroup);
+            this.arxLimesPlates.push({
+                group: plateGroup,
+                baseAngle: worldAngle,
+                baseRadius: gap,
+                phase: worldAngleDeg * 0.03,
+                tier
+            });
+        };
+
+        // Evenly spaced around the hub (~55-70 deg apart) so all 6 plates stay visually
+        // distinct instead of clustering near the top/bottom anchors.
+        addPlate(topShape, this.arxLimesMainFillMat, 90, 'main', 0.05);
+        addPlate(bottomShape, this.arxLimesMainFillMat, -90, 'main', -0.05);
+        addPlate(wingShapeRight, this.arxLimesWingFillMat, 35, 'wing', 0.12);
+        addPlate(wingShapeRight, this.arxLimesWingFillMat, -35, 'wing', -0.12);
+        addPlate(wingShapeLeft, this.arxLimesWingFillMat, 145, 'wing', 0.12);
+        addPlate(wingShapeLeft, this.arxLimesWingFillMat, -145, 'wing', -0.12);
 
         this.scene.add(this.arxLimesGroup);
     }
@@ -597,10 +632,11 @@ class HologramAvatar {
         // Nexus glow halo (particle stream colors are recomputed per-frame from activePalette)
         if (this.nexusSingularityGlow) this.nexusSingularityGlow.material.color.setHex(p.hex);
 
-        // A.R.X.LIMES voxel cubes
-        if (this.arxLimesCore) this.arxLimesCore.material.color.setHex(p.hex);
-        if (this.arxLimesCrystalMat) this.arxLimesCrystalMat.color.setHex(p.hex2);
-        if (this.arxLimesCubeMat) this.arxLimesCubeMat.color.setHex(p.hex);
+        // A.R.X.LIMES fractured dome
+        if (this.arxLimesHubFillMat) this.arxLimesHubFillMat.color.setHex(p.hex);
+        if (this.arxLimesMainFillMat) this.arxLimesMainFillMat.color.setHex(p.hex);
+        if (this.arxLimesWingFillMat) this.arxLimesWingFillMat.color.setHex(p.hex2);
+        if (this.arxLimesOutlineMat) this.arxLimesOutlineMat.color.setHex(p.hex3);
 
         // A.R.X.LOGOS hexagon spiral
         if (this.arxLogosCentralFill) this.arxLogosCentralFill.material.color.setHex(p.hex);
@@ -797,49 +833,51 @@ class HologramAvatar {
 
         } else if (this.currentAvatar === 'arx-limes') {
             // ==========================================
-            // A.R.X.LIMES (VOXEL CUBES)
+            // A.R.X.LIMES: FLOATING HUB + FRACTURED DOME PLATES
             // ==========================================
             if (this.arxLimesGroup) {
-                let groupRotSpeed = 0.006;
-                if (this.state === 'THINKING') groupRotSpeed = 0.035;
-                if (this.state === 'SPEAKING') groupRotSpeed = 0.015;
+                let groupRotSpeed = 0.004;
+                if (this.state === 'THINKING') groupRotSpeed = 0.02;
+                if (this.state === 'SPEAKING') groupRotSpeed = 0.01;
 
                 this.arxLimesGroup.rotation.y += groupRotSpeed;
-                this.arxLimesGroup.rotation.x = Math.sin(elapsedTime * 0.5) * 0.15 + this.mouseY;
-                this.arxLimesGroup.rotation.z = this.mouseX;
+                this.arxLimesGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.12 + this.mouseY;
+                this.arxLimesGroup.rotation.z = this.mouseX * 0.5;
             }
 
-            if (this.arxLimesCore) {
-                let coreScale = 1.0;
+            if (this.arxLimesHubOutline) {
+                let hubScale = 1.0;
                 if (this.state === 'SPEAKING') {
-                    coreScale = 1.0 + audioIntensity * 1.2;
+                    hubScale = 1.0 + audioIntensity * 0.9;
                 } else if (this.state === 'THINKING') {
-                    coreScale = 1.0 + Math.sin(elapsedTime * 18) * 0.4;
+                    hubScale = 1.0 + Math.sin(elapsedTime * 18) * 0.35;
                 } else {
-                    coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.15;
+                    hubScale = 1.0 + Math.sin(elapsedTime * 3) * 0.12;
                 }
-                this.arxLimesCore.scale.set(coreScale, coreScale, coreScale);
-                this.arxLimesCore.rotation.x += 0.02;
-                this.arxLimesCore.rotation.y += 0.03;
+                this.arxLimesHubOutline.scale.set(hubScale, hubScale, hubScale);
+                if (this.arxLimesHubMesh) this.arxLimesHubMesh.scale.set(hubScale, hubScale, hubScale);
+                this.arxLimesHubOutline.rotation.x += 0.015;
+                this.arxLimesHubOutline.rotation.y += 0.02;
+                if (this.arxLimesHubMesh) {
+                    this.arxLimesHubMesh.rotation.x = this.arxLimesHubOutline.rotation.x;
+                    this.arxLimesHubMesh.rotation.y = this.arxLimesHubOutline.rotation.y;
+                }
             }
 
-            this.arxLimesCubes.forEach((cube, idx) => {
-                cube.rotation.x += cube.userData.rotSpeedX;
-                cube.rotation.y += cube.userData.rotSpeedY;
-
-                let expansion = 1.0;
+            // Plates drift radially outward on their own axis -- floating, never touching --
+            // and each responds to its own slice of the audio spectrum while speaking.
+            this.arxLimesPlates.forEach((plate, idx) => {
+                let radiusMult = 1.0;
                 if (this.state === 'SPEAKING') {
                     const fVal = (this.audioData[idx % 16] || 0) / 255;
-                    expansion = 1.0 + fVal * 0.5 + Math.sin(elapsedTime * 8 + idx) * 0.15;
+                    radiusMult = 1.0 + fVal * 0.4 + Math.sin(elapsedTime * 7 + plate.phase) * 0.05;
                 } else if (this.state === 'THINKING') {
-                    expansion = 1.0 + Math.sin(elapsedTime * 12 + idx * 0.3) * 0.35;
+                    radiusMult = 1.0 + Math.sin(elapsedTime * 10 + plate.phase) * 0.18;
                 } else {
-                    expansion = 1.0 + Math.sin(elapsedTime * 2 + idx * 0.2) * 0.08;
+                    radiusMult = 1.0 + Math.sin(elapsedTime * 2 + plate.phase) * 0.06;
                 }
-
-                cube.position.x = cube.userData.baseX * expansion;
-                cube.position.y = cube.userData.baseY * expansion;
-                cube.position.z = cube.userData.baseZ * expansion;
+                const r = plate.baseRadius * radiusMult;
+                plate.group.position.set(Math.cos(plate.baseAngle) * r, Math.sin(plate.baseAngle) * r, 0);
             });
 
         } else {
