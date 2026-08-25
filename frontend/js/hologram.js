@@ -864,6 +864,16 @@ class HologramAvatar {
                 }
             }
 
+            // A periodic stylised blink -- the side wing plates flutter shut and open again
+            // every few seconds, like eyelashes blinking. Top/bottom "eyelids" stay still.
+            const blinkCycle = 4.5;
+            const blinkDuration = 0.28;
+            const tInCycle = elapsedTime % blinkCycle;
+            let blinkScale = 1.0;
+            if (tInCycle < blinkDuration) {
+                blinkScale = 1.0 - Math.sin((tInCycle / blinkDuration) * Math.PI) * 0.92;
+            }
+
             // Plates stay put -- static, floating in fixed position -- with only a faint
             // audio-reactive nudge while speaking. No idle/thinking bob.
             this.arxLimesPlates.forEach((plate, idx) => {
@@ -874,6 +884,12 @@ class HologramAvatar {
                 }
                 const r = plate.baseRadius * radiusMult;
                 plate.group.position.set(Math.cos(plate.baseAngle) * r, Math.sin(plate.baseAngle) * r, 0);
+
+                if (plate.tier === 'wing') {
+                    // Collapse to a thin sliver and back -- closer to how a blinking eyelash
+                    // reads than shrinking the whole blade toward the hub.
+                    plate.group.scale.set(blinkScale, 1, 1);
+                }
             });
 
         } else {
