@@ -179,10 +179,12 @@ class HologramAvatar {
     // outward tip recedes) so a cluster of shards reads as facets of one convex dome. Returns
     // a Group containing both the translucent fill and a bright edge outline.
     buildPolygonShard(points2D, bulge, fillMat, outlineMat) {
-        const maxDist = Math.max(...points2D.map(p => Math.hypot(p.x, p.y)), 1);
+        // Shapes are drawn with their near (hub-facing) edge at y=0 and extend toward +y.
+        // Bulge by y alone (not radial distance) so the whole near edge sits flush at z=0
+        // and only the far edge angles backward -- not the near edge's side corners too.
+        const maxY = Math.max(...points2D.map(p => p.y), 1);
         const verts = points2D.map(p => {
-            const d = Math.hypot(p.x, p.y);
-            return new THREE.Vector3(p.x, p.y, -bulge * (d / maxDist));
+            return new THREE.Vector3(p.x, p.y, -bulge * (p.y / maxY));
         });
 
         const positions = [];
@@ -337,12 +339,13 @@ class HologramAvatar {
         const wingShapeRight = [{ x: -2, y: 0 }, { x: 2, y: 0 }, { x: 17, y: 26 }, { x: 4, y: 31 }];
         const wingShapeLeft = wingShapeRight.map(p => ({ x: -p.x, y: p.y }));
 
-        const addPlate = (shape, fillMat, worldAngleDeg, tier, tiltBack, radius) => {
+        const addPlate = (shape, fillMat, worldAngleDeg, tier, radius) => {
             const worldAngle = worldAngleDeg * Math.PI / 180;
-            const plateGroup = this.buildPolygonShard(shape, 6, fillMat, this.arxLimesOutlineMat);
+            // buildPolygonShard already angles the far (outward) edge backward in Z while
+            // keeping the near (hub-facing) edge flush -- no extra rotation needed here.
+            const plateGroup = this.buildPolygonShard(shape, 10, fillMat, this.arxLimesOutlineMat);
             plateGroup.position.set(Math.cos(worldAngle) * radius, Math.sin(worldAngle) * radius, 0);
             plateGroup.rotation.z = worldAngle - Math.PI / 2;
-            plateGroup.rotateX(tiltBack); // sweeps the plate backward in Z for a 3D dome feel
             this.arxLimesGroup.add(plateGroup);
             this.arxLimesPlates.push({
                 group: plateGroup,
@@ -356,12 +359,12 @@ class HologramAvatar {
         // Top/bottom hug close to the hub like eyelids; the 4 wings sit further out near the
         // horizontal corners (0/180 deg) like the pointed outer corners/lashes of an eye --
         // together giving the whole cluster a wide, almond-eye silhouette.
-        addPlate(topShape, this.arxLimesMainFillMat, 90, 'main', 0.05, 16);
-        addPlate(bottomShape, this.arxLimesMainFillMat, -90, 'main', -0.05, 16);
-        addPlate(wingShapeRight, this.arxLimesWingFillMat, 15, 'wing', 0.12, 26);
-        addPlate(wingShapeRight, this.arxLimesWingFillMat, -15, 'wing', -0.12, 26);
-        addPlate(wingShapeLeft, this.arxLimesWingFillMat, 165, 'wing', 0.12, 26);
-        addPlate(wingShapeLeft, this.arxLimesWingFillMat, -165, 'wing', -0.12, 26);
+        addPlate(topShape, this.arxLimesMainFillMat, 90, 'main', 16);
+        addPlate(bottomShape, this.arxLimesMainFillMat, -90, 'main', 16);
+        addPlate(wingShapeRight, this.arxLimesWingFillMat, 15, 'wing', 26);
+        addPlate(wingShapeRight, this.arxLimesWingFillMat, -15, 'wing', 26);
+        addPlate(wingShapeLeft, this.arxLimesWingFillMat, 165, 'wing', 26);
+        addPlate(wingShapeLeft, this.arxLimesWingFillMat, -165, 'wing', 26);
 
         this.scene.add(this.arxLimesGroup);
     }
@@ -839,11 +842,7 @@ class HologramAvatar {
             // A.R.X.LIMES: FLOATING HUB + FRACTURED DOME PLATES
             // ==========================================
             if (this.arxLimesGroup) {
-                let groupRotSpeed = 0.004;
-                if (this.state === 'THINKING') groupRotSpeed = 0.02;
-                if (this.state === 'SPEAKING') groupRotSpeed = 0.01;
-
-                this.arxLimesGroup.rotation.y += groupRotSpeed;
+                // No Y-axis spin -- the eye stays facing forward, only tilting to "look around".
                 this.arxLimesGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.12 + this.mouseY;
                 this.arxLimesGroup.rotation.z = this.mouseX * 0.5;
             }
@@ -860,10 +859,8 @@ class HologramAvatar {
                 this.arxLimesHubOutline.scale.set(hubScale, hubScale, hubScale);
                 if (this.arxLimesHubMesh) this.arxLimesHubMesh.scale.set(hubScale, hubScale, hubScale);
                 this.arxLimesHubOutline.rotation.x += 0.015;
-                this.arxLimesHubOutline.rotation.y += 0.02;
                 if (this.arxLimesHubMesh) {
                     this.arxLimesHubMesh.rotation.x = this.arxLimesHubOutline.rotation.x;
-                    this.arxLimesHubMesh.rotation.y = this.arxLimesHubOutline.rotation.y;
                 }
             }
 
