@@ -1,6 +1,6 @@
 """
 Auto-Discovery & Model Scanner Module for Project AETHER1.
-Discovers Antigravity/Gemini environment keys, probes local Ollama and LM Studio
+Discovers cloud API keys in the environment, probes local Ollama and LM Studio
 services, and provides 1-click small model downloads.
 """
 
@@ -17,27 +17,24 @@ class ModelScanner:
         self.lmstudio_url = "http://localhost:1234"
 
     async def scan_all(self) -> Dict[str, Any]:
-        """Scan environment, Antigravity configs, Ollama, and LM Studio."""
-        antigravity_info = self.detect_antigravity_and_keys()
+        """Scan environment for cloud API keys, and probe Ollama and LM Studio."""
+        cloud_keys_info = self.detect_cloud_api_keys()
         ollama_info = await self.scan_ollama()
         lmstudio_info = await self.scan_lmstudio()
 
         return {
-            "antigravity": antigravity_info,
+            "cloud_keys": cloud_keys_info,
             "ollama": ollama_info,
             "lmstudio": lmstudio_info,
             "has_local_provider": ollama_info["available"] or lmstudio_info["available"],
-            "has_cloud_key": bool(antigravity_info.get("detected_key"))
+            "has_cloud_key": bool(cloud_keys_info.get("detected_key"))
         }
 
-    def detect_antigravity_and_keys(self) -> Dict[str, Any]:
-        """Detect Antigravity environment, Gemini API keys, and OpenAI/Groq keys."""
-        detected = {}
-        
-        # 1. Check direct environment variables
+    def detect_cloud_api_keys(self) -> Dict[str, Any]:
+        """Detect Gemini, OpenAI, Groq, and Anthropic API keys in the environment."""
+        # Check direct environment variables
         env_keys = {
             "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY"),
-            "ANTIGRAVITY_API_KEY": os.environ.get("ANTIGRAVITY_API_KEY"),
             "GOOGLE_API_KEY": os.environ.get("GOOGLE_API_KEY"),
             "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
             "GROQ_API_KEY": os.environ.get("GROQ_API_KEY"),
@@ -46,18 +43,13 @@ class ModelScanner:
 
         found_env = {k: v[:6] + "..." + v[-4:] if v and len(v) > 10 else v for k, v in env_keys.items() if v}
         active_key = (
-            env_keys.get("GEMINI_API_KEY") or 
-            env_keys.get("ANTIGRAVITY_API_KEY") or 
+            env_keys.get("GEMINI_API_KEY") or
             env_keys.get("GOOGLE_API_KEY") or
             env_keys.get("GROQ_API_KEY") or
             env_keys.get("OPENAI_API_KEY")
         )
 
-        # 2. Check Antigravity presence
-        is_antigravity = "ANTIGRAVITY_AGENT" in os.environ or os.path.exists(os.path.expanduser("~/.config/Antigravity"))
-        
         return {
-            "is_antigravity_host": is_antigravity,
             "detected_env_keys": list(found_env.keys()),
             "detected_key": active_key or "",
             "detected_provider": "gemini" if ("GEMINI_API_KEY" in found_env or "GOOGLE_API_KEY" in found_env) else ("groq" if "GROQ_API_KEY" in found_env else "openai" if "OPENAI_API_KEY" in found_env else "")

@@ -46,7 +46,7 @@ def test_memory_db():
     session_id = "test_session"
     memory_db.clear_history(session_id)
     memory_db.add_message(session_id, "user", "Test command")
-    memory_db.add_message(session_id, "cortana", "Test response")
+    memory_db.add_message(session_id, "agent", "Test response")
 
     msgs = memory_db.get_messages(session_id)
     assert len(msgs) == 2
@@ -68,9 +68,9 @@ def test_llm_engine():
     assert "SYSTEM DIAGNOSTIC REPORT" in resp
     print("   ✔ Instant status command intercepted.")
 
-    # Test offline Cortana reply
+    # Test offline reply
     resp2 = asyncio.run(llm_engine.generate_response("hello"))
-    assert "Cortana" in resp2 or "AETHER" in resp2 or "Greetings" in resp2
+    assert "Offline Standby Mode" in resp2 or "Greetings" in resp2
     print(f"   ✔ Contextual response generated: {resp2[:60]}...")
 
 def test_tts_engine():

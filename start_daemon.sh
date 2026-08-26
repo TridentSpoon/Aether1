@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 mkdir -p "$SCRIPT_DIR/logs"
-PID_FILE="$SCRIPT_DIR/logs/cortana.pid"
-LOG_FILE="$SCRIPT_DIR/logs/cortana.log"
+PID_FILE="$SCRIPT_DIR/logs/aether1.pid"
+LOG_FILE="$SCRIPT_DIR/logs/aether1.log"
 
 # Run setup if first time
 if [ ! -d "venv" ]; then

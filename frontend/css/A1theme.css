@@ -244,7 +244,7 @@ body {
   border-radius: 4px;
 }
 
-.msg-cortana {
+.msg-agent {
   background: rgba(0, 240, 255, 0.08);
   border: 1px solid var(--border-neon);
   border-left: 3px solid var(--neon-cyan);

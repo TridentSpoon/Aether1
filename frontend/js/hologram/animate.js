@@ -1,5 +1,13 @@
 // Per-frame animation loop. animate() computes the shared per-frame values (elapsedTime,
-// audioIntensity) then dispatches to exactly one animateX() method for the active avatar.
+// audioIntensity, clickPulse) then dispatches to exactly one animateX() method for the
+// active avatar.
+//
+// Design: every avatar sits front-facing and static at rest. The only things that wake
+// it up are the agent's own THINKING / SPEAKING state and a click on the viewport --
+// clicking sets lastClickTime (see core.js), which this loop turns into clickPulse, a
+// value that eases from ~1 down to 0 over CLICK_REACT_DURATION seconds. LISTENING is
+// treated the same as IDLE (static, click-reactive only) since it isn't one of the
+// three reactions requested.
 
 HologramAvatar.prototype.animate = function() {
     requestAnimationFrame(() => this.animate());
@@ -12,16 +20,22 @@ HologramAvatar.prototype.animate = function() {
     }
     const audioIntensity = audioSum / (16 * 255);
 
+    const CLICK_REACT_DURATION = 0.7;
+    const clickAge = elapsedTime - this.lastClickTime;
+    const clickPulse = (clickAge >= 0 && clickAge < CLICK_REACT_DURATION)
+        ? Math.sin((1 - clickAge / CLICK_REACT_DURATION) * (Math.PI / 2))
+        : 0;
+
     if (this.currentAvatar === 'arx-logos') {
-        this.animateArxLogos(elapsedTime, audioIntensity);
+        this.animateArxLogos(elapsedTime, audioIntensity, clickPulse);
     } else if (this.currentAvatar === 'red' || this.currentAvatar === 'crimson') {
-        this.animateRed9000(elapsedTime, audioIntensity);
+        this.animateRed9000(elapsedTime, audioIntensity, clickPulse);
     } else if (this.currentAvatar === 'nexus' || this.currentAvatar === 'matrix') {
-        this.animateNexus(elapsedTime, audioIntensity);
+        this.animateNexus(elapsedTime, audioIntensity, clickPulse);
     } else if (this.currentAvatar === 'arx-limes') {
-        this.animateArxLimes(elapsedTime, audioIntensity);
+        this.animateArxLimes(elapsedTime, audioIntensity, clickPulse);
     } else {
-        this.animateHalcy(elapsedTime, audioIntensity);
+        this.animateHalcy(elapsedTime, audioIntensity, clickPulse);
     }
 
     this.renderer.render(this.scene, this.camera);
@@ -30,45 +44,56 @@ HologramAvatar.prototype.animate = function() {
 // ==============================================================
 // A.R.X.LOGOS: CENTRAL HEXAGON WITH SIX SPIRALING HEXAGON ARMS
 // ==============================================================
-HologramAvatar.prototype.animateArxLogos = function(elapsedTime, audioIntensity) {
+HologramAvatar.prototype.animateArxLogos = function(elapsedTime, audioIntensity, clickPulse) {
+    const isThinking = this.state === 'THINKING';
+    const isSpeaking = this.state === 'SPEAKING';
+
     if (this.arxLogosGroup) {
-        const spinSpeed = this.state === 'THINKING' ? 0.02 : (this.state === 'SPEAKING' ? 0.01 : 0.004);
+        const spinSpeed = isThinking ? 0.02 : (isSpeaking ? 0.01 : clickPulse * 0.012);
         this.arxLogosGroup.rotation.z -= spinSpeed; // clockwise, matching the arm winding
-        this.arxLogosGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.1 + this.mouseY;
-        this.arxLogosGroup.rotation.y = Math.cos(elapsedTime * 0.35) * 0.1 + this.mouseX;
+        if (isThinking || isSpeaking) {
+            this.arxLogosGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.1;
+            this.arxLogosGroup.rotation.y = Math.cos(elapsedTime * 0.35) * 0.1;
+        } else {
+            // Front-facing and still at rest -- only a faint click-triggered nod.
+            this.arxLogosGroup.rotation.x += (clickPulse * 0.08 - this.arxLogosGroup.rotation.x) * 0.15;
+            this.arxLogosGroup.rotation.y += (0 - this.arxLogosGroup.rotation.y) * 0.15;
+        }
     }
 
     if (this.arxLogosCentralFill && this.arxLogosCentralOutline) {
         let coreScale = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             coreScale = 1.0 + audioIntensity * 0.5;
-        } else if (this.state === 'THINKING') {
+        } else if (isThinking) {
             coreScale = 1.0 + Math.sin(elapsedTime * 16) * 0.18;
         } else {
-            coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.08;
+            coreScale = 1.0 + clickPulse * 0.15;
         }
         this.arxLogosCentralFill.scale.set(coreScale, coreScale, coreScale);
         this.arxLogosCentralOutline.scale.set(coreScale, coreScale, coreScale);
     }
 
-    // Arm hexagons — energy pulses outward along each arm while speaking, gentle
-    // synchronized breathing otherwise.
+    // Arm hexagons — energy pulses outward along each arm while speaking/thinking,
+    // otherwise still, with just a brief pulse on click.
     this.arxLogosArmHexes.forEach(hex => {
         let pulseFactor = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             const fVal = (this.audioData[hex.userData.stepIndex % 16] || 0) / 255;
             pulseFactor = 1.0 + fVal * 0.6 + Math.sin(elapsedTime * 10 + hex.userData.phase) * 0.15;
-        } else if (this.state === 'THINKING') {
+        } else if (isThinking) {
             pulseFactor = 1.0 + Math.sin(elapsedTime * 12 + hex.userData.phase) * 0.3;
         } else {
-            pulseFactor = 1.0 + Math.sin(elapsedTime * 2.5 + hex.userData.phase) * 0.08;
+            pulseFactor = 1.0 + clickPulse * 0.2;
         }
         hex.scale.set(pulseFactor, pulseFactor, pulseFactor);
     });
 
-    // Outer dotted boundary ring — subtle shimmer
+    // Outer dotted boundary ring — shimmers while speaking, otherwise still.
     this.arxLogosOuterDots.forEach(dot => {
-        const shimmer = 1.0 + Math.sin(elapsedTime * 2 + dot.userData.phase) * (this.state === 'SPEAKING' ? 0.35 : 0.15);
+        const shimmer = isSpeaking
+            ? 1.0 + Math.sin(elapsedTime * 2 + dot.userData.phase) * 0.35
+            : 1.0 + clickPulse * 0.25;
         dot.scale.set(shimmer, shimmer, shimmer);
     });
 };
@@ -76,97 +101,129 @@ HologramAvatar.prototype.animateArxLogos = function(elapsedTime, audioIntensity)
 // ==============================================================
 // R.E.D. 9000: CENTRAL SPHERE + TWO ORBIT CIRCLES
 // ==============================================================
-HologramAvatar.prototype.animateRed9000 = function(elapsedTime, audioIntensity) {
+HologramAvatar.prototype.animateRed9000 = function(elapsedTime, audioIntensity, clickPulse) {
+    const isThinking = this.state === 'THINKING';
+    const isSpeaking = this.state === 'SPEAKING';
+
     if (this.redGroup) {
-        this.redGroup.rotation.y = Math.sin(elapsedTime * 0.3) * 0.15 + this.mouseY;
-        this.redGroup.rotation.x = Math.sin(elapsedTime * 0.2) * 0.1 + this.mouseX;
+        if (isThinking || isSpeaking) {
+            this.redGroup.rotation.y = Math.sin(elapsedTime * 0.3) * 0.15;
+            this.redGroup.rotation.x = Math.sin(elapsedTime * 0.2) * 0.1;
+        } else {
+            // Front-facing and still at rest -- only a faint click-triggered nod.
+            this.redGroup.rotation.y += (clickPulse * 0.12 - this.redGroup.rotation.y) * 0.15;
+            this.redGroup.rotation.x += (clickPulse * 0.08 - this.redGroup.rotation.x) * 0.15;
+        }
     }
 
     // Central Sphere Pulse with Audio / State
     if (this.redCoreSphere) {
         let coreScale = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             coreScale = 1.0 + audioIntensity * 1.3;
-        } else if (this.state === 'THINKING') {
+        } else if (isThinking) {
             coreScale = 1.0 + Math.sin(elapsedTime * 16) * 0.3;
         } else {
-            coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.08;
+            coreScale = 1.0 + clickPulse * 0.35;
         }
         this.redCoreSphere.scale.set(coreScale, coreScale, coreScale);
     }
 
     if (this.redLensOuter) {
-        this.redLensOuter.rotation.y += 0.008;
-        this.redLensOuter.rotation.x += 0.005;
-        const lensScale = 1.0 + audioIntensity * 0.6;
+        const lensSpin = isThinking ? 0.02 : (isSpeaking ? 0.012 : clickPulse * 0.02);
+        this.redLensOuter.rotation.y += lensSpin;
+        this.redLensOuter.rotation.x += lensSpin * 0.6;
+        const lensScale = isSpeaking ? 1.0 + audioIntensity * 0.6 : 1.0 + clickPulse * 0.2;
         this.redLensOuter.scale.set(lensScale, lensScale, lensScale);
     }
 
     // Eyelid arcs stay static, cupping the core -- only a faint audio-reactive
     // opacity flicker while speaking, no continuous rotation.
-    const lidOpacity = this.state === 'SPEAKING' ? 0.85 + audioIntensity * 0.15 : 0.85;
+    const lidOpacity = isSpeaking ? 0.85 + audioIntensity * 0.15 : 0.85;
     if (this.redBlueCircle) this.redBlueCircle.material.opacity = lidOpacity;
     if (this.redCyanCircle) this.redCyanCircle.material.opacity = lidOpacity;
 };
 
 // ==============================================================
-// THE NEXUS: SQUID/BRAIN HUNTING THE CURSOR + NEXUS LETTER RAIN
+// THE NEXUS: SQUID/BRAIN FACING FORWARD + NEXUS LETTER RAIN
 // ==============================================================
-HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity) {
-    // Rain falls straight down and wraps top-to-bottom -- no inward spiral/vortex.
-    const rainSpeedMult = this.state === 'THINKING' ? 1.8 : (this.state === 'SPEAKING' ? 1.3 : 1.0);
+HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, clickPulse) {
+    const isThinking = this.state === 'THINKING';
+    const isSpeaking = this.state === 'SPEAKING';
+
+    // Rain falls straight down and wraps top-to-bottom -- ambient background, always
+    // active (it's the scene behind the creature, not the creature reacting).
+    const rainSpeedMult = isThinking ? 1.8 : (isSpeaking ? 1.3 : 1.0);
     this.nexusRainDrops.forEach(drop => {
         drop.position.y -= drop.userData.speed * 0.016 * rainSpeedMult;
         if (drop.position.y < -110) {
             drop.position.y = 110;
             drop.position.x = (Math.random() - 0.5) * 260;
         }
-        drop.material.opacity = 0.55 + Math.sin(elapsedTime * 4 + drop.userData.flickerPhase) * 0.25;
+        // 10% dimmer than the original 0.55 base / 0.25 flicker amplitude.
+        drop.material.opacity = 0.495 + Math.sin(elapsedTime * 4 + drop.userData.flickerPhase) * 0.225;
     });
 
-    // Hunt the cursor: ease the creature's facing toward the mouse instead of
-    // snapping to it, for a predatory tracking feel. No idle spin.
+    // Front-facing and still at rest. Looks around while thinking, gives a slight
+    // attentive tilt while speaking, and glances up on click. No idle cursor-hunting.
     if (this.nexusCreatureGroup) {
-        const targetYaw = this.mouseX * 2.2;
-        const targetPitch = this.mouseY * 1.6;
-        this.nexusFacing.yaw += (targetYaw - this.nexusFacing.yaw) * 0.04;
-        this.nexusFacing.pitch += (targetPitch - this.nexusFacing.pitch) * 0.04;
+        let targetYaw = 0;
+        let targetPitch = 0;
+        if (isThinking) {
+            targetYaw = Math.sin(elapsedTime * 0.8) * 0.35;
+            targetPitch = Math.cos(elapsedTime * 0.6) * 0.2;
+        } else if (isSpeaking) {
+            targetYaw = Math.sin(elapsedTime * 1.4) * 0.15;
+            targetPitch = Math.sin(elapsedTime * 1.1) * 0.1;
+        } else if (clickPulse > 0) {
+            targetYaw = clickPulse * 0.3;
+            targetPitch = -clickPulse * 0.15;
+        }
+        this.nexusFacing.yaw += (targetYaw - this.nexusFacing.yaw) * 0.06;
+        this.nexusFacing.pitch += (targetPitch - this.nexusFacing.pitch) * 0.06;
         this.nexusCreatureGroup.rotation.y = this.nexusFacing.yaw;
         this.nexusCreatureGroup.rotation.x = this.nexusFacing.pitch;
     }
 
     if (this.nexusHeadMesh) {
         let headScale = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             headScale = 1.0 + audioIntensity * 0.3;
-        } else if (this.state === 'THINKING') {
+        } else if (isThinking) {
             headScale = 1.0 + Math.sin(elapsedTime * 10) * 0.08;
         } else {
-            headScale = 1.0 + Math.sin(elapsedTime * 2) * 0.04;
+            headScale = 1.0 + clickPulse * 0.12;
         }
         this.nexusHeadMesh.scale.set(headScale, headScale, headScale);
         if (this.nexusHeadOutline) this.nexusHeadOutline.scale.set(headScale, headScale, headScale);
     }
 
-    // Tentacles fan outward from the head along their own angle, each undulating
-    // perpendicular to its own length, and all trailing backward (+Z, away from
-    // whatever the head is currently facing) and slightly down, like flowing behind
-    // a creature swimming through the code rain.
-    const waveSpeed = this.state === 'SPEAKING' ? 6 : (this.state === 'THINKING' ? 4.5 : 3);
+    // Tentacles fan outward from the head and trail behind it (-Z, away from the
+    // camera) so they read as further back in depth. Restless and independently
+    // writhing at all times -- like a Sentinel's mechanical feelers -- rather than a
+    // single synchronized wave, with more energy while thinking/speaking and a brief
+    // boost on click.
+    const isReacting = isThinking || isSpeaking;
+    const waveSpeed = isSpeaking ? 6 : (isThinking ? 4.5 : 2.4);
+    const swayAmp = isReacting ? 1.0 : (0.65 + clickPulse * 0.45);
     this.nexusTentacles.forEach(tentacle => {
         const dirX = Math.cos(tentacle.baseAngle);
         const dirY = Math.sin(tentacle.baseAngle) * 0.6;
         const perpX = -dirY;
         const perpY = dirX;
+        const tSpeed = waveSpeed * tentacle.speedMult;
         tentacle.segments.forEach((seg, sIdx) => {
             const along = sIdx + 1;
-            const wavePhase = elapsedTime * waveSpeed + tentacle.baseAngle * 3;
-            const sway = Math.sin(wavePhase - along * 0.7) * (along * 0.9);
-            const outDist = tentacle.spreadRadius + along * 2.8;
+            const wavePhase = elapsedTime * tSpeed + tentacle.baseAngle * 3 + tentacle.phaseSeed;
+            // Secondary, faster wriggle layered on the primary wave so each tentacle
+            // coils and whips instead of tracing one clean sine curve.
+            const wriggle = Math.sin(wavePhase * 1.8 + along * 1.3) * 0.4 * along;
+            const sway = (Math.sin(wavePhase - along * 0.7) * (along * 0.9) + wriggle) * swayAmp;
+            const outDist = tentacle.spreadRadius + along * 3.6;
             seg.position.set(
                 dirX * outDist + perpX * sway,
                 dirY * outDist - along * 1.0 + perpY * sway * 0.5,
-                along * 4.0 + Math.sin(wavePhase * 0.6) * 2
+                -(along * 5.5 + Math.sin(wavePhase * 0.6) * 2 * swayAmp)
             );
         });
     });
@@ -175,47 +232,54 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity) {
 // ==========================================
 // A.R.X.LIMES: FLOATING HUB + FRACTURED DOME PLATES
 // ==========================================
-HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity) {
+HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity, clickPulse) {
+    const isThinking = this.state === 'THINKING';
+    const isSpeaking = this.state === 'SPEAKING';
+
     if (this.arxLimesGroup) {
-        // No Y-axis spin -- the eye stays facing forward, only tilting to "look around".
-        this.arxLimesGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.12 + this.mouseY;
-        this.arxLimesGroup.rotation.z = this.mouseX * 0.5;
+        if (isThinking || isSpeaking) {
+            // No Y-axis spin -- the eye stays facing forward, only tilting to "look around".
+            this.arxLimesGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.12;
+            this.arxLimesGroup.rotation.z = Math.sin(elapsedTime * 0.3) * 0.1;
+        } else {
+            // Front-facing and still at rest -- only a faint click-triggered nod.
+            this.arxLimesGroup.rotation.x += (clickPulse * 0.1 - this.arxLimesGroup.rotation.x) * 0.15;
+            this.arxLimesGroup.rotation.z += (clickPulse * 0.08 - this.arxLimesGroup.rotation.z) * 0.15;
+        }
     }
 
     if (this.arxLimesHubOutline) {
         let hubScale = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             hubScale = 1.0 + audioIntensity * 0.9;
-        } else if (this.state === 'THINKING') {
+        } else if (isThinking) {
             hubScale = 1.0 + Math.sin(elapsedTime * 18) * 0.35;
         } else {
-            hubScale = 1.0 + Math.sin(elapsedTime * 3) * 0.12;
+            hubScale = 1.0 + clickPulse * 0.3;
         }
         this.arxLimesHubOutline.scale.set(hubScale, hubScale, hubScale);
         if (this.arxLimesHubMesh) this.arxLimesHubMesh.scale.set(hubScale, hubScale, hubScale);
-        this.arxLimesHubOutline.rotation.x += 0.015;
+
+        const hubSpin = isThinking ? 0.03 : (isSpeaking ? 0.02 : clickPulse * 0.02);
+        this.arxLimesHubOutline.rotation.x += hubSpin;
         if (this.arxLimesHubMesh) {
             this.arxLimesHubMesh.rotation.x = this.arxLimesHubOutline.rotation.x;
         }
     }
 
-    // A periodic stylised blink -- the side wing plates flutter shut and open again
-    // every few seconds, like eyelashes blinking. Top/bottom "eyelids" stay still.
-    const blinkCycle = 4.5;
-    const blinkDuration = 0.28;
-    const tInCycle = elapsedTime % blinkCycle;
-    let blinkScale = 1.0;
-    if (tInCycle < blinkDuration) {
-        blinkScale = 1.0 - Math.sin((tInCycle / blinkDuration) * Math.PI) * 0.92;
-    }
+    // A click makes it blink -- the side wing plates flutter shut and open again,
+    // like eyelashes blinking. Top/bottom "eyelids" stay still. No idle auto-blink.
+    const blinkScale = 1.0 - clickPulse * 0.9;
 
     // Plates stay put -- static, floating in fixed position -- with only a faint
-    // audio-reactive nudge while speaking. No idle/thinking bob.
+    // audio-reactive nudge while speaking, or a faint pop on click.
     this.arxLimesPlates.forEach((plate, idx) => {
         let radiusMult = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             const fVal = (this.audioData[idx % 16] || 0) / 255;
             radiusMult = 1.0 + fVal * 0.06;
+        } else if (clickPulse > 0) {
+            radiusMult = 1.0 + clickPulse * 0.05;
         }
         const r = plate.baseRadius * radiusMult;
         plate.group.position.set(Math.cos(plate.baseAngle) * r, Math.sin(plate.baseAngle) * r, 0);
@@ -231,7 +295,10 @@ HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity)
 // ==========================================
 // HALCY / DEFAULT PARTICLE ANIMATIONS
 // ==========================================
-HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity) {
+HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, clickPulse) {
+    const isThinking = this.state === 'THINKING';
+    const isSpeaking = this.state === 'SPEAKING';
+
     if (this.particleSystem) {
         const positions = this.particleSystem.geometry.attributes.position.array;
 
@@ -239,16 +306,16 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity) {
             const base = this.basePositions[i];
             let displacement = 0;
 
-            if (this.state === 'SPEAKING') {
+            if (isSpeaking) {
                 const freqIdx = i % 32;
                 const freqVal = (this.audioData[freqIdx] || 0) / 255;
                 displacement = Math.sin(elapsedTime * 8 + i * 0.1) * (8 + freqVal * 25);
-            } else if (this.state === 'LISTENING') {
-                displacement = Math.sin(elapsedTime * 6 - Math.sqrt(base.x**2 + base.y**2 + base.z**2) * 0.1) * 6;
-            } else if (this.state === 'THINKING') {
+            } else if (isThinking) {
                 displacement = Math.sin(elapsedTime * 12 + base.x * 0.2) * Math.cos(elapsedTime * 8 + base.y * 0.2) * 9;
             } else {
-                displacement = Math.sin(elapsedTime * 2 + base.y * 0.05) * 3;
+                // Slow, uniform breathing so the lattice never reads as frozen, plus
+                // the click bump on top.
+                displacement = clickPulse * 10 + Math.sin(elapsedTime * 0.5) * 2.5;
             }
 
             const scale = 1 + displacement / this.halcyLatticeRadius;
@@ -259,21 +326,35 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity) {
 
         this.particleSystem.geometry.attributes.position.needsUpdate = true;
 
-        let rotSpeed = 0.004;
-        if (this.state === 'THINKING') rotSpeed = 0.025;
-        if (this.state === 'SPEAKING') rotSpeed = 0.01;
-
+        let rotSpeed = clickPulse * 0.01;
+        if (isThinking) rotSpeed = 0.025;
+        if (isSpeaking) rotSpeed = 0.01;
         this.particleSystem.rotation.y += rotSpeed;
-        this.particleSystem.rotation.x = Math.sin(elapsedTime * 0.5) * 0.1 + this.mouseY;
-        this.particleSystem.rotation.z = this.mouseX;
+
+        if (isThinking || isSpeaking) {
+            this.particleSystem.rotation.x = Math.sin(elapsedTime * 0.5) * 0.1;
+            this.particleSystem.rotation.z = Math.cos(elapsedTime * 0.4) * 0.1;
+        } else {
+            // Front-facing and still at rest -- only a faint click-triggered nod.
+            this.particleSystem.rotation.x += (clickPulse * 0.12 - this.particleSystem.rotation.x) * 0.15;
+            this.particleSystem.rotation.z += (clickPulse * 0.1 - this.particleSystem.rotation.z) * 0.15;
+        }
     }
 
-    // Static outer ring — gentle idle rotation, fixed cyan
+    // Static outer ring — only spins while thinking/speaking, or briefly on click.
     if (this.halcyOuterRing) {
-        const speedMultiplier = this.state === 'THINKING' ? 3.5 : (this.state === 'SPEAKING' ? 1.8 : 1.0);
+        const speedMultiplier = isThinking ? 3.5 : (isSpeaking ? 1.8 : clickPulse * 1.4);
         this.halcyOuterRing.rotation.z += this.halcyOuterRing.userData.speed * speedMultiplier;
-        this.halcyOuterRing.rotation.x = this.halcyOuterRing.userData.baseRotX + Math.sin(elapsedTime * 0.8) * 0.08 + this.mouseY;
-        this.halcyOuterRing.rotation.y = this.halcyOuterRing.userData.baseRotY + Math.cos(elapsedTime * 0.8) * 0.08 + this.mouseX;
+
+        if (isThinking || isSpeaking) {
+            this.halcyOuterRing.rotation.x = this.halcyOuterRing.userData.baseRotX + Math.sin(elapsedTime * 0.8) * 0.08;
+            this.halcyOuterRing.rotation.y = this.halcyOuterRing.userData.baseRotY + Math.cos(elapsedTime * 0.8) * 0.08;
+        } else {
+            const targetX = this.halcyOuterRing.userData.baseRotX + clickPulse * 0.1;
+            const targetY = this.halcyOuterRing.userData.baseRotY + clickPulse * 0.1;
+            this.halcyOuterRing.rotation.x += (targetX - this.halcyOuterRing.rotation.x) * 0.15;
+            this.halcyOuterRing.rotation.y += (targetY - this.halcyOuterRing.rotation.y) * 0.15;
+        }
     }
 
     // Inner ultramarine equalizer ring — each segment thickens along the circumference
@@ -281,38 +362,42 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity) {
     // rotating group, so the thickening pattern rotates together with the ring itself.
     this.halcyInnerSegments.forEach((seg, idx) => {
         let lenScale = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             const fVal = (this.audioData[idx % 32] || 0) / 255;
             lenScale = 1.0 + fVal * 2.4;
-        } else if (this.state === 'THINKING') {
+        } else if (isThinking) {
             lenScale = 1.0 + Math.sin(elapsedTime * 14 + seg.userData.angle * 6) * 0.35;
-        } else if (this.state === 'LISTENING') {
-            lenScale = 1.0 + Math.sin(elapsedTime * 6 + seg.userData.angle * 4) * 0.15;
         } else {
-            lenScale = 1.0 + Math.sin(elapsedTime * 2 + seg.userData.angle * 3) * 0.08;
+            lenScale = 1.0 + clickPulse * 0.3;
         }
         seg.scale.y = lenScale;
     });
 
     if (this.halcyInnerRingGroup) {
-        const spinMultiplier = this.state === 'THINKING' ? 3.0 : (this.state === 'SPEAKING' ? 1.6 : 1.0);
+        const spinMultiplier = isThinking ? 3.0 : (isSpeaking ? 1.6 : clickPulse * 1.1);
         this.halcyInnerRingGroup.rotation.z += this.halcyInnerRingGroup.userData.speed * spinMultiplier;
 
-        const swayAmplitude = this.state === 'SPEAKING' ? 0.24 : 0.05;
-        const swaySpeed = this.state === 'SPEAKING' ? 2.4 : 0.6;
-        this.halcyInnerRingGroup.rotation.x = Math.sin(elapsedTime * swaySpeed) * swayAmplitude;
+        if (isSpeaking) {
+            this.halcyInnerRingGroup.rotation.x = Math.sin(elapsedTime * 2.4) * 0.24;
+        } else if (isThinking) {
+            this.halcyInnerRingGroup.rotation.x = Math.sin(elapsedTime * 0.6) * 0.05;
+        } else {
+            this.halcyInnerRingGroup.rotation.x += (clickPulse * 0.1 - this.halcyInnerRingGroup.rotation.x) * 0.15;
+        }
     }
 
     if (this.coreOrb) {
         let coreScale = 1.0;
-        if (this.state === 'SPEAKING') {
+        if (isSpeaking) {
             coreScale = 1.0 + audioIntensity * 0.5;
-        } else if (this.state === 'THINKING') {
+        } else if (isThinking) {
             coreScale = 1.0 + Math.sin(elapsedTime * 15) * 0.2;
         } else {
-            coreScale = 1.0 + Math.sin(elapsedTime * 3) * 0.08;
+            coreScale = 1.0 + clickPulse * 0.25;
         }
         this.coreOrb.scale.set(coreScale, coreScale, coreScale);
-        this.coreOrb.rotation.y -= 0.02;
+
+        const orbSpin = isThinking ? 0.05 : (isSpeaking ? 0.03 : clickPulse * 0.03);
+        this.coreOrb.rotation.y -= orbSpin;
     }
 };

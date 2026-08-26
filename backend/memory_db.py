@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "cortana_memory.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "aether1_memory.db")
 
 class MemoryDB:
     def __init__(self, db_path: str = DB_PATH):

@@ -16,8 +16,20 @@ use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde::Deserialize;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::Manager;
+
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 8378;
+
+const UPDATE_REPO: &str = "TridentSpoon/Aether1";
+const TRAY_ID: &str = "main-tray";
+
+/// Set by build.rs from `git rev-parse HEAD` at compile time; "unknown" if this wasn't
+/// built from a git checkout (e.g. a source tarball without a .git directory).
+const BUILT_COMMIT: &str = env!("AETHER1_GIT_COMMIT");
 
 /// CARGO_MANIFEST_DIR is src-tauri/ at build time; the Python backend, its venv, and
 /// frontend/ all live one level up, at the repo root.
@@ -101,6 +113,100 @@ fn kill_backend(slot: &Mutex<Option<Child>>) {
     }
 }
 
+#[derive(Deserialize)]
+struct GhCommit {
+    sha: String,
+}
+
+fn short_hash(hash: &str) -> &str {
+    &hash[..hash.len().min(7)]
+}
+
+/// AETHER1's GitHub repo is private, so an unauthenticated request 404s. Shell out to the
+/// `gh` CLI for a token if it's installed and already logged in (as it is on a dev machine
+/// that can push to this repo at all) -- there's no bundled/embedded credential. Returns
+/// None (not an error) if `gh` is missing or not authenticated; the caller just skips auth
+/// and lets the request fail normally.
+fn github_token() -> Option<String> {
+    let output = Command::new("gh").args(["auth", "token"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+/// Blocking GET against GitHub's REST API for the latest commit on `main`. Always call
+/// this off the main thread -- it can take up to the timeout below if the network is slow
+/// or absent, and must never hold up the tray or the window.
+fn fetch_latest_main_sha() -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/commits/main");
+    let mut request = ureq::get(&url)
+        .config()
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build()
+        .header("User-Agent", "AETHER1-desktop-app")
+        .header("Accept", "application/vnd.github+json");
+
+    if let Some(token) = github_token() {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+
+    let response = request.call().map_err(|e| e.to_string())?;
+
+    response
+        .into_body()
+        .read_json::<GhCommit>()
+        .map(|c| c.sha)
+        .map_err(|e| e.to_string())
+}
+
+/// Compares the running build's baked-in commit (see BUILT_COMMIT / build.rs) against the
+/// latest commit on `main`, and reflects the result in the tray tooltip and the "Check for
+/// Updates" menu item's label. Safe to call from any thread; never panics or blocks the
+/// caller beyond the network timeout in fetch_latest_main_sha.
+fn run_update_check<R: tauri::Runtime>(tray: &TrayIcon<R>, update_item: &MenuItem<R>) {
+    if BUILT_COMMIT == "unknown" {
+        // Not built from a git checkout -- nothing to compare against.
+        return;
+    }
+
+    match fetch_latest_main_sha() {
+        Ok(latest) if latest == BUILT_COMMIT => {
+            println!(
+                "[AETHER1] Update check: up to date (build {})",
+                short_hash(BUILT_COMMIT)
+            );
+            let _ = tray.set_tooltip(Some(format!(
+                "AETHER1 -- running (build {}, up to date)",
+                short_hash(BUILT_COMMIT)
+            )));
+            let _ = update_item.set_text("✅ Up to Date");
+        }
+        Ok(latest) => {
+            println!(
+                "[AETHER1] Update check: new commit available (running {}, latest {})",
+                short_hash(BUILT_COMMIT),
+                short_hash(&latest)
+            );
+            let _ = tray.set_tooltip(Some(format!(
+                "AETHER1 -- update available (running {}, latest {}) -- run: git pull && ./setup.sh",
+                short_hash(BUILT_COMMIT),
+                short_hash(&latest)
+            )));
+            let _ = update_item.set_text("⬆ Update Available (git pull)");
+        }
+        Err(e) => {
+            eprintln!("[AETHER1] Update check failed: {e}");
+            let _ = update_item.set_text("🔄 Check for Updates");
+        }
+    }
+}
+
 fn main() {
     let backend: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(spawn_backend()));
 
@@ -118,6 +224,58 @@ fn main() {
 
     let backend_for_exit = backend.clone();
     tauri::Builder::default()
+        .setup(|app| {
+            // Native tray icon so there's a visible indicator (and a quick way to
+            // reopen/quit) while AETHER1 runs headlessly in the background.
+            let show_item = MenuItem::with_id(app, "show", "Show AETHER1", true, None::<&str>)?;
+            let update_item = MenuItem::with_id(
+                app,
+                "check_update",
+                "🔄 Check for Updates",
+                true,
+                None::<&str>,
+            )?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit AETHER1", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_item, &update_item, &quit_item])?;
+
+            let tray = TrayIconBuilder::with_id(TRAY_ID)
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip(format!(
+                    "AETHER1 -- running (build {})",
+                    short_hash(BUILT_COMMIT)
+                ))
+                .menu(&tray_menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event({
+                    let update_item = update_item.clone();
+                    move |app, event| match event.id.as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "check_update" => {
+                            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                                let update_item = update_item.clone();
+                                std::thread::spawn(move || run_update_check(&tray, &update_item));
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
+            // Check once on launch, off the main thread so a slow/absent network never
+            // delays showing the window.
+            {
+                let tray = tray.clone();
+                std::thread::spawn(move || run_update_check(&tray, &update_item));
+            }
+
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(move |_app_handle, event| {
