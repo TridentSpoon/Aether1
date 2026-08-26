@@ -106,6 +106,43 @@
         
         <!-- LEFT PANEL: SYSTEM & TOKEN TELEMETRY GAUGES (3 Cols) -->
         <section class="lg:col-span-3 flex flex-col gap-3 overflow-y-auto pr-1">
+            <!-- Token Usage & Availability Telemetry -->
+            <div class="hud-panel p-4 rounded flex flex-col gap-3">
+                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                    <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        COGNITIVE TOKEN TELEMETRY
+                    </h2>
+                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">0.0 TPS</span>
+                </div>
+
+                <!-- Daily Budget / Availability Bar -->
+                <div class="space-y-1">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">SESSION TOKENS</span>
+                        <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="tokens-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #7000ff, #b026ff); box-shadow: 0 0 8px rgba(176, 38, 255, 0.8);"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>Used: <strong id="tokens-used-pct" class="text-purple-300">0%</strong></span>
+                        <span>Available: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
+                    </div>
+                </div>
+
+                <!-- Token History Graph / Canvas -->
+                <div class="space-y-1 pt-1">
+                    <div class="text-[10px] font-mono text-slate-400 flex justify-between">
+                        <span>CONSUMPTION GRAPH</span>
+                        <span>BURST SPARKLINE</span>
+                    </div>
+                    <div class="bg-black/60 p-1.5 rounded border border-purple-500/30">
+                        <canvas id="tokens-graph-canvas" width="280" height="50" class="w-full"></canvas>
+                    </div>
+                </div>
+            </div>
+
             <!-- Hardware Telemetry -->
             <div class="hud-panel p-4 rounded flex flex-col gap-3">
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
@@ -158,43 +195,6 @@
                     <div class="bg-slate-900/60 p-2 rounded border border-cyan-500/20">
                         <div class="text-[10px] text-slate-400">NET UP ↑</div>
                         <div id="net-upload-val" class="text-cyan-300 font-bold">0.0 KB/s</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Token Usage & Availability Telemetry -->
-            <div class="hud-panel p-4 rounded flex flex-col gap-3">
-                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
-                    <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
-                        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        COGNITIVE TOKEN TELEMETRY
-                    </h2>
-                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">0.0 TPS</span>
-                </div>
-
-                <!-- Daily Budget / Availability Bar -->
-                <div class="space-y-1">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">SESSION TOKENS</span>
-                        <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
-                    </div>
-                    <div class="gauge-bar-track">
-                        <div id="tokens-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #7000ff, #b026ff); box-shadow: 0 0 8px rgba(176, 38, 255, 0.8);"></div>
-                    </div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
-                        <span>Used: <strong id="tokens-used-pct" class="text-purple-300">0%</strong></span>
-                        <span>Available: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
-                    </div>
-                </div>
-
-                <!-- Token History Graph / Canvas -->
-                <div class="space-y-1 pt-1">
-                    <div class="text-[10px] font-mono text-slate-400 flex justify-between">
-                        <span>CONSUMPTION GRAPH</span>
-                        <span>BURST SPARKLINE</span>
-                    </div>
-                    <div class="bg-black/60 p-1.5 rounded border border-purple-500/30">
-                        <canvas id="tokens-graph-canvas" width="280" height="50" class="w-full"></canvas>
                     </div>
                 </div>
             </div>

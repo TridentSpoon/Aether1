@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Keeps the machine's installed desktop app in sync with the repo: runs after
+# every commit so committing changes also updates the locally installed
+# AETHER1 app, instead of that being a separate manual step. Installed into
+# .git/hooks/post-commit by ./setup.sh (git doesn't version hooks itself, so
+# the real logic lives here and setup.sh just copies it into place).
+# Never blocks or fails the commit -- this is a side effect, not a gate.
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -n "$REPO_ROOT" ] && [ -x "$REPO_ROOT/scripts/install_desktop_app.sh" ]; then
+    "$REPO_ROOT/scripts/install_desktop_app.sh" || true
+fi
+
+exit 0

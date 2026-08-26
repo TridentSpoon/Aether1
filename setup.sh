@@ -77,29 +77,22 @@ echo "📥 Installing backend & desktop dependencies..."
 echo "🎨 Generating holographic tray & app icons..."
 ./venv/bin/python desktop/generate_icons.py
 
-# 6.5 Build the native desktop app (Tauri). The app launcher installed below
-# runs this binary directly instead of opening a browser tab, so it needs to
-# exist -- best-effort, since Rust isn't a hard requirement for the rest of
-# the project (the browser-based ./start.sh / ./start_daemon.sh still work
+# 6.5 Build the native desktop app (Tauri) and install its Linux launcher
+# entry + icon (best-effort -- Rust isn't a hard requirement for the rest of
+# the project; the browser-based ./start.sh / ./start_daemon.sh still work
 # without it).
-CARGO_BIN="$HOME/.cargo/bin/cargo"
-if [ -x "$CARGO_BIN" ] && [ -d "src-tauri" ]; then
-    echo "🦀 Building native desktop app (first build can take a few minutes)..."
-    (cd src-tauri && "$CARGO_BIN" build --release) \
-        || echo "⚠ Native app build failed -- the app launcher entry won't work until this succeeds. See README's 'Native Desktop App' section."
-else
-    echo "⚠ Rust/Cargo not found at $CARGO_BIN -- skipping native app build."
-    echo "   The app launcher entry needs it. See README's 'Native Desktop App' section to install Rust, then re-run ./setup.sh."
+chmod +x scripts/install_desktop_app.sh
+./scripts/install_desktop_app.sh
+
+# 7. Install the git post-commit hook so future commits automatically rebuild
+# and reinstall the desktop app -- "update the installed app" stops being a
+# separate manual step.
+if [ -d ".git" ]; then
+    mkdir -p .git/hooks
+    cp scripts/git-hooks/post-commit .git/hooks/post-commit
+    chmod +x .git/hooks/post-commit
+    echo "✔ Installed git post-commit hook (keeps the desktop app in sync with commits)."
 fi
-
-# 7. Install Linux Desktop Launcher & Autostart (Optional)
-mkdir -p "$HOME/.local/share/applications"
-sed "s|%k/..|$SCRIPT_DIR|g" desktop/Aether1.desktop > "$HOME/.local/share/applications/Aether1.desktop"
-chmod +x "$HOME/.local/share/applications/Aether1.desktop"
-
-# Copy Icon
-mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
-cp desktop/icons/icon.png "$HOME/.local/share/icons/hicolor/256x256/apps/aether1.png" 2>/dev/null || true
 
 echo ""
 echo "======================================================================"
