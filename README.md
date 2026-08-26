@@ -1,8 +1,3 @@
-**    / \     /|**
-**   /   \   | |**
-**  / /^\ \  | |**
-** / /---\ \ | |**
-**/_/     \_\|_|**
 **The Aether1 Platform**
 
 A basic project for self-hosted or API connected AI companions with a sleek holographic presence, built in the spirit of the the future we saw in Sci-Fi growing up.
