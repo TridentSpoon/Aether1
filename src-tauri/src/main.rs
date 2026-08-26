@@ -16,6 +16,7 @@ mod model_scanner;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -132,6 +133,13 @@ fn short_hash(hash: &str) -> &str {
 /// that can push to this repo at all) -- there's no bundled/embedded credential. Returns
 /// None (not an error) if `gh` is missing or not authenticated; the caller just skips auth
 /// and lets the request fail normally.
+///
+/// This -- and perform_update's `git pull`, which relies the same way on whatever
+/// credentials this machine's `git` is already configured with (an SSH key with push
+/// access to this repo, in practice) -- is a private-repo-only interim measure. If this
+/// project ever goes public, both need replacing with a real public update mechanism (e.g.
+/// Tauri's signed-updater plugin against public release artifacts) that doesn't assume the
+/// end user has any credentials for this repo at all.
 fn github_token() -> Option<String> {
     let output = Command::new("gh").args(["auth", "token"]).output().ok()?;
     if !output.status.success() {
@@ -172,9 +180,15 @@ fn fetch_latest_main_sha() -> Result<String, String> {
 
 /// Compares the running build's baked-in commit (see BUILT_COMMIT / build.rs) against the
 /// latest commit on `main`, and reflects the result in the tray tooltip and the "Check for
-/// Updates" menu item's label. Safe to call from any thread; never panics or blocks the
+/// Updates" menu item's label -- and in `update_available`, which the menu click handler
+/// reads to decide whether the next click should check again or actually install the
+/// update (see perform_update). Safe to call from any thread; never panics or blocks the
 /// caller beyond the network timeout in fetch_latest_main_sha.
-fn run_update_check<R: tauri::Runtime>(tray: &TrayIcon<R>, update_item: &MenuItem<R>) {
+fn run_update_check<R: tauri::Runtime>(
+    tray: &TrayIcon<R>,
+    update_item: &MenuItem<R>,
+    update_available: &AtomicBool,
+) {
     if BUILT_COMMIT == "unknown" {
         // Not built from a git checkout -- nothing to compare against.
         return;
@@ -182,6 +196,7 @@ fn run_update_check<R: tauri::Runtime>(tray: &TrayIcon<R>, update_item: &MenuIte
 
     match fetch_latest_main_sha() {
         Ok(latest) if latest == BUILT_COMMIT => {
+            update_available.store(false, Ordering::Relaxed);
             println!(
                 "[AETHER1] Update check: up to date (build {})",
                 short_hash(BUILT_COMMIT)
@@ -193,21 +208,99 @@ fn run_update_check<R: tauri::Runtime>(tray: &TrayIcon<R>, update_item: &MenuIte
             let _ = update_item.set_text("✅ Up to Date");
         }
         Ok(latest) => {
+            update_available.store(true, Ordering::Relaxed);
             println!(
                 "[AETHER1] Update check: new commit available (running {}, latest {})",
                 short_hash(BUILT_COMMIT),
                 short_hash(&latest)
             );
             let _ = tray.set_tooltip(Some(format!(
-                "AETHER1 -- update available (running {}, latest {}) -- run: git pull && ./setup.sh",
+                "AETHER1 -- update available (running {}, latest {}) -- click \"Update Available\" in the tray menu to install",
                 short_hash(BUILT_COMMIT),
                 short_hash(&latest)
             )));
-            let _ = update_item.set_text("⬆ Update Available (git pull)");
+            let _ = update_item.set_text("⬆ Update Available (click to install)");
         }
         Err(e) => {
             eprintln!("[AETHER1] Update check failed: {e}");
-            let _ = update_item.set_text("🔄 Check for Updates");
+            // Leave update_available and the menu label as-is if we already know an
+            // update was available -- a transient network error re-checking shouldn't
+            // erase that state or make the label lie about what the next click will do.
+            if !update_available.load(Ordering::Relaxed) {
+                let _ = update_item.set_text("🔄 Check for Updates");
+            }
+        }
+    }
+}
+
+/// Actually applies an update: `git pull --ff-only` (see the auth note on github_token),
+/// rebuild + reinstall via scripts/install_desktop_app.sh, then relaunch the freshly built
+/// binary and exit this process so the new build takes over. Blocking (a rebuild can take
+/// over a minute); always call this off the main thread. Every step is best-effort with
+/// its result reflected in the tray so a failure is visible instead of silent.
+fn perform_update<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    tray: &TrayIcon<R>,
+    update_item: &MenuItem<R>,
+) {
+    let root = project_root();
+
+    let _ = tray.set_tooltip(Some("AETHER1 -- updating (git pull)...".to_string()));
+    let _ = update_item.set_text("⏳ Updating...");
+    println!("[AETHER1] Update: running `git pull --ff-only`...");
+
+    let pull_ok = Command::new("git")
+        .args(["pull", "--ff-only"])
+        .current_dir(&root)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !pull_ok {
+        eprintln!("[AETHER1] Update failed: git pull did not succeed.");
+        let _ = tray.set_tooltip(Some(
+            "AETHER1 -- update failed (git pull) -- see terminal output for details".to_string(),
+        ));
+        let _ = update_item.set_text("⚠ Update Failed (see logs)");
+        return;
+    }
+
+    let _ = tray.set_tooltip(Some(
+        "AETHER1 -- updating (rebuilding, this can take a minute)...".to_string(),
+    ));
+    println!("[AETHER1] Update: rebuilding via scripts/install_desktop_app.sh...");
+
+    let build_ok = Command::new("bash")
+        .arg(root.join("scripts").join("install_desktop_app.sh"))
+        .current_dir(&root)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !build_ok {
+        eprintln!("[AETHER1] Update failed: rebuild did not succeed.");
+        let _ = tray.set_tooltip(Some(
+            "AETHER1 -- update failed (build) -- see terminal output for details".to_string(),
+        ));
+        let _ = update_item.set_text("⚠ Update Failed (see logs)");
+        return;
+    }
+
+    let new_binary = root
+        .join("src-tauri")
+        .join("target")
+        .join("release")
+        .join("aether1");
+    println!("[AETHER1] Update: relaunching {}...", new_binary.display());
+    match Command::new(&new_binary).current_dir(&root).spawn() {
+        Ok(_child) => app.exit(0),
+        Err(e) => {
+            eprintln!("[AETHER1] Update succeeded but relaunch failed: {e}");
+            let _ = tray.set_tooltip(Some(
+                "AETHER1 -- updated! Please quit and reopen the app to run the new build."
+                    .to_string(),
+            ));
+            let _ = update_item.set_text("✅ Updated (restart manually)");
         }
     }
 }
@@ -339,6 +432,11 @@ fn main() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit AETHER1", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &update_item, &quit_item])?;
 
+            // Whether the last check found a newer commit on `main` -- read by the
+            // "check_update" click handler to decide whether the next click should check
+            // again or actually install the update (see perform_update).
+            let update_available = Arc::new(AtomicBool::new(false));
+
             let tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip(format!(
@@ -349,6 +447,7 @@ fn main() {
                 .show_menu_on_left_click(true)
                 .on_menu_event({
                     let update_item = update_item.clone();
+                    let update_available = update_available.clone();
                     move |app, event| match event.id.as_ref() {
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -359,7 +458,15 @@ fn main() {
                         "check_update" => {
                             if let Some(tray) = app.tray_by_id(TRAY_ID) {
                                 let update_item = update_item.clone();
-                                std::thread::spawn(move || run_update_check(&tray, &update_item));
+                                let update_available = update_available.clone();
+                                let app = app.clone();
+                                std::thread::spawn(move || {
+                                    if update_available.load(Ordering::Relaxed) {
+                                        perform_update(&app, &tray, &update_item);
+                                    } else {
+                                        run_update_check(&tray, &update_item, &update_available);
+                                    }
+                                });
                             }
                         }
                         "quit" => app.exit(0),
@@ -372,7 +479,9 @@ fn main() {
             // delays showing the window.
             {
                 let tray = tray.clone();
-                std::thread::spawn(move || run_update_check(&tray, &update_item));
+                std::thread::spawn(move || {
+                    run_update_check(&tray, &update_item, &update_available)
+                });
             }
 
             Ok(())

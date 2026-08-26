@@ -102,11 +102,12 @@ You can type or speak these commands directly into the terminal:
 
 ## 🖥️ Native Desktop App (No Browser Needed)
 
-The **AETHER1 AI Assistant** entry in your app launcher opens AETHER1 as a native desktop
+The **Aether1 Platform** entry in your app launcher opens AETHER1 as a native desktop
 window via [Tauri](https://tauri.app/) (Rust) instead of a Python server + browser tab. The
 app is self-contained: it launches its own backend automatically, shuts it down when you
 close the window (or reuses one that's already running, if you started it separately), and
-shows a system tray icon while running (left-click for a Show/Quit menu).
+shows a system tray icon while running (left-click for a Show/Update/Quit menu -- the tray
+checks for updates on launch and lets you install one with a click; see "Updating" below).
 
 **One-time setup:**
 ```bash
@@ -127,6 +128,15 @@ This is an early, incremental migration — the window itself and the 3D avatars
 native Rust/Tauri, but the backend logic (chat, TTS, telemetry, memory) is still the same
 Python/FastAPI server under the hood for now, launched automatically rather than something
 you start by hand.
+
+**Updating:** the tray icon checks GitHub for a newer commit on `main` on launch, and again
+any time you click "Check for Updates." If one's available, the menu item turns into
+"⬆ Update Available" — click it to pull, rebuild, and relaunch automatically. This repo is
+currently private, so that update check and the `git pull` it triggers both authenticate
+however your machine's `git`/`gh` are already set up (an SSH key with push access, in
+practice) — there's no separate credential involved. If this project ever goes public,
+that needs to be replaced with a real public update mechanism (e.g. Tauri's signed-updater
+plugin against public release artifacts) before anyone without repo access could use it.
 
 ---
 

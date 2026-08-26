@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AETHER1",
+  "productName": "Aether1 Platform",
   "version": "0.1.0",
   "identifier": "com.tridentspoon.aether1",
   "build": {
@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AETHER1 // CYBERNETIC AI HUD",
+        "title": "Aether1 Platform // CYBERNETIC AI HUD",
         "width": 1400,
         "height": 900,
         "minWidth": 1024,
