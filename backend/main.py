@@ -6,10 +6,9 @@ Agent Identity Genesis, Local Model Auto-Scanner, and Token Telemetry.
 
 import os
 import asyncio
-import json
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel

@@ -4,11 +4,9 @@ Supports Ollama, LM Studio, Google Gemini, OpenAI, Groq, Anthropic,
 Custom Agent Naming, A.R.X.LIMES, The Nexus, R.E.D. 9000, and Token Telemetry.
 """
 
-import os
-import json
 import time
 import httpx
-from typing import List, Dict, Any, AsyncGenerator, Optional
+from typing import List, Dict, Any, Optional
 from backend.system_monitor import system_monitor
 from backend.memory_db import memory_db
 from backend.token_tracker import token_tracker
@@ -156,12 +154,6 @@ class LLMEngine:
         duration = time.time() - start_time
         token_tracker.record_usage(prompt, ai_reply, duration, model=self.model_name or self.provider)
         return ai_reply
-
-    async def stream_response(self, prompt: str, session_id: str = "default") -> AsyncGenerator[str, None]:
-        full_text = await self.generate_response(prompt, session_id)
-        words = full_text.split(" ")
-        for i, word in enumerate(words):
-            yield word + (" " if i < len(words) - 1 else "")
 
     async def generate_identity_from_purpose(self, purpose_text: str) -> Dict[str, Any]:
         p = purpose_text.lower()

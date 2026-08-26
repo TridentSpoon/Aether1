@@ -6,10 +6,9 @@ services, and provides 1-click small model downloads.
 
 import os
 import shutil
-import asyncio
 import httpx
 import subprocess
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 class ModelScanner:
     def __init__(self):
@@ -41,7 +40,7 @@ class ModelScanner:
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY")
         }
 
-        found_env = {k: v[:6] + "..." + v[-4:] if v and len(v) > 10 else v for k, v in env_keys.items() if v}
+        detected_env_keys = [k for k, v in env_keys.items() if v]
         active_key = (
             env_keys.get("GEMINI_API_KEY") or
             env_keys.get("GOOGLE_API_KEY") or
@@ -50,9 +49,9 @@ class ModelScanner:
         )
 
         return {
-            "detected_env_keys": list(found_env.keys()),
+            "detected_env_keys": detected_env_keys,
             "detected_key": active_key or "",
-            "detected_provider": "gemini" if ("GEMINI_API_KEY" in found_env or "GOOGLE_API_KEY" in found_env) else ("groq" if "GROQ_API_KEY" in found_env else "openai" if "OPENAI_API_KEY" in found_env else "")
+            "detected_provider": "gemini" if ("GEMINI_API_KEY" in detected_env_keys or "GOOGLE_API_KEY" in detected_env_keys) else ("groq" if "GROQ_API_KEY" in detected_env_keys else "openai" if "OPENAI_API_KEY" in detected_env_keys else "")
         }
 
     async def scan_ollama(self) -> Dict[str, Any]:
