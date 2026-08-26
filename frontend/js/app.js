@@ -53,6 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Model Scanner Elements
     const btnScanSystem = document.getElementById('btn-scan-system');
     const btnPullLlama = document.getElementById('btn-pull-llama');
+    const selectLocalModel = document.getElementById('select-local-model');
     const scannerResultsBox = document.getElementById('scanner-results-box');
 
     // Hardware Telemetry Elements
@@ -582,7 +583,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function handleScanSystem() {
         if (scannerResultsBox) {
-            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Scanning for cloud API keys, Ollama, and LM Studio...</div>';
+            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Scanning for Provider API keys, Ollama, and LM Studio...</div>';
         }
         voiceEngine.playSFX('click');
 
@@ -593,9 +594,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 let html = '';
 
                 if (data.cloud_keys.detected_key) {
-                    html += `<div class="text-green-400">✔ Detected API Key (${data.cloud_keys.detected_provider || 'cloud'}) via Environment</div>`;
+                    html += `<div class="text-green-400">✔ Detected Provider API Key (${data.cloud_keys.detected_provider || 'cloud'}) via Environment</div>`;
                 } else {
-                    html += `<div class="text-slate-400">⚪ No Cloud API keys found in environment.</div>`;
+                    html += `<div class="text-slate-400">⚪ No Provider API keys found in environment.</div>`;
                 }
 
                 if (data.ollama.available) {
@@ -622,20 +623,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function handlePullLlama() {
-        if (!confirm("Pull lightweight Llama-3.2 (1B) via Ollama? (Requires Ollama running)")) return;
+        const modelName = selectLocalModel ? selectLocalModel.value : 'llama3.2:1b';
+        const modelLabel = selectLocalModel ? selectLocalModel.options[selectLocalModel.selectedIndex].text : modelName;
+        if (!confirm(`Install ${modelLabel} via Ollama? (Requires Ollama running)`)) return;
         voiceEngine.playSFX('click');
         if (scannerResultsBox) {
-            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Requesting Ollama to pull llama3.2:1b...</div>';
+            scannerResultsBox.innerHTML = `<div class="text-cyan-300 animate-pulse">Requesting Ollama to pull ${modelName}...</div>`;
         }
 
         try {
-            const resp = await apiFetch('/api/scanner/pull-model?model_name=llama3.2:1b', { method: 'POST' });
+            const resp = await apiFetch(`/api/scanner/pull-model?model_name=${encodeURIComponent(modelName)}`, { method: 'POST' });
             const data = await resp.json();
             if (scannerResultsBox) {
                 scannerResultsBox.innerHTML = `<div class="${data.status === 'error' ? 'text-red-400' : 'text-green-400'}">${data.message}</div>`;
             }
         } catch (e) {
-            alert(`Pull error: ${e.message}`);
+            alert(`Install error: ${e.message}`);
         }
     }
 
@@ -669,6 +672,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
                 document.getElementById('setting-apikey').value = s.llm_api_key || '';
                 document.getElementById('setting-persona').value = s.persona_type || 'halcy';
+                document.getElementById('setting-custom-directive').value = s.custom_directive || '';
+                toggleCustomPersonaField();
                 document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
                 document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
                 autoSpeak = s.auto_speak !== false;
@@ -676,6 +681,13 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.warn("Could not load settings", e);
         }
+    }
+
+    // Shows the custom persona directive textarea only when "Custom Directive" is
+    // selected as the base persona -- the preset personas don't need it.
+    function toggleCustomPersonaField() {
+        const wrap = document.getElementById('custom-persona-wrap');
+        if (wrap) wrap.classList.toggle('hidden', document.getElementById('setting-persona').value !== 'custom');
     }
 
     async function saveSettings(notify = true) {
@@ -687,6 +699,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 llm_endpoint: document.getElementById('setting-endpoint').value,
                 llm_api_key: document.getElementById('setting-apikey').value,
                 persona_type: document.getElementById('setting-persona').value,
+                custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
                 auto_speak: document.getElementById('setting-autospeak').checked
             }
@@ -738,6 +751,12 @@ document.addEventListener('DOMContentLoaded', () => {
             voiceEngine.playSFX('click');
             applyColorTheme(colorThemeSelect.value);
         });
+    }
+
+    // Base Persona Dropdown -- reveal the custom directive textarea only when needed
+    const settingPersonaSelect = document.getElementById('setting-persona');
+    if (settingPersonaSelect) {
+        settingPersonaSelect.addEventListener('change', toggleCustomPersonaField);
     }
 
     btnSend.addEventListener('click', () => handleSendMessage());

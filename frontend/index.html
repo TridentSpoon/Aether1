@@ -274,27 +274,53 @@
                 <button id="btn-close-settings" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
             </div>
 
-            <!-- SECTION: AVATAR SELECTOR (3D shape) -->
-            <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
-                <label class="text-xs font-mono text-cyan-300 block font-bold">🎭 3D AVATAR PRESET</label>
-                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center" data-avatar="halcy">🔷 hAlcy</button>
-                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-avatar="nexus">🟢 The Nexus</button>
-                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-avatar="arx-limes">🔶 A.R.X.LIMES</button>
-                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-avatar="arx-logos">🟣 A.R.X.LOGOS</button>
-                    <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-avatar="red">🔴 R.E.D. 9000</button>
-                </div>
-            </div>
+            <!-- SECTION: CUSTOMISATION (Avatar, Theme, Persona -- each its own card) -->
+            <div class="border border-slate-600/40 rounded-md p-4 space-y-3">
+                <h3 class="font-orbitron text-xs font-bold text-slate-300 tracking-wider flex items-center gap-1.5">
+                    🎨 CUSTOMISATION
+                </h3>
 
-            <!-- SECTION: COLOR THEME SELECTOR (cosmetic palette, independent of avatar shape) -->
-            <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
-                <label class="text-xs font-mono text-cyan-300 block font-bold">🎨 COLOR THEME</label>
-                <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center" data-color-theme="halcy">🔷 hAlcy Cyan</button>
-                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-color-theme="nexus">🟢 Nexus Green</button>
-                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-color-theme="arx-limes">🔶 A.R.X.LIMES Amber</button>
-                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 A.R.X.LOGOS Magenta</button>
-                    <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
+                <!-- Avatar Selector (3D shape) -->
+                <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                    <label class="text-xs font-mono text-cyan-300 block font-bold">🎭 3D AVATAR PRESET</label>
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        <button class="avatar-btn cyber-btn text-xs py-2 justify-center" data-avatar="halcy">🔷 hAlcy</button>
+                        <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-avatar="nexus">🟢 The Nexus</button>
+                        <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-avatar="arx-limes">🔶 A.R.X.LIMES</button>
+                        <button class="avatar-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-avatar="arx-logos">🟣 A.R.X.LOGOS</button>
+                        <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-avatar="red">🔴 R.E.D. 9000</button>
+                    </div>
+                </div>
+
+                <!-- Color Theme Selector (cosmetic palette, independent of avatar shape) -->
+                <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                    <label class="text-xs font-mono text-cyan-300 block font-bold">🎨 COLOR THEME</label>
+                    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        <button class="color-theme-btn cyber-btn text-xs py-2 justify-center" data-color-theme="halcy">🔷 hAlcy Cyan</button>
+                        <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-green-400 border-green-400" data-color-theme="nexus">🟢 Nexus Green</button>
+                        <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-color-theme="arx-limes">🔶 A.R.X.LIMES Amber</button>
+                        <button class="color-theme-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 A.R.X.LOGOS Magenta</button>
+                        <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
+                    </div>
+                </div>
+
+                <!-- Persona Selector -->
+                <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                    <label class="text-xs font-mono text-cyan-300 block font-bold">🧠 BASE PERSONA</label>
+                    <select id="setting-persona" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <option value="halcy">hAlcy (Holographic Adaptive Companion)</option>
+                        <option value="red9000">R.E.D. 9000 (Reactive Engine Daemon)</option>
+                        <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
+                        <option value="arx-limes">A.R.X.LIMES (Archival, Reasoning, matriX — Limes)</option>
+                        <option value="arx-logos">A.R.X.LOGOS (Archival, Reasoning, matriX — Logos)</option>
+                        <option value="tactical">Tactical Military HUD</option>
+                        <option value="cyberpunk">Cyberpunk Netrunner</option>
+                        <option value="custom">Custom Directive (write your own below)</option>
+                    </select>
+                    <div id="custom-persona-wrap" class="hidden space-y-1 pt-1">
+                        <label class="text-xs font-mono text-cyan-300 block">CUSTOM PERSONA DIRECTIVE</label>
+                        <textarea id="setting-custom-directive" rows="3" placeholder="e.g. 'You are {AGENT_NAME}, a dry-witted lab assistant who explains things through kitchen analogies.'" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono"></textarea>
+                    </div>
                 </div>
             </div>
 
@@ -304,27 +330,12 @@
                     <h3 class="font-orbitron text-xs font-bold text-purple-300 tracking-wider flex items-center gap-1.5">
                         ⚡ AGENT IDENTITY & GENESIS FORGE
                     </h3>
-                    <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME & PERSONA</span>
+                    <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME</span>
                 </div>
-                
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
-                        <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                    </div>
-                    <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">BASE PERSONA DIRECTIVE</label>
-                        <select id="setting-persona" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="halcy">hAlcy (Holographic Adaptive Companion)</option>
-                            <option value="red9000">R.E.D. 9000 (Reactive Engine Daemon)</option>
-                            <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
-                            <option value="arx-limes">A.R.X.LIMES (Archival, Reasoning, matriX — Limes)</option>
-                            <option value="arx-logos">A.R.X.LOGOS (Archival, Reasoning, matriX — Logos)</option>
-                            <option value="tactical">Tactical Military HUD</option>
-                            <option value="cyberpunk">Cyberpunk Netrunner</option>
-                            <option value="custom">Custom Dynamic Directive</option>
-                        </select>
-                    </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
+                    <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                 </div>
 
                 <div class="pt-2 border-t border-purple-500/30 space-y-2">
@@ -344,7 +355,7 @@
             <div class="bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
                 <div class="flex items-center justify-between">
                     <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
-                        🔍 LOCAL MODEL & CLOUD KEY SCANNER
+                        🔍 INSTALL OR INSTALLED LOCAL MODEL / PROVIDER API SCANNER
                     </h3>
                     <button id="btn-scan-system" class="cyber-btn text-[11px] py-1 px-2.5">
                         🔄 Scan System & Keys
@@ -352,14 +363,26 @@
                 </div>
 
                 <div id="scanner-results-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
-                    <div>Status: Click Scan to detect cloud API keys, Ollama, and LM Studio.</div>
+                    <div>Status: Click Scan to detect Provider API keys, Ollama, and LM Studio.</div>
                 </div>
 
-                <div class="flex items-center justify-between pt-1">
-                    <span class="text-xs font-mono text-slate-400">Need a fast local offline model?</span>
-                    <button id="btn-pull-llama" class="cyber-btn text-xs py-1 px-3 text-cyan-300">
-                        📥 Pull Llama-3.2 (1B)
-                    </button>
+                <div class="space-y-1.5 pt-1">
+                    <span class="text-xs font-mono text-slate-400 block">Guided install -- a small local LLM to get started with (via Ollama):</span>
+                    <div class="flex items-center justify-between gap-2">
+                        <select id="select-local-model" class="flex-1 bg-slate-900 border border-cyan-500/40 rounded p-1.5 text-xs text-cyan-100 font-mono">
+                            <option value="llama3.2:1b">Llama 3.2 (1B) -- fastest, smallest</option>
+                            <option value="qwen2.5:1.5b">Qwen 2.5 (1.5B) -- fast, strong for its size</option>
+                            <option value="gemma2:2b">Gemma 2 (2B) -- balanced</option>
+                            <option value="phi3">Phi-3 (3.8B) -- stronger reasoning</option>
+                            <option value="mistral">Mistral (7B) -- best quality, needs more RAM</option>
+                        </select>
+                        <button id="btn-pull-llama" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                            📥 Install Model
+                        </button>
+                    </div>
+                    <span class="text-[11px] font-mono text-slate-500 block">
+                        Prefer a GUI? LM Studio (lmstudio.ai) works the same way on Windows, macOS, and Linux -- install it, download any model from its in-app browser, then select "LM Studio" as the provider below.
+                    </span>
                 </div>
             </div>
 
