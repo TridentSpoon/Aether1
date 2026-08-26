@@ -260,6 +260,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') {
             lineColor = '#00ff66';
             fillColor = 'rgba(0, 255, 102, 0.15)';
+        } else if (currentColorTheme === 'arx-logos') {
+            lineColor = '#e024c3';
+            fillColor = 'rgba(224, 36, 195, 0.15)';
         }
 
         tokensCanvasCtx.beginPath();
