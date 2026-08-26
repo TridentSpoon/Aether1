@@ -5,7 +5,6 @@ Provides voice generation with hAlcy-style pitch and cadence.
 
 import os
 import hashlib
-import asyncio
 from typing import Optional
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "audio_cache")

@@ -4,7 +4,6 @@ Tracks prompt tokens, completion tokens, tokens-per-second, session totals,
 and historical consumption for HUD visualization.
 """
 
-import time
 import math
 from datetime import datetime
 from typing import Dict, Any, List
