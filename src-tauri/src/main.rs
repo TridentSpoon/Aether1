@@ -11,6 +11,7 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod llm;
+mod model_scanner;
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
@@ -257,6 +258,25 @@ fn agent_genesis_rust(
     }))
 }
 
+/// Rust-native equivalent of GET /api/scanner/status (backend/main.py) -- cloud API key
+/// detection plus Ollama/LM Studio probes. Blocking (matches this file's existing
+/// synchronous command style); each probe has its own short timeout so this can't hang.
+#[tauri::command]
+fn scan_models_rust() -> model_scanner::ScanResult {
+    model_scanner::scan_all()
+}
+
+/// Rust-native equivalent of POST /api/scanner/pull-model (backend/main.py).
+#[tauri::command]
+fn pull_model_rust(model_name: String) -> model_scanner::PullResult {
+    let model_name = if model_name.trim().is_empty() {
+        "llama3.2:1b".to_string()
+    } else {
+        model_name
+    };
+    model_scanner::pull_model(&model_name)
+}
+
 fn main() {
     let backend: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(spawn_backend()));
 
@@ -301,7 +321,9 @@ fn main() {
         .manage(llm_engine)
         .invoke_handler(tauri::generate_handler![
             generate_response_rust,
-            agent_genesis_rust
+            agent_genesis_rust,
+            scan_models_rust,
+            pull_model_rust
         ])
         .setup(|app| {
             // Native tray icon so there's a visible indicator (and a quick way to

@@ -58,21 +58,17 @@ struct Config {
     custom_directive: String,
 }
 
-/// Scans the environment for a usable cloud API key, same set/priority as
-/// model_scanner.py's detect_cloud_api_keys. Anthropic is deliberately not part of the
-/// auto-select priority here, matching the Python (which scans ANTHROPIC_API_KEY for
-/// display purposes but never routes to it automatically).
+/// Scans the environment for a usable cloud API key via crate::model_scanner (the same
+/// scan the Settings UI's "Scan System" button will eventually trigger), so this logic
+/// lives in exactly one place instead of being duplicated between the two modules.
 fn detect_cloud_api_key() -> Option<(String, &'static str)> {
-    if let Ok(key) = std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY")) {
-        return Some((key, "gemini"));
+    let detected = crate::model_scanner::detect_cloud_keys();
+    match detected.detected_provider.as_str() {
+        "gemini" => Some((detected.detected_key, "gemini")),
+        "groq" => Some((detected.detected_key, "groq")),
+        "openai" => Some((detected.detected_key, "openai")),
+        _ => None,
     }
-    if let Ok(key) = std::env::var("GROQ_API_KEY") {
-        return Some((key, "groq"));
-    }
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        return Some((key, "openai"));
-    }
-    None
 }
 
 pub struct LlmEngine {
@@ -375,8 +371,16 @@ mod tests {
         assert!(stats.last_tps > 0.0);
     }
 
+    // load_config's cloud-key fallback reads the same env vars model_scanner::tests
+    // mutates; every test below that touches config/generate_response needs this guard
+    // so the two test modules don't race each other under parallel test execution.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::model_scanner::CLOUD_ENV_TEST_GUARD.lock().unwrap()
+    }
+
     #[test]
     fn default_config_is_offline_halcy() {
+        let _guard = env_guard();
         let engine = temp_engine("default_config");
         let config = engine.load_config();
         assert_eq!(config.provider, Provider::Offline);
@@ -386,6 +390,7 @@ mod tests {
 
     #[test]
     fn generate_response_offline_default_mentions_standby() {
+        let _guard = env_guard();
         let engine = temp_engine("offline_default");
         let reply = engine.generate_response("hello there", "test-session");
         assert!(reply.contains("Offline Standby Mode"), "reply was: {reply}");
@@ -393,6 +398,7 @@ mod tests {
 
     #[test]
     fn who_are_you_instant_command_short_circuits_network() {
+        let _guard = env_guard();
         let engine = temp_engine("who_are_you");
         let reply = engine.generate_response("who are you?", "test-session");
         assert!(reply.contains("HALCY"), "reply was: {reply}");
@@ -400,6 +406,7 @@ mod tests {
 
     #[test]
     fn remember_that_persists_and_list_memory_reads_it_back() {
+        let _guard = env_guard();
         let engine = temp_engine("remember");
         let ack = engine.generate_response("remember that favorite_color: blue", "test-session");
         assert!(ack.contains("favorite_color"), "ack was: {ack}");
@@ -411,6 +418,7 @@ mod tests {
 
     #[test]
     fn set_name_updates_agent_name_case_preserving() {
+        let _guard = env_guard();
         let engine = temp_engine("set_name");
         let reply = engine.generate_response("Set Name Aria", "test-session");
         assert!(reply.contains("Aria"), "reply was: {reply}");
@@ -419,6 +427,7 @@ mod tests {
 
     #[test]
     fn generate_identity_from_purpose_persists_settings() {
+        let _guard = env_guard();
         let engine = temp_engine("genesis");
         let identity = engine.generate_identity_from_purpose("I want a reactive engine daemon");
         assert_eq!(identity.name, "R.E.D. 9000");
@@ -435,6 +444,7 @@ mod tests {
     /// NOT needed since this checks liveness itself instead of using #[ignore].
     #[test]
     fn generate_response_against_live_ollama_if_available() {
+        let _guard = env_guard();
         let ollama_up = ureq::get("http://localhost:11434/api/tags")
             .config()
             .timeout_global(Some(std::time::Duration::from_millis(500)))
