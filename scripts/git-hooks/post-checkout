@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Same purpose as post-commit/post-merge, for the third way files on disk can
+# change: switching branches (or checking out a specific commit) rewrites the
+# working tree without a commit or merge happening, so neither of those hooks
+# fires. git passes three args to post-checkout; the third is 1 for a branch
+# checkout and 0 for a plain file checkout -- skip the latter, since checking
+# out a single file isn't a "the repo state changed" event worth a rebuild.
+prev_head="$1"
+new_head="$2"
+is_branch_checkout="$3"
+
+if [ "$is_branch_checkout" != "1" ]; then
+    exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -n "$REPO_ROOT" ] && [ -x "$REPO_ROOT/scripts/install_desktop_app.sh" ]; then
+    "$REPO_ROOT/scripts/install_desktop_app.sh" || true
+fi
+
+exit 0

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Same purpose as scripts/git-hooks/post-commit, but for the update path that
+# hook can't see: `git pull` / `git merge` run a merge, not a commit, so only
+# post-merge fires for them. Without this, the installed desktop app only
+# stayed in sync with changes committed directly on this machine and silently
+# went stale every time a PR was merged on GitHub and then pulled down here.
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -n "$REPO_ROOT" ] && [ -x "$REPO_ROOT/scripts/install_desktop_app.sh" ]; then
+    "$REPO_ROOT/scripts/install_desktop_app.sh" || true
+fi
+
+exit 0

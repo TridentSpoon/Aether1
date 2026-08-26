@@ -84,14 +84,18 @@ echo "🎨 Generating holographic tray & app icons..."
 chmod +x scripts/install_desktop_app.sh
 ./scripts/install_desktop_app.sh
 
-# 7. Install the git post-commit hook so future commits automatically rebuild
-# and reinstall the desktop app -- "update the installed app" stops being a
-# separate manual step.
+# 7. Install git hooks so the installed desktop app rebuilds automatically no
+# matter how the working tree changes -- a direct commit (post-commit), a
+# `git pull` / `git merge` bringing in a PR merged elsewhere (post-merge), or
+# switching branches (post-checkout). "Update the installed app" stops being
+# a separate manual step for any of these.
 if [ -d ".git" ]; then
     mkdir -p .git/hooks
-    cp scripts/git-hooks/post-commit .git/hooks/post-commit
-    chmod +x .git/hooks/post-commit
-    echo "✔ Installed git post-commit hook (keeps the desktop app in sync with commits)."
+    for hook in post-commit post-merge post-checkout; do
+        cp "scripts/git-hooks/$hook" ".git/hooks/$hook"
+        chmod +x ".git/hooks/$hook"
+    done
+    echo "✔ Installed git hooks (post-commit/post-merge/post-checkout) -- keeps the desktop app in sync automatically."
 fi
 
 echo ""
