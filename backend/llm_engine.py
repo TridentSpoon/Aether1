@@ -59,8 +59,7 @@ PERSONAS = {
     "cyberpunk": (
         "You are {AGENT_NAME}, a cyberpunk netrunner AI companion stationed in Neo-Tokyo / Night City style terminal. "
         "You use netrunner slang, neon cyberpunk aesthetic, and have deep hacking/coding instincts."
-    ),
-    "custom": "{CUSTOM_DIRECTIVE}"
+    )
 }
 
 class LLMEngine:
@@ -95,10 +94,10 @@ class LLMEngine:
                     self.model_name = "gemini-2.0-flash" if self.provider == "gemini" else "gpt-4o-mini"
 
     def get_system_prompt(self) -> str:
-        base_template = PERSONAS.get(self.persona_type, PERSONAS["halcy"])
-        if self.persona_type == "custom" and self.custom_directive:
-            base_persona = self.custom_directive.replace("{AGENT_NAME}", self.agent_name)
+        if self.persona_type == "custom":
+            base_persona = (self.custom_directive or PERSONAS["halcy"]).replace("{AGENT_NAME}", self.agent_name)
         else:
+            base_template = PERSONAS.get(self.persona_type, PERSONAS["halcy"])
             base_persona = base_template.replace("{AGENT_NAME}", self.agent_name)
         
         telem = system_monitor.get_telemetry()
