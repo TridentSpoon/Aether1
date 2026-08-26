@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=AETHER1 AI Assistant
+Name=Aether1 Platform
 GenericName=Holographic AI Companion
 Comment=AI-Enhanced Task Handling & Engagement Resource
 Exec=/bin/bash -c "cd %k/.. && ./src-tauri/target/release/aether1"
