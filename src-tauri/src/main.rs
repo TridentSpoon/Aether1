@@ -16,6 +16,10 @@ use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
+
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 8378;
 
@@ -118,6 +122,32 @@ fn main() {
 
     let backend_for_exit = backend.clone();
     tauri::Builder::default()
+        .setup(|app| {
+            // Native tray icon so there's a visible indicator (and a quick way to
+            // reopen/quit) while AETHER1 runs headlessly in the background.
+            let show_item = MenuItem::with_id(app, "show", "Show AETHER1", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit AETHER1", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("AETHER1 -- running")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(move |_app_handle, event| {

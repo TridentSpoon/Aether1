@@ -100,12 +100,13 @@ You can type or speak these commands directly into the terminal:
 
 ---
 
-## 🖥️ Native Desktop App (No Browser Needed) — Experimental
+## 🖥️ Native Desktop App (No Browser Needed)
 
-AETHER1 also runs as a native desktop window via [Tauri](https://tauri.app/) (Rust) instead
-of a Python server + browser tab. The app is self-contained: it launches its own backend
-automatically and shuts it down when you close the window (or reuses one that's already
-running, if you started it separately).
+The **AETHER1 AI Assistant** entry in your app launcher opens AETHER1 as a native desktop
+window via [Tauri](https://tauri.app/) (Rust) instead of a Python server + browser tab. The
+app is self-contained: it launches its own backend automatically, shuts it down when you
+close the window (or reuses one that's already running, if you started it separately), and
+shows a system tray icon while running (left-click for a Show/Quit menu).
 
 **One-time setup:**
 ```bash

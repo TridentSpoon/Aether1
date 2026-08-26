@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=AETHER1 AI Assistant
+GenericName=Holographic AI Companion
+Comment=AI-Enhanced Task Handling & Engagement Resource
+Exec=/bin/bash -c "cd %k/.. && ./src-tauri/target/release/aether1"
+Icon=aether1
+Terminal=false
+Type=Application
+Categories=Utility;Development;System;
+Keywords=AI;hAlcy;Assistant;RED9000;ARXLimes;ARXLogos;The Nexus;HUD
+StartupNotify=true

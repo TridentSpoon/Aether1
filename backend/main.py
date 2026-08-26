@@ -23,7 +23,7 @@ from backend.model_scanner import model_scanner
 
 app = FastAPI(
     title="AETHER1 AI Core",
-    description="Cybernetic Operational Reconnaissance & Telemetry Autonomous Network Assistant",
+    description="AI-Enhanced Task Handling & Engagement Resource",
     version="2.1.0"
 )
 

@@ -77,19 +77,35 @@ echo "📥 Installing backend & desktop dependencies..."
 echo "🎨 Generating holographic tray & app icons..."
 ./venv/bin/python desktop/generate_icons.py
 
+# 6.5 Build the native desktop app (Tauri). The app launcher installed below
+# runs this binary directly instead of opening a browser tab, so it needs to
+# exist -- best-effort, since Rust isn't a hard requirement for the rest of
+# the project (the browser-based ./start.sh / ./start_daemon.sh still work
+# without it).
+CARGO_BIN="$HOME/.cargo/bin/cargo"
+if [ -x "$CARGO_BIN" ] && [ -d "src-tauri" ]; then
+    echo "🦀 Building native desktop app (first build can take a few minutes)..."
+    (cd src-tauri && "$CARGO_BIN" build --release) \
+        || echo "⚠ Native app build failed -- the app launcher entry won't work until this succeeds. See README's 'Native Desktop App' section."
+else
+    echo "⚠ Rust/Cargo not found at $CARGO_BIN -- skipping native app build."
+    echo "   The app launcher entry needs it. See README's 'Native Desktop App' section to install Rust, then re-run ./setup.sh."
+fi
+
 # 7. Install Linux Desktop Launcher & Autostart (Optional)
 mkdir -p "$HOME/.local/share/applications"
-sed "s|%k/..|$SCRIPT_DIR|g" desktop/aether-cortana.desktop > "$HOME/.local/share/applications/aether-cortana.desktop"
-chmod +x "$HOME/.local/share/applications/aether-cortana.desktop"
+sed "s|%k/..|$SCRIPT_DIR|g" desktop/Aether1.desktop > "$HOME/.local/share/applications/Aether1.desktop"
+chmod +x "$HOME/.local/share/applications/Aether1.desktop"
 
 # Copy Icon
 mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
-cp desktop/icons/icon.png "$HOME/.local/share/icons/hicolor/256x256/apps/cortana-ai.png" 2>/dev/null || true
+cp desktop/icons/icon.png "$HOME/.local/share/icons/hicolor/256x256/apps/aether1.png" 2>/dev/null || true
 
 echo ""
 echo "======================================================================"
 echo "✨ SETUP COMPLETE!"
 echo "To start AETHER1 AI:"
+echo "   Use the AETHER1 AI Assistant entry in your app launcher (native app + tray icon)"
 echo "   ./start.sh          (foreground, opens a terminal + browser tab)"
 echo "   ./start_daemon.sh   (background, no terminal window needed)"
 echo "======================================================================"
