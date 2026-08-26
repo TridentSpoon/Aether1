@@ -14,6 +14,17 @@ const AVATAR_DISPLAY_NAMES = {
     crimson: 'R.E.D. 9000'
 };
 
+// When this page is loaded by the Tauri desktop shell, it's served from Tauri's own
+// local context (not http://localhost:8378), so API calls need an absolute base URL
+// pointing at the backend the Rust shell launches. Under the plain browser/FastAPI
+// flow, relative paths keep working exactly as before.
+const IS_TAURI = typeof window.__TAURI_INTERNALS__ !== 'undefined';
+const API_BASE = IS_TAURI ? 'http://localhost:8378' : '';
+
+function apiFetch(path, options) {
+    return fetch(API_BASE + path, options);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const hologram = new HologramAvatar('hologram-viewport');
     const voiceEngine = new VoiceAudioEngine();
@@ -310,8 +321,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // WebSocket Telemetry
     function connectTelemetry() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
+        let wsUrl;
+        if (IS_TAURI) {
+            wsUrl = 'ws://localhost:8378/ws/telemetry';
+        } else {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
+        }
         const ws = new WebSocket(wsUrl);
 
         ws.onmessage = (event) => {
@@ -385,7 +401,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadStaticInfo() {
         try {
-            const resp = await fetch('/api/static-info');
+            const resp = await apiFetch('/api/static-info');
             if (resp.ok) {
                 const info = await resp.json();
                 if (elDistroBadge) elDistroBadge.textContent = `${info.distro} [${info.architecture}]`;
@@ -466,7 +482,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chatContainer.scrollTop = chatContainer.scrollHeight;
 
         try {
-            const resp = await fetch('/api/chat', {
+            const resp = await apiFetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -480,12 +496,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (resp.ok) {
                 const data = await resp.json();
+                const audioUrl = data.audio_url ? API_BASE + data.audio_url : null;
                 if (data.agent_name) updateAgentNameDisplay(data.agent_name);
                 voiceEngine.playSFX('incoming');
-                appendMessage(currentAgentName, data.reply, data.audio_url);
+                appendMessage(currentAgentName, data.reply, audioUrl);
 
-                if (data.audio_url && autoSpeak) {
-                    await voiceEngine.playTTSAudio(data.audio_url);
+                if (audioUrl && autoSpeak) {
+                    await voiceEngine.playTTSAudio(audioUrl);
                 } else {
                     hologram.setState('IDLE');
                     if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
@@ -516,7 +533,7 @@ document.addEventListener('DOMContentLoaded', () => {
         hologram.setState('THINKING');
 
         try {
-            const resp = await fetch('/api/agent/genesis', {
+            const resp = await apiFetch('/api/agent/genesis', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ purpose: purpose.trim() })
@@ -524,6 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (resp.ok) {
                 const data = await resp.json();
+                const audioUrl = data.audio_url ? API_BASE + data.audio_url : null;
                 updateAgentNameDisplay(data.name);
 
                 if (data.name.includes("R.E.D.")) { applyAvatar('red'); applyColorTheme('red'); }
@@ -531,10 +549,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyColorTheme('arx-limes'); }
 
                 settingsModal.classList.add('hidden');
-                appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, data.audio_url);
+                appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, audioUrl);
 
-                if (data.audio_url && autoSpeak) {
-                    await voiceEngine.playTTSAudio(data.audio_url);
+                if (audioUrl && autoSpeak) {
+                    await voiceEngine.playTTSAudio(audioUrl);
                 } else {
                     hologram.setState('IDLE');
                 }
@@ -555,7 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.playSFX('click');
 
         try {
-            const resp = await fetch('/api/scanner/status');
+            const resp = await apiFetch('/api/scanner/status');
             if (resp.ok) {
                 const data = await resp.json();
                 let html = '';
@@ -597,7 +615,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            const resp = await fetch('/api/scanner/pull-model?model_name=llama3.2:1b', { method: 'POST' });
+            const resp = await apiFetch('/api/scanner/pull-model?model_name=llama3.2:1b', { method: 'POST' });
             const data = await resp.json();
             if (scannerResultsBox) {
                 scannerResultsBox.innerHTML = `<div class="${data.status === 'error' ? 'text-red-400' : 'text-green-400'}">${data.message}</div>`;
@@ -609,7 +627,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadChatHistory() {
         try {
-            const resp = await fetch('/api/messages?limit=25');
+            const resp = await apiFetch('/api/messages?limit=25');
             if (resp.ok) {
                 const msgs = await resp.json();
                 chatContainer.innerHTML = '';
@@ -626,7 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadSettings() {
         try {
-            const resp = await fetch('/api/settings');
+            const resp = await apiFetch('/api/settings');
             if (resp.ok) {
                 const data = await resp.json();
                 const s = data.settings;
@@ -663,7 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateAgentNameDisplay(payload.settings.agent_name);
 
         try {
-            const resp = await fetch('/api/settings', {
+            const resp = await apiFetch('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -758,7 +776,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnClearChat.addEventListener('click', async () => {
         voiceEngine.playSFX('click');
         if (confirm("Clear conversation logs?")) {
-            await fetch('/api/messages', { method: 'DELETE' });
+            await apiFetch('/api/messages', { method: 'DELETE' });
             chatContainer.innerHTML = '';
             appendMessage(currentAgentName, 'Conversation logs cleared. Ready.');
         }

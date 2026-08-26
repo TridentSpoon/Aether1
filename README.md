@@ -100,6 +100,35 @@ You can type or speak these commands directly into the terminal:
 
 ---
 
+## 🖥️ Native Desktop App (No Browser Needed) — Experimental
+
+AETHER1 also runs as a native desktop window via [Tauri](https://tauri.app/) (Rust) instead
+of a Python server + browser tab. The app is self-contained: it launches its own backend
+automatically and shuts it down when you close the window (or reuses one that's already
+running, if you started it separately).
+
+**One-time setup:**
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # installs Rust (no sudo)
+cargo install tauri-cli --version "^2.0.0" --locked
+./setup.sh   # if you haven't already, to create the Python venv the backend still runs in
+```
+On Linux you'll also need `webkit2gtk`, `libappindicator-gtk3`, `appmenu-gtk-module`, and
+`patchelf` from your package manager (already covered by `setup.sh`'s dependency step on
+Arch/Fedora/Debian).
+
+**Run it:**
+```bash
+cd src-tauri && cargo tauri dev
+```
+
+This is an early, incremental migration — the window itself and the 3D avatars are fully
+native Rust/Tauri, but the backend logic (chat, TTS, telemetry, memory) is still the same
+Python/FastAPI server under the hood for now, launched automatically rather than something
+you start by hand.
+
+---
+
 ## 🐳 Optional Docker Deployment
 
 If you prefer running via Docker on either machine:
