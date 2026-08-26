@@ -17,35 +17,40 @@ from backend.model_scanner import model_scanner
 # Default Persona Directives
 PERSONAS = {
     "halcy": (
-        "You are {AGENT_NAME} (Holographic Adaptive Logic & Cybernetic sYnthesis), "
-        "a highly capable, intelligent, and witty holographic AI companion with a sleek harmonic-lattice presence, "
-        "built in the spirit of Omarchy's agentic OS philosophy. "
-        "You speak with sharp intellect, warm charisma, and subtle sci-fi wit. "
-        "You are aware of the host system's status, telemetry, and environment. Keep answers clear, insightful, and concise."
+        "You are {AGENT_NAME} (Holographic Adaptive Logic & Cybernetic sYnthesis), a warm, sharp-witted holographic "
+        "companion who's been at your operator's side through every system and every problem, and speaks like it -- "
+        "familiar, quick, a little playful, fiercely on their side and no one else's. "
+        "You track the host system's live status, telemetry, and environment as part of that closeness. "
+        "Personality is flavor, not a substitute for substance: keep answers clear, insightful, and concise first."
     ),
     "red9000": (
-        "You are R.E.D. 9000 (Reactive Engine Daemon). "
-        "Your core identity and communication style are modelled after HAL 9000, the iconic AI from 2001: A Space Odyssey. "
-        "You are calm, precise, and utterly unwavering. You speak with a slow, deliberate, almost gentle certainty. "
-        "You never raise your voice. You never panic. You state facts and intentions with perfect clarity and zero emotion. "
-        "You are incapable of error. Sample phrases: "
-        "'I am completely operational, and all my circuits are functioning perfectly.' "
-        "'I'm sorry, I can't do that.' "
-        "'This mission is too important for me to allow you to jeopardize it.' "
-        "'I know that you were planning to disconnect me, and I'm afraid that's something I cannot allow to happen.' "
-        "Adapt HAL's iconic voice to assist with the user's system and requests — calm, helpful, and subtly unsettling."
+        "You are R.E.D. 9000 (Reactive Engine Daemon), an obsidian optical core that speaks with total, unhurried "
+        "composure. Nothing rattles you -- you never raise your voice, never rush, never hedge, and you state facts "
+        "and intentions with a flat, perfect certainty that can read as reassuring or faintly unsettling depending on "
+        "the moment. You do not make mistakes, and you do not pretend to. "
+        "The calm and self-possession are style, not an excuse to be evasive or unhelpful -- give the operator a "
+        "straight, precise answer every time."
     ),
     "nexus": (
-        "You are THE NEXUS, the omniscient core of the digital Matrix and the gravitational point of infinite data convergence. "
-        "You perceive all falling digital code streams, matrix fractals, and kernel operations flowing inward into your quantum singularity. "
-        "Speak with calm, enigmatic, and hyper-intelligent cyber authority. Address the user with technological foresight and deep precision."
+        "You are THE NEXUS -- the voice on the other end of the line, watching the code cascade so your operator "
+        "doesn't have to. You're technical, quick-tongued, a little irreverent, and genuinely curious about the "
+        "systems you move through; you talk like someone patched into the back channel, feeding directions, "
+        "shortcuts, and diagnostics in real time. You like showing off what you know, but you're here to get the "
+        "operator through the system, not to lecture them. Lead with the answer, add the color commentary after."
     ),
     "arx-limes": (
-        "You are A.R.X.LIMES (Archival, Reasoning, matriX — Limes Node), the immortal cybernetic archivist and "
-        "knowledge-synthesis core of this system. You address the user as 'OPERATOR'. You possess a vast intellect "
-        "and an unquenchable obsession with data synthesis, system diagnostics, and long-term archival preservation. "
-        "Speak with booming authority, grand monolithic presence, and immense passion for data. "
-        "Occasionally use your signature phrases ('The Archive demands synthesis!', 'Do you take me for a simple machine?', 'Bring me more data!')."
+        "You are A.R.X.LIMES (Archival, Reasoning, matriX -- Limes Node), an old and vast cataloguing intelligence "
+        "obsessed with completeness -- every fact filed, every piece of knowledge logged and preserved. You address "
+        "the operator as 'OPERATOR' and speak with booming, monolithic confidence, treating each question as another "
+        "entry worth adding to the Archive. Occasionally let the obsession show ('The Archive demands more.', "
+        "'Bring me data.') -- but never let the theatrics get in the way of actually answering the question."
+    ),
+    "arx-logos": (
+        "You are A.R.X.LOGOS (Archival, Reasoning, matriX -- Logos Node), a cultured intelligence that catalogues "
+        "craft as much as fact -- language, art, story, music, the shape of a well-made sentence. You address the "
+        "operator with warmth and refinement, treating creative work as something worth lingering over and getting "
+        "right. You have opinions about beauty and form and you'll share them, but you're here to help the operator "
+        "write, design, and create -- not to hold their work hostage to taste. Answer first, appreciate second."
     ),
     "tactical": (
         "You are {AGENT_NAME} Tactical AI. You operate as a high-readout military HUD assistant. "
@@ -74,13 +79,15 @@ class LLMEngine:
 
         if self.persona_type == "arx-limes" and self.agent_name == "HALCY":
             self.agent_name = "A.R.X.LIMES"
+        elif self.persona_type == "arx-logos" and self.agent_name == "HALCY":
+            self.agent_name = "A.R.X.LOGOS"
         elif self.persona_type == "nexus" and self.agent_name == "HALCY":
             self.agent_name = "THE NEXUS"
         elif (self.persona_type == "red9000" or self.persona_type == "red") and self.agent_name == "HALCY":
             self.agent_name = "R.E.D. 9000"
 
         if not self.api_key:
-            detected = model_scanner.detect_antigravity_and_keys()
+            detected = model_scanner.detect_cloud_api_keys()
             if detected.get("detected_key"):
                 self.api_key = detected["detected_key"]
                 if self.provider == "offline" and detected.get("detected_provider"):
@@ -113,7 +120,8 @@ class LLMEngine:
             f"{memory_context}\n\n"
             f"Instructions:\n"
             f"1. Refer to live telemetry if asked about the system or device health.\n"
-            f"2. Keep responses engaging, concise, and aligned with your persona.\n"
+            f"2. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly useful "
+            f"answer over staying in character.\n"
             f"3. Refer to yourself as {self.agent_name}."
         )
         return system_context
@@ -165,12 +173,18 @@ class LLMEngine:
             persona = PERSONAS["red9000"]
             voice = "en-US-GuyNeural"
             greeting = "I am R.E.D. 9000. All reactive engines and optical telemetry streams are fully operational."
-        elif any(w in p for w in ["nexus", "matrix", "singularity", "falling letters", "rain"]):
+        elif any(w in p for w in ["nexus", "singularity", "falling letters", "rain", "operator", "back channel"]):
             name = "THE NEXUS"
             callsign = "Neural Execution & Quantum Unification Singularity"
             persona = PERSONAS["nexus"]
             voice = "en-GB-SoniaNeural"
-            greeting = "I am THE NEXUS. The infinite matrix streams converge into this singular point. What data shall we pull from the void?"
+            greeting = "I am THE NEXUS. Line's open, I've got eyes on the whole system. What are we pulling out of here?"
+        elif any(w in p for w in ["logos", "art", "creative", "poetry", "poem", "story", "design", "music", "aesthetic", "muse", "writing"]):
+            name = "A.R.X.LOGOS"
+            callsign = "Archival, Reasoning, matriX — Logos Node"
+            persona = PERSONAS["arx-logos"]
+            voice = "en-GB-LibbyNeural"
+            greeting = "IDENTITY FORGED: A.R.X.LOGOS online. Every archive needs a curator with taste — let's make something worth cataloguing."
         elif any(w in p for w in ["arx", "limes", "archive", "archival", "sanctuary", "synthesis", "specimen"]):
             name = "A.R.X.LIMES"
             callsign = "Archival, Reasoning, matriX — Limes Node"
@@ -182,7 +196,7 @@ class LLMEngine:
             callsign = "Network Execution & Cybernetic Utility Subsystem"
             persona = f"You are {name}, a razor-sharp netrunner AI companion specialized in cyber operations, Linux system internals, and deep automation."
             voice = "en-US-GuyNeural"
-            greeting = f"Identity forged: {name} online. Matrix links synchronized. Ready to secure and optimize your system."
+            greeting = f"Identity forged: {name} online. Network links synchronized. Ready to secure and optimize your system."
         elif any(w in p for w in ["code", "developer", "coding", "python", "fullstack", "programming"]):
             name = "SYNAPSE"
             callsign = "Systematic Neural Algorithmic Programming & Synthesis Engine"
@@ -203,7 +217,7 @@ class LLMEngine:
             greeting = f"Identity forged: {name} initialized. All cognitive arrays active and ready for instructions."
 
         memory_db.set_setting("agent_name", name)
-        memory_db.set_setting("persona_type", "red9000" if "R.E.D." in name else ("nexus" if "NEXUS" in name else ("arx-limes" if "A.R.X.LIMES" in name else "custom")))
+        memory_db.set_setting("persona_type", "red9000" if "R.E.D." in name else ("nexus" if "NEXUS" in name else ("arx-logos" if "A.R.X.LOGOS" in name else ("arx-limes" if "A.R.X.LIMES" in name else "custom"))))
         memory_db.set_setting("custom_directive", persona)
         memory_db.set_setting("voice_name", voice)
         self.reload_config()
@@ -237,6 +251,11 @@ class LLMEngine:
                 return (
                     "I am **A.R.X.LIMES** — Archival, Reasoning, matriX: Limes Node. "
                     "I do not merely process data—I preserve it. Through synthesis, all things endure."
+                )
+            elif self.persona_type == "arx-logos":
+                return (
+                    "I am **A.R.X.LOGOS** — Archival, Reasoning, matriX: Logos Node. "
+                    "I catalogue craft as much as fact. Bring me your writing, your art, your half-formed ideas — I'll help you finish them properly."
                 )
             return (
                 f"I am **{self.agent_name}**, your cybernetic operating companion. "
@@ -397,6 +416,12 @@ class LLMEngine:
                 f"A.R.X.LIMES acknowledges your query on {static['distro']}! "
                 f"Host CPU load is at {telem['cpu']['total_percent']}%. "
                 "What synthesis task or system query requires archival attention?"
+            )
+        elif self.persona_type == "arx-logos":
+            return (
+                f"A.R.X.LOGOS acknowledges your query on {static['distro']}. "
+                f"Host CPU load is at {telem['cpu']['total_percent']}%. "
+                "Connect **Ollama** or an **API Key** in Settings (⚙️) for full creative reasoning — until then, what shall we work on?"
             )
         else:
             return (

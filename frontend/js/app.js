@@ -152,6 +152,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage("THE NEXUS", "🟢 **The Nexus singularity is active.** Digital code cascades inward toward the point of infinite convergence. All matrix streams are operational.");
             }
         }
+        // A.R.X.LOGOS Preset
+        else if (avatarName === 'arx-logos') {
+            updateAgentNameDisplay("A.R.X.LOGOS");
+            if (updatePersona) {
+                document.getElementById('setting-persona').value = 'arx-logos';
+                document.getElementById('setting-voice').value = 'en-GB-LibbyNeural';
+                saveSettings(false);
+                appendMessage("A.R.X.LOGOS", "🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let's make something worth cataloguing.");
+            }
+        }
     }
 
     // Color Theme Handler — purely cosmetic, independent of the selected avatar shape
@@ -546,6 +556,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (data.name.includes("R.E.D.")) { applyAvatar('red'); applyColorTheme('red'); }
                 else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyColorTheme('nexus'); }
+                else if (data.name.includes("A.R.X.LOGOS")) { applyAvatar('arx-logos'); applyColorTheme('arx-logos'); }
                 else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyColorTheme('arx-limes'); }
 
                 settingsModal.classList.add('hidden');
