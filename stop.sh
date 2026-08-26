@@ -7,7 +7,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PID_FILE="$SCRIPT_DIR/logs/cortana.pid"
+PID_FILE="$SCRIPT_DIR/logs/aether1.pid"
 
 echo "🛑 Stopping AETHER1 services..."
 

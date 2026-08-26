@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 DIST_DIR="$SCRIPT_DIR/dist"
-PKG_NAME="cortana-ai-portable"
+PKG_NAME="aether1-portable"
 TEMP_BUILD="$DIST_DIR/$PKG_NAME"
 
 echo "======================================================================"

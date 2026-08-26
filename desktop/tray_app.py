@@ -18,7 +18,7 @@ from pystray import MenuItem as item
 BACKEND_URL = "http://localhost:8378"
 ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 
-class CortanaTrayApp:
+class Aether1TrayApp:
     def __init__(self):
         self.icon_cyan = Image.open(os.path.join(ICONS_DIR, "icon_cyan.png"))
         self.icon_gold = Image.open(os.path.join(ICONS_DIR, "icon_gold.png"))
@@ -124,5 +124,5 @@ class CortanaTrayApp:
         self.tray.run()
 
 if __name__ == "__main__":
-    app = CortanaTrayApp()
+    app = Aether1TrayApp()
     app.run()

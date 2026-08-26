@@ -1,6 +1,6 @@
 # 🌌 AETHER1 AI Companion
 
-An advanced, self-hosted, cybernetic AI companion and HUD inspired by the UNSC AI **Cortana** (Halo & original OS concept) and the agentic OS philosophy of **Omarchy**.
+An advanced, self-hosted, cybernetic AI companion and HUD with a sleek holographic presence, built in the spirit of the agentic OS philosophy of **Omarchy**.
 
 Designed natively for **CachyOS (Arch)** and **Fedora (GNOME / KDE / Wayland / X11)**, featuring real-time system telemetry, an interactive 3D holographic particle avatar, neural speech synthesis, voice recognition, persistent memory, and a system tray companion in your notification bar.
 
@@ -11,7 +11,7 @@ Designed natively for **CachyOS (Arch)** and **Fedora (GNOME / KDE / Wayland / X
 - **3D Holographic Particle Avatar**: Three.js WebGL avatar featuring 2,800+ harmonic particle nodes, 3 orbital energy rings, and a pulsing neural core that deforms dynamically to speech and audio frequencies.
 - **Cyberpunk HUD & Live Telemetry**: Real-time monitoring of CPU usage (per-core load), RAM allocation, storage, network upload/download throughput, and battery status.
 - **System Notification Bar Integration**:
-  - Displays a dynamic glowing Cortana status icon in your top panel / system tray (Cyan = Active, Green = Listening, Purple = Processing, Amber = Alert/Offline).
+  - Displays a dynamic glowing status icon in your top panel / system tray (Cyan = Active, Green = Listening, Purple = Processing, Amber = Alert/Offline).
   - Quick action menu to open the HUD, trigger instant system diagnostics, or adjust settings.
   - Native desktop notifications (`libnotify` / `notify-send`) for health updates and briefings.
 - **Multi-Provider AI Engine**:
@@ -19,7 +19,7 @@ Designed natively for **CachyOS (Arch)** and **Fedora (GNOME / KDE / Wayland / X
   - **Cloud AI APIs**: Supports **Google Gemini**, **OpenAI (ChatGPT)**, **Groq** (ultra-fast voice chat), and **Anthropic Claude**.
   - **Offline Standby Mode**: Intelligent built-in contextual fallback for instant diagnostics and commands even without an LLM connected.
 - **Neural Voice Synthesis & Speech Recognition**:
-  - Neural text-to-speech using `edge-tts` (featuring Cortana's signature clear tone, customizable pitch, and rates).
+  - Neural text-to-speech using `edge-tts` (clear, warm default tone with customizable pitch and rate).
   - Speech-to-Text via Web Speech API with auto-send voice chat.
   - Built-in Web Audio API sci-fi synthesizer for UI sound effects.
 - **Persistent Long-Term Memory**:
@@ -65,13 +65,13 @@ cd ~/Aether1 && git pull && ./setup.sh && ./stop.sh && ./start_daemon.sh
 If the new machine can't reach GitHub, package a portable bundle from a machine
 that already has the project instead:
 ```bash
-./package_dist.sh                                # produces dist/cortana-ai-portable.tar.gz
-scp dist/cortana-ai-portable.tar.gz user@new-pc:~/
+./package_dist.sh                                # produces dist/aether1-portable.tar.gz
+scp dist/aether1-portable.tar.gz user@new-pc:~/
 ```
 Then on the new machine:
 ```bash
-tar -xzf cortana-ai-portable.tar.gz
-cd cortana-ai-portable
+tar -xzf aether1-portable.tar.gz
+cd aether1-portable
 ./setup.sh && ./start_daemon.sh
 ```
 

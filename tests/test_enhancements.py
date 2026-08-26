@@ -1,7 +1,7 @@
 """
 Automated Test Suite for AETHER1 Enhancements:
 - Agent Naming & Identity Genesis
-- Model Scanner & Antigravity/Gemini Key Auto-Discovery
+- Model Scanner & Cloud API Key Auto-Discovery
 - Real-Time Token Telemetry & Usage Tracker
 - API Endpoints
 """
@@ -38,15 +38,15 @@ def test_token_tracker():
     print(f"   ✔ Tokens: Prompt={telem['session_prompt_tokens']}, Comp={telem['session_completion_tokens']}, TPS={telem['last_tps']}")
 
 def test_model_scanner():
-    print("🧪 Testing Model & Antigravity Scanner...")
-    # Environment & Antigravity detect
-    antigravity_info = model_scanner.detect_antigravity_and_keys()
-    assert "is_antigravity_host" in antigravity_info
-    print(f"   ✔ Antigravity Host: {antigravity_info['is_antigravity_host']}, Keys Found: {antigravity_info['detected_env_keys']}")
+    print("🧪 Testing Model & Cloud Key Scanner...")
+    # Environment key detect
+    cloud_keys_info = model_scanner.detect_cloud_api_keys()
+    assert "detected_env_keys" in cloud_keys_info
+    print(f"   ✔ Keys Found: {cloud_keys_info['detected_env_keys']}")
 
     # Scan All
     results = asyncio.run(model_scanner.scan_all())
-    assert "antigravity" in results
+    assert "cloud_keys" in results
     assert "ollama" in results
     assert "lmstudio" in results
     print(f"   ✔ Scanner complete. Ollama available: {results['ollama']['available']}, LM Studio: {results['lmstudio']['available']}")

@@ -440,7 +440,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function appendMessage(sender, text, audioUrl = null) {
         const msgDiv = document.createElement('div');
         const isUser = sender === 'user';
-        msgDiv.className = `p-3 rounded my-2 text-sm leading-relaxed ${isUser ? 'msg-user self-end ml-8' : 'msg-cortana self-start mr-8'}`;
+        msgDiv.className = `p-3 rounded my-2 text-sm leading-relaxed ${isUser ? 'msg-user self-end ml-8' : 'msg-agent self-start mr-8'}`;
 
         const headerDiv = document.createElement('div');
         headerDiv.className = 'flex items-center justify-between mb-1 pb-1 border-b border-cyan-500/20 text-xs font-mono text-cyan-400/80';
@@ -486,7 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (voiceEngine.onStateChange) voiceEngine.onStateChange('THINKING');
 
         const thinkingDiv = document.createElement('div');
-        thinkingDiv.className = 'p-3 rounded my-2 text-sm leading-relaxed msg-cortana self-start mr-8 typing-cursor';
+        thinkingDiv.className = 'p-3 rounded my-2 text-sm leading-relaxed msg-agent self-start mr-8 typing-cursor';
         thinkingDiv.innerHTML = `<span class="text-xs font-mono text-cyan-400">🌐 ${currentAgentName} // Reactive processing</span>`;
         chatContainer.appendChild(thinkingDiv);
         chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -579,7 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function handleScanSystem() {
         if (scannerResultsBox) {
-            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Scanning Antigravity configs, Ollama, and LM Studio...</div>';
+            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Scanning for cloud API keys, Ollama, and LM Studio...</div>';
         }
         voiceEngine.playSFX('click');
 
@@ -589,8 +589,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await resp.json();
                 let html = '';
 
-                if (data.antigravity.detected_key) {
-                    html += `<div class="text-green-400">✔ Detected API Key (${data.antigravity.detected_provider || 'cloud'}) via Environment / Antigravity</div>`;
+                if (data.cloud_keys.detected_key) {
+                    html += `<div class="text-green-400">✔ Detected API Key (${data.cloud_keys.detected_provider || 'cloud'}) via Environment</div>`;
                 } else {
                     html += `<div class="text-slate-400">⚪ No Cloud API keys found in environment.</div>`;
                 }
