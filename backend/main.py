@@ -231,15 +231,20 @@ async def websocket_telemetry(websocket: WebSocket):
         print(f"[WebSocket Telemetry Error] {e}")
 
 # Serve Static Frontend Files
-if os.path.exists(FRONTEND_DIR):
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
-
+# Mounted at root (not /static) so the same asset paths (css/..., js/...) resolve
+# identically whether served here or loaded directly by the Tauri desktop shell,
+# which points its webview straight at the frontend/ directory.
+# The explicit "/" route below is registered first so it takes priority for the
+# exact root path; the mount only ends up handling everything else (css/js/assets).
 @app.get("/")
 async def root():
     index_file = os.path.join(FRONTEND_DIR, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)
     return {"message": "AETHER1 Core Running. Frontend directory not initialized."}
+
+if os.path.exists(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 if __name__ == "__main__":
     import uvicorn

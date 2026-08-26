@@ -13,6 +13,10 @@ logs/
 # Packaged distribution bundle
 dist/
 
+# Rust / Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
 # OS / editor
 .DS_Store
 .vscode/
