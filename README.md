@@ -1,36 +1,33 @@
-# 🌌 AETHER1 AI Companion
+**The Aether1 Platform**
 
-An advanced, self-hosted, cybernetic AI companion and HUD with a sleek holographic presence, built in the spirit of the agentic OS philosophy of **Omarchy**.
+A basic project for self-hosted or API connected AI companions with a sleek holographic presence, built in the spirit of the the future we saw in Sci-Fi growing up.
 
-Designed natively for **CachyOS (Arch)** and **Fedora (GNOME / KDE / Wayland / X11)**, featuring real-time system telemetry, an interactive 3D holographic particle avatar, neural speech synthesis, voice recognition, persistent memory, and a system tray companion in your notification bar.
+Designed natively on Linux and with future OS compatibility in mind, featuring real-time system and AI rellevant telemetry, an interactive 3D holographic avatar, with speech capabilities, a local persistent memory, and a system tray companion in or hovering next to your notification bar.
 
----
+Intended features
 
-## ✨ Features
-
-- **3D Holographic Particle Avatar**: Three.js WebGL avatar featuring 2,800+ harmonic particle nodes, 3 orbital energy rings, and a pulsing neural core that deforms dynamically to speech and audio frequencies.
-- **Cyberpunk HUD & Live Telemetry**: Real-time monitoring of CPU usage (per-core load), RAM allocation, storage, network upload/download throughput, and battery status.
+- **3D Holographic Avatar**: 5 inspired avatars with what will hopefully be familiar personas.
+- **Futuristic HUD & Live Telemetry**: Real-time monitoring of Hardware Telemetry.
 - **System Notification Bar Integration**:
-  - Displays a dynamic glowing status icon in your top panel / system tray (Cyan = Active, Green = Listening, Purple = Processing, Amber = Alert/Offline).
-  - Quick action menu to open the HUD, trigger instant system diagnostics, or adjust settings.
-  - Native desktop notifications (`libnotify` / `notify-send`) for health updates and briefings.
+  - Displays a dynamic glowing status icon in your system tray (Cyan = Active, Green = Listening, Purple = Processing, Amber = Alert/Offline).
+  - Quick action menu on click to open the HUD, Trigger instant diagnostics, show the avatar or close out the program.
 - **Multi-Provider AI Engine**:
-  - **Local Offline AI**: Connect to **Ollama** (`http://localhost:11434`) or **LM Studio** (`http://localhost:1234/v1`) with zero cloud dependencies.
-  - **Cloud AI APIs**: Supports **Google Gemini**, **OpenAI (ChatGPT)**, **Groq** (ultra-fast voice chat), and **Anthropic Claude**.
-  - **Offline Standby Mode**: Intelligent built-in contextual fallback for instant diagnostics and commands even without an LLM connected.
+  - **Local Offline AI**: Connect or Install a Local AI with zero cloud dependencies.
+  - **Cloud AI APIs**: Support using different popular services via API or Local App installation.
+  - **Offline Standby Mode**: While offline the Platform can still use TTS to read out the basic local system stats/information.
 - **Neural Voice Synthesis & Speech Recognition**:
-  - Neural text-to-speech using `edge-tts` (clear, warm default tone with customizable pitch and rate).
+  - Neural text-to-speech. With Persona specific voices
   - Speech-to-Text via Web Speech API with auto-send voice chat.
   - Built-in Web Audio API sci-fi synthesizer for UI sound effects.
 - **Persistent Long-Term Memory**:
-  - SQLite persistent database storing chat sessions, user preferences, and memories across system reboots.
-  - Type `remember that [fact]` or `save memory [key]: [value]` to store data permanently.
+  - Persistent database storing chat sessions, user preferences, and memories across system reboots.
+  - Type `remember that [fact]` or `save memory [key]: [value]` to store data permanently and locally.
 - **1-Click Packaging & Portability**:
-  - Auto-installer for **CachyOS/Arch** (`pacman`) and **Fedora** (`dnf`).
-  - Distribution script (`package_dist.sh`) to package the entire system into a single `.tar.gz` bundle to transfer to your second system.
+  - Auto-installer for Linux and Windows.
+  - Easy installation from GitHub via script or via packaging the entire system into a single `.tar.gz` bundle to transfer to a separate system.
 
----
-
+_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_*_
+TEXT TO STILL REVIEW
 ## 🚀 Quick Start (New Machine)
 
 This repo is **private**, so cloning it needs your GitHub account's SSH key set
