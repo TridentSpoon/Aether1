@@ -78,8 +78,7 @@ class HologramAvatar {
         this.arxLogosOuterDotMat = null;
 
         this.clock = null;
-        this.mouseX = 0;
-        this.mouseY = 0;
+        this.lastClickTime = -999; // seconds on this.clock; drives the click-reaction pulse
 
         this.init();
     }
@@ -123,9 +122,11 @@ class HologramAvatar {
         this.setAvatar(this.currentAvatar);
         this.setColorTheme(this.currentColorTheme);
 
-        window.addEventListener('mousemove', (e) => {
-            this.mouseX = (e.clientX - window.innerWidth / 2) * 0.0005;
-            this.mouseY = (e.clientY - window.innerHeight / 2) * 0.0005;
+        // Avatars sit front-facing and static at rest; a click is the only pointer
+        // interaction that wakes them up (see animate.js for the resulting pulse).
+        this.renderer.domElement.style.cursor = 'pointer';
+        this.renderer.domElement.addEventListener('click', () => {
+            this.lastClickTime = this.clock.getElapsedTime();
         });
 
         // Window resize always resizes the container, but the container can also change size
