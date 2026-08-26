@@ -10,6 +10,8 @@
 // commands will replace pieces of it over time.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
+mod llm;
+
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -20,6 +22,8 @@ use serde::Deserialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Manager;
+
+use llm::{LlmEngine, MemoryDb};
 
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 8378;
@@ -207,8 +211,78 @@ fn run_update_check<R: tauri::Runtime>(tray: &TrayIcon<R>, update_item: &MenuIte
     }
 }
 
+/// Rust-native equivalent of POST /api/chat's LLM call (backend/main.py), calling straight
+/// into the ported llm::LlmEngine instead of the Python backend. Runs alongside the
+/// existing Python /api/chat route rather than replacing it -- the frontend can opt into
+/// this per-call, and both read/write the same SQLite file, so switching between them
+/// mid-conversation doesn't lose history.
+#[tauri::command]
+fn generate_response_rust(
+    engine: tauri::State<LlmEngine>,
+    prompt: String,
+    session_id: Option<String>,
+) -> Result<String, String> {
+    if prompt.trim().is_empty() {
+        return Err("Empty message".to_string());
+    }
+    let session_id = session_id.unwrap_or_else(|| "default".to_string());
+
+    engine.add_message(&session_id, "user", &prompt);
+    let reply = engine.generate_response(&prompt, &session_id);
+    let agent_name = engine.agent_name();
+    engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
+
+    Ok(reply)
+}
+
+/// Rust-native equivalent of POST /api/agent/genesis (backend/main.py), minus TTS audio
+/// generation -- that stays Python-only for now (see backend/tts_engine.py).
+#[tauri::command]
+fn agent_genesis_rust(
+    engine: tauri::State<LlmEngine>,
+    purpose: String,
+) -> Result<serde_json::Value, String> {
+    if purpose.trim().is_empty() {
+        return Err("Please provide a purpose description".to_string());
+    }
+    let identity = engine.generate_identity_from_purpose(&purpose);
+    engine.add_message("default", &identity.name.to_lowercase(), &identity.greeting);
+
+    Ok(serde_json::json!({
+        "name": identity.name,
+        "callsign": identity.callsign,
+        "persona": identity.persona_directive,
+        "voice": identity.voice,
+        "greeting": identity.greeting,
+    }))
+}
+
 fn main() {
     let backend: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(spawn_backend()));
+
+    let llm_engine = {
+        let db_path = project_root().join("backend").join("aether1_memory.db");
+        match MemoryDb::open(&db_path) {
+            Ok(db) => LlmEngine::new(db),
+            Err(e) => {
+                // NOT ":memory:" -- MemoryDb opens a fresh connection per call (matching
+                // memory_db.py's own pattern, which is fine for a real file), so a literal
+                // SQLite ":memory:" database would be destroyed and recreated empty on
+                // every single call. A real temp file actually persists for the session.
+                let fallback_path = std::env::temp_dir().join("aether1_fallback_memory.db");
+                eprintln!(
+                    "[AETHER1] Could not open {} ({e}); the Rust LLM engine will use {} for this session \
+                     instead (won't be shared with the Python backend).",
+                    db_path.display(),
+                    fallback_path.display()
+                );
+                LlmEngine::new(
+                    MemoryDb::open(&fallback_path)
+                        .expect("fallback sqlite path should always open"),
+                )
+            }
+        }
+    };
 
     // Defense in depth: also clean up the backend on SIGINT/SIGTERM (e.g. the app being
     // killed from a terminal, or a system shutdown/logout), not just when Tauri's own
@@ -224,6 +298,11 @@ fn main() {
 
     let backend_for_exit = backend.clone();
     tauri::Builder::default()
+        .manage(llm_engine)
+        .invoke_handler(tauri::generate_handler![
+            generate_response_rust,
+            agent_genesis_rust
+        ])
         .setup(|app| {
             // Native tray icon so there's a visible indicator (and a quick way to
             // reopen/quit) while AETHER1 runs headlessly in the background.
