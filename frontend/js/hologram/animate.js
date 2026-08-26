@@ -341,40 +341,48 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
         }
     }
 
-    // Static outer ring — only spins while thinking/speaking, or briefly on click.
-    if (this.halcyOuterRing) {
-        const speedMultiplier = isThinking ? 3.5 : (isSpeaking ? 1.8 : clickPulse * 1.4);
-        this.halcyOuterRing.rotation.z += this.halcyOuterRing.userData.speed * speedMultiplier;
-
-        if (isThinking || isSpeaking) {
-            this.halcyOuterRing.rotation.x = this.halcyOuterRing.userData.baseRotX + Math.sin(elapsedTime * 0.8) * 0.08;
-            this.halcyOuterRing.rotation.y = this.halcyOuterRing.userData.baseRotY + Math.cos(elapsedTime * 0.8) * 0.08;
-        } else {
-            const targetX = this.halcyOuterRing.userData.baseRotX + clickPulse * 0.1;
-            const targetY = this.halcyOuterRing.userData.baseRotY + clickPulse * 0.1;
-            this.halcyOuterRing.rotation.x += (targetX - this.halcyOuterRing.rotation.x) * 0.15;
-            this.halcyOuterRing.rotation.y += (targetY - this.halcyOuterRing.rotation.y) * 0.15;
-        }
+    // How far the lattice is currently bulging beyond its resting radius -- used to push
+    // both rings outward in step so they never overlap it, even mid-click or mid-speech.
+    let latticeBulge = 2.5 + clickPulse * 10;
+    if (isSpeaking) {
+        latticeBulge = 8 + audioIntensity * 25;
+    } else if (isThinking) {
+        latticeBulge = 9;
     }
 
     // Inner ultramarine equalizer ring — each segment thickens along the circumference
     // to the live audio frequencies while speaking. The segments are children of the
     // rotating group, so the thickening pattern rotates together with the ring itself.
-    this.halcyInnerSegments.forEach((seg, idx) => {
-        let lenScale = 1.0;
-        if (isSpeaking) {
-            const fVal = (this.audioData[idx % 32] || 0) / 255;
-            lenScale = 1.0 + fVal * 2.4;
-        } else if (isThinking) {
-            lenScale = 1.0 + Math.sin(elapsedTime * 14 + seg.userData.angle * 6) * 0.35;
-        } else {
-            lenScale = 1.0 + clickPulse * 0.3;
-        }
-        seg.scale.y = lenScale;
-    });
+    let segReachEnvelope = 1.0 + clickPulse * 0.3;
+    if (isSpeaking) {
+        segReachEnvelope = 1.0 + audioIntensity * 2.4;
+    } else if (isThinking) {
+        segReachEnvelope = 1.35;
+    }
 
     if (this.halcyInnerRingGroup) {
-        const spinMultiplier = isThinking ? 3.0 : (isSpeaking ? 1.6 : clickPulse * 1.1);
+        const targetInnerRadius = this.halcyLatticeRadius + this.halcyInnerRingGap + latticeBulge;
+        this.halcyInnerRingRadius += (targetInnerRadius - this.halcyInnerRingRadius) * 0.12;
+
+        this.halcyInnerSegments.forEach((seg, idx) => {
+            let lenScale = 1.0;
+            if (isSpeaking) {
+                const fVal = (this.audioData[idx % 32] || 0) / 255;
+                lenScale = 1.0 + fVal * 2.4;
+            } else if (isThinking) {
+                lenScale = 1.0 + Math.sin(elapsedTime * 14 + seg.userData.angle * 6) * 0.35;
+            } else {
+                lenScale = 1.0 + clickPulse * 0.3;
+            }
+            seg.scale.y = lenScale;
+            seg.position.set(
+                Math.cos(seg.userData.angle) * this.halcyInnerRingRadius,
+                Math.sin(seg.userData.angle) * this.halcyInnerRingRadius,
+                0
+            );
+        });
+
+        const spinMultiplier = isThinking ? 3.0 : (isSpeaking ? 1.6 : 0.4 + clickPulse * 1.1);
         this.halcyInnerRingGroup.rotation.z += this.halcyInnerRingGroup.userData.speed * spinMultiplier;
 
         if (isSpeaking) {
@@ -384,6 +392,19 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
         } else {
             this.halcyInnerRingGroup.rotation.x += (clickPulse * 0.1 - this.halcyInnerRingGroup.rotation.x) * 0.15;
         }
+    }
+
+    // Static outer ring — kept perfectly flat (a true circle, not tilted into an ellipse),
+    // spins the opposite way from the inner ring, and stays a little tighter to it than
+    // before while still tracking the inner ring's outward dodge. Its baked-in bulge rides
+    // around the circumference as it spins, reading as a pulse of motion.
+    if (this.halcyOuterRing) {
+        const targetOuterRadius = this.halcyInnerRingRadius + 6 * segReachEnvelope + this.halcyOuterRingGap;
+        this.halcyOuterRingRadius += (targetOuterRadius - this.halcyOuterRingRadius) * 0.12;
+        this.halcyOuterRing.scale.setScalar(this.halcyOuterRingRadius / this.halcyOuterRingBaseRadius);
+
+        const speedMultiplier = isThinking ? 3.5 : (isSpeaking ? 1.8 : clickPulse * 1.4);
+        this.halcyOuterRing.rotation.z -= this.halcyOuterRing.userData.speed * speedMultiplier;
     }
 
     if (this.coreOrb) {

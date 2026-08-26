@@ -56,8 +56,47 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
     this.coreOrb = new THREE.Mesh(coreGeom, coreMat);
     this.scene.add(this.coreOrb);
 
-    // Static outer ring — fixed cyan, unaffected by color theme
-    const outerRingGeom = new THREE.RingGeometry(76, 78.5, 64);
+    // Inner ring's resting radius (a few pixels clear of the lattice) and its baseline
+    // outward reach once its equalizer segments are included -- both are re-derived every
+    // frame in animate.js so the rings dodge outward in step with the lattice bulging
+    // during clicks/thinking/speaking, instead of a fixed gap that would get swallowed.
+    this.halcyInnerRingGap = 5;
+    this.halcyInnerRingRadius = radius + this.halcyInnerRingGap;
+    const restingSegReach = 6; // segment length before any equalizer lenScale is applied
+    this.halcyOuterRingGap = 4;
+    this.halcyOuterRingBaseRadius = this.halcyInnerRingRadius + restingSegReach + this.halcyOuterRingGap;
+    this.halcyOuterRingRadius = this.halcyOuterRingBaseRadius;
+
+    // Static outer ring — fixed cyan, unaffected by color theme. Authored at its resting
+    // radius, then scaled at runtime to track halcyOuterRingRadius. Kept perfectly flat
+    // (no x/y tilt) so it reads as a true circle around the inner ring rather than an ellipse.
+    const outerRingThickness = 2.5;
+    const outerRingGeom = new THREE.RingGeometry(
+        this.halcyOuterRingBaseRadius - outerRingThickness / 2,
+        this.halcyOuterRingBaseRadius + outerRingThickness / 2,
+        128
+    );
+
+    // Bake a single gradual bulge into the band at local angle 0 -- since the mesh spins
+    // on its Z axis every frame, this rides around the circumference as a traveling pulse
+    // that reads as motion, instead of the ring just looking like a static disc.
+    const bulgeHalfAngle = Math.PI / 5;
+    const bulgeMaxAmount = 4;
+    const outerPos = outerRingGeom.attributes.position;
+    for (let vi = 0; vi < outerPos.count; vi++) {
+        const vx = outerPos.getX(vi);
+        const vy = outerPos.getY(vi);
+        const vAngle = Math.atan2(vy, vx);
+        const angleDiff = Math.atan2(Math.sin(vAngle), Math.cos(vAngle));
+        let bulge = 0;
+        if (Math.abs(angleDiff) < bulgeHalfAngle) {
+            bulge = bulgeMaxAmount * 0.5 * (1 + Math.cos((angleDiff / bulgeHalfAngle) * Math.PI));
+        }
+        const r = Math.sqrt(vx * vx + vy * vy) + bulge;
+        outerPos.setXY(vi, Math.cos(vAngle) * r, Math.sin(vAngle) * r);
+    }
+    outerPos.needsUpdate = true;
+
     const outerRingMat = new THREE.MeshBasicMaterial({
         color: 0x00f0ff,
         side: THREE.DoubleSide,
@@ -66,16 +105,15 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
         blending: THREE.AdditiveBlending
     });
     this.halcyOuterRing = new THREE.Mesh(outerRingGeom, outerRingMat);
-    this.halcyOuterRing.rotation.x = 0.6;
-    this.halcyOuterRing.rotation.y = 0.2;
-    this.halcyOuterRing.userData = { speed: 0.012, baseRotX: 0.6, baseRotY: 0.2 };
+    this.halcyOuterRing.userData = { speed: 0.012 };
     this.scene.add(this.halcyOuterRing);
 
     // Inner ultramarine equalizer ring — segmented so its circumference can "thicken" per-bar
     // like an audio equalizer while speaking, and the whole ring can sway on its Z axis.
+    // Dodges a few pixels clear of the lattice surface and spins slowly even at rest.
     this.halcyInnerRingGroup = new THREE.Group();
     this.halcyInnerRingGroup.userData = { speed: 0.01 };
-    const innerRingRadius = 58;
+    const innerRingRadius = this.halcyInnerRingRadius;
     const segmentCount = 40;
     const segMat = new THREE.MeshBasicMaterial({
         color: 0x2b3eff,
@@ -85,7 +123,7 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
     });
     for (let i = 0; i < segmentCount; i++) {
         const angle = (i / segmentCount) * Math.PI * 2;
-        const segGeom = new THREE.BoxGeometry(2.4, 6, 1.6);
+        const segGeom = new THREE.BoxGeometry(3.6, 6, 2.6);
         segGeom.translate(0, 3, 0); // pivot at inner edge so it only extends outward when scaled
         const seg = new THREE.Mesh(segGeom, segMat);
         seg.position.set(Math.cos(angle) * innerRingRadius, Math.sin(angle) * innerRingRadius, 0);
