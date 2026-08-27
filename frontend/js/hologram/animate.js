@@ -360,6 +360,7 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
         segReachEnvelope = 1.35;
     }
 
+    let innerRingSpinDelta = 0;
     if (this.halcyInnerRingGroup) {
         const targetInnerRadius = this.halcyLatticeRadius + this.halcyInnerRingGap + latticeBulge;
         this.halcyInnerRingRadius += (targetInnerRadius - this.halcyInnerRingRadius) * 0.12;
@@ -383,7 +384,8 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
         });
 
         const spinMultiplier = isThinking ? 3.0 : (isSpeaking ? 1.6 : 0.4 + clickPulse * 1.1);
-        this.halcyInnerRingGroup.rotation.z += this.halcyInnerRingGroup.userData.speed * spinMultiplier;
+        innerRingSpinDelta = this.halcyInnerRingGroup.userData.speed * spinMultiplier;
+        this.halcyInnerRingGroup.rotation.z += innerRingSpinDelta;
 
         if (isSpeaking) {
             this.halcyInnerRingGroup.rotation.x = Math.sin(elapsedTime * 2.4) * 0.24;
@@ -395,16 +397,16 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
     }
 
     // Static outer ring — kept perfectly flat (a true circle, not tilted into an ellipse),
-    // spins the opposite way from the inner ring, and stays a little tighter to it than
-    // before while still tracking the inner ring's outward dodge. Its baked-in bulge rides
-    // around the circumference as it spins, reading as a pulse of motion.
+    // spins clockwise at exactly half the inner ring's current speed (so it stays in visible
+    // lockstep through every state), and stays a little tighter to the inner ring than before
+    // while still tracking its outward dodge. Its baked-in swell rides around the
+    // circumference as it spins, reading as a wave of motion.
     if (this.halcyOuterRing) {
         const targetOuterRadius = this.halcyInnerRingRadius + 6 * segReachEnvelope + this.halcyOuterRingGap;
         this.halcyOuterRingRadius += (targetOuterRadius - this.halcyOuterRingRadius) * 0.12;
         this.halcyOuterRing.scale.setScalar(this.halcyOuterRingRadius / this.halcyOuterRingBaseRadius);
 
-        const speedMultiplier = isThinking ? 3.5 : (isSpeaking ? 1.8 : clickPulse * 1.4);
-        this.halcyOuterRing.rotation.z -= this.halcyOuterRing.userData.speed * speedMultiplier;
+        this.halcyOuterRing.rotation.z -= innerRingSpinDelta * 0.5;
     }
 
     if (this.coreOrb) {
