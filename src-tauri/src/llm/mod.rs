@@ -242,10 +242,18 @@ impl LlmEngine {
                 let _ = self.db.set_memory(k, v, "general");
                 return Some(format!("Data synthesized into memory: **{k}** = `{v}`"));
             } else if !fact.is_empty() {
-                let count = self.db.get_all_memories().map(|m| m.len()).unwrap_or(0);
+                // A key derived from the live memory count (fact_{count+1}) collides with
+                // an existing key once anything's ever been deleted (set_memory is an
+                // upsert, so that silently overwrites the wrong entry instead of adding a
+                // new one). A millisecond timestamp can't repeat across two separate chat
+                // commands, so it can't collide with an earlier fact_* key.
+                let millis = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
                 let _ = self
                     .db
-                    .set_memory(&format!("fact_{}", count + 1), fact, "general");
+                    .set_memory(&format!("fact_{millis}"), fact, "general");
                 return Some(format!("Archived to neural memory: \"{fact}\""));
             }
         }

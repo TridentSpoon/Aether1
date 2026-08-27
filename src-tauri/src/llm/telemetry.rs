@@ -4,7 +4,7 @@
 // way -- the same code path here runs on Linux and Windows.
 
 use std::thread;
-use sysinfo::{Disks, System};
+use sysinfo::{Disks, ProcessesToUpdate, System};
 
 pub struct Telemetry {
     pub os_name: String,
@@ -43,6 +43,11 @@ impl Telemetry {
         thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         sys.refresh_cpu_usage();
         sys.refresh_memory();
+        // Per-process CPU usage needs the same two-samples-apart treatment as the global
+        // number above -- without this second call, every process's cpu_usage() stays 0.0
+        // from the single sample taken inside System::new_all(), making "top processes"
+        // meaningless (sorted by a constant).
+        sys.refresh_processes(ProcessesToUpdate::All, true);
 
         let os_name = System::long_os_version()
             .or_else(System::name)

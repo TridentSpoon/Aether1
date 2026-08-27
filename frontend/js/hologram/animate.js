@@ -21,10 +21,21 @@ HologramAvatar.prototype.animate = function() {
     const audioIntensity = audioSum / (16 * 255);
 
     const CLICK_REACT_DURATION = 0.7;
+    // Ramp the pulse up over a short rise instead of snapping to ~1 on the very first
+    // frame after a click. hAlcy's rings ease toward a click-driven target radius over
+    // several frames (see animateHalcy) -- an instant-rise pulse gave the lattice's
+    // displacement (which isn't eased, just recomputed from clickPulse every frame) no
+    // time margin, so it could visibly bulge past the ring before the ring caught up.
+    const CLICK_RISE_DURATION = 0.15;
     const clickAge = elapsedTime - this.lastClickTime;
-    const clickPulse = (clickAge >= 0 && clickAge < CLICK_REACT_DURATION)
-        ? Math.sin((1 - clickAge / CLICK_REACT_DURATION) * (Math.PI / 2))
-        : 0;
+    let clickPulse = 0;
+    if (clickAge >= 0 && clickAge < CLICK_REACT_DURATION) {
+        const decay = Math.sin((1 - clickAge / CLICK_REACT_DURATION) * (Math.PI / 2));
+        const rise = clickAge < CLICK_RISE_DURATION
+            ? Math.sin((clickAge / CLICK_RISE_DURATION) * (Math.PI / 2))
+            : 1;
+        clickPulse = decay * rise;
+    }
 
     if (this.currentAvatar === 'arx-logos') {
         this.animateArxLogos(elapsedTime, audioIntensity, clickPulse);
@@ -341,11 +352,24 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
         }
     }
 
+    // Peak (not average) of the same 32-bin range the particles (freqIdx = i % 32, below)
+    // and inner-ring segments (idx % 32, below) actually read while speaking -- using the
+    // shared audioIntensity here instead (an average of only bins 0-15) let a loud bin
+    // anywhere in 16-31 push a particle or segment out further than this bulge/envelope
+    // accounted for, since that quieter-looking average under-reported the real peak.
+    let maxSpeakingFreqVal = 0;
+    if (isSpeaking) {
+        for (let i = 0; i < 32; i++) {
+            const v = (this.audioData[i] || 0) / 255;
+            if (v > maxSpeakingFreqVal) maxSpeakingFreqVal = v;
+        }
+    }
+
     // How far the lattice is currently bulging beyond its resting radius -- used to push
     // both rings outward in step so they never overlap it, even mid-click or mid-speech.
     let latticeBulge = 2.5 + clickPulse * 10;
     if (isSpeaking) {
-        latticeBulge = 8 + audioIntensity * 25;
+        latticeBulge = 8 + maxSpeakingFreqVal * 25;
     } else if (isThinking) {
         latticeBulge = 9;
     }
@@ -355,7 +379,7 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
     // rotating group, so the thickening pattern rotates together with the ring itself.
     let segReachEnvelope = 1.0 + clickPulse * 0.3;
     if (isSpeaking) {
-        segReachEnvelope = 1.0 + audioIntensity * 2.4;
+        segReachEnvelope = 1.0 + maxSpeakingFreqVal * 2.4;
     } else if (isThinking) {
         segReachEnvelope = 1.35;
     }
