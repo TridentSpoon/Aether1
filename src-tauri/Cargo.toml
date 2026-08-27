@@ -21,6 +21,9 @@ which = "8"
 msedge-tts = { version = "0.4.0", default-features = false, features = ["blocking", "rustls"] }
 regex = "1.13.1"
 rustls = { version = "0.23.43", features = ["ring"] }
+axum = { version = "0.8.9", features = ["ws"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "fs", "time", "sync"] }
+tower-http = { version = "0.7.0", features = ["fs"] }
 
 [profile.release]
 panic = "abort"

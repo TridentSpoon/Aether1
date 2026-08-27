@@ -23,8 +23,7 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 fi
 
-# Fallback cleanup for any dangling processes
-pkill -f "uvicorn backend.main:app" 2>/dev/null || true
-pkill -f "desktop/tray_app.py" 2>/dev/null || true
+# Fallback cleanup for any dangling process
+pkill -f "target/release/aether1 --serve" 2>/dev/null || true
 
 echo "✔ AETHER1 services stopped successfully."

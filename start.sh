@@ -1,38 +1,31 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Project AETHER1 AI - 1-Click Launch Script
-# Starts FastAPI Backend, System Tray Notification App, and Opens HUD
+# Starts the native Rust server (headless --serve mode) and opens the HUD in a browser.
+# This is a dev convenience only -- the real way to run AETHER1 is the native desktop app
+# (see scripts/install_desktop_app.sh); this just gives the same backend a browser tab.
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-if [ ! -d "venv" ]; then
-    echo "⚡ First-time run detected. Running setup..."
-    ./setup.sh
+BIN="src-tauri/target/release/aether1"
+if [ ! -x "$BIN" ]; then
+    echo "⚡ No release build found. Building (first build can take a few minutes)..."
+    (cd src-tauri && cargo build --release)
 fi
 
 echo "======================================================================"
 echo "🌐 LAUNCHING AETHER1 AI CORE"
 echo "======================================================================"
 
-# Start Backend Server
-echo "🚀 Starting FastAPI Backend on http://localhost:8378..."
-./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8378 &
-BACKEND_PID=$!
+echo "🚀 Starting AETHER1 server on http://localhost:8378..."
+"$BIN" --serve &
+SERVER_PID=$!
 
-# Wait briefly for backend to initialize
-sleep 2
+# Wait briefly for the server to bind before opening a browser tab at it.
+sleep 1
 
-# Start System Tray App (if graphical display is present)
-TRAY_PID=""
-if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
-    echo "🔔 Starting System Tray Notification Companion..."
-    ./venv/bin/python desktop/tray_app.py &
-    TRAY_PID=$!
-fi
-
-# Open HUD in default browser
 echo "💻 Opening Holographic Cyberpunk HUD in Browser..."
 if command -v xdg-open &> /dev/null; then
     xdg-open "http://localhost:8378" &
@@ -43,24 +36,16 @@ fi
 echo ""
 echo "✔ AETHER1 AI is running!"
 echo "  - Web HUD: http://localhost:8378"
-echo "  - System Tray: Active in your notification panel"
-echo "  - Press Ctrl+C to terminate all services"
+echo "  - Press Ctrl+C to terminate"
 echo "======================================================================"
 
-# Trap termination signals to kill both background processes
 cleanup() {
     echo ""
-    echo "🛑 Shutting down AETHER1 services..."
-    if [ -n "$BACKEND_PID" ]; then
-        kill "$BACKEND_PID" 2>/dev/null || true
-    fi
-    if [ -n "$TRAY_PID" ]; then
-        kill "$TRAY_PID" 2>/dev/null || true
-    fi
+    echo "🛑 Shutting down AETHER1 server..."
+    kill "$SERVER_PID" 2>/dev/null || true
     exit 0
 }
 
 trap cleanup SIGINT SIGTERM
 
-# Wait on backend process
-wait $BACKEND_PID
+wait $SERVER_PID

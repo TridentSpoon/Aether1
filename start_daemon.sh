@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Project AETHER1 AI - Background Daemon Launcher
-# Starts all services silently in the background (No terminal window needed!)
+# Starts the native Rust server (headless --serve mode) silently in the background.
+# This is a dev convenience only -- the real way to run AETHER1 is the native desktop app.
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,9 +12,10 @@ mkdir -p "$SCRIPT_DIR/logs"
 PID_FILE="$SCRIPT_DIR/logs/aether1.pid"
 LOG_FILE="$SCRIPT_DIR/logs/aether1.log"
 
-# Run setup if first time
-if [ ! -d "venv" ]; then
-    ./setup.sh >> "$LOG_FILE" 2>&1
+BIN="src-tauri/target/release/aether1"
+if [ ! -x "$BIN" ]; then
+    echo "⚡ No release build found. Building (first build can take a few minutes)..."
+    (cd src-tauri && cargo build --release) >> "$LOG_FILE" 2>&1
 fi
 
 # Check if already running
@@ -30,27 +32,13 @@ fi
 
 echo "🚀 Launching AETHER1 in background daemon mode..."
 
-# 1. Start Backend Server in background
-nohup ./venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8378 >> "$LOG_FILE" 2>&1 &
-BACKEND_PID=$!
+nohup "$BIN" --serve >> "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+echo "$SERVER_PID" > "$PID_FILE"
 
-# Wait briefly for backend
-sleep 1.5
+# Wait briefly for the server to bind
+sleep 1
 
-# 2. Start System Tray Notification App in background
-TRAY_PID=""
-if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
-    nohup ./venv/bin/python desktop/tray_app.py >> "$LOG_FILE" 2>&1 &
-    TRAY_PID=$!
-fi
-
-# Save PIDs
-echo "$BACKEND_PID" > "$PID_FILE"
-if [ -n "$TRAY_PID" ]; then
-    echo "$TRAY_PID" >> "$PID_FILE"
-fi
-
-# 3. Open HUD in default browser
 if command -v xdg-open &> /dev/null; then
     xdg-open "http://localhost:8378" > /dev/null 2>&1 &
 elif command -v python3 &> /dev/null; then
@@ -60,7 +48,6 @@ fi
 echo "======================================================================"
 echo "✨ AETHER1 IS RUNNING IN THE BACKGROUND!"
 echo "  - Web HUD: http://localhost:8378"
-echo "  - Notification Bar: 🤖 Robot icon active in your panel"
 echo "  - Logs: $LOG_FILE"
 echo "  - To stop at any time: ./stop.sh"
 echo "======================================================================"

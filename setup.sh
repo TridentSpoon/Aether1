@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Project AETHER1 AI Companion - Setup Script
-# Installs system dependencies and configures the Python virtualenv.
+# Installs system dependencies and builds the native Rust app (also used headlessly by
+# ./start.sh / ./start_daemon.sh's browser-dev flow via `aether1 --serve`).
 # Safe to re-run at any time (idempotent).
 # ==============================================================================
 
@@ -25,66 +26,39 @@ if [ "$(id -u)" -ne 0 ]; then
     SUDO="sudo"
 fi
 
-# 2. Install system dependencies (best-effort; the venv/pip steps below are what
-# actually matter, so a failure here is a warning, not a hard stop).
-# The only non-pip runtime dependency this project needs is `notify-send`
-# (libnotify) for desktop notifications. pystray's tray icon, Pillow, and
-# everything else are pure pip packages -- no GTK/AppIndicator system libs
-# required.
+# 2. Install system dependencies (best-effort; the Rust build step below is what
+# actually matters, so a failure here is a warning, not a hard stop). `notify-send`
+# (libnotify) is for desktop notifications; see README's "Native Desktop App" section
+# for the Tauri Linux build prerequisites (webkit2gtk, libappindicator-gtk3, etc.) if
+# the build step below fails on a missing system library.
 echo "📦 Installing system dependencies ($DISTRO)..."
 case "$DISTRO" in
     cachyos|arch|manjaro|endeavouros)
-        $SUDO pacman -Sy --needed --noconfirm python python-pip git libnotify \
+        $SUDO pacman -Sy --needed --noconfirm git libnotify \
             || echo "⚠ System package install failed or was skipped -- continuing anyway."
         ;;
     fedora|nobara|rhel|centos)
-        $SUDO dnf install -y python3 python3-pip git libnotify \
+        $SUDO dnf install -y git libnotify \
             || echo "⚠ System package install failed or was skipped -- continuing anyway."
         ;;
     ubuntu|debian|pop|linuxmint)
-        $SUDO apt-get update && $SUDO apt-get install -y python3 python3-pip python3-venv git libnotify-bin \
+        $SUDO apt-get update && $SUDO apt-get install -y git libnotify-bin \
             || echo "⚠ System package install failed or was skipped -- continuing anyway."
         ;;
     *)
-        echo "⚠ Unrecognized distro ($DISTRO). Please ensure python3, pip, git, and libnotify are installed manually."
+        echo "⚠ Unrecognized distro ($DISTRO). Please ensure git and libnotify are installed manually."
         ;;
 esac
 
-# 3. Check for Python 3 (hard requirement -- stop here if still missing)
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed and could not be auto-installed."
-    echo "   Install it manually, then re-run ./setup.sh"
-    exit 1
-fi
-echo "✔ Python 3 found: $(python3 --version)"
-
 set -e
 
-# 4. Create Python Virtual Environment
-if [ ! -d "venv" ]; then
-    echo "📦 Creating isolated Python virtual environment (venv)..."
-    python3 -m venv venv
-else
-    echo "✔ Python virtual environment already exists."
-fi
-
-# 5. Install Dependencies
-echo "📥 Installing backend & desktop dependencies..."
-./venv/bin/pip install --upgrade pip
-./venv/bin/pip install -r backend/requirements.txt
-
-# 6. Generate Hologram Tray Icons
-echo "🎨 Generating holographic tray & app icons..."
-./venv/bin/python desktop/generate_icons.py
-
-# 6.5 Build the native desktop app (Tauri) and install its Linux launcher
-# entry + icon (best-effort -- Rust isn't a hard requirement for the rest of
-# the project; the browser-based ./start.sh / ./start_daemon.sh still work
-# without it).
+# 3. Build the native desktop app (Tauri) and install its Linux launcher entry +
+# icon -- this also produces the src-tauri/target/release/aether1 binary that
+# ./start.sh / ./start_daemon.sh run headlessly via `--serve`.
 chmod +x scripts/install_desktop_app.sh
-./scripts/install_desktop_app.sh || echo "⚠ Native app install step failed -- continuing with the rest of setup anyway."
+./scripts/install_desktop_app.sh || echo "⚠ Native app install step failed -- see README's 'Native Desktop App' section to install Rust, then re-run ./setup.sh."
 
-# 7. Install git hooks so the installed desktop app rebuilds automatically no
+# 4. Install git hooks so the installed desktop app rebuilds automatically no
 # matter how the working tree changes -- a direct commit (post-commit), a
 # `git pull` / `git merge` bringing in a PR merged elsewhere (post-merge), or
 # switching branches (post-checkout). "Update the installed app" stops being
