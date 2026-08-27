@@ -48,16 +48,26 @@ class HologramAvatar {
         this.arxLimesMainFillMat = null;
         this.arxLimesWingFillMat = null;
 
-        // 3. The Nexus: squid/brain hunting the cursor, trailing tentacles, NEXUS letter rain
+        // 3. The Nexus: Sentinel-esque ribbed head with a clustered eye-lens array, a front
+        // mandible cluster, and trailing claw-tipped tentacles, hunting the cursor against a
+        // falling NEXUS letter rain.
         this.nexusGroup = null;
         this.nexusCreatureGroup = null; // head + tentacles; rotates to face the cursor
         this.nexusHeadMesh = null;
         this.nexusHeadOutline = null;
-        this.nexusTentacleMat = null;
-        this.nexusTentacles = []; // { segments, baseAngle, spreadRadius }
+        this.nexusTentacleMat = null; // dark sphere fill
+        this.nexusGlowMat = null; // shared subtle inner-glow sprite -- tentacles, arms, and head all use it
+        this.nexusTentacles = []; // { segments, baseAngle, spreadRadius, claws }
+        this.nexusLegMat = null; // front mandible/arm joints — dark fill, like the tentacles
+        this.nexusLegRodMat = null; // front mandible/arm rigid links — dark fill, like the tentacles
+        this.nexusLegOutlineMat = null; // dark edge outline shared by every joint/rod
+        this.nexusLegs = []; // { joints, rods, spread, speedMult, phaseSeed }
+        this.nexusEyes = []; // { mesh, glow, ring, highlight } — fixed red, blink together in idle
+        this.nexusEyeRingMat = null; // shared bezel-outline sprite material, slowly spins
+        this.nexusEyeHighlightMat = null; // shared anime/cartoon eye-shine sprite material
         this.nexusRainDrops = []; // sprites, fall straight down and wrap top-to-bottom
         this.nexusRainMaterials = []; // one shared material per NEXUS letter
-        this.nexusFacing = { yaw: 0, pitch: 0 }; // eased hunting orientation
+        this.nexusFacing = { yaw: 0, pitch: 0, roll: 0 }; // eased hunting orientation
 
         // 4. R.E.D. 9000 / HAL 9000 structures -- obsidian eye with lens shell + eyelid arcs
         this.redGroup = null;
@@ -79,6 +89,13 @@ class HologramAvatar {
 
         this.clock = null;
         this.lastClickTime = -999; // seconds on this.clock; drives the click-reaction pulse
+
+        // Pointer tracking -- only The Nexus consumes these (mouse-manipulated head that
+        // autonomously "hunts" when the pointer isn't actively directing it); other avatars
+        // stay front-facing/static and simply don't read them.
+        this.nexusMouseNX = 0; // -1..1 across the renderer element
+        this.nexusMouseNY = 0;
+        this.lastMouseMoveTime = -999; // seconds on this.clock
 
         this.init();
     }
@@ -127,6 +144,19 @@ class HologramAvatar {
         this.renderer.domElement.style.cursor = 'pointer';
         this.renderer.domElement.addEventListener('click', () => {
             this.lastClickTime = this.clock.getElapsedTime();
+        });
+
+        // The Nexus's head can be steered by the pointer while it's active over the
+        // viewport; animateNexus falls back to an autonomous "hunting" scan the moment it
+        // stops (mouseleave included, so it doesn't just sit aimed at wherever it was left).
+        this.renderer.domElement.addEventListener('mousemove', (e) => {
+            const rect = this.renderer.domElement.getBoundingClientRect();
+            this.nexusMouseNX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            this.nexusMouseNY = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+            this.lastMouseMoveTime = this.clock.getElapsedTime();
+        });
+        this.renderer.domElement.addEventListener('mouseleave', () => {
+            this.lastMouseMoveTime = -999;
         });
 
         // Window resize always resizes the container, but the container can also change size
@@ -184,10 +214,17 @@ class HologramAvatar {
             this.particleSystem.geometry.attributes.color.needsUpdate = true;
         }
 
-        // The Nexus: squid/brain creature + letter rain
-        if (this.nexusHeadMesh) this.nexusHeadMesh.material.color.setHex(p.hex);
-        if (this.nexusHeadOutline) this.nexusHeadOutline.material.color.setHex(p.hex3);
-        if (this.nexusTentacleMat) this.nexusTentacleMat.color.setHex(p.hex2);
+        // The Nexus: squid/brain creature + letter rain. Head, arms, and tentacles all now
+        // share the same treatment: a heavily darkened fill plus the shared subtle low-opacity
+        // inner-glow sprite (nexusGlowMat, see buildNexusAvatar) rather than a bright fill.
+        // The outline/rib "lattice" stays brightened for contrast against the darker head.
+        if (this.nexusHeadMesh) this.nexusHeadMesh.material.color.setHex(p.hex2).multiplyScalar(0.22);
+        if (this.nexusHeadOutline) this.nexusHeadOutline.material.color.setHex(p.hex3).multiplyScalar(1.4);
+        if (this.nexusTentacleMat) this.nexusTentacleMat.color.setHex(p.hex2).multiplyScalar(0.22);
+        if (this.nexusGlowMat) this.nexusGlowMat.color.setHex(p.hex2);
+        if (this.nexusLegMat) this.nexusLegMat.color.setHex(p.hex2).multiplyScalar(0.22);
+        if (this.nexusLegRodMat) this.nexusLegRodMat.color.setHex(p.hex2).multiplyScalar(0.22);
+        if (this.nexusLegOutlineMat) this.nexusLegOutlineMat.color.setHex(p.hex2).multiplyScalar(0.15);
         this.nexusRainMaterials.forEach(mat => mat.color.setHex(p.hex));
 
         // A.R.X.LIMES fractured dome
