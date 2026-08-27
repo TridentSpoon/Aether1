@@ -16,6 +16,23 @@ HologramAvatar.prototype.createGlowSpriteTexture = function(size = 32) {
     return new THREE.CanvasTexture(canvas);
 };
 
+// A thin stroked ring on a transparent canvas (used by The Nexus's eye-lens outlines) --
+// rendered white so material.color can tint it. A sprite rather than flat geometry so the
+// ring always faces the camera regardless of how the parent head is rotated.
+HologramAvatar.prototype.createRingSpriteTexture = function(size = 64, thickness = 0.14) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const r = size / 2 - 2;
+    ctx.strokeStyle = 'rgba(255,255,255,1)';
+    ctx.lineWidth = size * thickness;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, r, 0, Math.PI * 2);
+    ctx.stroke();
+    return new THREE.CanvasTexture(canvas);
+};
+
 // A single glowing glyph on a transparent canvas (used by The Nexus's letter rain).
 // Rendered white so material.color can tint it per the active color theme.
 HologramAvatar.prototype.createLetterSpriteTexture = function(char, size = 64) {
