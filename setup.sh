@@ -82,7 +82,7 @@ echo "🎨 Generating holographic tray & app icons..."
 # the project; the browser-based ./start.sh / ./start_daemon.sh still work
 # without it).
 chmod +x scripts/install_desktop_app.sh
-./scripts/install_desktop_app.sh
+./scripts/install_desktop_app.sh || echo "⚠ Native app install step failed -- continuing with the rest of setup anyway."
 
 # 7. Install git hooks so the installed desktop app rebuilds automatically no
 # matter how the working tree changes -- a direct commit (post-commit), a
@@ -102,7 +102,7 @@ echo ""
 echo "======================================================================"
 echo "✨ SETUP COMPLETE!"
 echo "To start AETHER1 AI:"
-echo "   Use the AETHER1 AI Assistant entry in your app launcher (native app + tray icon)"
+echo "   Use the Aether1 Platform entry in your app launcher (native app + tray icon)"
 echo "   ./start.sh          (foreground, opens a terminal + browser tab)"
 echo "   ./start_daemon.sh   (background, no terminal window needed)"
 echo "======================================================================"
