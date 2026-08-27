@@ -53,8 +53,8 @@ const BUILT_PR_REV: &str = env!("AETHER1_PR_REV");
 /// without needing a hand-maintained counter.
 const APP_VERSION: &str = concat!("Aether1 0.3.Rev", env!("AETHER1_PR_REV"));
 
-/// CARGO_MANIFEST_DIR is src-tauri/ at build time; the Python backend, its venv, and
-/// frontend/ all live one level up, at the repo root.
+/// CARGO_MANIFEST_DIR is src-tauri/ at build time; frontend/ and the backend/ data
+/// directory (aether1_memory.db, audio_cache/) all live one level up, at the repo root.
 fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

@@ -6,27 +6,32 @@ echo ======================================================================
 echo Launching AETHER1 AI Companion
 echo ======================================================================
 
-if not exist "venv" (
-    echo Setting up Python virtual environment...
-    python -m venv venv
-    call venv\Scripts\activate.bat
-    pip install -r backend\requirements.txt
-    python desktop\generate_icons.py
-) else (
-    call venv\Scripts\activate.bat
+set BIN=src-tauri\target\release\aether1.exe
+
+if not exist "%BIN%" (
+    echo No release build found. Building AETHER1 (first build can take a few minutes)...
+    pushd src-tauri
+    cargo build --release
+    popd
 )
 
-echo Starting FastAPI Backend on http://localhost:8378...
-start "" "%~dp0venv\Scripts\uvicorn.exe" backend.main:app --host 0.0.0.0 --port 8378
+if not exist "%BIN%" (
+    echo.
+    echo Build failed -- see the errors above. Make sure Rust is installed:
+    echo   https://rustup.rs
+    pause
+    exit /b 1
+)
+
+echo Starting AETHER1 server on http://localhost:8378...
+start "AETHER1 Server" "%BIN%" --serve
 
 timeout /t 2 >nul
-echo Starting System Tray Notification Bar App...
-start "" "%~dp0venv\Scripts\python.exe" desktop\tray_app.py
 
 echo Opening Holographic Cyberpunk HUD...
 start http://localhost:8378
 
 echo ======================================================================
-echo AETHER1 is active. Close this window when done.
+echo AETHER1 is active. Close the "AETHER1 Server" window to stop it.
 echo ======================================================================
 pause
