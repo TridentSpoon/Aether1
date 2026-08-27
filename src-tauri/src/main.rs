@@ -449,6 +449,11 @@ fn main() {
             // "check_update" click handler to decide whether the next click should check
             // again or actually install the update (see perform_update).
             let update_available = Arc::new(AtomicBool::new(false));
+            // Debounce: true while a check or an update is already running, so a double
+            // click (or a click landing during the launch-time check below) can't start a
+            // second one -- two concurrent `perform_update` calls would run two concurrent
+            // `git pull`/`cargo build` and could both relaunch the app.
+            let update_in_progress = Arc::new(AtomicBool::new(false));
 
             let tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())
@@ -461,6 +466,7 @@ fn main() {
                 .on_menu_event({
                     let update_item = update_item.clone();
                     let update_available = update_available.clone();
+                    let update_in_progress = update_in_progress.clone();
                     move |app, event| match event.id.as_ref() {
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -470,16 +476,35 @@ fn main() {
                         }
                         "check_update" => {
                             if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                                let update_item = update_item.clone();
-                                let update_available = update_available.clone();
-                                let app = app.clone();
-                                std::thread::spawn(move || {
-                                    if update_available.load(Ordering::Relaxed) {
-                                        perform_update(&app, &tray, &update_item);
-                                    } else {
-                                        run_update_check(&tray, &update_item, &update_available);
-                                    }
-                                });
+                                if update_in_progress
+                                    .compare_exchange(
+                                        false,
+                                        true,
+                                        Ordering::Relaxed,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                                {
+                                    let update_item = update_item.clone();
+                                    let update_available = update_available.clone();
+                                    let update_in_progress = update_in_progress.clone();
+                                    let app = app.clone();
+                                    std::thread::spawn(move || {
+                                        if update_available.load(Ordering::Relaxed) {
+                                            perform_update(&app, &tray, &update_item);
+                                        } else {
+                                            run_update_check(
+                                                &tray,
+                                                &update_item,
+                                                &update_available,
+                                            );
+                                        }
+                                        // Unreached if perform_update succeeded (it calls
+                                        // app.exit(0)), which is fine -- the process is
+                                        // gone, so there's no stuck flag to worry about.
+                                        update_in_progress.store(false, Ordering::Relaxed);
+                                    });
+                                }
                             }
                         }
                         "quit" => app.exit(0),
@@ -492,8 +517,10 @@ fn main() {
             // delays showing the window.
             {
                 let tray = tray.clone();
+                update_in_progress.store(true, Ordering::Relaxed);
                 std::thread::spawn(move || {
-                    run_update_check(&tray, &update_item, &update_available)
+                    run_update_check(&tray, &update_item, &update_available);
+                    update_in_progress.store(false, Ordering::Relaxed);
                 });
             }
 

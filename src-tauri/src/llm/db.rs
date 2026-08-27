@@ -119,12 +119,14 @@ impl MemoryDb {
     }
 
     pub fn set_setting(&self, key: &str, value: &JsonValue) -> rusqlite::Result<()> {
-        // Mirrors memory_db.py's set_setting: plain strings are stored raw (no quotes),
-        // everything else as JSON, so get_setting's plain-string fallback still round-trips.
-        let val_str = match value {
-            JsonValue::String(s) => s.clone(),
-            other => other.to_string(),
-        };
+        // Always store as JSON, including strings (JsonValue::String -> a properly quoted
+        // JSON string) -- storing strings raw/unquoted made a string that happened to look
+        // like JSON (a bare number, "true", "false", "null") indistinguishable on read from
+        // that literal value, e.g. set_setting("agent_name", "9000") followed by
+        // get_setting("agent_name") would come back as the *integer* 9000, not the string
+        // "9000". get_setting's fallback-to-raw-string still covers old rows written by the
+        // previous raw-string scheme, so this doesn't need a data migration.
+        let val_str = value.to_string();
         self.connect()?.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2) \
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -142,6 +144,9 @@ impl MemoryDb {
                 |row| row.get(0),
             )
             .optional()?;
+        // Falls back to treating the stored value as a plain string if it doesn't parse as
+        // JSON -- covers rows written before this method always JSON-encoded (see
+        // set_setting), so existing settings.db files don't need migrating.
         Ok(raw.map(|s| serde_json::from_str(&s).unwrap_or(JsonValue::String(s))))
     }
 
@@ -197,6 +202,33 @@ mod tests {
             db.get_setting("some_flag").unwrap(),
             Some(JsonValue::Bool(true))
         );
+    }
+
+    #[test]
+    fn string_settings_that_look_like_json_round_trip_as_strings() {
+        // Regression test: a string value that happens to be valid JSON syntax (a bare
+        // number, "true"/"false"/"null", or another quoted string) must still come back as
+        // a String, not get silently reinterpreted as that JSON type.
+        let db = temp_db("json_lookalike_settings");
+
+        db.set_setting("agent_name", &JsonValue::String("9000".to_string()))
+            .unwrap();
+        assert_eq!(
+            db.get_setting("agent_name").unwrap(),
+            Some(JsonValue::String("9000".to_string())),
+            "a numeric-looking name must stay a string, not become the integer 9000"
+        );
+        assert_eq!(db.get_setting_string("agent_name", "HALCY"), "9000");
+
+        for tricky in ["true", "false", "null", "\"already quoted\""] {
+            db.set_setting("agent_name", &JsonValue::String(tricky.to_string()))
+                .unwrap();
+            assert_eq!(
+                db.get_setting("agent_name").unwrap(),
+                Some(JsonValue::String(tricky.to_string())),
+                "JSON-syntax-like string {tricky:?} must round-trip as itself"
+            );
+        }
     }
 
     #[test]

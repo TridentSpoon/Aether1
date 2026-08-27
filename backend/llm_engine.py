@@ -221,6 +221,18 @@ class LLMEngine:
             "greeting": greeting
         }
 
+    @staticmethod
+    def _strip_ci_prefix(text: str, prefix: str) -> Optional[str]:
+        """Case-insensitive prefix strip that preserves the original casing of whatever
+        follows the prefix. `text.replace(prefix, "")` (the previous approach here)
+        silently no-ops unless the user typed that exact-case prefix, even though the
+        startswith() check gating it was case-insensitive -- e.g. "Set Name Jarvis" would
+        pass `p.startswith("set name ")` but `.replace("set name ", "")` wouldn't match
+        it, leaving new_name as the untouched string "Set Name Jarvis"."""
+        if text.lower().startswith(prefix):
+            return text[len(prefix):]
+        return None
+
     def _check_instant_commands(self, prompt: str) -> Optional[str]:
         p = prompt.strip().lower()
         if p in ["status", "system status", "telemetry", "diagnostics", "health check", "specs"]:
@@ -254,19 +266,33 @@ class LLMEngine:
                 "voice command dispatch, and cognitive assistance. Ready for your instructions."
             )
         elif p.startswith("set name ") or p.startswith("change name to "):
-            new_name = prompt.replace("set name ", "").replace("change name to ", "").strip()
+            trimmed = prompt.strip()
+            new_name = (
+                self._strip_ci_prefix(trimmed, "set name ")
+                or self._strip_ci_prefix(trimmed, "change name to ")
+                or ""
+            ).strip()
             if new_name:
                 memory_db.set_setting("agent_name", new_name)
                 self.reload_config()
                 return f"Identifier recalibrated. I am now **{new_name}**. Standing by."
         elif p.startswith("remember that ") or p.startswith("save memory "):
-            fact = prompt.replace("remember that ", "").replace("save memory ", "").strip()
+            trimmed = prompt.strip()
+            fact = (
+                self._strip_ci_prefix(trimmed, "remember that ")
+                or self._strip_ci_prefix(trimmed, "save memory ")
+                or ""
+            ).strip()
             if ":" in fact:
                 k, v = fact.split(":", 1)
                 memory_db.set_memory(k.strip(), v.strip())
                 return f"Data synthesized into memory: **{k.strip()}** = `{v.strip()}`"
-            else:
-                memory_db.set_memory(f"fact_{int(len(memory_db.get_all_memories()) + 1)}", fact)
+            elif fact:
+                # A key derived from the live memory count (fact_{count+1}) collides with
+                # an existing key once anything's ever been deleted (set_memory is an
+                # upsert), silently overwriting the wrong entry. A millisecond timestamp
+                # can't repeat across two separate chat commands, so it can't collide.
+                memory_db.set_memory(f"fact_{int(time.time() * 1000)}", fact)
                 return f"Archived to neural memory: \"{fact}\""
         elif p in ["list memory", "show memories", "recall memories"]:
             mems = memory_db.get_all_memories()

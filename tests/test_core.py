@@ -60,6 +60,28 @@ def test_memory_db():
     assert val == "ThinkPad X1 Carbon with Fedora 41"
     print("   ✔ Long-term fact recall verified.")
 
+def test_memory_db_connection_closes():
+    print("🧪 Testing SQLite connections are actually closed (not leaked)...")
+    import sqlite3
+    with memory_db._get_connection() as conn:
+        pass
+    try:
+        conn.execute("SELECT 1")
+        assert False, "connection should have been closed by _get_connection's context manager"
+    except sqlite3.ProgrammingError:
+        pass  # expected: "Cannot operate on a closed database."
+    print("   ✔ Connection is closed after the `with` block exits.")
+
+def test_settings_round_trip_json_lookalike_strings():
+    print("🧪 Testing settings round-trip for JSON-syntax-like strings...")
+    # Regression test: a string value that happens to be valid JSON syntax (a bare
+    # number, "true"/"false"/"null") must come back as that same string, not get
+    # silently reinterpreted as the JSON type it looks like.
+    memory_db.set_setting("test_numeric_looking_setting", "9000")
+    val = memory_db.get_setting("test_numeric_looking_setting")
+    assert val == "9000" and isinstance(val, str), f"expected the string '9000', got {val!r} ({type(val)})"
+    print("   ✔ A numeric-looking string setting round-trips as a string.")
+
 def test_llm_engine():
     print("🧪 Testing LLM Engine Commands...")
     
@@ -72,6 +94,31 @@ def test_llm_engine():
     resp2 = asyncio.run(llm_engine.generate_response("hello"))
     assert "Offline Standby Mode" in resp2 or "Greetings" in resp2
     print(f"   ✔ Contextual response generated: {resp2[:60]}...")
+
+def test_llm_engine_set_name_is_case_insensitive():
+    print("🧪 Testing \"set name\" command is case-insensitive...")
+    # Regression test: the startswith() gate lowercases the prompt, but the old
+    # extraction (prompt.replace("set name ", "")) was case-sensitive against the
+    # original-case prompt, so "Set Name TestBot" left the leftover command text stuck
+    # in the new name instead of extracting just "TestBot".
+    resp = llm_engine._check_instant_commands("Set Name TestBot")
+    assert resp is not None and "TestBot" in resp, f"expected TestBot in reply, got: {resp!r}"
+    assert "Set Name" not in resp, f"leftover command text leaked into the name: {resp!r}"
+    assert llm_engine.agent_name == "TestBot"
+    print("   ✔ Mixed-case \"Set Name\" extracts the name correctly.")
+
+def test_llm_engine_remember_fact_keys_dont_collide():
+    print("🧪 Testing auto-generated memory keys don't collide after a deletion...")
+    # Regression test: a key derived from the live memory count (fact_{count+1})
+    # collided with an existing key once anything had ever been deleted, silently
+    # overwriting it (set_memory is an upsert).
+    before_keys = {m["key"] for m in memory_db.get_all_memories()}
+    llm_engine._check_instant_commands("remember that this is the first fact")
+    llm_engine._check_instant_commands("remember that this is a second, different fact")
+    after_keys = {m["key"] for m in memory_db.get_all_memories()}
+    new_keys = after_keys - before_keys
+    assert len(new_keys) == 2, f"expected 2 distinct new keys, got {new_keys!r}"
+    print(f"   ✔ Two colon-less facts got distinct keys: {new_keys!r}")
 
 def test_tts_engine():
     print("🧪 Testing Edge-TTS Neural Speech Synthesis...")
@@ -113,7 +160,11 @@ if __name__ == "__main__":
     print("==================================================")
     test_telemetry()
     test_memory_db()
+    test_memory_db_connection_closes()
+    test_settings_round_trip_json_lookalike_strings()
     test_llm_engine()
+    test_llm_engine_set_name_is_case_insensitive()
+    test_llm_engine_remember_fact_keys_dont_collide()
     test_tts_engine()
     test_api_routes()
     print("==================================================")

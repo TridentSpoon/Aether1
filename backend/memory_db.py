@@ -6,6 +6,7 @@ Stores conversations, persistent knowledge, and user settings.
 import sqlite3
 import os
 import json
+from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -16,10 +17,22 @@ class MemoryDB:
         self.db_path = db_path
         self._init_db()
 
+    @contextmanager
     def _get_connection(self):
+        # A plain sqlite3.Connection used as `with conn:` only commits/rolls back the
+        # transaction on exit -- it never closes the connection. Every method here does
+        # `with self._get_connection() as conn:`, so without this wrapper every single DB
+        # call leaked an open connection/file descriptor for the life of the process.
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -124,7 +137,13 @@ class MemoryDB:
     def set_setting(self, key: str, value: Any):
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            val_str = json.dumps(value) if not isinstance(value, str) else value
+            # Always JSON-encode, including plain strings. Storing a string raw/unquoted
+            # made it indistinguishable on read from a string that happens to look like
+            # JSON syntax -- e.g. set_setting("agent_name", "9000") followed by
+            # get_setting("agent_name") would come back as the *integer* 9000, not the
+            # string "9000" (get_setting's try/except below still falls back to returning
+            # old rows written before this fix as plain strings, so no migration needed).
+            val_str = json.dumps(value)
             cursor.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, val_str)

@@ -117,12 +117,38 @@ const FALLBACK: IdentityRule = IdentityRule {
     greeting: "Identity forged: AETHER initialized. All cognitive arrays active and ready for instructions.",
 };
 
+/// A single-word keyword (e.g. "art", "hal", "arch") only counts as a match on a real word
+/// boundary -- otherwise "start my day" matches "art" (inside "st-art-") and "research
+/// assistant" matches "arch" (inside "re-search-"), routing to the wrong persona entirely.
+/// A multi-word keyword (e.g. "red 9000", "back channel") is a phrase, so a substring match
+/// is the correct semantics for it -- word-splitting would just be the same check done less
+/// directly.
+fn purpose_matches_keyword(
+    purpose_lower: &str,
+    words: &std::collections::HashSet<&str>,
+    keyword: &str,
+) -> bool {
+    if keyword.contains(' ') {
+        purpose_lower.contains(keyword)
+    } else {
+        words.contains(keyword)
+    }
+}
+
 pub fn generate_identity(purpose_text: &str) -> Identity {
     let purpose_lower = purpose_text.to_lowercase();
+    let words: std::collections::HashSet<&str> = purpose_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
 
     let rule = rules()
         .iter()
-        .find(|rule| rule.keywords.iter().any(|kw| purpose_lower.contains(kw)))
+        .find(|rule| {
+            rule.keywords
+                .iter()
+                .any(|kw| purpose_matches_keyword(&purpose_lower, &words, kw))
+        })
         .unwrap_or(&FALLBACK);
 
     Identity {
@@ -164,6 +190,31 @@ mod tests {
                 "unsubstituted template for {purpose:?}"
             );
         }
+    }
+
+    #[test]
+    fn single_word_keywords_do_not_match_inside_unrelated_words() {
+        // Regression test: "start" contains "art" and "research" contains "arch" as raw
+        // substrings, but neither purpose is actually about those personas.
+        let identity = generate_identity("help me start my day");
+        assert_ne!(
+            identity.name, "A.R.X.LOGOS",
+            "\"start\" should not match the \"art\" keyword"
+        );
+        assert_eq!(
+            identity.name, "AETHER",
+            "no real keyword present, should fall back"
+        );
+
+        let identity = generate_identity("research assistant");
+        assert_ne!(
+            identity.name, "NEXUS-09",
+            "\"research\" should not match the \"arch\" keyword"
+        );
+        assert_eq!(
+            identity.name, "VALKYRIE",
+            "\"assistant\" is a real whole-word match"
+        );
     }
 
     #[test]
