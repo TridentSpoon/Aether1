@@ -38,8 +38,19 @@ fi
 
 INSTALL_BIN="$HOME/.local/bin/aether1"
 mkdir -p "$HOME/.local/bin"
-cp src-tauri/target/release/aether1 "$INSTALL_BIN"
-chmod +x "$INSTALL_BIN"
+# Copy to a temp file in the same directory and rename it into place, rather than copying
+# straight over $INSTALL_BIN. This is almost always still running while this script runs --
+# the self-update flow (perform_update() in main.rs) invokes this from inside the very
+# process being replaced -- and overwriting a running executable's file in place fails with
+# "Text file busy". A rename instead swaps the directory entry atomically: the running
+# process keeps its already-open (now unlinked) old binary until it exits, and the new file
+# takes over the path for the next launch.
+TMP_BIN="$INSTALL_BIN.new.$$"
+if ! cp src-tauri/target/release/aether1 "$TMP_BIN" || ! chmod +x "$TMP_BIN" || ! mv -f "$TMP_BIN" "$INSTALL_BIN"; then
+    echo "⚠ Could not install the built binary to $INSTALL_BIN."
+    rm -f "$TMP_BIN"
+    exit 1
+fi
 
 mkdir -p "$HOME/.local/share/applications"
 sed "s|__AETHER1_INSTALLED_BIN__|$INSTALL_BIN|g" desktop/Aether1.desktop > "$HOME/.local/share/applications/Aether1.desktop"

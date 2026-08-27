@@ -69,6 +69,21 @@ class MemoryDB:
             """)
             conn.commit()
 
+        self._restrict_permissions()
+
+    def _restrict_permissions(self):
+        """Locks the database file down to owner-only read/write (0600). This file holds
+        chat history, saved memories, and settings -- including the LLM provider API key --
+        so it should never be group/world-readable. No-op on platforms without POSIX
+        permission bits (Windows relies on the user profile directory being private by
+        default instead)."""
+        if os.name != "posix":
+            return
+        try:
+            os.chmod(self.db_path, 0o600)
+        except OSError:
+            pass
+
     def add_message(self, session_id: str, sender: str, text: str, metadata: Optional[Dict[str, Any]] = None):
         with self._get_connection() as conn:
             cursor = conn.cursor()

@@ -59,8 +59,24 @@ impl MemoryDb {
                 value TEXT NOT NULL
             );",
         )?;
+        db.restrict_permissions();
         Ok(db)
     }
+
+    /// Locks the database file down to owner-only read/write (0600). This file holds chat
+    /// history, saved memories, and settings -- including the LLM provider API key -- so it
+    /// should never be group/world-readable. No-op on Windows, which has no POSIX permission
+    /// bits and relies on the user profile directory being private by default instead.
+    /// Best-effort: a failure here (e.g. a filesystem that doesn't support Unix permissions)
+    /// shouldn't stop the app from working, just leave it at the OS default.
+    #[cfg(unix)]
+    fn restrict_permissions(&self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.db_path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    #[cfg(not(unix))]
+    fn restrict_permissions(&self) {}
 
     fn connect(&self) -> rusqlite::Result<Connection> {
         Connection::open(&self.db_path)
@@ -91,6 +107,14 @@ impl MemoryDb {
             .collect::<rusqlite::Result<_>>()?;
         rows.reverse(); // oldest first, matching memory_db.py's get_messages order
         Ok(rows)
+    }
+
+    pub fn clear_history(&self, session_id: &str) -> rusqlite::Result<()> {
+        self.connect()?.execute(
+            "DELETE FROM messages WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
     }
 
     pub fn get_all_memories(&self) -> rusqlite::Result<Vec<MemoryEntry>> {
@@ -157,6 +181,26 @@ impl MemoryDb {
             _ => default.to_string(),
         }
     }
+
+    /// Every stored setting as a single object, matching memory_db.py's
+    /// get_all_settings -- used for the Settings modal's bulk load/save.
+    pub fn get_all_settings(&self) -> rusqlite::Result<JsonValue> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
+        let rows = stmt.query_map([], |row| {
+            let key: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            Ok((key, raw))
+        })?;
+
+        let mut map = serde_json::Map::new();
+        for row in rows {
+            let (key, raw) = row?;
+            let value = serde_json::from_str(&raw).unwrap_or(JsonValue::String(raw));
+            map.insert(key, value);
+        }
+        Ok(JsonValue::Object(map))
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +215,20 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_test_{name}_{}_{n}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(path).expect("temp db should open")
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn open_restricts_db_file_to_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let db = temp_db("permissions");
+        let mode = std::fs::metadata(&db.db_path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "db file should be owner-read/write only, got {:o}",
+            mode & 0o777
+        );
     }
 
     #[test]

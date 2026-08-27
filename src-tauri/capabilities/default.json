@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window -- grants the core JS APIs the frontend actually uses via window.__TAURI__ (withGlobalTauri): invoking commands and listening for the telemetry-update event. Custom #[tauri::command]s (chat, TTS, scanner, updates) aren't gated by this file -- only Tauri's own built-in core APIs are.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

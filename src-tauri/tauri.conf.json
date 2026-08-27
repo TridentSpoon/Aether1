@@ -7,6 +7,7 @@
     "frontendDist": "../frontend"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
@@ -16,7 +17,12 @@
         "minWidth": 1024,
         "minHeight": 700
       }
-    ]
+    ],
+    "security": {
+      "assetProtocol": {
+        "enable": true
+      }
+    }
   },
   "bundle": {
     "icon": [
