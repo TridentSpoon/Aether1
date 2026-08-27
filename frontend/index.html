@@ -50,6 +50,9 @@
                 <h1 class="font-orbitron font-bold text-lg text-cyan-400 tracking-wider glow-cyan flex items-center gap-2">
                     AETHER1 <span id="hud-agent-name" class="text-xs px-2 py-0.5 border border-cyan-500/50 rounded text-cyan-300 font-mono">HALCY</span>
                 </h1>
+                <button id="version-badge" title="Click to check for updates" class="hidden sm:inline-flex items-center text-[10px] font-mono text-slate-500 border border-slate-700 rounded px-1.5 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">
+                    --
+                </button>
             </div>
 
             <!-- AVATAR PICKER PILLS -->
@@ -383,6 +386,32 @@
                     <span class="text-[11px] font-mono text-slate-500 block">
                         Prefer a GUI? LM Studio (lmstudio.ai) works the same way on Windows, macOS, and Linux -- install it, download any model from its in-app browser, then select "LM Studio" as the provider below.
                     </span>
+                </div>
+            </div>
+
+            <!-- SECTION: APP VERSION & UPDATES (native desktop app only) -->
+            <div id="update-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
+                        🔄 APP VERSION & UPDATES
+                    </h3>
+                    <span id="settings-version-label" class="text-[10px] font-mono text-cyan-400">--</span>
+                </div>
+
+                <div id="update-status-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
+                    <div>Status: Click Check for Updates to compare this build against the latest commit on GitHub.</div>
+                </div>
+
+                <div class="flex items-center justify-between gap-2">
+                    <span class="text-[11px] font-mono text-slate-500">Checks GitHub directly -- this is a real comparison, not a cached guess.</span>
+                    <div class="flex gap-2">
+                        <button id="btn-check-update" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                            🔄 Check for Updates
+                        </button>
+                        <button id="btn-apply-update" class="hidden cyber-btn text-xs py-1 px-3 text-green-400 border-green-400 whitespace-nowrap">
+                            ⬆ Update Now
+                        </button>
+                    </div>
                 </div>
             </div>
 

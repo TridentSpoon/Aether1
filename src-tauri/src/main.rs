@@ -1,34 +1,30 @@
-// AETHER1 native shell (incremental Rust port).
+// AETHER1 native shell.
 //
-// This launches the existing Python/FastAPI backend as a managed child process so the
-// whole app is a single thing to run -- no separate "start the server, then open a
-// browser tab" step. The webview loads the same frontend/ files used by the browser
-// flow, but talks to the backend over an absolute http://localhost:8378 URL (see
-// frontend/js/app.js's API_BASE) since a Tauri-loaded page isn't served from that origin.
-//
-// Backend logic itself (chat, TTS, telemetry, memory) is still Python for now; Rust
-// commands will replace pieces of it over time.
+// The whole app -- chat, TTS, telemetry, memory/settings, model scanning, self-updating --
+// runs natively in this process; nothing is spawned or shelled out to at runtime except the
+// update mechanism's own `git pull` (see perform_update_core) and TTS/update-check's network
+// calls. The webview loads the same frontend/ files used by the old browser flow, but talks
+// to this process over Tauri's IPC (see frontend/js/app.js's IS_TAURI branches) instead of
+// HTTP -- there's no server listening on any port. The Python backend/ tree still exists and
+// still works for the browser-only flow (./start.sh / ./start_daemon.sh), but this app no
+// longer spawns or depends on it.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod llm;
 mod model_scanner;
 
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use llm::{LlmEngine, MemoryDb};
-
-const BACKEND_HOST: &str = "127.0.0.1";
-const BACKEND_PORT: u16 = 8378;
 
 const UPDATE_REPO: &str = "TridentSpoon/Aether1";
 const TRAY_ID: &str = "main-tray";
@@ -37,6 +33,17 @@ const TRAY_ID: &str = "main-tray";
 /// built from a git checkout (e.g. a source tarball without a .git directory).
 const BUILT_COMMIT: &str = env!("AETHER1_GIT_COMMIT");
 
+/// Set by build.rs: the PR number of the most recently merged pull request reachable from
+/// the built commit (see build.rs for how this is derived). "0" if none was found (e.g. a
+/// checkout before any PR had ever been merged).
+const BUILT_PR_REV: &str = env!("AETHER1_PR_REV");
+
+/// Aether1 0.3.Rev{N} -- 0.x because still in dev; the 3 marks the project's third era
+/// (1: Antigravity project, 2: ported to Claude, 3: native Rust/Tauri rewrite); Rev{N} is
+/// the PR number this build was built from, so the version always tracks the last merge
+/// without needing a hand-maintained counter.
+const APP_VERSION: &str = concat!("Aether1 0.3.Rev", env!("AETHER1_PR_REV"));
+
 /// CARGO_MANIFEST_DIR is src-tauri/ at build time; the Python backend, its venv, and
 /// frontend/ all live one level up, at the repo root.
 fn project_root() -> PathBuf {
@@ -44,79 +51,6 @@ fn project_root() -> PathBuf {
         .parent()
         .expect("src-tauri should have a parent directory")
         .to_path_buf()
-}
-
-fn backend_already_running() -> bool {
-    let addr: SocketAddr = format!("{BACKEND_HOST}:{BACKEND_PORT}")
-        .parse()
-        .expect("static host:port should always parse");
-    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
-}
-
-fn spawn_backend() -> Option<Child> {
-    if backend_already_running() {
-        println!(
-            "[AETHER1] Backend already running on port {BACKEND_PORT}; using it instead of spawning another one."
-        );
-        return None;
-    }
-
-    let root = project_root();
-    let uvicorn = root.join("venv").join("bin").join("uvicorn");
-
-    if !uvicorn.exists() {
-        eprintln!(
-            "[AETHER1] Could not find {}. Run ./setup.sh from the project root first to create the Python venv.",
-            uvicorn.display()
-        );
-        return None;
-    }
-
-    let mut cmd = Command::new(&uvicorn);
-    cmd.args([
-        "backend.main:app",
-        "--host",
-        BACKEND_HOST,
-        "--port",
-        &BACKEND_PORT.to_string(),
-    ])
-    .current_dir(&root);
-
-    // Ask the kernel to auto-kill this child if we (the parent) die for any reason --
-    // window closed, killed externally, crashed, logged out, etc. This is the actually
-    // reliable mechanism; catching signals in the parent process (see main()) races
-    // against Tauri/tao's own internal signal handling and isn't dependable on its own --
-    // confirmed by testing: `kill <tauri-pid>` left the child running without this.
-    #[cfg(target_os = "linux")]
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
-    match cmd.spawn() {
-        Ok(child) => {
-            println!("[AETHER1] Spawned backend (pid {})", child.id());
-            Some(child)
-        }
-        Err(e) => {
-            eprintln!("[AETHER1] Failed to spawn backend via {}: {e}", uvicorn.display());
-            None
-        }
-    }
-}
-
-fn kill_backend(slot: &Mutex<Option<Child>>) {
-    if let Ok(mut guard) = slot.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -178,77 +112,150 @@ fn fetch_latest_main_sha() -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Compares the running build's baked-in commit (see BUILT_COMMIT / build.rs) against the
-/// latest commit on `main`, and reflects the result in the tray tooltip and the "Check for
-/// Updates" menu item's label -- and in `update_available`, which the menu click handler
-/// reads to decide whether the next click should check again or actually install the
-/// update (see perform_update). Safe to call from any thread; never panics or blocks the
-/// caller beyond the network timeout in fetch_latest_main_sha.
+/// Result of comparing this build against the latest commit on `main` -- the shared shape
+/// returned to the frontend (see check_for_update_rust) and used internally by the tray's
+/// run_update_check to decide what to show. `checked` is false when the comparison itself
+/// couldn't complete (see `error`); `up_to_date` is only meaningful when `checked` is true.
+#[derive(serde::Serialize)]
+struct UpdateStatus {
+    checked: bool,
+    up_to_date: bool,
+    version: String,
+    built_commit: String,
+    built_commit_short: String,
+    latest_commit: Option<String>,
+    error: Option<String>,
+}
+
+/// Does the actual comparison: this build's baked-in commit (BUILT_COMMIT / build.rs)
+/// against the latest commit on `main` via the GitHub API. Safe to call from any thread;
+/// never panics or blocks the caller beyond the network timeout in fetch_latest_main_sha.
+fn compute_update_status() -> UpdateStatus {
+    let base = UpdateStatus {
+        checked: false,
+        up_to_date: false,
+        version: APP_VERSION.to_string(),
+        built_commit: BUILT_COMMIT.to_string(),
+        built_commit_short: short_hash(BUILT_COMMIT).to_string(),
+        latest_commit: None,
+        error: None,
+    };
+
+    if BUILT_COMMIT == "unknown" {
+        return UpdateStatus {
+            error: Some("not built from a git checkout -- nothing to compare against".to_string()),
+            ..base
+        };
+    }
+
+    match fetch_latest_main_sha() {
+        Ok(latest) => UpdateStatus {
+            checked: true,
+            up_to_date: latest == BUILT_COMMIT,
+            latest_commit: Some(latest),
+            ..base
+        },
+        Err(e) => UpdateStatus {
+            error: Some(e),
+            ..base
+        },
+    }
+}
+
+/// Rust-native equivalent for the frontend of what the tray's "Check for Updates" click
+/// does -- lets the HUD show the same real version check instead of only being visible via
+/// the taskbar icon. Does not itself update `update_available`/the tray UI; those stay
+/// tray-only state (see run_update_check).
+#[tauri::command]
+fn check_for_update_rust() -> UpdateStatus {
+    compute_update_status()
+}
+
+/// Rust-native equivalent for the frontend of get_version_info -- current version string
+/// plus the exact commit this build came from, for display in the HUD.
+#[tauri::command]
+fn get_version_info() -> serde_json::Value {
+    serde_json::json!({
+        "version": APP_VERSION,
+        "pr_rev": BUILT_PR_REV,
+        "commit": BUILT_COMMIT,
+        "commit_short": short_hash(BUILT_COMMIT),
+    })
+}
+
+/// Compares the running build's baked-in commit against the latest commit on `main`, and
+/// reflects the result in the tray tooltip and the "Check for Updates" menu item's label --
+/// and in `update_available`, which the menu click handler reads to decide whether the next
+/// click should check again or actually install the update (see perform_update). Thin
+/// wrapper around compute_update_status that adds the tray-specific UI updates.
 fn run_update_check<R: tauri::Runtime>(
     tray: &TrayIcon<R>,
     update_item: &MenuItem<R>,
     update_available: &AtomicBool,
 ) {
-    if BUILT_COMMIT == "unknown" {
-        // Not built from a git checkout -- nothing to compare against.
+    let status = compute_update_status();
+
+    if !status.checked {
+        if let Some(e) = &status.error {
+            eprintln!("[AETHER1] Update check failed: {e}");
+        }
+        // Leave update_available and the menu label as-is if we already know an update
+        // was available -- a transient network error re-checking shouldn't erase that
+        // state or make the label lie about what the next click will do.
+        if !update_available.load(Ordering::Relaxed) {
+            let _ = update_item.set_text("🔄 Check for Updates");
+        }
         return;
     }
 
-    match fetch_latest_main_sha() {
-        Ok(latest) if latest == BUILT_COMMIT => {
-            update_available.store(false, Ordering::Relaxed);
-            println!(
-                "[AETHER1] Update check: up to date (build {})",
-                short_hash(BUILT_COMMIT)
-            );
-            let _ = tray.set_tooltip(Some(format!(
-                "AETHER1 -- running (build {}, up to date)",
-                short_hash(BUILT_COMMIT)
-            )));
-            let _ = update_item.set_text("✅ Up to Date");
-        }
-        Ok(latest) => {
-            update_available.store(true, Ordering::Relaxed);
-            println!(
-                "[AETHER1] Update check: new commit available (running {}, latest {})",
-                short_hash(BUILT_COMMIT),
-                short_hash(&latest)
-            );
-            let _ = tray.set_tooltip(Some(format!(
-                "AETHER1 -- update available (running {}, latest {}) -- click \"Update Available\" in the tray menu to install",
-                short_hash(BUILT_COMMIT),
-                short_hash(&latest)
-            )));
-            let _ = update_item.set_text("⬆ Update Available (click to install)");
-        }
-        Err(e) => {
-            eprintln!("[AETHER1] Update check failed: {e}");
-            // Leave update_available and the menu label as-is if we already know an
-            // update was available -- a transient network error re-checking shouldn't
-            // erase that state or make the label lie about what the next click will do.
-            if !update_available.load(Ordering::Relaxed) {
-                let _ = update_item.set_text("🔄 Check for Updates");
-            }
-        }
+    update_available.store(!status.up_to_date, Ordering::Relaxed);
+
+    if status.up_to_date {
+        println!(
+            "[AETHER1] Update check: up to date ({}, build {})",
+            APP_VERSION,
+            short_hash(BUILT_COMMIT)
+        );
+        let _ = tray.set_tooltip(Some(format!(
+            "{APP_VERSION} -- running (build {}, up to date)",
+            short_hash(BUILT_COMMIT)
+        )));
+        let _ = update_item.set_text("✅ Up to Date");
+    } else {
+        let latest = status.latest_commit.as_deref().unwrap_or("unknown");
+        println!(
+            "[AETHER1] Update check: new commit available (running {}, latest {})",
+            short_hash(BUILT_COMMIT),
+            short_hash(latest)
+        );
+        let _ = tray.set_tooltip(Some(format!(
+            "{APP_VERSION} -- update available (running {}, latest {}) -- click \"Update Available\" in the tray menu to install",
+            short_hash(BUILT_COMMIT),
+            short_hash(latest)
+        )));
+        let _ = update_item.set_text("⬆ Update Available (click to install)");
     }
+}
+
+/// Which step of the update sequence failed, so callers (tray UI, the frontend) can show a
+/// specific message instead of a generic "it broke somewhere".
+enum UpdateStage {
+    Pull,
+    Build,
+    Relaunch,
 }
 
 /// Actually applies an update: `git pull --ff-only` (see the auth note on github_token),
 /// rebuild + reinstall via scripts/install_desktop_app.sh, then relaunch the freshly built
 /// binary and exit this process so the new build takes over. Blocking (a rebuild can take
-/// over a minute); always call this off the main thread. Every step is best-effort with
-/// its result reflected in the tray so a failure is visible instead of silent.
-fn perform_update<R: tauri::Runtime>(
+/// over a minute); always call this off the main thread. On success this process exits and
+/// never returns to the caller; on failure it returns which stage failed.
+fn perform_update_core<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    tray: &TrayIcon<R>,
-    update_item: &MenuItem<R>,
-) {
+) -> Result<(), (UpdateStage, String)> {
     let root = project_root();
 
-    let _ = tray.set_tooltip(Some("AETHER1 -- updating (git pull)...".to_string()));
-    let _ = update_item.set_text("⏳ Updating...");
     println!("[AETHER1] Update: running `git pull --ff-only`...");
-
     let pull_ok = Command::new("git")
         .args(["pull", "--ff-only"])
         .current_dir(&root)
@@ -257,19 +264,10 @@ fn perform_update<R: tauri::Runtime>(
         .unwrap_or(false);
 
     if !pull_ok {
-        eprintln!("[AETHER1] Update failed: git pull did not succeed.");
-        let _ = tray.set_tooltip(Some(
-            "AETHER1 -- update failed (git pull) -- see terminal output for details".to_string(),
-        ));
-        let _ = update_item.set_text("⚠ Update Failed (see logs)");
-        return;
+        return Err((UpdateStage::Pull, "git pull did not succeed".to_string()));
     }
 
-    let _ = tray.set_tooltip(Some(
-        "AETHER1 -- updating (rebuilding, this can take a minute)...".to_string(),
-    ));
     println!("[AETHER1] Update: rebuilding via scripts/install_desktop_app.sh...");
-
     let build_ok = Command::new("bash")
         .arg(root.join("scripts").join("install_desktop_app.sh"))
         .current_dir(&root)
@@ -278,12 +276,7 @@ fn perform_update<R: tauri::Runtime>(
         .unwrap_or(false);
 
     if !build_ok {
-        eprintln!("[AETHER1] Update failed: rebuild did not succeed.");
-        let _ = tray.set_tooltip(Some(
-            "AETHER1 -- update failed (build) -- see terminal output for details".to_string(),
-        ));
-        let _ = update_item.set_text("⚠ Update Failed (see logs)");
-        return;
+        return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
     }
 
     // Relaunch the installed copy at ~/.local/bin/aether1 (see
@@ -306,29 +299,58 @@ fn perform_update<R: tauri::Runtime>(
         });
     println!("[AETHER1] Update: relaunching {}...", new_binary.display());
     match Command::new(&new_binary).current_dir(&root).spawn() {
-        Ok(_child) => app.exit(0),
-        Err(e) => {
-            eprintln!("[AETHER1] Update succeeded but relaunch failed: {e}");
-            let _ = tray.set_tooltip(Some(
-                "AETHER1 -- updated! Please quit and reopen the app to run the new build."
-                    .to_string(),
-            ));
-            let _ = update_item.set_text("✅ Updated (restart manually)");
+        Ok(_child) => {
+            app.exit(0);
+            Ok(())
         }
+        Err(e) => Err((UpdateStage::Relaunch, format!("relaunch failed: {e}"))),
     }
 }
 
-/// Rust-native equivalent of POST /api/chat's LLM call (backend/main.py), calling straight
-/// into the ported llm::LlmEngine instead of the Python backend. Runs alongside the
-/// existing Python /api/chat route rather than replacing it -- the frontend can opt into
-/// this per-call, and both read/write the same SQLite file, so switching between them
-/// mid-conversation doesn't lose history.
+/// Tray-specific wrapper around perform_update_core that keeps the tray tooltip and menu
+/// label updated through each stage, so a failure is visible in the tray instead of silent.
+fn perform_update<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    tray: &TrayIcon<R>,
+    update_item: &MenuItem<R>,
+) {
+    let _ = tray.set_tooltip(Some("AETHER1 -- updating (git pull)...".to_string()));
+    let _ = update_item.set_text("⏳ Updating...");
+
+    if let Err((stage, msg)) = perform_update_core(app) {
+        eprintln!("[AETHER1] Update failed: {msg}");
+        let stage_label = match stage {
+            UpdateStage::Pull => "git pull",
+            UpdateStage::Build => "build",
+            UpdateStage::Relaunch => "relaunch",
+        };
+        let _ = tray.set_tooltip(Some(format!(
+            "AETHER1 -- update failed ({stage_label}) -- see terminal output for details"
+        )));
+        let _ = update_item.set_text("⚠ Update Failed (see logs)");
+    }
+    // No else branch: on success perform_update_core calls app.exit(0) and this process is
+    // gone, so there's nothing left to update the tray with.
+}
+
+/// Rust-native equivalent for the frontend of the tray's install-update action. Blocking
+/// (a rebuild can take over a minute) -- the frontend should show a "working" state while
+/// this call is in flight. On success this process exits before ever returning a response,
+/// so the frontend only ever observes this call either hang (app about to exit) or reject.
+#[tauri::command]
+fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
+    perform_update_core(&app).map_err(|(_, msg)| msg)
+}
+
+/// Rust-native equivalent of POST /api/chat (backend/main.py), minus voice generation --
+/// the frontend calls generate_speech_rust separately for that, matching the two-command
+/// split the rest of this file already uses instead of one do-everything endpoint.
 #[tauri::command]
 fn generate_response_rust(
     engine: tauri::State<LlmEngine>,
     prompt: String,
     session_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<serde_json::Value, String> {
     if prompt.trim().is_empty() {
         return Err("Empty message".to_string());
     }
@@ -339,7 +361,7 @@ fn generate_response_rust(
     let agent_name = engine.agent_name();
     engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
 
-    Ok(reply)
+    Ok(serde_json::json!({ "reply": reply, "agent_name": agent_name }))
 }
 
 /// Rust-native equivalent of POST /api/agent/genesis (backend/main.py), minus TTS audio
@@ -383,8 +405,98 @@ fn pull_model_rust(model_name: String) -> model_scanner::PullResult {
     model_scanner::pull_model(&model_name)
 }
 
+/// Rust-native equivalent of GET /api/static-info (backend/main.py) -- just the OS/arch
+/// badge in the header, so a full Telemetry::snapshot() (which briefly sleeps to sample CPU
+/// usage) would be needlessly slow for something this static; read it directly instead.
+#[tauri::command]
+fn get_static_info_rust() -> serde_json::Value {
+    let os_name = sysinfo::System::long_os_version()
+        .or_else(sysinfo::System::name)
+        .unwrap_or_else(|| "Unknown OS".to_string());
+    serde_json::json!({
+        "distro": os_name,
+        "architecture": std::env::consts::ARCH,
+    })
+}
+
+/// Rust-native equivalent of GET /api/messages (backend/main.py).
+#[tauri::command]
+fn get_messages_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::Message> {
+    engine
+        .db()
+        .get_messages("default", limit.unwrap_or(50))
+        .unwrap_or_default()
+}
+
+/// Rust-native equivalent of DELETE /api/messages (backend/main.py).
+#[tauri::command]
+fn clear_messages_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
+    engine.db().clear_history("default").map_err(|e| e.to_string())
+}
+
+/// Rust-native equivalent of GET /api/settings (backend/main.py) -- same default-filling
+/// behavior, so a fresh install (no settings rows yet) still gets sensible values.
+#[tauri::command]
+fn get_settings_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    let mut settings = engine.db().get_all_settings().unwrap_or(serde_json::json!({}));
+    let defaults = serde_json::json!({
+        "agent_name": "HALCY",
+        "llm_provider": "offline",
+        "llm_model": "halcy-core",
+        "llm_endpoint": "http://localhost:11434",
+        "llm_api_key": "",
+        "persona_type": "halcy",
+        "custom_directive": "",
+        "voice_name": llm::DEFAULT_VOICE,
+        "enable_sfx": true,
+        "auto_speak": true,
+    });
+    if let (Some(settings_obj), Some(defaults_obj)) = (settings.as_object_mut(), defaults.as_object()) {
+        for (key, value) in defaults_obj {
+            settings_obj.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    serde_json::json!({ "settings": settings })
+}
+
+/// Rust-native equivalent of POST /api/settings (backend/main.py).
+#[tauri::command]
+fn save_settings_rust(
+    engine: tauri::State<LlmEngine>,
+    settings: serde_json::Value,
+) -> Result<(), String> {
+    let Some(map) = settings.as_object() else {
+        return Err("settings payload must be a JSON object".to_string());
+    };
+    for (key, value) in map {
+        engine
+            .db()
+            .set_setting(key, value)
+            .map_err(|e| format!("could not save setting {key:?}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Rust-native equivalent of POST /api/tts + GET /api/audio/{filename} (backend/main.py)
+/// combined into one call: synthesizes speech and returns a local file path directly,
+/// since there's no HTTP server here to stream it from. The frontend turns this into a
+/// playable URL via Tauri's convertFileSrc (see frontend/js/app.js).
+#[tauri::command]
+fn generate_speech_rust(text: String, voice: Option<String>) -> Result<String, String> {
+    let cache_dir = project_root().join("backend").join("audio_cache");
+    let path = llm::generate_speech(&cache_dir, &text, voice.as_deref())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn main() {
-    let backend: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(spawn_backend()));
+    // Both `ring` and `aws-lc-rs` end up in the dependency tree now (ureq pulls in one,
+    // msedge-tts's cert verifier the other), and rustls refuses to guess between two linked
+    // providers -- pin one explicitly before anything on any thread makes its first TLS
+    // connection (the update-checker and TTS both do). Must run before the telemetry/update
+    // threads spawned below could possibly race it.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("installing the rustls crypto provider should only fail if called twice");
 
     let llm_engine = {
         let db_path = project_root().join("backend").join("aether1_memory.db");
@@ -410,28 +522,33 @@ fn main() {
         }
     };
 
-    // Defense in depth: also clean up the backend on SIGINT/SIGTERM (e.g. the app being
-    // killed from a terminal, or a system shutdown/logout), not just when Tauri's own
-    // window-close event fires. Confirmed by testing that `kill <pid>` on the Tauri
-    // process alone left the spawned uvicorn process running otherwise.
-    {
-        let backend_for_signal = backend.clone();
-        let _ = ctrlc::set_handler(move || {
-            kill_backend(&backend_for_signal);
-            std::process::exit(0);
-        });
-    }
-
-    let backend_for_exit = backend.clone();
     tauri::Builder::default()
         .manage(llm_engine)
         .invoke_handler(tauri::generate_handler![
             generate_response_rust,
             agent_genesis_rust,
             scan_models_rust,
-            pull_model_rust
+            pull_model_rust,
+            get_static_info_rust,
+            get_messages_rust,
+            clear_messages_rust,
+            get_settings_rust,
+            save_settings_rust,
+            generate_speech_rust,
+            get_version_info,
+            check_for_update_rust,
+            apply_update_rust
         ])
         .setup(|app| {
+            // Let the webview load synthesized speech files directly off disk via
+            // convertFileSrc (see synthesizeSpeechUrl in frontend/js/app.js) -- the asset
+            // protocol is opt-in per-directory, and this path is only known at runtime (it's
+            // relative to wherever this checkout happens to live), so it's granted here
+            // rather than as a fixed glob in tauri.conf.json.
+            let audio_cache_dir = project_root().join("backend").join("audio_cache");
+            std::fs::create_dir_all(&audio_cache_dir)?;
+            app.asset_protocol_scope().allow_directory(&audio_cache_dir, false)?;
+
             // Native tray icon so there's a visible indicator (and a quick way to
             // reopen/quit) while AETHER1 runs headlessly in the background.
             let show_item = MenuItem::with_id(app, "show", "Show AETHER1", true, None::<&str>)?;
@@ -524,13 +641,28 @@ fn main() {
                 });
             }
 
+            // Live telemetry push, replacing the Python backend's /ws/telemetry loop: an
+            // event instead of a websocket message, but the same ~1s cadence and the same
+            // payload shape (see Telemetry::to_wire_json / UsageSnapshot), so the frontend's
+            // existing updateHardwareTelemetry/updateTokenTelemetry handle both paths as-is.
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    let telemetry = llm::Telemetry::snapshot();
+                    let engine = app_handle.state::<LlmEngine>();
+                    let payload = serde_json::json!({
+                        "telemetry": telemetry.to_wire_json(),
+                        "tokens": engine.usage_snapshot(),
+                        "agent_name": engine.agent_name(),
+                    });
+                    let _ = app_handle.emit("telemetry-update", payload);
+                    std::thread::sleep(Duration::from_millis(1000));
+                });
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                kill_backend(&backend_for_exit);
-            }
-        });
+        .run(|_app_handle, _event| {});
 }

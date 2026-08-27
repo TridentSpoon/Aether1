@@ -9,15 +9,20 @@ mod genesis;
 mod persona;
 mod providers;
 mod telemetry;
+mod tts;
 
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub use db::MemoryDb;
+pub use db::{MemoryDb, Message};
 pub use genesis::Identity;
 use persona::{Persona, Provider};
 use providers::ChatContext;
-use telemetry::Telemetry;
+pub use telemetry::Telemetry;
+pub use tts::{generate_speech, DEFAULT_VOICE};
+
+const SESSION_TOKEN_BUDGET: u64 = 100_000; // matches token_tracker.py's daily_budget_tokens
+const SPARKLINE_LEN: usize = 15; // matches token_tracker.py's history[-15:]
 
 #[derive(Default)]
 struct UsageStats {
@@ -25,6 +30,21 @@ struct UsageStats {
     session_completion_tokens: u64,
     total_requests: u64,
     last_tps: f64,
+    /// Per-request total token counts, most recent last, capped at SPARKLINE_LEN --
+    /// mirrors token_tracker.py's history-derived sparkline.
+    sparkline: Vec<u64>,
+}
+
+/// Serializable snapshot of UsageStats for the frontend's token telemetry panel. Field
+/// names match token_tracker.py's get_telemetry() so the same JS (updateTokenTelemetry)
+/// handles both the Python websocket and this Tauri event without a separate code path.
+#[derive(serde::Serialize)]
+pub struct UsageSnapshot {
+    pub last_tps: f64,
+    pub total_session_tokens: u64,
+    pub used_percent: f64,
+    pub available_tokens: u64,
+    pub sparkline: Vec<u64>,
 }
 
 fn estimate_tokens(text: &str) -> u64 {
@@ -44,6 +64,31 @@ impl UsageStats {
         self.session_completion_tokens += completion_tok;
         self.total_requests += 1;
         self.last_tps = (completion_tok as f64 / duration_secs.max(0.05) * 10.0).round() / 10.0;
+
+        self.sparkline.push(prompt_tok + completion_tok);
+        if self.sparkline.len() > SPARKLINE_LEN {
+            self.sparkline.remove(0);
+        }
+    }
+
+    fn snapshot(&self) -> UsageSnapshot {
+        let total_session = self.session_prompt_tokens + self.session_completion_tokens;
+        let used_percent = ((total_session as f64 / SESSION_TOKEN_BUDGET.max(1) as f64) * 100.0)
+            .min(100.0);
+        let used_percent = (used_percent * 10.0).round() / 10.0;
+        let available_tokens = SESSION_TOKEN_BUDGET.saturating_sub(total_session);
+
+        UsageSnapshot {
+            last_tps: self.last_tps,
+            total_session_tokens: total_session,
+            used_percent,
+            available_tokens,
+            sparkline: if self.sparkline.is_empty() {
+                vec![0]
+            } else {
+                self.sparkline.clone()
+            },
+        }
     }
 }
 
@@ -351,6 +396,14 @@ impl LlmEngine {
 
     pub fn agent_name(&self) -> String {
         self.load_config().agent_name
+    }
+
+    pub fn usage_snapshot(&self) -> UsageSnapshot {
+        self.usage.lock().unwrap().snapshot()
+    }
+
+    pub fn db(&self) -> &MemoryDb {
+        &self.db
     }
 }
 

@@ -56,6 +56,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectLocalModel = document.getElementById('select-local-model');
     const scannerResultsBox = document.getElementById('scanner-results-box');
 
+    // Version & Update Elements (native desktop app only -- see IS_TAURI below)
+    const versionBadge = document.getElementById('version-badge');
+    const updateSection = document.getElementById('update-section');
+    const settingsVersionLabel = document.getElementById('settings-version-label');
+    const updateStatusBox = document.getElementById('update-status-box');
+    const btnCheckUpdate = document.getElementById('btn-check-update');
+    const btnApplyUpdate = document.getElementById('btn-apply-update');
+
     // Hardware Telemetry Elements
     const elCpuGauge = document.getElementById('cpu-gauge-fill');
     const elCpuVal = document.getElementById('cpu-percent-val');
@@ -333,25 +341,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // WebSocket Telemetry
-    function connectTelemetry() {
-        let wsUrl;
-        if (IS_TAURI) {
-            wsUrl = 'ws://localhost:8378/ws/telemetry';
-        } else {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
+    // Live Telemetry -- a Tauri event in the native app (see the background thread in
+    // src-tauri/src/main.rs that emits "telemetry-update"), a WebSocket to the Python
+    // backend in the browser flow. Same payload shape either way, so one handler covers both.
+    function handleTelemetryPayload(data) {
+        if (data.telemetry) updateHardwareTelemetry(data.telemetry);
+        if (data.tokens) updateTokenTelemetry(data.tokens);
+        if (data.agent_name && data.agent_name !== currentAgentName) {
+            updateAgentNameDisplay(data.agent_name);
         }
+    }
+
+    function connectTelemetry() {
+        if (IS_TAURI) {
+            if (!window.__TAURI__ || !window.__TAURI__.event) {
+                console.error('Tauri event bridge unavailable; live telemetry will not update.');
+                return;
+            }
+            window.__TAURI__.event.listen('telemetry-update', (event) => {
+                handleTelemetryPayload(event.payload);
+            });
+            return;
+        }
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
         const ws = new WebSocket(wsUrl);
 
         ws.onmessage = (event) => {
             try {
-                const data = JSON.parse(event.data);
-                if (data.telemetry) updateHardwareTelemetry(data.telemetry);
-                if (data.tokens) updateTokenTelemetry(data.tokens);
-                if (data.agent_name && data.agent_name !== currentAgentName) {
-                    updateAgentNameDisplay(data.agent_name);
-                }
+                handleTelemetryPayload(JSON.parse(event.data));
             } catch (e) {
                 console.error("Telemetry parse error", e);
             }
@@ -415,11 +434,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadStaticInfo() {
         try {
-            const resp = await apiFetch('/api/static-info');
-            if (resp.ok) {
-                const info = await resp.json();
-                if (elDistroBadge) elDistroBadge.textContent = `${info.distro} [${info.architecture}]`;
+            let info;
+            if (IS_TAURI) {
+                info = await tauriInvoke('get_static_info_rust');
+            } else {
+                const resp = await apiFetch('/api/static-info');
+                if (!resp.ok) return;
+                info = await resp.json();
             }
+            if (elDistroBadge) elDistroBadge.textContent = `${info.distro} [${info.architecture}]`;
         } catch (e) {
             console.warn("Could not load static info", e);
         }
@@ -496,33 +519,38 @@ document.addEventListener('DOMContentLoaded', () => {
         chatContainer.scrollTop = chatContainer.scrollHeight;
 
         try {
-            const resp = await apiFetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: text,
-                    session_id: 'default',
-                    generate_voice: autoSpeak
-                })
-            });
+            let reply, agentName, audioUrl;
+            if (IS_TAURI) {
+                const data = await tauriInvoke('generate_response_rust', { prompt: text, sessionId: 'default' });
+                reply = data.reply;
+                agentName = data.agent_name;
+                audioUrl = autoSpeak ? await synthesizeSpeechUrl(reply) : null;
+            } else {
+                const resp = await apiFetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: text,
+                        session_id: 'default',
+                        generate_voice: autoSpeak
+                    })
+                });
+                if (!resp.ok) throw new Error(`chat request failed: ${resp.status}`);
+                const data = await resp.json();
+                reply = data.reply;
+                agentName = data.agent_name;
+                audioUrl = data.audio_url ? API_BASE + data.audio_url : null;
+            }
 
             chatContainer.removeChild(thinkingDiv);
 
-            if (resp.ok) {
-                const data = await resp.json();
-                const audioUrl = data.audio_url ? API_BASE + data.audio_url : null;
-                if (data.agent_name) updateAgentNameDisplay(data.agent_name);
-                voiceEngine.playSFX('incoming');
-                appendMessage(currentAgentName, data.reply, audioUrl);
+            if (agentName) updateAgentNameDisplay(agentName);
+            voiceEngine.playSFX('incoming');
+            appendMessage(currentAgentName, reply, audioUrl);
 
-                if (audioUrl && autoSpeak) {
-                    await voiceEngine.playTTSAudio(audioUrl);
-                } else {
-                    hologram.setState('IDLE');
-                    if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
-                }
+            if (audioUrl && autoSpeak) {
+                await voiceEngine.playTTSAudio(audioUrl);
             } else {
-                appendMessage(currentAgentName, '⚠️ Neural link transmission error. Please check server status.');
                 hologram.setState('IDLE');
                 if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
             }
@@ -547,32 +575,35 @@ document.addEventListener('DOMContentLoaded', () => {
         hologram.setState('THINKING');
 
         try {
-            const resp = await apiFetch('/api/agent/genesis', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ purpose: purpose.trim() })
-            });
-
-            if (resp.ok) {
-                const data = await resp.json();
-                const audioUrl = data.audio_url ? API_BASE + data.audio_url : null;
-                updateAgentNameDisplay(data.name);
-
-                if (data.name.includes("R.E.D.")) { applyAvatar('red'); applyColorTheme('red'); }
-                else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyColorTheme('nexus'); }
-                else if (data.name.includes("A.R.X.LOGOS")) { applyAvatar('arx-logos'); applyColorTheme('arx-logos'); }
-                else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyColorTheme('arx-limes'); }
-
-                settingsModal.classList.add('hidden');
-                appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, audioUrl);
-
-                if (audioUrl && autoSpeak) {
-                    await voiceEngine.playTTSAudio(audioUrl);
-                } else {
-                    hologram.setState('IDLE');
-                }
+            let data;
+            if (IS_TAURI) {
+                data = await tauriInvoke('agent_genesis_rust', { purpose: purpose.trim() });
             } else {
-                alert("Failed to forge identity.");
+                const resp = await apiFetch('/api/agent/genesis', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ purpose: purpose.trim() })
+                });
+                if (!resp.ok) throw new Error(`genesis request failed: ${resp.status}`);
+                data = await resp.json();
+            }
+
+            const audioUrl = IS_TAURI
+                ? (autoSpeak ? await synthesizeSpeechUrl(data.greeting, data.voice) : null)
+                : (data.audio_url ? API_BASE + data.audio_url : null);
+            updateAgentNameDisplay(data.name);
+
+            if (data.name.includes("R.E.D.")) { applyAvatar('red'); applyColorTheme('red'); }
+            else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyColorTheme('nexus'); }
+            else if (data.name.includes("A.R.X.LOGOS")) { applyAvatar('arx-logos'); applyColorTheme('arx-logos'); }
+            else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyColorTheme('arx-limes'); }
+
+            settingsModal.classList.add('hidden');
+            appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, audioUrl);
+
+            if (audioUrl && autoSpeak) {
+                await voiceEngine.playTTSAudio(audioUrl);
+            } else {
                 hologram.setState('IDLE');
             }
         } catch (e) {
@@ -588,35 +619,39 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.playSFX('click');
 
         try {
-            const resp = await apiFetch('/api/scanner/status');
-            if (resp.ok) {
-                const data = await resp.json();
-                let html = '';
+            const data = IS_TAURI
+                ? await tauriInvoke('scan_models_rust')
+                : await (async () => {
+                    const resp = await apiFetch('/api/scanner/status');
+                    if (!resp.ok) throw new Error(`scan request failed: ${resp.status}`);
+                    return resp.json();
+                })();
 
-                if (data.cloud_keys.detected_key) {
-                    html += `<div class="text-green-400">✔ Detected Provider API Key (${data.cloud_keys.detected_provider || 'cloud'}) via Environment</div>`;
-                } else {
-                    html += `<div class="text-slate-400">⚪ No Provider API keys found in environment.</div>`;
-                }
+            let html = '';
 
-                if (data.ollama.available) {
-                    const modelsStr = data.ollama.models.length > 0 ? data.ollama.models.join(', ') : 'No models pulled yet';
-                    html += `<div class="text-green-400">✔ Ollama Online (Port 11434) - Models: <strong>${modelsStr}</strong></div>`;
-                } else if (data.ollama.cli_installed) {
-                    html += `<div class="text-yellow-400">⚠ Ollama CLI is installed but server not running (\`ollama serve\`).</div>`;
-                } else {
-                    html += `<div class="text-slate-400">⚪ Ollama is not active on localhost:11434.</div>`;
-                }
-
-                if (data.lmstudio.available) {
-                    const lmStr = data.lmstudio.models.length > 0 ? data.lmstudio.models.join(', ') : 'Ready';
-                    html += `<div class="text-green-400">✔ LM Studio Active (Port 1234) - ${lmStr}</div>`;
-                } else {
-                    html += `<div class="text-slate-400">⚪ LM Studio is not active on localhost:1234.</div>`;
-                }
-
-                if (scannerResultsBox) scannerResultsBox.innerHTML = html;
+            if (data.cloud_keys.detected_key) {
+                html += `<div class="text-green-400">✔ Detected Provider API Key (${data.cloud_keys.detected_provider || 'cloud'}) via Environment</div>`;
+            } else {
+                html += `<div class="text-slate-400">⚪ No Provider API keys found in environment.</div>`;
             }
+
+            if (data.ollama.available) {
+                const modelsStr = data.ollama.models.length > 0 ? data.ollama.models.join(', ') : 'No models pulled yet';
+                html += `<div class="text-green-400">✔ Ollama Online (Port 11434) - Models: <strong>${modelsStr}</strong></div>`;
+            } else if (data.ollama.cli_installed) {
+                html += `<div class="text-yellow-400">⚠ Ollama CLI is installed but server not running (\`ollama serve\`).</div>`;
+            } else {
+                html += `<div class="text-slate-400">⚪ Ollama is not active on localhost:11434.</div>`;
+            }
+
+            if (data.lmstudio.available) {
+                const lmStr = data.lmstudio.models.length > 0 ? data.lmstudio.models.join(', ') : 'Ready';
+                html += `<div class="text-green-400">✔ LM Studio Active (Port 1234) - ${lmStr}</div>`;
+            } else {
+                html += `<div class="text-slate-400">⚪ LM Studio is not active on localhost:1234.</div>`;
+            }
+
+            if (scannerResultsBox) scannerResultsBox.innerHTML = html;
         } catch (e) {
             if (scannerResultsBox) scannerResultsBox.innerHTML = `<div class="text-red-400">Scan failed: ${e.message}</div>`;
         }
@@ -632,8 +667,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            const resp = await apiFetch(`/api/scanner/pull-model?model_name=${encodeURIComponent(modelName)}`, { method: 'POST' });
-            const data = await resp.json();
+            const data = IS_TAURI
+                ? await tauriInvoke('pull_model_rust', { modelName })
+                : await (async () => {
+                    const resp = await apiFetch(`/api/scanner/pull-model?model_name=${encodeURIComponent(modelName)}`, { method: 'POST' });
+                    return resp.json();
+                })();
             if (scannerResultsBox) {
                 scannerResultsBox.innerHTML = `<div class="${data.status === 'error' ? 'text-red-400' : 'text-green-400'}">${data.message}</div>`;
             }
@@ -642,17 +681,134 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Version & Updates -- mirrors the taskbar tray icon's "Check for Updates" /
+    // "Update Available" flow, but in the HUD itself. Real self-updating (git pull +
+    // rebuild) only makes sense for the native desktop app, so this whole feature is
+    // Tauri-only; see IS_TAURI gating in initVersionAndUpdates() below.
+    async function tauriInvoke(cmd, args) {
+        if (!window.__TAURI__ || !window.__TAURI__.core) {
+            throw new Error('Tauri bridge unavailable');
+        }
+        return window.__TAURI__.core.invoke(cmd, args);
+    }
+
+    // Synthesizes speech via the native TTS command and turns the local mp3 path it returns
+    // into a URL the webview's <audio> element can actually load (convertFileSrc maps a
+    // filesystem path to Tauri's asset:// protocol; see the assetProtocol scope this path's
+    // directory is allowed under in tauri.conf.json / main.rs's setup()). Returns null on
+    // any failure so callers can just skip voice playback instead of erroring the whole chat.
+    async function synthesizeSpeechUrl(text, voiceName) {
+        try {
+            const path = await tauriInvoke('generate_speech_rust', { text, voice: voiceName || null });
+            return window.__TAURI__.core.convertFileSrc(path);
+        } catch (e) {
+            console.warn('TTS synthesis failed', e);
+            return null;
+        }
+    }
+
+    async function loadVersionInfo() {
+        try {
+            const info = await tauriInvoke('get_version_info');
+            if (versionBadge) versionBadge.textContent = info.version;
+            if (settingsVersionLabel) settingsVersionLabel.textContent = `${info.version} (${info.commit_short})`;
+        } catch (e) {
+            console.error('Version info error', e);
+        }
+    }
+
+    async function handleCheckForUpdate() {
+        if (versionBadge) versionBadge.classList.add('animate-pulse');
+        if (updateStatusBox) {
+            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Checking GitHub for the latest commit on main...</div>';
+        }
+        if (btnApplyUpdate) btnApplyUpdate.classList.add('hidden');
+
+        try {
+            const status = await tauriInvoke('check_for_update_rust');
+            if (settingsVersionLabel) settingsVersionLabel.textContent = `${status.version} (${status.built_commit_short})`;
+
+            if (!status.checked) {
+                if (updateStatusBox) {
+                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⚠ Could not check for updates: ${status.error || 'unknown error'}</div>`;
+                }
+                if (versionBadge) versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
+                return;
+            }
+
+            if (status.up_to_date) {
+                if (updateStatusBox) {
+                    updateStatusBox.innerHTML = `<div class="text-green-400">✔ Up to date -- ${status.version} (build ${status.built_commit_short})</div>`;
+                }
+                if (versionBadge) {
+                    versionBadge.classList.remove('border-yellow-500/50', 'text-yellow-400');
+                    versionBadge.classList.add('border-green-500/50', 'text-green-400');
+                }
+            } else {
+                const latestShort = status.latest_commit ? status.latest_commit.slice(0, 7) : 'unknown';
+                if (updateStatusBox) {
+                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>`;
+                }
+                if (versionBadge) {
+                    versionBadge.classList.remove('border-green-500/50', 'text-green-400');
+                    versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
+                }
+                if (btnApplyUpdate) btnApplyUpdate.classList.remove('hidden');
+            }
+        } catch (e) {
+            if (updateStatusBox) {
+                updateStatusBox.innerHTML = `<div class="text-red-400">Update check failed: ${e.message || e}</div>`;
+            }
+        } finally {
+            if (versionBadge) versionBadge.classList.remove('animate-pulse');
+        }
+    }
+
+    async function handleApplyUpdate() {
+        if (!confirm('Pull the latest changes, rebuild, and relaunch Aether1? The app will restart.')) return;
+        voiceEngine.playSFX('click');
+        if (updateStatusBox) {
+            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Updating -- pulling latest changes and rebuilding. This can take over a minute; the app will restart automatically when it\'s done.</div>';
+        }
+        if (btnApplyUpdate) btnApplyUpdate.disabled = true;
+        if (btnCheckUpdate) btnCheckUpdate.disabled = true;
+
+        try {
+            // On success the app exits and relaunches before this ever resolves --
+            // reaching the catch block means it genuinely failed.
+            await tauriInvoke('apply_update_rust');
+        } catch (e) {
+            if (updateStatusBox) {
+                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ Update failed: ${e.message || e}. See the terminal/tray for details.</div>`;
+            }
+            if (btnApplyUpdate) btnApplyUpdate.disabled = false;
+            if (btnCheckUpdate) btnCheckUpdate.disabled = false;
+        }
+    }
+
+    function initVersionAndUpdates() {
+        if (!IS_TAURI) return;
+        if (versionBadge) versionBadge.classList.remove('hidden');
+        if (updateSection) updateSection.classList.remove('hidden');
+        loadVersionInfo();
+        handleCheckForUpdate();
+    }
+
     async function loadChatHistory() {
         try {
-            const resp = await apiFetch('/api/messages?limit=25');
-            if (resp.ok) {
-                const msgs = await resp.json();
-                chatContainer.innerHTML = '';
-                if (msgs.length === 0) {
-                    appendMessage(currentAgentName, `Greetings Operator. **${currentAgentName}** online and ready for deployment.`);
-                } else {
-                    msgs.forEach(m => appendMessage(m.sender, m.text));
-                }
+            const msgs = IS_TAURI
+                ? await tauriInvoke('get_messages_rust', { limit: 25 })
+                : await (async () => {
+                    const resp = await apiFetch('/api/messages?limit=25');
+                    if (!resp.ok) throw new Error(`messages request failed: ${resp.status}`);
+                    return resp.json();
+                })();
+
+            chatContainer.innerHTML = '';
+            if (msgs.length === 0) {
+                appendMessage(currentAgentName, `Greetings Operator. **${currentAgentName}** online and ready for deployment.`);
+            } else {
+                msgs.forEach(m => appendMessage(m.sender, m.text));
             }
         } catch (e) {
             console.warn("Could not load messages", e);
@@ -661,23 +817,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadSettings() {
         try {
-            const resp = await apiFetch('/api/settings');
-            if (resp.ok) {
-                const data = await resp.json();
-                const s = data.settings;
-                updateAgentNameDisplay(s.agent_name || "HALCY");
-                document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
-                document.getElementById('setting-provider').value = s.llm_provider || 'offline';
-                document.getElementById('setting-model').value = s.llm_model || 'halcy-core';
-                document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
-                document.getElementById('setting-apikey').value = s.llm_api_key || '';
-                document.getElementById('setting-persona').value = s.persona_type || 'halcy';
-                document.getElementById('setting-custom-directive').value = s.custom_directive || '';
-                toggleCustomPersonaField();
-                document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
-                document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
-                autoSpeak = s.auto_speak !== false;
-            }
+            const data = IS_TAURI
+                ? await tauriInvoke('get_settings_rust')
+                : await (async () => {
+                    const resp = await apiFetch('/api/settings');
+                    if (!resp.ok) throw new Error(`settings request failed: ${resp.status}`);
+                    return resp.json();
+                })();
+
+            const s = data.settings;
+            updateAgentNameDisplay(s.agent_name || "HALCY");
+            document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
+            document.getElementById('setting-provider').value = s.llm_provider || 'offline';
+            document.getElementById('setting-model').value = s.llm_model || 'halcy-core';
+            document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
+            document.getElementById('setting-apikey').value = s.llm_api_key || '';
+            document.getElementById('setting-persona').value = s.persona_type || 'halcy';
+            document.getElementById('setting-custom-directive').value = s.custom_directive || '';
+            toggleCustomPersonaField();
+            document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
+            document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
+            autoSpeak = s.auto_speak !== false;
         } catch (e) {
             console.warn("Could not load settings", e);
         }
@@ -708,12 +868,17 @@ document.addEventListener('DOMContentLoaded', () => {
         updateAgentNameDisplay(payload.settings.agent_name);
 
         try {
-            const resp = await apiFetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (resp.ok && notify) {
+            if (IS_TAURI) {
+                await tauriInvoke('save_settings_rust', { settings: payload.settings });
+            } else {
+                const resp = await apiFetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!resp.ok) throw new Error(`settings save failed: ${resp.status}`);
+            }
+            if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
                 appendMessage(currentAgentName, '⚙️ Cognitive Core & Identity configurations updated.');
@@ -797,6 +962,16 @@ document.addEventListener('DOMContentLoaded', () => {
         handlePullLlama();
     });
 
+    if (versionBadge) {
+        versionBadge.addEventListener('click', () => handleCheckForUpdate());
+    }
+    if (btnCheckUpdate) {
+        btnCheckUpdate.addEventListener('click', () => handleCheckForUpdate());
+    }
+    if (btnApplyUpdate) {
+        btnApplyUpdate.addEventListener('click', () => handleApplyUpdate());
+    }
+
     btnCloseSettings.addEventListener('click', () => {
         voiceEngine.playSFX('click');
         settingsModal.classList.add('hidden');
@@ -809,7 +984,11 @@ document.addEventListener('DOMContentLoaded', () => {
     btnClearChat.addEventListener('click', async () => {
         voiceEngine.playSFX('click');
         if (confirm("Clear conversation logs?")) {
-            await apiFetch('/api/messages', { method: 'DELETE' });
+            if (IS_TAURI) {
+                await tauriInvoke('clear_messages_rust');
+            } else {
+                await apiFetch('/api/messages', { method: 'DELETE' });
+            }
             chatContainer.innerHTML = '';
             appendMessage(currentAgentName, 'Conversation logs cleared. Ready.');
         }
@@ -835,6 +1014,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadChatHistory();
     loadSettings();
     connectTelemetry();
+    initVersionAndUpdates();
 
     document.body.addEventListener('click', () => {
         voiceEngine.playSFX('boot');

@@ -4,7 +4,7 @@
 // way -- the same code path here runs on Linux and Windows.
 
 use std::thread;
-use sysinfo::{Disks, ProcessesToUpdate, System};
+use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
 
 pub struct Telemetry {
     pub os_name: String,
@@ -17,6 +17,8 @@ pub struct Telemetry {
     pub disk_used_gb: f64,
     pub disk_total_gb: f64,
     pub disk_percent: f64,
+    pub network_download_kbps: f64,
+    pub network_upload_kbps: f64,
     pub uptime: String,
     pub status: &'static str,
     pub top_processes: Vec<(String, f32)>,
@@ -40,9 +42,23 @@ impl Telemetry {
     /// snapshot, but don't call this in a hot loop.
     pub fn snapshot() -> Telemetry {
         let mut sys = System::new_all();
+        let mut networks = Networks::new_with_refreshed_list();
         thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         sys.refresh_cpu_usage();
         sys.refresh_memory();
+        // received()/transmitted() are deltas since the *previous* refresh (not running
+        // totals), so this second refresh -- after the sleep above -- gives real throughput
+        // over that interval, the same way psutil-based system_monitor.py diffs two
+        // net_io_counters() readings itself.
+        networks.refresh();
+        let interval_secs = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.as_secs_f64().max(0.001);
+        let (rx_bytes, tx_bytes) = networks
+            .iter()
+            .fold((0u64, 0u64), |(rx, tx), (_, data)| {
+                (rx + data.received(), tx + data.transmitted())
+            });
+        let network_download_kbps = (rx_bytes as f64 / interval_secs / 1024.0 * 10.0).round() / 10.0;
+        let network_upload_kbps = (tx_bytes as f64 / interval_secs / 1024.0 * 10.0).round() / 10.0;
         // Per-process CPU usage needs the same two-samples-apart treatment as the global
         // number above -- without this second call, every process's cpu_usage() stays 0.0
         // from the single sample taken inside System::new_all(), making "top processes"
@@ -105,10 +121,35 @@ impl Telemetry {
             disk_used_gb,
             disk_total_gb,
             disk_percent,
+            network_download_kbps,
+            network_upload_kbps,
             uptime: format_uptime(System::uptime()),
             status,
             top_processes,
         }
+    }
+
+    /// Nested JSON shape matching system_monitor.py's get_telemetry() -- lets the frontend's
+    /// existing updateHardwareTelemetry() handle both the Python websocket and this Tauri
+    /// event with the same code, instead of needing a second, Rust-specific handler.
+    pub fn to_wire_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "cpu": { "total_percent": self.cpu_percent },
+            "ram": {
+                "percent": self.ram_percent,
+                "used_gb": self.ram_used_gb,
+                "total_gb": self.ram_total_gb,
+            },
+            "disk": {
+                "percent": self.disk_percent,
+                "used_gb": self.disk_used_gb,
+                "total_gb": self.disk_total_gb,
+            },
+            "network": {
+                "download_kbps": self.network_download_kbps,
+                "upload_kbps": self.network_upload_kbps,
+            },
+        })
     }
 
     pub fn diagnostic_report(&self) -> String {
@@ -118,7 +159,8 @@ impl Telemetry {
              Status: {} | Uptime: {}\n\
              CPU Load: {:.1}% across {} cores\n\
              RAM Usage: {:.2} GB / {:.2} GB ({:.1}%)\n\
-             Storage: {:.1} GB / {:.1} GB ({:.1}% used)\n",
+             Storage: {:.1} GB / {:.1} GB ({:.1}% used)\n\
+             Network I/O: \u{2193} {:.1} KB/s | \u{2191} {:.1} KB/s\n",
             self.os_name.to_uppercase(),
             self.architecture,
             self.status,
@@ -131,6 +173,8 @@ impl Telemetry {
             self.disk_used_gb,
             self.disk_total_gb,
             self.disk_percent,
+            self.network_download_kbps,
+            self.network_upload_kbps,
         );
 
         let processes = self
