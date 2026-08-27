@@ -2,7 +2,7 @@
 Name=Aether1 Platform
 GenericName=Holographic AI Companion
 Comment=AI-Enhanced Task Handling & Engagement Resource
-Exec=/bin/bash -c "cd %k/.. && ./src-tauri/target/release/aether1"
+Exec=__AETHER1_INSTALLED_BIN__
 Icon=aether1
 Terminal=false
 Type=Application

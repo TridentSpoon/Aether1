@@ -286,11 +286,24 @@ fn perform_update<R: tauri::Runtime>(
         return;
     }
 
-    let new_binary = root
-        .join("src-tauri")
-        .join("target")
-        .join("release")
-        .join("aether1");
+    // Relaunch the installed copy at ~/.local/bin/aether1 (see
+    // scripts/install_desktop_app.sh), not the raw build artifact under
+    // src-tauri/target/ -- the whole point of that install step is that the
+    // launcher (and now the self-update relaunch too) runs from a stable
+    // location, not from wherever this checkout happens to live.
+    let new_binary = std::env::var("HOME")
+        .map(|home| {
+            PathBuf::from(home)
+                .join(".local")
+                .join("bin")
+                .join("aether1")
+        })
+        .unwrap_or_else(|_| {
+            root.join("src-tauri")
+                .join("target")
+                .join("release")
+                .join("aether1")
+        });
     println!("[AETHER1] Update: relaunching {}...", new_binary.display());
     match Command::new(&new_binary).current_dir(&root).spawn() {
         Ok(_child) => app.exit(0),
