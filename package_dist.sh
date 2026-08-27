@@ -21,17 +21,24 @@ echo "======================================================================"
 rm -rf "$DIST_DIR"
 mkdir -p "$TEMP_BUILD"
 
-# Copy source directories and files
+# Copy source directories and files -- src-tauri/ ships as SOURCE (not a prebuilt binary),
+# so the target machine builds its own release binary via ./setup.sh / ./start.sh's
+# auto-build-if-missing step. This is deliberate: a prebuilt binary is tied to the build
+# machine's glibc/ABI and can fail to run on a different distro, whereas building on the
+# target works on any Linux distro with Rust installed.
 echo "📂 Copying project components..."
-cp -r backend "$TEMP_BUILD/"
+cp -r src-tauri "$TEMP_BUILD/"
 cp -r desktop "$TEMP_BUILD/"
 cp -r frontend "$TEMP_BUILD/"
-cp setup.sh start.sh start_daemon.sh stop.sh start.bat README.md Dockerfile docker-compose.yml "$TEMP_BUILD/"
+cp -r scripts "$TEMP_BUILD/"
+cp setup.sh start.sh start_daemon.sh stop.sh start.bat README.md "$TEMP_BUILD/"
 
-# Remove Python bytecode and audio cache from bundle to keep package light
-find "$TEMP_BUILD" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find "$TEMP_BUILD" -type d -name "*.pyc" -exec rm -rf {} + 2>/dev/null || true
-rm -rf "$TEMP_BUILD/backend/audio_cache/*" 2>/dev/null || true
+# Don't ship a stale/huge build artifact -- the target machine builds its own.
+rm -rf "$TEMP_BUILD/src-tauri/target"
+
+# Remove any local audio cache from the bundle to keep the package light.
+mkdir -p "$TEMP_BUILD/backend/audio_cache"
+rm -rf "$TEMP_BUILD/backend/audio_cache"/* 2>/dev/null || true
 
 # Set execute permissions
 chmod +x "$TEMP_BUILD/setup.sh" "$TEMP_BUILD/start.sh" "$TEMP_BUILD/start_daemon.sh" "$TEMP_BUILD/stop.sh"

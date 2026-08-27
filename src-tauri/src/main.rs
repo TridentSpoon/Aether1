@@ -5,13 +5,22 @@
 // update mechanism's own `git pull` (see perform_update_core) and TTS/update-check's network
 // calls. The webview loads the same frontend/ files used by the old browser flow, but talks
 // to this process over Tauri's IPC (see frontend/js/app.js's IS_TAURI branches) instead of
-// HTTP -- there's no server listening on any port. The Python backend/ tree still exists and
-// still works for the browser-only flow (./start.sh / ./start_daemon.sh), but this app no
-// longer spawns or depends on it.
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+// HTTP -- there's no server listening on any port.
+//
+// Running this same binary with `--serve` instead launches a headless axum HTTP server
+// (server.rs) exposing the REST/WebSocket surface frontend/js/app.js's non-Tauri fallback
+// path expects, reusing the exact same commands:: functions the Tauri commands below call.
+// That's the browser-based dev flow's backend now (./start.sh / ./start_daemon.sh) -- the
+// Python backend/ tree is gone.
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
+mod commands;
 mod llm;
 mod model_scanner;
+mod server;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -344,46 +353,26 @@ fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Rust-native equivalent of POST /api/chat (backend/main.py), minus voice generation --
 /// the frontend calls generate_speech_rust separately for that, matching the two-command
-/// split the rest of this file already uses instead of one do-everything endpoint.
+/// split the rest of this file already uses instead of one do-everything endpoint. Body
+/// lives in commands::generate_response, shared with the axum server's /api/chat handler.
 #[tauri::command]
 fn generate_response_rust(
     engine: tauri::State<LlmEngine>,
     prompt: String,
     session_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if prompt.trim().is_empty() {
-        return Err("Empty message".to_string());
-    }
-    let session_id = session_id.unwrap_or_else(|| "default".to_string());
-
-    engine.add_message(&session_id, "user", &prompt);
-    let reply = engine.generate_response(&prompt, &session_id);
-    let agent_name = engine.agent_name();
-    engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
-
-    Ok(serde_json::json!({ "reply": reply, "agent_name": agent_name }))
+    commands::generate_response(&engine, prompt, session_id)
 }
 
 /// Rust-native equivalent of POST /api/agent/genesis (backend/main.py), minus TTS audio
-/// generation -- that stays Python-only for now (see backend/tts_engine.py).
+/// generation (see generate_speech_rust). Body lives in commands::agent_genesis, shared
+/// with the axum server's /api/agent/genesis handler.
 #[tauri::command]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
     purpose: String,
 ) -> Result<serde_json::Value, String> {
-    if purpose.trim().is_empty() {
-        return Err("Please provide a purpose description".to_string());
-    }
-    let identity = engine.generate_identity_from_purpose(&purpose);
-    engine.add_message("default", &identity.name.to_lowercase(), &identity.greeting);
-
-    Ok(serde_json::json!({
-        "name": identity.name,
-        "callsign": identity.callsign,
-        "persona": identity.persona_directive,
-        "voice": identity.voice,
-        "greeting": identity.greeting,
-    }))
+    commands::agent_genesis(&engine, purpose)
 }
 
 /// Rust-native equivalent of GET /api/scanner/status (backend/main.py) -- cloud API key
@@ -397,12 +386,7 @@ fn scan_models_rust() -> model_scanner::ScanResult {
 /// Rust-native equivalent of POST /api/scanner/pull-model (backend/main.py).
 #[tauri::command]
 fn pull_model_rust(model_name: String) -> model_scanner::PullResult {
-    let model_name = if model_name.trim().is_empty() {
-        "llama3.2:1b".to_string()
-    } else {
-        model_name
-    };
-    model_scanner::pull_model(&model_name)
+    commands::pull_model(model_name)
 }
 
 /// Rust-native equivalent of GET /api/static-info (backend/main.py) -- just the OS/arch
@@ -410,53 +394,26 @@ fn pull_model_rust(model_name: String) -> model_scanner::PullResult {
 /// usage) would be needlessly slow for something this static; read it directly instead.
 #[tauri::command]
 fn get_static_info_rust() -> serde_json::Value {
-    let os_name = sysinfo::System::long_os_version()
-        .or_else(sysinfo::System::name)
-        .unwrap_or_else(|| "Unknown OS".to_string());
-    serde_json::json!({
-        "distro": os_name,
-        "architecture": std::env::consts::ARCH,
-    })
+    commands::static_info()
 }
 
 /// Rust-native equivalent of GET /api/messages (backend/main.py).
 #[tauri::command]
 fn get_messages_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::Message> {
-    engine
-        .db()
-        .get_messages("default", limit.unwrap_or(50))
-        .unwrap_or_default()
+    commands::get_messages(&engine, limit)
 }
 
 /// Rust-native equivalent of DELETE /api/messages (backend/main.py).
 #[tauri::command]
 fn clear_messages_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
-    engine.db().clear_history("default").map_err(|e| e.to_string())
+    commands::clear_messages(&engine)
 }
 
 /// Rust-native equivalent of GET /api/settings (backend/main.py) -- same default-filling
 /// behavior, so a fresh install (no settings rows yet) still gets sensible values.
 #[tauri::command]
 fn get_settings_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
-    let mut settings = engine.db().get_all_settings().unwrap_or(serde_json::json!({}));
-    let defaults = serde_json::json!({
-        "agent_name": "HALCY",
-        "llm_provider": "offline",
-        "llm_model": "halcy-core",
-        "llm_endpoint": "http://localhost:11434",
-        "llm_api_key": "",
-        "persona_type": "halcy",
-        "custom_directive": "",
-        "voice_name": llm::DEFAULT_VOICE,
-        "enable_sfx": true,
-        "auto_speak": true,
-    });
-    if let (Some(settings_obj), Some(defaults_obj)) = (settings.as_object_mut(), defaults.as_object()) {
-        for (key, value) in defaults_obj {
-            settings_obj.entry(key.clone()).or_insert_with(|| value.clone());
-        }
-    }
-    serde_json::json!({ "settings": settings })
+    commands::get_settings(&engine)
 }
 
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
@@ -465,27 +422,43 @@ fn save_settings_rust(
     engine: tauri::State<LlmEngine>,
     settings: serde_json::Value,
 ) -> Result<(), String> {
-    let Some(map) = settings.as_object() else {
-        return Err("settings payload must be a JSON object".to_string());
-    };
-    for (key, value) in map {
-        engine
-            .db()
-            .set_setting(key, value)
-            .map_err(|e| format!("could not save setting {key:?}: {e}"))?;
-    }
-    Ok(())
+    commands::save_settings(&engine, settings)
 }
 
 /// Rust-native equivalent of POST /api/tts + GET /api/audio/{filename} (backend/main.py)
 /// combined into one call: synthesizes speech and returns a local file path directly,
-/// since there's no HTTP server here to stream it from. The frontend turns this into a
-/// playable URL via Tauri's convertFileSrc (see frontend/js/app.js).
+/// since the Tauri IPC path has no HTTP server to stream it from. The frontend turns this
+/// into a playable URL via Tauri's convertFileSrc (see frontend/js/app.js). The axum
+/// server's /api/chat and /api/agent/genesis handlers call commands::synthesize_speech
+/// directly instead, since they need a URL string rather than a raw path.
 #[tauri::command]
 fn generate_speech_rust(text: String, voice: Option<String>) -> Result<String, String> {
-    let cache_dir = project_root().join("backend").join("audio_cache");
-    let path = llm::generate_speech(&cache_dir, &text, voice.as_deref())?;
+    let path = commands::synthesize_speech(&text, voice.as_deref())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Shared by both the native Tauri path and `--serve`: opens the real sqlite file at
+/// backend/aether1_memory.db, falling back to a temp-dir sqlite file if that fails.
+fn build_llm_engine() -> LlmEngine {
+    let db_path = project_root().join("backend").join("aether1_memory.db");
+    match MemoryDb::open(&db_path) {
+        Ok(db) => LlmEngine::new(db),
+        Err(e) => {
+            // NOT ":memory:" -- MemoryDb opens a fresh connection per call (matching
+            // memory_db.py's own pattern, which is fine for a real file), so a literal
+            // SQLite ":memory:" database would be destroyed and recreated empty on
+            // every single call. A real temp file actually persists for the session.
+            let fallback_path = std::env::temp_dir().join("aether1_fallback_memory.db");
+            eprintln!(
+                "[AETHER1] Could not open {} ({e}); the Rust LLM engine will use {} for this session instead.",
+                db_path.display(),
+                fallback_path.display()
+            );
+            LlmEngine::new(
+                MemoryDb::open(&fallback_path).expect("fallback sqlite path should always open"),
+            )
+        }
+    }
 }
 
 fn main() {
@@ -493,34 +466,25 @@ fn main() {
     // msedge-tts's cert verifier the other), and rustls refuses to guess between two linked
     // providers -- pin one explicitly before anything on any thread makes its first TLS
     // connection (the update-checker and TTS both do). Must run before the telemetry/update
-    // threads spawned below could possibly race it.
+    // threads spawned below (or --serve's own telemetry thread) could possibly race it.
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("installing the rustls crypto provider should only fail if called twice");
 
-    let llm_engine = {
-        let db_path = project_root().join("backend").join("aether1_memory.db");
-        match MemoryDb::open(&db_path) {
-            Ok(db) => LlmEngine::new(db),
-            Err(e) => {
-                // NOT ":memory:" -- MemoryDb opens a fresh connection per call (matching
-                // memory_db.py's own pattern, which is fine for a real file), so a literal
-                // SQLite ":memory:" database would be destroyed and recreated empty on
-                // every single call. A real temp file actually persists for the session.
-                let fallback_path = std::env::temp_dir().join("aether1_fallback_memory.db");
-                eprintln!(
-                    "[AETHER1] Could not open {} ({e}); the Rust LLM engine will use {} for this session \
-                     instead (won't be shared with the Python backend).",
-                    db_path.display(),
-                    fallback_path.display()
-                );
-                LlmEngine::new(
-                    MemoryDb::open(&fallback_path)
-                        .expect("fallback sqlite path should always open"),
-                )
-            }
-        }
-    };
+    // Headless HTTP mode: short-circuit before tauri::Builder is ever constructed, so the
+    // native app's setup (tray, asset-protocol scope, window) never runs in this process.
+    // See server.rs for the actual axum app.
+    if std::env::args().any(|arg| arg == "--serve") {
+        let engine = build_llm_engine();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime for --serve");
+        runtime.block_on(server::run(engine));
+        return;
+    }
+
+    let llm_engine = build_llm_engine();
 
     tauri::Builder::default()
         .manage(llm_engine)
@@ -547,7 +511,8 @@ fn main() {
             // rather than as a fixed glob in tauri.conf.json.
             let audio_cache_dir = project_root().join("backend").join("audio_cache");
             std::fs::create_dir_all(&audio_cache_dir)?;
-            app.asset_protocol_scope().allow_directory(&audio_cache_dir, false)?;
+            app.asset_protocol_scope()
+                .allow_directory(&audio_cache_dir, false)?;
 
             // Native tray icon so there's a visible indicator (and a quick way to
             // reopen/quit) while AETHER1 runs headlessly in the background.
