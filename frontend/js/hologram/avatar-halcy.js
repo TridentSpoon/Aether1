@@ -77,22 +77,28 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
         128
     );
 
-    // Bake a single gradual bulge into the band at local angle 0 -- since the mesh spins
-    // on its Z axis every frame, this rides around the circumference as a traveling pulse
-    // that reads as motion, instead of the ring just looking like a static disc.
-    const bulgeHalfAngle = Math.PI / 5;
-    const bulgeMaxAmount = 4;
+    // Bake a single broad, gradual swell into the band at local angle 0 -- since the mesh
+    // spins on its Z axis every frame, this rides around the circumference as a traveling
+    // wave that reads as motion, instead of the ring just looking like a static disc.
+    // Only the outer edge moves for this -- the inner edge (facing the inner ring) stays put
+    // so its distance from the inner ring never varies, and the band's thickness swells instead.
+    const bulgeHalfAngle = Math.PI / 2.6;
+    const bulgeMaxAmount = 3.5;
     const outerPos = outerRingGeom.attributes.position;
     for (let vi = 0; vi < outerPos.count; vi++) {
         const vx = outerPos.getX(vi);
         const vy = outerPos.getY(vi);
         const vAngle = Math.atan2(vy, vx);
-        const angleDiff = Math.atan2(Math.sin(vAngle), Math.cos(vAngle));
+        const baseR = Math.sqrt(vx * vx + vy * vy);
+        const isOuterEdge = baseR > this.halcyOuterRingBaseRadius;
         let bulge = 0;
-        if (Math.abs(angleDiff) < bulgeHalfAngle) {
-            bulge = bulgeMaxAmount * 0.5 * (1 + Math.cos((angleDiff / bulgeHalfAngle) * Math.PI));
+        if (isOuterEdge) {
+            const angleDiff = Math.atan2(Math.sin(vAngle), Math.cos(vAngle));
+            if (Math.abs(angleDiff) < bulgeHalfAngle) {
+                bulge = bulgeMaxAmount * 0.5 * (1 + Math.cos((angleDiff / bulgeHalfAngle) * Math.PI));
+            }
         }
-        const r = Math.sqrt(vx * vx + vy * vy) + bulge;
+        const r = baseR + bulge;
         outerPos.setXY(vi, Math.cos(vAngle) * r, Math.sin(vAngle) * r);
     }
     outerPos.needsUpdate = true;
@@ -105,7 +111,6 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
         blending: THREE.AdditiveBlending
     });
     this.halcyOuterRing = new THREE.Mesh(outerRingGeom, outerRingMat);
-    this.halcyOuterRing.userData = { speed: 0.012 };
     this.scene.add(this.halcyOuterRing);
 
     // Inner ultramarine equalizer ring — segmented so its circumference can "thicken" per-bar
@@ -117,6 +122,7 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
     const segmentCount = 40;
     const segMat = new THREE.MeshBasicMaterial({
         color: 0x2b3eff,
+        vertexColors: true,
         transparent: true,
         opacity: 0.85,
         blending: THREE.AdditiveBlending
@@ -125,6 +131,20 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
         const angle = (i / segmentCount) * Math.PI * 2;
         const segGeom = new THREE.BoxGeometry(3.6, 6, 2.6);
         segGeom.translate(0, 3, 0); // pivot at inner edge so it only extends outward when scaled
+
+        // Radial gradient -- brightest where the segment meets the lattice (local y = 0),
+        // fading darker toward its outer tip (local y = 6).
+        const segPos = segGeom.attributes.position;
+        const segColors = new Float32Array(segPos.count * 3);
+        for (let vi = 0; vi < segPos.count; vi++) {
+            const t = THREE.MathUtils.clamp(segPos.getY(vi) / 6, 0, 1);
+            const brightness = 1.0 - t * 0.7;
+            segColors[vi * 3] = brightness;
+            segColors[vi * 3 + 1] = brightness;
+            segColors[vi * 3 + 2] = brightness;
+        }
+        segGeom.setAttribute('color', new THREE.BufferAttribute(segColors, 3));
+
         const seg = new THREE.Mesh(segGeom, segMat);
         seg.position.set(Math.cos(angle) * innerRingRadius, Math.sin(angle) * innerRingRadius, 0);
         seg.rotation.z = angle - Math.PI / 2;
