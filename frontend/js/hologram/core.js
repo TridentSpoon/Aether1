@@ -61,6 +61,8 @@ class HologramAvatar {
         this.nexusLegMat = null; // front mandible/arm joints — dark fill, like the tentacles
         this.nexusLegRodMat = null; // front mandible/arm rigid links — dark fill, like the tentacles
         this.nexusLegOutlineMat = null; // dark edge outline shared by every joint/rod
+        this.nexusMandibleTipMat = null; // fixed lime core, the tip "globe" of each mandible
+        this.nexusMandibleTipGlowMat = null; // fixed lime, faint glow sprite on that same tip
         this.nexusLegs = []; // { joints, rods, spread, speedMult, phaseSeed }
         this.nexusEyes = []; // { mesh, glow, ring, highlight } — fixed red, blink together in idle
         this.nexusEyeRingMat = null; // shared bezel-outline sprite material, slowly spins

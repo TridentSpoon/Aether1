@@ -178,8 +178,13 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
     // Looks around while thinking, gives a slight attentive tilt while speaking. Otherwise
     // the pointer can steer the head directly while it's active over the viewport; the
     // instant it stops (mouseleave included), the head falls back to an autonomous
-    // "hunting" search -- a layered, multi-frequency writhe (yaw + pitch + roll) rather
-    // than one smooth side-to-side sway, closer to a snake's sinuous motion.
+    // "hunting" search. isHunting/huntPhase are read again below in the tentacle loop, which
+    // layers a phase-lagged version of this same writhe onto every segment of every tentacle
+    // -- so the head doesn't just rotate as one rigid block while the tentacles trail along
+    // for the ride, but the whole body (head through tentacle tips) bends as one continuous,
+    // snake-like curve, each point further back lagging a little more than the one before it.
+    let isHunting = false;
+    let huntPhase = 0;
     if (this.nexusCreatureGroup) {
         let targetYaw = 0;
         let targetPitch = 0;
@@ -196,7 +201,8 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
                 targetYaw = this.nexusMouseNX * 0.55;
                 targetPitch = -this.nexusMouseNY * 0.38;
             } else {
-                const huntPhase = elapsedTime * 0.3;
+                isHunting = true;
+                huntPhase = elapsedTime * 0.3;
                 targetYaw = Math.sin(huntPhase) * 0.4 + Math.sin(huntPhase * 2.3 + 1.1) * 0.22;
                 targetPitch = Math.sin(huntPhase * 0.6 + 1.2) * 0.18 + Math.sin(huntPhase * 1.7 + 0.4) * 0.12;
                 targetRoll = Math.sin(huntPhase * 1.4 + 0.8) * 0.15;
@@ -259,14 +265,18 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
     // camera) so they read as further back in depth. Restless and independently
     // writhing at all times -- like a Sentinel's mechanical feelers -- rather than a
     // single synchronized wave, with more energy while speaking.
+    // While hunting, each tentacle's wave picks up toward the same energy as
+    // thinking/speaking (each already runs at its own speed/phase, so they ripple past
+    // each other rather than moving in lockstep) -- closer to the many-limbed
+    // paddling/rippling gait real Sentinels move with, instead of a gentle idle sway.
     // While THINKING, the last few segments of each tentacle curl into a small dish/rim
     // shape that independently pans and tilts, like a cluster of little satellite dishes
     // searching for a signal, instead of just whipping faster.
     // A click perches the creature up on its own tentacles -- they curl forward/under the
     // body to brace it (see the body lift in the facing block above) instead of trailing.
     const isReacting = isThinking || isSpeaking;
-    const waveSpeed = isSpeaking ? 6 : (isThinking ? 4.5 : 2.4);
-    const swayAmp = isReacting ? 1.0 : (0.65 + clickPulse * 0.45);
+    const waveSpeed = isSpeaking ? 6 : (isThinking ? 4.5 : (isHunting ? 3.8 : 2.4));
+    const swayAmp = isReacting ? 1.0 : (isHunting ? 0.95 : (0.65 + clickPulse * 0.45));
     const perchT = clickPulse;
     const dishSegCount = 5;
     const tmpAim = new THREE.Vector3();
@@ -309,6 +319,19 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
             let px = dirX * outDist + perpX * sway;
             let py = dirY * outDist - along * 1.0 + perpY * sway * 0.5;
             let pz = -(along * 7.2 + Math.sin(wavePhase * 0.6) * 2 * swayAmp * flareT * dishCalm);
+
+            // Whole-body snake writhe while hunting: the same two-frequency wave driving the
+            // head's yaw/roll above is echoed here as a lateral bend, phase-lagged more the
+            // further a segment sits from the head, and growing in reach with distance --
+            // so every tentacle curves in a coordinated S along its own length rather than
+            // just being dragged along rigidly by the head's rotation.
+            if (isHunting) {
+                const bendLag = along * 0.12;
+                const bendAngle = Math.sin(huntPhase - bendLag) * 0.4 + Math.sin(huntPhase * 2.3 - bendLag * 1.6 + 1.1) * 0.22;
+                const bendReach = along * 1.3;
+                px += perpX * bendAngle * bendReach;
+                py += perpY * bendAngle * bendReach * 0.6;
+            }
 
             if (isThinking && sIdx >= dishStartIdx) {
                 if (!dishAnchorSet) {
@@ -373,8 +396,8 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
     // connect each consecutive pair every frame, which is what reads as a jointed arm
     // rather than a soft tentacle. A fast, tiny, always-on twitch is layered on top of the
     // slower wriggle -- reads as little mandibles working/chewing, not just idle sway.
-    const legWaveSpeed = isSpeaking ? 5.5 : (isThinking ? 4 : 2);
-    const legSwayAmp = isReacting ? 0.7 : (0.35 + clickPulse * 0.25);
+    const legWaveSpeed = isSpeaking ? 5.5 : (isThinking ? 4 : (isHunting ? 3.2 : 2));
+    const legSwayAmp = isReacting ? 0.7 : (isHunting ? 0.6 : (0.35 + clickPulse * 0.25));
     const legOutProfile = [0.55, 1.0, 0.6]; // hip -> knee -> foot; foot curls back toward center
     const legAnchor = new THREE.Vector3();
     const legGap = new THREE.Vector3();
