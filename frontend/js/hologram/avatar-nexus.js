@@ -151,7 +151,11 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
     ];
     eyeLayout.forEach(([rawEx, ey, rawEz, er]) => {
         const ex = rawEx * headWidenX;
-        const ez = rawEz * headLengthenZ;
+        // Pushed a few units further out than a flat rawEz*headLengthenZ would land --
+        // the icosahedron's facet edges (the "lattice" wireframe) bulge unevenly near this
+        // cluster, and a purely proportional scale left some eyes sitting just inside that
+        // bulge, so the wireframe rendered in front of / through them. This margin clears it.
+        const ez = rawEz * headLengthenZ + 3.5;
         const eye = new THREE.Mesh(new THREE.SphereGeometry(er, 8, 8), eyeMat);
         eye.position.set(ex, ey, ez);
         this.nexusHeadMesh.add(eye);
@@ -237,17 +241,28 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
     this.nexusLegOutlineMat = new THREE.LineBasicMaterial({
         color: 0x0a1a10, transparent: true, opacity: 0.85
     });
+    // The tip joint (the globe at the end of each mandible) gets a fixed lime core instead
+    // of the shared dark fill, with its own faint glow sprite -- reads as a distinct
+    // light-up tip rather than just another dark bead.
+    this.nexusMandibleTipMat = new THREE.MeshBasicMaterial({
+        color: 0xaaff33, transparent: true, opacity: 0.95
+    });
+    this.nexusMandibleTipGlowMat = new THREE.SpriteMaterial({
+        map: this.createGlowSpriteTexture(32), color: 0xaaff33, transparent: true, opacity: 0.35,
+        blending: THREE.AdditiveBlending, depthWrite: false
+    });
     for (let l = 0; l < legCount; l++) {
         const spread = legCount === 1 ? 0 : (l / (legCount - 1) - 0.5) * 2; // -1..1 across the fan
         const joints = [];
         for (let s = 0; s < jointsPerLeg; s++) {
+            const isTip = s === jointsPerLeg - 1;
             const size = 1.7 * (1 - s / jointsPerLeg) + 0.7;
             const geom = new THREE.SphereGeometry(size, 6, 6);
-            const joint = new THREE.Mesh(geom, this.nexusLegMat);
+            const joint = new THREE.Mesh(geom, isTip ? this.nexusMandibleTipMat : this.nexusLegMat);
             const jointOutline = new THREE.LineSegments(new THREE.EdgesGeometry(geom, 1), this.nexusLegOutlineMat);
             joint.add(jointOutline);
-            const jointGlow = new THREE.Sprite(this.nexusGlowMat);
-            jointGlow.scale.setScalar(size * 1.5);
+            const jointGlow = new THREE.Sprite(isTip ? this.nexusMandibleTipGlowMat : this.nexusGlowMat);
+            jointGlow.scale.setScalar(size * (isTip ? 1.8 : 1.5));
             joint.add(jointGlow);
             this.nexusCreatureGroup.add(joint);
             joints.push(joint);
