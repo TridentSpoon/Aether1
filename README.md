@@ -25,3 +25,7 @@ Intended features
 - **1-Click Packaging & Portability**:
   - Auto-installer for Linux and Windows.
   - Easy installation from GitHub via script or via packaging the entire system into a single `.tar.gz` bundle to transfer to a separate system.
+
+## Project goals
+
+Where this is headed, and why: [docs/GOALS.md](docs/GOALS.md).
