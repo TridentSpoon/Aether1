@@ -171,8 +171,13 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
             drop.position.y = 110;
             drop.position.x = (Math.random() - 0.5) * 260;
         }
-        // 10% dimmer than the original 0.55 base / 0.25 flicker amplitude.
-        drop.material.opacity = 0.495 + Math.sin(elapsedTime * 4 + drop.userData.flickerPhase) * 0.225;
+        // Mostly-dim field with occasional brighter glyphs standing out (reference: a dense
+        // rain grid where a few characters flash brighter against a dim majority), rather
+        // than a smooth sine flicker that spends equal time bright and dim. Raising a
+        // clamped sine to a power keeps it near the dim floor most of the cycle and only
+        // spikes toward the ceiling briefly, near the peak.
+        const flicker = Math.max(0, Math.sin(elapsedTime * 4 + drop.userData.flickerPhase));
+        drop.material.opacity = 0.22 + Math.pow(flicker, 6) * 0.68;
     });
 
     // Looks around while thinking, gives a slight attentive tilt while speaking. Otherwise
