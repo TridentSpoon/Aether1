@@ -17,6 +17,7 @@
     windows_subsystem = "windows"
 )]
 
+mod cli;
 mod commands;
 mod llm;
 mod model_scanner;
@@ -441,6 +442,14 @@ fn generate_speech_rust(text: String, voice: Option<String>) -> Result<String, S
 /// backend/aether1_memory.db, falling back to a temp-dir sqlite file if that fails.
 fn build_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
+    // The native path creates backend/ as a side effect of setting up the audio cache in
+    // setup(), but a headless run (--serve, or a CLI subcommand) reaches this first. Without
+    // this, sqlite can't create the file in a directory that doesn't exist yet, and every
+    // headless invocation on a fresh checkout would silently fall back to a temp database --
+    // i.e. the CLI would keep its own separate memory until the GUI had been opened once.
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     match MemoryDb::open(&db_path) {
         Ok(db) => LlmEngine::new(db),
         Err(e) => {
@@ -471,17 +480,25 @@ fn main() {
         .install_default()
         .expect("installing the rustls crypto provider should only fail if called twice");
 
-    // Headless HTTP mode: short-circuit before tauri::Builder is ever constructed, so the
-    // native app's setup (tray, asset-protocol scope, window) never runs in this process.
-    // See server.rs for the actual axum app.
-    if std::env::args().any(|arg| arg == "--serve") {
-        let engine = build_llm_engine();
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime for --serve");
-        runtime.block_on(server::run(engine));
-        return;
+    // Everything except a bare launch short-circuits before tauri::Builder is ever
+    // constructed, so the native app's setup (tray, asset-protocol scope, window) never
+    // runs in a headless process. See cli.rs for the argument parsing and server.rs for
+    // the axum app.
+    let invocation = cli::parse(&std::env::args().collect::<Vec<_>>());
+    match invocation {
+        cli::Invocation::App => {}
+        // Headless HTTP mode.
+        cli::Invocation::Serve => {
+            let engine = build_llm_engine();
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime for --serve");
+            runtime.block_on(server::run(engine));
+            return;
+        }
+        // One-shot CLI: prompt/status/say/help/version.
+        other => std::process::exit(cli::run(other)),
     }
 
     let llm_engine = build_llm_engine();

@@ -32,10 +32,16 @@ These constrain every step, so they're worth stating once:
 
 ## Phase 1 — Reachability and flow
 
-### Step 1: `aether1` CLI and headless prompt
+### Step 1: `aether1` CLI and headless prompt — **shipped**
 
 *Why first:* it's the cheapest real capability, and it forces the "one implementation, two
 transports" discipline before there's much to keep in sync.
+
+Landed as `src-tauri/src/cli.rs`: `prompt` (with `--session`, or text piped on stdin),
+`status` (`--json`), `say` (`--voice`, `--no-play`), plus `--help`/`--version`. `main()`
+now parses argv once and either runs a one-shot command, serves, or launches the app.
+`build_llm_engine` creates `backend/` before opening the database, so a headless run on a
+fresh checkout shares the HUD's memory instead of silently falling back to a temp file.
 
 - **`src-tauri/src/main.rs`** — `main()` already checks for `--serve`. Extend that argument
   parse into a small subcommand match: `prompt <text>` (print the reply to stdout and
@@ -43,8 +49,9 @@ transports" discipline before there's much to keep in sync.
   (synthesize and play, or write the wav path). Each arm builds the engine via the existing
   `build_llm_engine()` and calls `commands::generate_response` / `commands::static_info` /
   `commands::synthesize_speech`. No new engine code.
-- **`scripts/install_desktop_app.sh`** — symlink the binary as `aether1` into
-  `~/.local/bin`.
+- **`scripts/install_desktop_app.sh`** — already installs the binary as
+  `~/.local/bin/aether1`, so the CLI needs no extra install step; it just tells you the
+  commands exist, and warns when `~/.local/bin` isn't on `PATH`.
 - **Verify:** `aether1 prompt "what's my CPU doing"` answers from a cold start with no HUD
   open, and `aether1 status` matches what the HUD shows.
 
