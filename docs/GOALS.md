@@ -188,3 +188,7 @@ persona/palette identity the rest of your system can follow.
   consent model entirely ours.
 - Windows: crash capture and command execution are the most Linux-shaped parts of the
   design. Does Windows get a reduced capability set, or a parallel implementation?
+
+## Getting there
+
+Step-by-step integration of this plan into the existing codebase: [IMPLEMENTATION.md](IMPLEMENTATION.md).
