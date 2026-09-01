@@ -17,7 +17,9 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
         depthWrite: false
     }));
 
-    const rainCount = 90;
+    // Denser field, smaller glyphs -- closer to a solid curtain of falling characters
+    // (reference: a dense uniform digital-rain grid) rather than a sparse scatter.
+    const rainCount = 220;
     const rainHalfWidth = 130;
     const rainTopY = 110;
     const rainBottomY = -110;
@@ -29,7 +31,7 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
     for (let i = 0; i < rainCount; i++) {
         const mat = this.nexusRainMaterials[Math.floor(Math.random() * letters.length)];
         const sprite = new THREE.Sprite(mat);
-        const scale = (9 + Math.random() * 7) * 1.2;
+        const scale = (6 + Math.random() * 5) * 1.1;
         sprite.scale.set(scale, scale, 1);
         sprite.position.set(
             (Math.random() - 0.5) * rainHalfWidth * 2,
