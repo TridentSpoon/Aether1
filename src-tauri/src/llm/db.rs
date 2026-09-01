@@ -283,10 +283,6 @@ impl MemoryDb {
         Ok(JsonValue::Object(map))
     }
 
-    // Written by the consent path and the tool loop in the steps that follow -- landed
-    // here, with tests, because the log has to exist before the first tool that writes to
-    // it, not alongside it.
-    #[allow(dead_code)]
     /// Records a tool call and returns its id. Every call is logged, mutating or not, and
     /// logged *before* it runs -- an action that panics or never returns still leaves a
     /// trace of having been attempted, which is the whole point of having the log.
@@ -305,7 +301,6 @@ impl MemoryDb {
         Ok(conn.last_insert_rowid())
     }
 
-    #[allow(dead_code)]
     /// Fills in how an action turned out. `undo` is stored only when the tool provides it.
     pub fn set_action_outcome(
         &self,
@@ -326,7 +321,7 @@ impl MemoryDb {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // read by the undo path, once actions can be undone
     pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
         self.connect()?
             .query_row(

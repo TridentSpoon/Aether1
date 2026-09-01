@@ -953,6 +953,7 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleCustomPersonaField();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
+            document.getElementById('setting-tools').checked = s.tools_enabled === true;
             document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
             autoSpeak = s.auto_speak !== false;
         } catch (e) {
@@ -982,6 +983,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.
                 ...(IS_TAURI ? { hotkey_toggle: document.getElementById('setting-hotkey').value.trim() } : {}),
+                tools_enabled: document.getElementById('setting-tools').checked,
                 auto_speak: document.getElementById('setting-autospeak').checked
             }
         };

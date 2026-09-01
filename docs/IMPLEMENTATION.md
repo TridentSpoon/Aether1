@@ -150,7 +150,7 @@ and exercised before anything depends on it. The catalog answers
 `{"enabled": false, "tools": []}` today, which is the honest description of a companion
 that cannot yet do anything.
 
-### Step 5: The tool loop, read-only tools only
+### Step 5: The tool loop, read-only tools only — **shipped**
 
 - **`src-tauri/src/tools/`** — first tools, all `mutating: false`: `read_file`,
   `list_dir`, `list_processes`, `telemetry_detail`, `search_memory`. Each one small, each
@@ -168,6 +168,23 @@ that cannot yet do anything.
   new one.
 - **Verify:** with `tools_enabled` on, "what's in my downloads folder" is answered from a
   real listing, and every call appears in `action_log`.
+
+Landed as `tools/builtin.rs` (`read_file`, `list_dir`, `list_processes`,
+`telemetry_detail`, `search_memory`), `tools/fs_guard.rs`, `tools/protocol.rs`, and
+`LlmEngine::tool_loop`. A checkbox in Settings turns it on; off, the turn is byte for byte
+what it was before tools existed.
+
+The part the plan under-described is streaming. A tool call arrives token by token like
+everything else, so the fence has to be recognized mid-stream and withheld, or the
+operator watches their companion type JSON at them. `FenceFilter` does that: prose streams
+through, the block is swallowed, and a one-line trace (`⚙ read_file /etc/hostname`) is
+shown in its place. What gets stored as the reply is what the operator saw, not the raw
+text — the history should read the way the conversation looked.
+
+`tools::run` refuses a mutating tool outright rather than trusting that none is
+registered, so the consent path can't be bypassed by a future tool being added carelessly.
+A call refused on its name, its arguments, or the path guard never reaches the log as
+having happened; a call that runs and fails is logged as failed, with the reason.
 
 ### Step 6: The consent path
 

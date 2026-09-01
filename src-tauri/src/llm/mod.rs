@@ -14,13 +14,18 @@ mod tts;
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub use db::{ActionRecord, MemoryDb, Message};
+pub use db::{ActionRecord, ActionStatus, MemoryDb, Message};
 pub use genesis::Identity;
 use persona::{Persona, Provider};
 use providers::ChatContext;
 pub use providers::Sink;
 pub use telemetry::Telemetry;
 pub use tts::{generate_speech, DEFAULT_VOICE};
+
+/// How many times the model may call tools before it has to answer. High enough for a
+/// real chain (look at a directory, read the interesting file, check a process), low
+/// enough that a model stuck in a loop stops costing time and tokens.
+const MAX_TOOL_ROUNDS: usize = 6;
 
 const SESSION_TOKEN_BUDGET: u64 = 100_000; // matches token_tracker.py's daily_budget_tokens
 const SPARKLINE_LEN: usize = 15; // matches token_tracker.py's history[-15:]
@@ -408,6 +413,109 @@ impl LlmEngine {
         }
     }
 
+    /// Runs rounds of model call -> tool calls -> results until the model answers without
+    /// asking for a tool, and returns what the operator saw.
+    ///
+    /// What the operator sees and what the model writes are deliberately different: the
+    /// fenced tool blocks are filtered out of the stream and replaced by a one-line trace
+    /// of what actually ran. The model's raw text is still what gets parsed, and the
+    /// visible text is what gets stored as the reply -- the conversation history should
+    /// read the way the conversation looked.
+    fn tool_loop(
+        &self,
+        config: &Config,
+        system_prompt: &str,
+        base_history: Vec<Message>,
+        user_prompt: &str,
+        sink: providers::Sink,
+    ) -> String {
+        let registry = crate::tools::registry();
+        let tool_ctx = crate::tools::ToolContext { db: &self.db };
+
+        let mut history = base_history;
+        let mut current_prompt = user_prompt.to_string();
+        let mut visible = String::new();
+
+        for _round in 0..MAX_TOOL_ROUNDS {
+            let ctx = ChatContext {
+                system_prompt,
+                history: &history,
+                prompt: &current_prompt,
+                agent_name: &config.agent_name,
+            };
+
+            let mut filter = crate::tools::protocol::FenceFilter::new();
+            let outcome = {
+                let mut round_sink = |delta: &str| {
+                    let shown = filter.push(delta);
+                    if !shown.is_empty() {
+                        visible.push_str(&shown);
+                        sink(&shown);
+                    }
+                };
+                self.call_provider(config, &ctx, &mut round_sink)
+            };
+            let tail = filter.finish();
+            if !tail.is_empty() {
+                visible.push_str(&tail);
+                sink(&tail);
+            }
+
+            let raw = match outcome {
+                Ok(raw) => raw,
+                Err(failure) => {
+                    eprintln!(
+                        "[AETHER1] LLM Engine Error: provider {} error: {}",
+                        config.provider, failure.message
+                    );
+                    let notice = format!(
+                        "\n\n[HUD Alert: Neural link to {} dropped mid-transmission.]",
+                        config.provider
+                    );
+                    sink(&notice);
+                    return format!("{visible}{notice}");
+                }
+            };
+
+            let calls = crate::tools::protocol::parse_calls(&raw);
+            if calls.is_empty() {
+                return visible.trim().to_string();
+            }
+
+            let mut results = Vec::new();
+            for call in &calls {
+                let trace = crate::tools::protocol::trace_line(call);
+                visible.push_str(&trace);
+                sink(&trace);
+                results.push((
+                    call.tool.clone(),
+                    crate::tools::run(registry, &tool_ctx, &call.tool, &call.arguments),
+                ));
+            }
+
+            // Carry the round into the history so the next one can see what it asked for
+            // and what came back.
+            history.push(Message {
+                sender: "user".to_string(),
+                text: current_prompt,
+                timestamp: String::new(),
+            });
+            history.push(Message {
+                sender: "assistant".to_string(),
+                text: raw,
+                timestamp: String::new(),
+            });
+            current_prompt = crate::tools::protocol::format_results(&results);
+        }
+
+        let notice = format!(
+            "\n\n[HUD Alert: stopped after {MAX_TOOL_ROUNDS} rounds of tool calls without \
+             reaching an answer.]"
+        );
+        sink(&notice);
+        format!("{visible}{notice}")
+    }
+
     /// Generates a reply, feeding it to `sink` in the order it arrives: one call per
     /// delta while streaming, or a single call with the whole text for instant commands,
     /// offline mode, and the non-streaming fallback. The returned String is always the
@@ -434,13 +542,16 @@ impl LlmEngine {
 
         let history = self.db.get_messages(session_id, 8).unwrap_or_default();
         let telem = Telemetry::snapshot();
-        let system_prompt = self.system_prompt(&config, &telem);
-        let ctx = ChatContext {
-            system_prompt: &system_prompt,
-            history: &history,
-            prompt,
-            agent_name: &config.agent_name,
-        };
+        let mut system_prompt = self.system_prompt(&config, &telem);
+
+        // Tools are off by default and the catalog can be empty, in which case the prompt
+        // says nothing about tools and the turn is exactly what it was before they existed.
+        let registry = crate::tools::registry();
+        let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
+        if tools_on {
+            system_prompt
+                .push_str(&crate::tools::protocol::instructions(&registry.prompt_catalog()));
+        }
 
         let reply = if config.provider == Provider::Offline {
             let reply = config.persona.offline_reply(
@@ -451,7 +562,15 @@ impl LlmEngine {
             );
             sink(&reply);
             reply
+        } else if tools_on {
+            self.tool_loop(&config, &system_prompt, history, prompt, sink)
         } else {
+            let ctx = ChatContext {
+                system_prompt: &system_prompt,
+                history: &history,
+                prompt,
+                agent_name: &config.agent_name,
+            };
             match self.call_provider(&config, &ctx, sink) {
                 Ok(reply) => reply,
                 Err(failure) => {

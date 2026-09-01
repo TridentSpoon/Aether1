@@ -470,6 +470,20 @@
                     </p>
                 </div>
 
+                <div class="space-y-1 pt-1">
+                    <div class="flex items-center gap-2">
+                        <input id="setting-tools" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                        <label for="setting-tools" class="text-xs font-mono text-slate-300">Allow inspection of this machine (read-only)</label>
+                    </div>
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                        Lets the AI read files, list directories and check processes to answer you.
+                        Only your home directory, <span class="text-cyan-300">/etc</span>,
+                        <span class="text-cyan-300">/proc</span> and <span class="text-cyan-300">/var/log</span>;
+                        never credentials or keys. Every use is recorded. Nothing can be changed &mdash;
+                        no tool that alters this machine exists yet.
+                    </p>
+                </div>
+
                 <div class="flex items-center gap-2 pt-1">
                     <input id="setting-autospeak" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
                     <label for="setting-autospeak" class="text-xs font-mono text-slate-300">Auto-speak AI responses aloud with neural voice</label>
