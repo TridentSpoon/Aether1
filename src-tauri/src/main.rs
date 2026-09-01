@@ -23,6 +23,7 @@ mod hotkey;
 mod llm;
 mod model_scanner;
 mod server;
+mod tools;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -421,6 +422,16 @@ fn get_static_info_rust() -> serde_json::Value {
 
 /// Rust-native equivalent of GET /api/messages (backend/main.py).
 #[tauri::command]
+fn get_tools_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::tool_catalog(&engine)
+}
+
+#[tauri::command]
+fn get_actions_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::ActionRecord> {
+    commands::recent_actions(&engine, limit)
+}
+
+#[tauri::command]
 fn get_messages_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::Message> {
     commands::get_messages(&engine, limit)
 }
@@ -560,6 +571,8 @@ fn main() {
             scan_models_rust,
             pull_model_rust,
             get_static_info_rust,
+            get_tools_rust,
+            get_actions_rust,
             get_messages_rust,
             clear_messages_rust,
             get_settings_rust,

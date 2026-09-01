@@ -19,6 +19,63 @@ pub struct Message {
     pub timestamp: String,
 }
 
+/// Where an action stands. Every tool call the companion makes gets a row in action_log,
+/// so this is also the record of what it did on the operator's behalf -- the thing the
+/// memory browser and the undo path in later steps both read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionStatus {
+    /// A mutating call waiting for the operator to approve it.
+    Proposed,
+    /// Ran, and the result is recorded.
+    Executed,
+    /// Ran and failed; `result` carries the error.
+    Failed,
+    /// The operator declined it.
+    Rejected,
+    /// Executed and then reversed.
+    Undone,
+}
+
+impl ActionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ActionStatus::Proposed => "proposed",
+            ActionStatus::Executed => "executed",
+            ActionStatus::Failed => "failed",
+            ActionStatus::Rejected => "rejected",
+            ActionStatus::Undone => "undone",
+        }
+    }
+
+    fn from_str(raw: &str) -> ActionStatus {
+        match raw {
+            "executed" => ActionStatus::Executed,
+            "failed" => ActionStatus::Failed,
+            "rejected" => ActionStatus::Rejected,
+            "undone" => ActionStatus::Undone,
+            _ => ActionStatus::Proposed,
+        }
+    }
+}
+
+/// One row of the action log.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionRecord {
+    pub id: i64,
+    pub timestamp: String,
+    pub tool: String,
+    /// The arguments the tool was called with, as JSON.
+    pub args: JsonValue,
+    pub mutating: bool,
+    pub status: ActionStatus,
+    /// Output on success, the error on failure, None while still proposed.
+    pub result: Option<String>,
+    /// Whatever the tool needs to reverse itself, as JSON -- the previous contents of a
+    /// file it overwrote, the setting it replaced. None when the action can't be undone.
+    pub undo: Option<JsonValue>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryEntry {
     pub key: String,
@@ -57,6 +114,16 @@ impl MemoryDb {
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS action_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                tool TEXT NOT NULL,
+                args_json TEXT NOT NULL,
+                mutating INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                result TEXT,
+                undo_json TEXT
             );",
         )?;
         db.restrict_permissions();
@@ -182,6 +249,20 @@ impl MemoryDb {
         }
     }
 
+    /// A stored boolean, tolerating the string forms ("true"/"false") that a settings
+    /// payload from the frontend can carry for a checkbox.
+    pub fn get_setting_bool(&self, key: &str, default: bool) -> bool {
+        match self.get_setting(key) {
+            Ok(Some(JsonValue::Bool(b))) => b,
+            Ok(Some(JsonValue::String(s))) => match s.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                _ => default,
+            },
+            _ => default,
+        }
+    }
+
     /// Every stored setting as a single object, matching memory_db.py's
     /// get_all_settings -- used for the Settings modal's bulk load/save.
     pub fn get_all_settings(&self) -> rusqlite::Result<JsonValue> {
@@ -201,6 +282,90 @@ impl MemoryDb {
         }
         Ok(JsonValue::Object(map))
     }
+
+    // Written by the consent path and the tool loop in the steps that follow -- landed
+    // here, with tests, because the log has to exist before the first tool that writes to
+    // it, not alongside it.
+    #[allow(dead_code)]
+    /// Records a tool call and returns its id. Every call is logged, mutating or not, and
+    /// logged *before* it runs -- an action that panics or never returns still leaves a
+    /// trace of having been attempted, which is the whole point of having the log.
+    pub fn log_action(
+        &self,
+        tool: &str,
+        args: &JsonValue,
+        mutating: bool,
+        status: ActionStatus,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT INTO action_log (tool, args_json, mutating, status) VALUES (?1, ?2, ?3, ?4)",
+            params![tool, args.to_string(), mutating as i64, status.as_str()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    #[allow(dead_code)]
+    /// Fills in how an action turned out. `undo` is stored only when the tool provides it.
+    pub fn set_action_outcome(
+        &self,
+        id: i64,
+        status: ActionStatus,
+        result: Option<&str>,
+        undo: Option<&JsonValue>,
+    ) -> rusqlite::Result<()> {
+        self.connect()?.execute(
+            "UPDATE action_log SET status = ?2, result = ?3, undo_json = ?4 WHERE id = ?1",
+            params![
+                id,
+                status.as_str(),
+                result,
+                undo.map(|u| u.to_string()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
+        self.connect()?
+            .query_row(
+                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json \
+                 FROM action_log WHERE id = ?1",
+                params![id],
+                action_from_row,
+            )
+            .optional()
+    }
+
+    /// Most recent first -- the order an operator reading back what happened wants.
+    pub fn recent_actions(&self, limit: u32) -> rusqlite::Result<Vec<ActionRecord>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json \
+             FROM action_log ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], action_from_row)?;
+        rows.collect()
+    }
+}
+
+/// Stored JSON that no longer parses (a hand-edited row, a schema change) becomes Null
+/// rather than failing the whole read -- a corrupt row shouldn't hide the rest of the log.
+fn action_from_row(row: &rusqlite::Row) -> rusqlite::Result<ActionRecord> {
+    let args_raw: String = row.get(3)?;
+    let undo_raw: Option<String> = row.get(7)?;
+    let status_raw: String = row.get(5)?;
+    Ok(ActionRecord {
+        id: row.get(0)?,
+        timestamp: row.get(1)?,
+        tool: row.get(2)?,
+        args: serde_json::from_str(&args_raw).unwrap_or(JsonValue::Null),
+        mutating: row.get::<_, i64>(4)? != 0,
+        status: ActionStatus::from_str(&status_raw),
+        result: row.get(6)?,
+        undo: undo_raw.and_then(|u| serde_json::from_str(&u).ok()),
+    })
 }
 
 #[cfg(test)]
@@ -229,6 +394,72 @@ mod tests {
             "db file should be owner-read/write only, got {:o}",
             mode & 0o777
         );
+    }
+
+    #[test]
+    fn actions_are_logged_before_they_run_and_updated_after() {
+        let db = temp_db("actions");
+        let args = serde_json::json!({"path": "/etc/hostname"});
+
+        // Logged as proposed, with no outcome yet -- this is the state a mutating call
+        // sits in while it waits for the operator.
+        let id = db
+            .log_action("write_file", &args, true, ActionStatus::Proposed)
+            .unwrap();
+        let logged = db.get_action(id).unwrap().expect("action should be stored");
+        assert_eq!(logged.tool, "write_file");
+        assert_eq!(logged.args, args);
+        assert!(logged.mutating);
+        assert_eq!(logged.status, ActionStatus::Proposed);
+        assert!(logged.result.is_none());
+        assert!(logged.undo.is_none());
+
+        let undo = serde_json::json!({"restore": "old contents"});
+        db.set_action_outcome(id, ActionStatus::Executed, Some("wrote 12 bytes"), Some(&undo))
+            .unwrap();
+        let done = db.get_action(id).unwrap().unwrap();
+        assert_eq!(done.status, ActionStatus::Executed);
+        assert_eq!(done.result.as_deref(), Some("wrote 12 bytes"));
+        assert_eq!(done.undo, Some(undo));
+    }
+
+    #[test]
+    fn recent_actions_are_newest_first_and_bounded() {
+        let db = temp_db("recent_actions");
+        for i in 0..5 {
+            db.log_action(
+                "read_file",
+                &serde_json::json!({"n": i}),
+                false,
+                ActionStatus::Executed,
+            )
+            .unwrap();
+        }
+        let recent = db.recent_actions(3).unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].args["n"], serde_json::json!(4));
+        assert_eq!(recent[2].args["n"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn an_unknown_action_id_is_none_not_an_error() {
+        let db = temp_db("missing_action");
+        assert!(db.get_action(4242).unwrap().is_none());
+    }
+
+    #[test]
+    fn setting_bools_tolerate_the_string_forms_a_checkbox_can_send() {
+        let db = temp_db("setting_bool");
+        assert!(!db.get_setting_bool("tools_enabled", false));
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(true))
+            .unwrap();
+        assert!(db.get_setting_bool("tools_enabled", false));
+        db.set_setting(
+            "tools_enabled",
+            &serde_json::Value::String("false".to_string()),
+        )
+        .unwrap();
+        assert!(!db.get_setting_bool("tools_enabled", true));
     }
 
     #[test]

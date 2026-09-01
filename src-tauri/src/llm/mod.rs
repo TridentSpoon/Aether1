@@ -14,7 +14,7 @@ mod tts;
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub use db::{MemoryDb, Message};
+pub use db::{ActionRecord, MemoryDb, Message};
 pub use genesis::Identity;
 use persona::{Persona, Provider};
 use providers::ChatContext;

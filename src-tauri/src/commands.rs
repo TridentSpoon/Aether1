@@ -7,9 +7,10 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::llm::{self, LlmEngine};
+use crate::llm::{self, ActionRecord, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
+use crate::tools;
 
 pub fn generate_response(
     engine: &LlmEngine,
@@ -106,6 +107,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "voice_name": llm::DEFAULT_VOICE,
         "enable_sfx": true,
         "auto_speak": true,
+        "tools_enabled": false,
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
@@ -131,6 +133,21 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
             .map_err(|e| format!("could not save setting {key:?}: {e}"))?;
     }
     Ok(())
+}
+
+/// What the companion can currently do to the machine, and whether that is switched on.
+/// The list is empty until the first tools are registered; the shape is stable from now
+/// on so the UI and the prompt renderer can both be built against it.
+pub fn tool_catalog(engine: &LlmEngine) -> Value {
+    tools::catalog(engine.db(), tools::registry())
+}
+
+/// The record of what the companion has actually done, newest first.
+pub fn recent_actions(engine: &LlmEngine, limit: Option<u32>) -> Vec<ActionRecord> {
+    engine
+        .db()
+        .recent_actions(limit.unwrap_or(50))
+        .unwrap_or_default()
 }
 
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling

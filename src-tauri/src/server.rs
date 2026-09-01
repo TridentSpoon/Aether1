@@ -71,6 +71,8 @@ pub async fn run(engine: LlmEngine) {
         .route("/api/agent/genesis", post(genesis))
         .route("/api/scanner/status", get(scanner_status))
         .route("/api/scanner/pull-model", post(pull_model))
+        .route("/api/tools", get(get_tools))
+        .route("/api/actions", get(get_actions))
         .route("/api/messages", get(get_messages).delete(clear_messages))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
@@ -147,6 +149,22 @@ async fn chat(
     result["audio_url"] = serde_json::json!(audio_url);
     result["session_id"] = serde_json::json!(session_id_for_result);
     Ok(Json(result))
+}
+
+async fn get_tools(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::tool_catalog(&state.engine))
+}
+
+#[derive(Deserialize)]
+struct ActionsQuery {
+    limit: Option<u32>,
+}
+
+async fn get_actions(
+    State(state): State<AppState>,
+    Query(q): Query<ActionsQuery>,
+) -> Json<Vec<llm::ActionRecord>> {
+    Json(commands::recent_actions(&state.engine, q.limit))
 }
 
 #[derive(Deserialize)]

@@ -124,7 +124,7 @@ mid-generation; the whole-reply replay button synthesizes lazily on first click 
 
 ## Phase 2 — Hands
 
-### Step 4: Tool registry and action log (no tools yet)
+### Step 4: Tool registry and action log (no tools yet) — **shipped**
 
 - **New `src-tauri/src/tools/mod.rs`** — a `Tool` describing `name`, `description`, a JSON
   Schema for its arguments, a `mutating: bool`, and `fn call(&self, args: &Value) ->
@@ -136,6 +136,19 @@ mid-generation; the whole-reply replay button synthesizes lazily on first click 
 - **Settings** — `tools_enabled` (default **false**) so nothing changes until you opt in.
 - **Verify:** unit tests only. Registry round-trips a schema; the log writes and reads back.
   Nothing is user-visible yet, and that's fine.
+
+Landed as `src-tauri/src/tools/mod.rs` (the `Tool` trait, `Outcome`, `Registry`, and a
+process-wide `registry()` that is deliberately empty) plus the `action_log` table and its
+read/write methods in `llm/db.rs`. `tools_enabled` defaults to false.
+
+Two departures from the sketch. Actions are logged *before* they run rather than after, so
+a call that panics or hangs still leaves a trace of having been attempted. And rather than
+leaving the whole module unreachable, the catalog and the log are exposed on both
+transports now (`get_tools_rust` / `get_actions_rust`, `GET /api/tools` / `GET
+/api/actions`), so the shape the settings UI and the approval history will read is settled
+and exercised before anything depends on it. The catalog answers
+`{"enabled": false, "tools": []}` today, which is the honest description of a companion
+that cannot yet do anything.
 
 ### Step 5: The tool loop, read-only tools only
 
