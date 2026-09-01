@@ -19,6 +19,7 @@
 
 mod cli;
 mod commands;
+mod hotkey;
 mod llm;
 mod model_scanner;
 mod server;
@@ -420,10 +421,22 @@ fn get_settings_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
 #[tauri::command]
 fn save_settings_rust(
+    app: tauri::AppHandle,
     engine: tauri::State<LlmEngine>,
     settings: serde_json::Value,
 ) -> Result<(), String> {
-    commands::save_settings(&engine, settings)
+    let hotkey_changed = settings.get("hotkey_toggle").is_some();
+    commands::save_settings(&engine, settings)?;
+    // Rebind the global hotkey in place so a chord edited in Settings takes effect without
+    // a restart. A chord that won't parse is reported to the operator but doesn't fail the
+    // save -- the rest of the settings were still written, and refusing the whole save
+    // would lose them. (The axum path has no window to summon, so it has no equivalent.)
+    if hotkey_changed {
+        if let Err(e) = hotkey::reregister_from_settings(&app) {
+            return Err(format!("settings saved, but the hotkey was not: {e}"));
+        }
+    }
+    Ok(())
 }
 
 /// Rust-native equivalent of POST /api/tts + GET /api/audio/{filename} (backend/main.py)
@@ -486,7 +499,10 @@ fn main() {
     // the axum app.
     let invocation = cli::parse(&std::env::args().collect::<Vec<_>>());
     match invocation {
-        cli::Invocation::App => {}
+        // `show`/`toggle` continue into the app path: the single-instance plugin below
+        // hands their argv to the already-running instance, and if there isn't one, this
+        // launch becomes it.
+        cli::Invocation::App | cli::Invocation::Window { .. } => {}
         // Headless HTTP mode.
         cli::Invocation::Serve => {
             let engine = build_llm_engine();
@@ -504,6 +520,18 @@ fn main() {
     let llm_engine = build_llm_engine();
 
     tauri::Builder::default()
+        // Must be the first plugin registered (see the plugin's own docs). A second
+        // `aether1` launch -- including `aether1 show` and `aether1 toggle` -- exits
+        // immediately after handing its argv to the instance already running, which is
+        // what makes those subcommands reach this window, and what stops the tray from
+        // sprouting a second icon when the app is launched twice.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            match cli::parse(&argv) {
+                cli::Invocation::Window { toggle: true } => hotkey::toggle_window(app),
+                _ => hotkey::show_window(app),
+            }
+        }))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(llm_engine)
         .invoke_handler(tauri::generate_handler![
             generate_response_rust,
@@ -530,6 +558,18 @@ fn main() {
             std::fs::create_dir_all(&audio_cache_dir)?;
             app.asset_protocol_scope()
                 .allow_directory(&audio_cache_dir, false)?;
+
+            // Global hotkey to summon/dismiss the HUD. A chord that won't parse or is
+            // already taken by another application is a warning, never a startup failure --
+            // the tray and `aether1 toggle` both still work without it.
+            match hotkey::reregister_from_settings(app.handle()) {
+                Ok(()) => hotkey::warn_if_wayland(
+                    &app.state::<LlmEngine>()
+                        .db()
+                        .get_setting_string("hotkey_toggle", hotkey::DEFAULT_TOGGLE),
+                ),
+                Err(e) => eprintln!("[AETHER1] Global hotkey not registered: {e}"),
+            }
 
             // Native tray icon so there's a visible indicator (and a quick way to
             // reopen/quit) while AETHER1 runs headlessly in the background.

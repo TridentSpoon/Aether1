@@ -460,6 +460,16 @@
                     </select>
                 </div>
 
+                <div id="setting-hotkey-wrap" class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">GLOBAL SUMMON HOTKEY</label>
+                    <input id="setting-hotkey" type="text" placeholder="Super+Shift+A" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        Shows or hides this HUD from anywhere. Modifiers: Super, Control, Alt, Shift.
+                        Leave empty to disable. On Wayland an app can't grab keys system-wide &mdash;
+                        bind your compositor to <span class="text-cyan-300">aether1 toggle</span> instead.
+                    </p>
+                </div>
+
                 <div class="flex items-center gap-2 pt-1">
                     <input id="setting-autospeak" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
                     <label for="setting-autospeak" class="text-xs font-mono text-slate-300">Auto-speak AI responses aloud with neural voice</label>

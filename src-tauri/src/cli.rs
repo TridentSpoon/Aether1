@@ -35,6 +35,7 @@ USAGE:
     aether1 prompt [TEXT]          Ask the companion; prints the reply to stdout
     aether1 status                 Print a system diagnostic report
     aether1 say [TEXT]             Speak text in the companion's voice
+    aether1 show | toggle          Summon (or dismiss) the HUD of a running instance
     aether1 --serve                Run headless as an HTTP/WebSocket server
 
 OPTIONS:
@@ -48,12 +49,22 @@ OPTIONS:
 
 TEXT may be omitted for `prompt` and `say` when it is piped in on stdin:
     echo \"what is eating my RAM\" | aether1 prompt
+
+The HUD toggle is also bound to a global hotkey (Super+Shift+A by default, changeable in
+Settings). On Wayland, where an application can't grab keys system-wide, bind your
+compositor's keybinding to `aether1 toggle` instead.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Invocation {
     /// No recognized subcommand: launch the desktop app, as before.
     App,
+    /// `show` / `toggle`: reaches an already-running instance through the single-instance
+    /// plugin, which is why this goes down the same path as App rather than being handled
+    /// here -- with no instance running, it simply starts one.
+    Window {
+        toggle: bool,
+    },
     Serve,
     Prompt {
         text: Option<String>,
@@ -157,6 +168,12 @@ pub fn parse(argv: &[String]) -> Invocation {
                 play: !no_play,
             })
         }),
+        "show" | "toggle" => free_text(rest.clone()).and_then(|extra| match extra {
+            Some(extra) => Err(format!("{command} takes no arguments (got {extra:?})")),
+            None => Ok(Invocation::Window {
+                toggle: command == "toggle",
+            }),
+        }),
         other => Err(format!("unknown command {other:?}")),
     };
 
@@ -254,7 +271,7 @@ fn run_say(text: Option<String>, voice: Option<String>, play: bool) -> Result<St
 /// handled by main() and are a no-op here.
 pub fn run(invocation: Invocation) -> i32 {
     let result = match invocation {
-        Invocation::App | Invocation::Serve => Ok(String::new()),
+        Invocation::App | Invocation::Serve | Invocation::Window { .. } => Ok(String::new()),
         Invocation::Help => Ok(USAGE.trim_end().to_string()),
         Invocation::Version => Ok(format!(
             "{} ({})",
@@ -379,6 +396,16 @@ mod tests {
         );
         assert!(matches!(
             parse_args(&["status", "please"]),
+            Invocation::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn show_and_toggle_are_recognized() {
+        assert_eq!(parse_args(&["show"]), Invocation::Window { toggle: false });
+        assert_eq!(parse_args(&["toggle"]), Invocation::Window { toggle: true });
+        assert!(matches!(
+            parse_args(&["toggle", "now"]),
             Invocation::Invalid(_)
         ));
     }

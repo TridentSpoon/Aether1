@@ -787,7 +787,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function initVersionAndUpdates() {
-        if (!IS_TAURI) return;
+        if (!IS_TAURI) {
+            document.getElementById('setting-hotkey-wrap')?.classList.add('hidden');
+            return;
+        }
         if (versionBadge) versionBadge.classList.remove('hidden');
         if (updateSection) updateSection.classList.remove('hidden');
         loadVersionInfo();
@@ -836,6 +839,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-custom-directive').value = s.custom_directive || '';
             toggleCustomPersonaField();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
+            document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
             document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
             autoSpeak = s.auto_speak !== false;
         } catch (e) {
@@ -861,6 +865,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 persona_type: document.getElementById('setting-persona').value,
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
+                // Sent only from the native app: the browser fallback has no window for the
+                // OS to summon, and saving a chord there would promise something that can't
+                // happen. See setting-hotkey-wrap, hidden on that path.
+                ...(IS_TAURI ? { hotkey_toggle: document.getElementById('setting-hotkey').value.trim() } : {}),
                 auto_speak: document.getElementById('setting-autospeak').checked
             }
         };

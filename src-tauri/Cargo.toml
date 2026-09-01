@@ -24,6 +24,8 @@ rustls = { version = "0.23.43", features = ["ring"] }
 axum = { version = "0.8.9", features = ["ws"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "fs", "time", "sync"] }
 tower-http = { version = "0.7.0", features = ["fs"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 panic = "abort"

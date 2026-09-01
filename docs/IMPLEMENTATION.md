@@ -55,7 +55,7 @@ fresh checkout shares the HUD's memory instead of silently falling back to a tem
 - **Verify:** `aether1 prompt "what's my CPU doing"` answers from a cold start with no HUD
   open, and `aether1 status` matches what the HUD shows.
 
-### Step 2: Global hotkey
+### Step 2: Global hotkey — **shipped**
 
 - **`src-tauri/Cargo.toml`** — add `tauri-plugin-global-shortcut`.
 - **`src-tauri/src/main.rs`** — register the plugin in the builder; in `setup()`, bind a
@@ -67,6 +67,18 @@ fresh checkout shares the HUD's memory instead of silently falling back to a tem
   save.
 - **Verify:** the HUD appears and disappears on the chord from any application, and
   survives a restart with a custom chord set.
+
+Landed as `src-tauri/src/hotkey.rs`, with the chord in the `hotkey_toggle` setting
+(`Super+Shift+A` by default, empty to disable) and re-registered live when Settings is
+saved. A chord that won't parse is a warning, not a startup failure.
+
+The plan missed one thing: **an application cannot grab keys system-wide on Wayland**,
+which is most of this project's target audience. So the step also added
+`tauri-plugin-single-instance` and the `aether1 show` / `aether1 toggle` subcommands — a
+second launch hands its argv to the running instance instead of starting a second one, so
+a compositor keybinding bound to `aether1 toggle` does what the global hotkey does on X11.
+Startup says so explicitly when it detects a Wayland session. The plugin also stops a
+double launch from producing two tray icons.
 
 ### Step 3: Streaming end to end
 
