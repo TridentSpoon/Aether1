@@ -73,7 +73,9 @@ pub async fn run(engine: LlmEngine) {
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/messages", get(get_messages).delete(clear_messages))
         .route("/api/settings", get(get_settings).post(save_settings))
+        .route("/api/tts", post(tts))
         .route("/api/audio/{filename}", get(get_audio))
+        .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
         .with_state(state)
         .fallback_service(static_service);
@@ -279,6 +281,142 @@ async fn get_audio(Path(filename): Path<String>) -> Result<Response, StatusCode>
         .header(header::CONTENT_TYPE, "audio/mpeg")
         .body(Body::from(bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Streaming chat, the browser fallback's counterpart to the Tauri path's `chat-delta`
+/// events. A WebSocket rather than SSE because the socket plumbing is already here for
+/// telemetry, and because the client sends the prompt on the same connection it reads the
+/// reply from.
+///
+/// Protocol: the client sends one JSON message shaped like POST /api/chat, and receives a
+/// stream of {"type":"delta","delta":...} messages followed by exactly one
+/// {"type":"done", reply, agent_name, audio_url, session_id} -- the same object /api/chat
+/// returns -- or {"type":"error","error":...}. The socket then closes.
+#[derive(Deserialize)]
+struct TtsRequest {
+    text: String,
+    voice: Option<String>,
+}
+
+/// Synthesizes one piece of text and returns its audio URL. The Tauri path has had this
+/// all along as generate_speech_rust; the browser path only ever got whole-reply audio
+/// bundled into /api/chat, which is no use once replies stream in sentence by sentence.
+async fn tts(Json(req): Json<TtsRequest>) -> Result<Json<Value>, (StatusCode, String)> {
+    let path = tokio::task::spawn_blocking(move || {
+        commands::synthesize_speech(&req.text, req.voice.as_deref())
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    let file_name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "no audio file".to_string()))?;
+
+    Ok(Json(
+        serde_json::json!({ "audio_url": format!("/api/audio/{file_name}") }),
+    ))
+}
+
+async fn ws_chat(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+    ws.on_upgrade(move |socket| chat_socket(socket, state))
+}
+
+async fn chat_socket(mut socket: WebSocket, state: AppState) {
+    let Some(Ok(Message::Text(raw))) = socket.recv().await else {
+        return;
+    };
+    let Ok(req) = serde_json::from_str::<ChatRequest>(&raw) else {
+        let _ = socket
+            .send(Message::Text(
+                serde_json::json!({"type": "error", "error": "malformed chat request"})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        return;
+    };
+
+    let session_id = req.session_id.unwrap_or_else(|| "default".to_string());
+    let engine = state.engine.clone();
+    let message = req.message;
+
+    // The engine is blocking and knows nothing about async, so it runs on a blocking task
+    // and pushes deltas through a channel that this task forwards to the socket. Unbounded
+    // so a slow client can never block generation itself -- the deltas are small and the
+    // reply is bounded by the model's own output.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let generation = {
+        let session_id = session_id.clone();
+        tokio::task::spawn_blocking(move || {
+            commands::generate_response_streamed(&engine, message, Some(session_id), &mut |delta| {
+                let _ = tx.send(delta.to_string());
+            })
+        })
+    };
+
+    while let Some(delta) = rx.recv().await {
+        if socket
+            .send(Message::Text(
+                serde_json::json!({"type": "delta", "delta": delta})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .is_err()
+        {
+            break; // client went away; the generation task still finishes and is stored
+        }
+    }
+
+    let mut result = match generation.await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"type": "error", "error": e})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+        Err(e) => {
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"type": "error", "error": e.to_string()})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    let mut audio_url: Option<String> = None;
+    if req.generate_voice.unwrap_or(false) {
+        if let Some(reply) = result
+            .get("reply")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        {
+            audio_url =
+                tokio::task::spawn_blocking(move || commands::synthesize_speech(&reply, None))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .and_then(|p| {
+                        p.file_name()
+                            .map(|f| format!("/api/audio/{}", f.to_string_lossy()))
+                    });
+        }
+    }
+    result["type"] = serde_json::json!("done");
+    result["audio_url"] = serde_json::json!(audio_url);
+    result["session_id"] = serde_json::json!(session_id);
+
+    let _ = socket.send(Message::Text(result.to_string().into())).await;
 }
 
 async fn ws_telemetry(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {

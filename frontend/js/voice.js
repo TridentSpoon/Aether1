@@ -12,6 +12,8 @@ class VoiceAudioEngine {
         this.analyser = null;
         this.dataArray = new Uint8Array(64);
         this.currentAudio = null;
+        this.ttsQueue = [];
+        this.isDrainingQueue = false;
         this.recognition = null;
         this.isListening = false;
         this.sfxEnabled = true;
@@ -107,6 +109,38 @@ class VoiceAudioEngine {
         }
     }
 
+    /**
+     * Queues one clip of a streamed reply. Sentences are synthesized as they complete, so
+     * they can arrive out of order relative to playback -- this plays them strictly in the
+     * order they were queued, and keeps the avatar in SPEAKING across the gaps between
+     * clips instead of flickering back to IDLE between every sentence.
+     */
+    async enqueueTTS(audioUrl) {
+        if (!audioUrl) return;
+        this.ttsQueue.push(audioUrl);
+        if (this.isDrainingQueue) return;
+
+        this.isDrainingQueue = true;
+        try {
+            while (this.ttsQueue.length) {
+                await this.playTTSAudio(this.ttsQueue.shift());
+            }
+        } finally {
+            this.isDrainingQueue = false;
+            if (this.onStateChange) this.onStateChange('IDLE');
+            if (this.onAudioFrequency) this.onAudioFrequency(new Uint8Array(64));
+        }
+    }
+
+    /** Drops anything queued but not yet played (a new turn supersedes the old one). */
+    stopSpeech() {
+        this.ttsQueue = [];
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio = null;
+        }
+    }
+
     async playTTSAudio(audioUrl) {
         if (this.currentAudio) {
             this.currentAudio.pause();
@@ -149,8 +183,12 @@ class VoiceAudioEngine {
 
             audio.onended = () => {
                 this.currentAudio = null;
-                if (this.onStateChange) this.onStateChange('IDLE');
-                if (this.onAudioFrequency) this.onAudioFrequency(new Uint8Array(64));
+                // Mid-queue, the next clip is about to start: staying SPEAKING keeps the
+                // avatar steady across the seam. enqueueTTS emits IDLE when it drains.
+                if (!this.ttsQueue.length) {
+                    if (this.onStateChange) this.onStateChange('IDLE');
+                    if (this.onAudioFrequency) this.onAudioFrequency(new Uint8Array(64));
+                }
                 resolve();
             };
 

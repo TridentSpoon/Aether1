@@ -80,7 +80,7 @@ a compositor keybinding bound to `aether1 toggle` does what the global hotkey do
 Startup says so explicitly when it detects a Wayland session. The plugin also stops a
 double launch from producing two tray icons.
 
-### Step 3: Streaming end to end
+### Step 3: Streaming end to end — **shipped**
 
 *The largest refactor in Phase 1. Do it before tools — a tool loop on top of a
 non-streaming call is much harder to retrofit than the other way round.*
@@ -103,6 +103,22 @@ non-streaming call is much harder to retrofit than the other way round.*
   immediately.
 - **Verify:** first token visible in well under a second against a local Ollama model, and
   speech begins before generation finishes.
+
+Landed with `generate_response_streamed` as the *only* path through the providers:
+`generate_response` was removed rather than kept beside it, so the blocking callers (the
+CLI, `/api/chat`) are streaming calls that discard their deltas, and the two can't drift.
+Each provider has a `stream_*` beside its `call_*`, sharing one payload builder; a stream
+that fails before producing any text silently retries the blocking call, which is what
+keeps a provider or model that can't stream working. A stream that fails *after* text has
+reached the operator keeps the partial reply and appends a notice — restarting over the
+top of what they are already reading would be worse.
+
+Two additions the plan didn't list: `/ws/chat` for the browser path (a WebSocket, because
+the socket plumbing already existed for telemetry, and the client sends the prompt on the
+same connection), and `/api/tts`, without which the browser path had no way to synthesize
+a single sentence — it only ever got whole-reply audio bundled into `/api/chat`. Auto-speak
+now synthesizes per sentence on both paths and queues the clips in order, so speech starts
+mid-generation; the whole-reply replay button synthesizes lazily on first click instead.
 
 ---
 

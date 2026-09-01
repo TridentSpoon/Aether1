@@ -18,6 +18,7 @@ pub use db::{MemoryDb, Message};
 pub use genesis::Identity;
 use persona::{Persona, Provider};
 use providers::ChatContext;
+pub use providers::Sink;
 pub use telemetry::Telemetry;
 pub use tts::{generate_speech, DEFAULT_VOICE};
 
@@ -73,8 +74,8 @@ impl UsageStats {
 
     fn snapshot(&self) -> UsageSnapshot {
         let total_session = self.session_prompt_tokens + self.session_completion_tokens;
-        let used_percent = ((total_session as f64 / SESSION_TOKEN_BUDGET.max(1) as f64) * 100.0)
-            .min(100.0);
+        let used_percent =
+            ((total_session as f64 / SESSION_TOKEN_BUDGET.max(1) as f64) * 100.0).min(100.0);
         let used_percent = (used_percent * 10.0).round() / 10.0;
         let available_tokens = SESSION_TOKEN_BUDGET.saturating_sub(total_session);
 
@@ -90,6 +91,13 @@ impl UsageStats {
             },
         }
     }
+}
+
+/// A provider call that could not be completed. `partial` is whatever text had already
+/// been streamed to the operator before it failed -- empty when nothing had.
+struct StreamFailure {
+    message: String,
+    partial: String,
 }
 
 struct Config {
@@ -306,11 +314,117 @@ impl LlmEngine {
         None
     }
 
-    pub fn generate_response(&self, prompt: &str, session_id: &str) -> String {
+    /// Runs the configured provider, feeding reply text to `sink` as it arrives.
+    ///
+    /// Streaming is tried first for every provider. If the stream fails before any text
+    /// has reached the operator, the blocking call is retried once -- that's what keeps a
+    /// provider or model that can't stream working, and it costs nothing in the normal
+    /// case. Once text *has* been streamed, a failure can't be retried: the operator is
+    /// already reading a half-finished answer, and starting a second one over the top of
+    /// it would be worse than saying the link dropped.
+    fn call_provider(
+        &self,
+        config: &Config,
+        ctx: &ChatContext,
+        sink: providers::Sink,
+    ) -> Result<String, StreamFailure> {
+        let mut partial = String::new();
+
+        let streamed = {
+            let mut collect = |delta: &str| {
+                partial.push_str(delta);
+                sink(delta);
+            };
+            match config.provider {
+                Provider::Ollama => providers::stream_ollama(
+                    &config.endpoint,
+                    &config.model_name,
+                    ctx,
+                    &mut collect,
+                ),
+                Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                    providers::stream_openai_compatible(
+                        config.provider,
+                        &config.endpoint,
+                        &config.api_key,
+                        &config.model_name,
+                        ctx,
+                        &mut collect,
+                    )
+                }
+                Provider::Gemini => {
+                    providers::stream_gemini(&config.api_key, &config.model_name, ctx, &mut collect)
+                }
+                Provider::Anthropic => providers::stream_anthropic(
+                    &config.api_key,
+                    &config.model_name,
+                    ctx,
+                    &mut collect,
+                ),
+                // Handled before this is ever called.
+                Provider::Offline => Ok(String::new()),
+            }
+        };
+
+        match streamed {
+            Ok(reply) => Ok(reply),
+            Err(stream_error) if partial.is_empty() => {
+                let blocking = match config.provider {
+                    Provider::Ollama => {
+                        providers::call_ollama(&config.endpoint, &config.model_name, ctx)
+                    }
+                    Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                        providers::call_openai_compatible(
+                            config.provider,
+                            &config.endpoint,
+                            &config.api_key,
+                            &config.model_name,
+                            ctx,
+                        )
+                    }
+                    Provider::Gemini => {
+                        providers::call_gemini(&config.api_key, &config.model_name, ctx)
+                    }
+                    Provider::Anthropic => {
+                        providers::call_anthropic(&config.api_key, &config.model_name, ctx)
+                    }
+                    Provider::Offline => Ok(String::new()),
+                };
+                match blocking {
+                    Ok(reply) => {
+                        sink(&reply);
+                        Ok(reply)
+                    }
+                    Err(call_error) => Err(StreamFailure {
+                        message: format!("{stream_error} (retry without streaming: {call_error})"),
+                        partial: String::new(),
+                    }),
+                }
+            }
+            Err(stream_error) => Err(StreamFailure {
+                message: stream_error,
+                partial,
+            }),
+        }
+    }
+
+    /// Generates a reply, feeding it to `sink` in the order it arrives: one call per
+    /// delta while streaming, or a single call with the whole text for instant commands,
+    /// offline mode, and the non-streaming fallback. The returned String is always the
+    /// concatenation of everything the sink was given.
+    pub fn generate_response_streamed(
+        &self,
+        prompt: &str,
+        session_id: &str,
+        sink: providers::Sink,
+    ) -> String {
         let config = self.load_config();
         let start = Instant::now();
 
+        // Instant commands and offline mode produce their whole reply locally, with no
+        // stream to follow -- they arrive as one delta.
         if let Some(reply) = self.check_instant_commands(prompt, &config) {
+            sink(&reply);
             self.usage
                 .lock()
                 .unwrap()
@@ -328,37 +442,49 @@ impl LlmEngine {
             agent_name: &config.agent_name,
         };
 
-        let result = match config.provider {
-            Provider::Ollama => providers::call_ollama(&config.endpoint, &config.model_name, &ctx),
-            Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
-                providers::call_openai_compatible(
-                    config.provider,
-                    &config.endpoint,
-                    &config.api_key,
-                    &config.model_name,
-                    &ctx,
-                )
-            }
-            Provider::Gemini => providers::call_gemini(&config.api_key, &config.model_name, &ctx),
-            Provider::Anthropic => {
-                providers::call_anthropic(&config.api_key, &config.model_name, &ctx)
-            }
-            Provider::Offline => Ok(config.persona.offline_reply(
+        let reply = if config.provider == Provider::Offline {
+            let reply = config.persona.offline_reply(
                 prompt,
                 &telem.os_name,
                 telem.cpu_percent,
                 &config.agent_name,
-            )),
+            );
+            sink(&reply);
+            reply
+        } else {
+            match self.call_provider(&config, &ctx, sink) {
+                Ok(reply) => reply,
+                Err(failure) => {
+                    eprintln!(
+                        "[AETHER1] LLM Engine Error: provider {} error: {}",
+                        config.provider, failure.message
+                    );
+                    if failure.partial.is_empty() {
+                        let fallback = config.persona.offline_reply(
+                            prompt,
+                            &telem.os_name,
+                            telem.cpu_percent,
+                            &config.agent_name,
+                        );
+                        let reply = format!(
+                            "[HUD Alert: Neural link to {} timed out. Engaging localized cognitive fallback]\n\n{fallback}",
+                            config.provider
+                        );
+                        sink(&reply);
+                        reply
+                    } else {
+                        // Text already reached the operator; append the notice to what
+                        // they are reading instead of replacing it.
+                        let notice = format!(
+                            "\n\n[HUD Alert: Neural link to {} dropped mid-transmission.]",
+                            config.provider
+                        );
+                        sink(&notice);
+                        format!("{}{notice}", failure.partial)
+                    }
+                }
+            }
         };
-
-        let reply = result.unwrap_or_else(|e| {
-            eprintln!("[AETHER1] LLM Engine Error: provider {} error: {e}", config.provider);
-            let fallback = config.persona.offline_reply(prompt, &telem.os_name, telem.cpu_percent, &config.agent_name);
-            format!(
-                "[HUD Alert: Neural link to {} timed out. Engaging localized cognitive fallback]\n\n{fallback}",
-                config.provider
-            )
-        });
 
         self.usage
             .lock()
@@ -449,11 +575,25 @@ mod tests {
         assert_eq!(config.agent_name, "HALCY");
     }
 
+    /// Every reply in these tests goes through the streaming path and asserts the
+    /// invariant the whole design rests on: the deltas handed to the sink, concatenated,
+    /// are exactly the reply that was returned.
+    fn generate(engine: &LlmEngine, prompt: &str, session_id: &str) -> String {
+        let mut streamed = String::new();
+        let reply = engine
+            .generate_response_streamed(prompt, session_id, &mut |delta| streamed.push_str(delta));
+        assert_eq!(
+            streamed, reply,
+            "the sink's deltas must reconstruct the returned reply"
+        );
+        reply
+    }
+
     #[test]
     fn generate_response_offline_default_mentions_standby() {
         let _guard = env_guard();
         let engine = temp_engine("offline_default");
-        let reply = engine.generate_response("hello there", "test-session");
+        let reply = generate(&engine, "hello there", "test-session");
         assert!(reply.contains("Offline Standby Mode"), "reply was: {reply}");
     }
 
@@ -461,7 +601,7 @@ mod tests {
     fn who_are_you_instant_command_short_circuits_network() {
         let _guard = env_guard();
         let engine = temp_engine("who_are_you");
-        let reply = engine.generate_response("who are you?", "test-session");
+        let reply = generate(&engine, "who are you?", "test-session");
         assert!(reply.contains("HALCY"), "reply was: {reply}");
     }
 
@@ -469,10 +609,14 @@ mod tests {
     fn remember_that_persists_and_list_memory_reads_it_back() {
         let _guard = env_guard();
         let engine = temp_engine("remember");
-        let ack = engine.generate_response("remember that favorite_color: blue", "test-session");
+        let ack = generate(
+            &engine,
+            "remember that favorite_color: blue",
+            "test-session",
+        );
         assert!(ack.contains("favorite_color"), "ack was: {ack}");
 
-        let listing = engine.generate_response("list memory", "test-session");
+        let listing = generate(&engine, "list memory", "test-session");
         assert!(listing.contains("favorite_color"), "listing was: {listing}");
         assert!(listing.contains("blue"), "listing was: {listing}");
     }
@@ -481,7 +625,7 @@ mod tests {
     fn set_name_updates_agent_name_case_preserving() {
         let _guard = env_guard();
         let engine = temp_engine("set_name");
-        let reply = engine.generate_response("Set Name Aria", "test-session");
+        let reply = generate(&engine, "Set Name Aria", "test-session");
         assert!(reply.contains("Aria"), "reply was: {reply}");
         assert_eq!(engine.agent_name(), "Aria");
     }
@@ -533,7 +677,8 @@ mod tests {
             &serde_json::Value::String("http://localhost:11434".to_string()),
         );
 
-        let reply = engine.generate_response(
+        let reply = generate(
+            &engine,
             "Reply with only the single word PONG, nothing else, no punctuation.",
             "live-test-session",
         );

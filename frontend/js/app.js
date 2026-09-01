@@ -497,7 +497,85 @@ document.addEventListener('DOMContentLoaded', () => {
 
         chatContainer.appendChild(msgDiv);
         chatContainer.scrollTop = chatContainer.scrollHeight;
+        msgDiv.bodyDiv = bodyDiv;
         return msgDiv;
+    }
+
+    // A streamed reply has no single audio file to replay: it was spoken sentence by
+    // sentence as it arrived. Synthesize the whole thing on demand instead, the first time
+    // the operator actually asks for it.
+    function attachLazyReplay(msgDiv, text) {
+        const playBtn = document.createElement('button');
+        playBtn.className = 'mt-2 text-xs text-cyan-400 hover:text-cyan-200 flex items-center gap-1 font-mono cursor-pointer border border-cyan-500/30 px-2 py-0.5 rounded bg-cyan-950/40';
+        playBtn.innerHTML = '▶ Replay Voice';
+        let cachedUrl = null;
+        playBtn.onclick = async () => {
+            try {
+                if (!cachedUrl) {
+                    playBtn.innerHTML = '⋯ Synthesizing';
+                    cachedUrl = await synthesizeSpeechUrl(text);
+                }
+                playBtn.innerHTML = '▶ Replay Voice';
+                if (cachedUrl) await voiceEngine.playTTSAudio(cachedUrl);
+            } catch (e) {
+                playBtn.innerHTML = '⚠ Voice unavailable';
+            }
+        };
+        msgDiv.appendChild(playBtn);
+    }
+
+    // Splits streamed text into speakable chunks at sentence boundaries. Anything shorter
+    // than this is not worth a TTS round-trip of its own -- a stream of two-word clips
+    // sounds worse than waiting for the rest of the sentence.
+    const MIN_SPEAKABLE = 24;
+
+    function takeSpeakableChunk(buffer) {
+        const match = /[.!?:](?=\s|$)|\n\n/g;
+        let lastEnd = -1;
+        let m;
+        while ((m = match.exec(buffer)) !== null) {
+            if (m.index + m[0].length >= MIN_SPEAKABLE) { lastEnd = m.index + m[0].length; break; }
+        }
+        if (lastEnd < 0) return null;
+        return { chunk: buffer.slice(0, lastEnd), rest: buffer.slice(lastEnd) };
+    }
+
+    /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
+    /// Resolves with the authoritative final reply -- the deltas are for display, the
+    /// return value is what gets rendered as final text.
+    async function streamChat(text, sessionId, onDelta) {
+        if (IS_TAURI) {
+            const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
+            const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            try {
+                return await tauriInvoke('generate_response_streaming_rust', {
+                    prompt: text, sessionId, streamId
+                });
+            } finally {
+                unlisten();
+            }
+        }
+
+        // Browser fallback: the same conversation over a WebSocket, since the socket
+        // plumbing already exists here for telemetry (see /ws/chat in server.rs).
+        return await new Promise((resolve, reject) => {
+            const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
+            const socket = new WebSocket(`${wsBase}/ws/chat`);
+            socket.onopen = () => socket.send(JSON.stringify({
+                message: text, session_id: sessionId, generate_voice: false
+            }));
+            socket.onmessage = (event) => {
+                let data;
+                try { data = JSON.parse(event.data); } catch (e) { return; }
+                if (data.type === 'delta') onDelta(data.delta);
+                else if (data.type === 'error') { socket.close(); reject(new Error(data.error)); }
+                else if (data.type === 'done') { socket.close(); resolve(data); }
+            };
+            socket.onerror = () => reject(new Error('chat socket failed'));
+            socket.onclose = () => reject(new Error('chat socket closed before the reply finished'));
+        });
     }
 
     async function handleSendMessage(customPrompt = null) {
@@ -507,57 +585,80 @@ document.addEventListener('DOMContentLoaded', () => {
         chatInput.value = '';
         appendMessage('user', text);
         voiceEngine.playSFX('click');
+        voiceEngine.stopSpeech(); // a new question supersedes anything still being spoken
 
         isWaitingForResponse = true;
         hologram.setState('THINKING');
         if (voiceEngine.onStateChange) voiceEngine.onStateChange('THINKING');
 
-        const thinkingDiv = document.createElement('div');
-        thinkingDiv.className = 'p-3 rounded my-2 text-sm leading-relaxed msg-agent self-start mr-8 typing-cursor';
-        thinkingDiv.innerHTML = `<span class="text-xs font-mono text-cyan-400">🌐 ${currentAgentName} // Reactive processing</span>`;
-        chatContainer.appendChild(thinkingDiv);
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+        // The reply's own message node, created empty and filled in as deltas arrive --
+        // the cursor class marks it as still being written.
+        const replyDiv = appendMessage(currentAgentName, '');
+        replyDiv.classList.add('typing-cursor');
+
+        let rendered = '';
+        let spoken = '';        // text already handed to TTS
+        let pending = '';       // text waiting for a sentence boundary
+        let firstDelta = true;
+
+        const speakChunk = async (chunk) => {
+            if (!autoSpeak || !chunk.trim()) return;
+            try {
+                const url = await synthesizeSpeechUrl(chunk);
+                if (url) voiceEngine.enqueueTTS(url);
+            } catch (e) {
+                console.warn('sentence TTS failed', e);
+            }
+        };
+
+        const onDelta = (delta) => {
+            if (!delta) return;
+            if (firstDelta) {
+                // Generation has actually started; stop pretending to think.
+                firstDelta = false;
+                hologram.setState('IDLE');
+            }
+            rendered += delta;
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            pending += delta;
+            let taken;
+            while ((taken = takeSpeakableChunk(pending)) !== null) {
+                pending = taken.rest;
+                spoken += taken.chunk;
+                speakChunk(taken.chunk);
+            }
+        };
 
         try {
-            let reply, agentName, audioUrl;
-            if (IS_TAURI) {
-                const data = await tauriInvoke('generate_response_rust', { prompt: text, sessionId: 'default' });
-                reply = data.reply;
-                agentName = data.agent_name;
-                audioUrl = autoSpeak ? await synthesizeSpeechUrl(reply) : null;
-            } else {
-                const resp = await apiFetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message: text,
-                        session_id: 'default',
-                        generate_voice: autoSpeak
-                    })
-                });
-                if (!resp.ok) throw new Error(`chat request failed: ${resp.status}`);
-                const data = await resp.json();
-                reply = data.reply;
-                agentName = data.agent_name;
-                audioUrl = data.audio_url ? API_BASE + data.audio_url : null;
-            }
-
-            chatContainer.removeChild(thinkingDiv);
+            const data = await streamChat(text, 'default', onDelta);
+            const reply = data.reply;
+            const agentName = data.agent_name;
 
             if (agentName) updateAgentNameDisplay(agentName);
+            // The return value is authoritative: render it in place of the accumulated
+            // deltas, which also repairs the display if any delta was dropped.
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
+            replyDiv.classList.remove('typing-cursor');
             voiceEngine.playSFX('incoming');
-            appendMessage(currentAgentName, reply, audioUrl);
 
-            if (audioUrl && autoSpeak) {
-                await voiceEngine.playTTSAudio(audioUrl);
+            // Speak whatever never reached a sentence boundary (the tail of the reply).
+            const tail = reply.slice(spoken.length);
+            if (tail.trim()) await speakChunk(tail);
+
+            if (autoSpeak) {
+                attachLazyReplay(replyDiv, reply);
             } else {
                 hologram.setState('IDLE');
                 if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
             }
         } catch (e) {
             console.error("Chat error", e);
-            if (chatContainer.contains(thinkingDiv)) chatContainer.removeChild(thinkingDiv);
-            appendMessage(currentAgentName, `⚠️ System Error: ${e.message}`);
+            replyDiv.classList.remove('typing-cursor');
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(
+                rendered ? `${rendered}\n\n⚠️ System Error: ${e.message}` : `⚠️ System Error: ${e.message}`
+            );
             hologram.setState('IDLE');
             if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
         } finally {
@@ -697,10 +798,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // filesystem path to Tauri's asset:// protocol; see the assetProtocol scope this path's
     // directory is allowed under in tauri.conf.json / main.rs's setup()). Returns null on
     // any failure so callers can just skip voice playback instead of erroring the whole chat.
+    // Both transports: the native path synthesizes over IPC and plays the file directly,
+    // the browser path posts to /api/tts and plays it back over HTTP.
     async function synthesizeSpeechUrl(text, voiceName) {
         try {
-            const path = await tauriInvoke('generate_speech_rust', { text, voice: voiceName || null });
-            return window.__TAURI__.core.convertFileSrc(path);
+            if (IS_TAURI) {
+                const path = await tauriInvoke('generate_speech_rust', { text, voice: voiceName || null });
+                return window.__TAURI__.core.convertFileSrc(path);
+            }
+            const resp = await apiFetch('/api/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice: voiceName || null })
+            });
+            if (!resp.ok) throw new Error(`tts request failed: ${resp.status}`);
+            const data = await resp.json();
+            return data.audio_url ? API_BASE + data.audio_url : null;
         } catch (e) {
             console.warn('TTS synthesis failed', e);
             return null;

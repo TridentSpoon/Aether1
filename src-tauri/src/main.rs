@@ -369,6 +369,26 @@ fn generate_response_rust(
 /// Rust-native equivalent of POST /api/agent/genesis (backend/main.py), minus TTS audio
 /// generation (see generate_speech_rust). Body lives in commands::agent_genesis, shared
 /// with the axum server's /api/agent/genesis handler.
+/// Streaming counterpart of generate_response_rust: the reply is emitted delta by delta as
+/// `chat-delta` events (each tagged with the caller's stream_id so two in-flight turns can't
+/// interleave in the UI), and the whole reply still comes back as the return value. The
+/// frontend renders the deltas and uses the return value as the authoritative final text.
+#[tauri::command]
+fn generate_response_streaming_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    prompt: String,
+    session_id: Option<String>,
+    stream_id: String,
+) -> Result<serde_json::Value, String> {
+    commands::generate_response_streamed(&engine, prompt, session_id, &mut |delta| {
+        let _ = app.emit(
+            "chat-delta",
+            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+        );
+    })
+}
+
 #[tauri::command]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
@@ -525,16 +545,17 @@ fn main() {
         // immediately after handing its argv to the instance already running, which is
         // what makes those subcommands reach this window, and what stops the tray from
         // sprouting a second icon when the app is launched twice.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            match cli::parse(&argv) {
+        .plugin(tauri_plugin_single_instance::init(
+            |app, argv, _cwd| match cli::parse(&argv) {
                 cli::Invocation::Window { toggle: true } => hotkey::toggle_window(app),
                 _ => hotkey::show_window(app),
-            }
-        }))
+            },
+        ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(llm_engine)
         .invoke_handler(tauri::generate_handler![
             generate_response_rust,
+            generate_response_streaming_rust,
             agent_genesis_rust,
             scan_models_rust,
             pull_model_rust,

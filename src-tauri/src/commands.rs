@@ -16,13 +16,25 @@ pub fn generate_response(
     prompt: String,
     session_id: Option<String>,
 ) -> Result<Value, String> {
+    generate_response_streamed(engine, prompt, session_id, &mut |_| {})
+}
+
+/// generate_response, with each piece of the reply handed to `sink` as it arrives. The
+/// returned value is identical either way -- the sink is an extra, not an alternative, so
+/// history and usage accounting can't differ between a streamed and an unstreamed turn.
+pub fn generate_response_streamed(
+    engine: &LlmEngine,
+    prompt: String,
+    session_id: Option<String>,
+    sink: llm::Sink,
+) -> Result<Value, String> {
     if prompt.trim().is_empty() {
         return Err("Empty message".to_string());
     }
     let session_id = session_id.unwrap_or_else(|| "default".to_string());
 
     engine.add_message(&session_id, "user", &prompt);
-    let reply = engine.generate_response(&prompt, &session_id);
+    let reply = engine.generate_response_streamed(&prompt, &session_id, sink);
     let agent_name = engine.agent_name();
     engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
 
