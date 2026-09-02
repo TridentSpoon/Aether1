@@ -61,7 +61,8 @@ impl Tool for ReadFile {
             ));
         }
 
-        let bytes = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let truncated = bytes.len() > MAX_FILE_BYTES;
         let slice = &bytes[..bytes.len().min(MAX_FILE_BYTES)];
 
@@ -122,8 +123,8 @@ impl Tool for ListDir {
 
     fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
         let path = fs_guard::resolve_readable(string_arg(args, "path")?)?;
-        let entries = std::fs::read_dir(&path)
-            .map_err(|e| format!("cannot list {}: {e}", path.display()))?;
+        let entries =
+            std::fs::read_dir(&path).map_err(|e| format!("cannot list {}: {e}", path.display()))?;
 
         let mut lines = Vec::new();
         let mut total = 0usize;
@@ -144,7 +145,11 @@ impl Tool for ListDir {
         }
         lines.sort();
 
-        let mut report = format!("{} ({total} entries):\n{}", path.display(), lines.join("\n"));
+        let mut report = format!(
+            "{} ({total} entries):\n{}",
+            path.display(),
+            lines.join("\n")
+        );
         if total > lines.len() {
             report.push_str(&format!("\n[{} more not shown]", total - lines.len()));
         }
@@ -198,7 +203,9 @@ impl Tool for ListProcesses {
 
         let lines: Vec<String> = processes
             .iter()
-            .map(|(name, pid, cpu, mem_mb)| format!("{name} (pid {pid}): {cpu:.1}% CPU, {mem_mb} MB"))
+            .map(|(name, pid, cpu, mem_mb)| {
+                format!("{name} (pid {pid}): {cpu:.1}% CPU, {mem_mb} MB")
+            })
             .collect();
 
         Ok(Outcome::text(format!(
@@ -281,9 +288,16 @@ impl Tool for SearchMemory {
             .collect();
 
         Ok(Outcome::text(if hits.is_empty() {
-            format!("Nothing stored matching {query:?} ({} memories searched).", memories.len())
+            format!(
+                "Nothing stored matching {query:?} ({} memories searched).",
+                memories.len()
+            )
         } else {
-            format!("{} match(es) for {query:?}:\n{}", hits.len(), hits.join("\n"))
+            format!(
+                "{} match(es) for {query:?}:\n{}",
+                hits.len(),
+                hits.join("\n")
+            )
         }))
     }
 }
@@ -294,7 +308,8 @@ mod tests {
     use crate::llm::MemoryDb;
 
     fn temp_db(name: &str) -> MemoryDb {
-        let path = std::env::temp_dir().join(format!("aether1_tools_{name}_{}.db", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("aether1_tools_{name}_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(path).unwrap()
     }
@@ -340,7 +355,8 @@ mod tests {
     #[test]
     fn search_memory_finds_what_was_stored_and_says_so_when_it_doesnt() {
         let db = temp_db("search_memory");
-        db.set_memory("favorite_editor", "helix", "general").unwrap();
+        db.set_memory("favorite_editor", "helix", "general")
+            .unwrap();
         let ctx = ToolContext { db: &db };
 
         let hit = SearchMemory

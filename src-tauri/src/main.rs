@@ -432,6 +432,33 @@ fn get_actions_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<
 }
 
 #[tauri::command]
+fn pending_actions_rust(engine: tauri::State<LlmEngine>) -> Vec<llm::ActionRecord> {
+    commands::pending_actions(&engine)
+}
+
+#[tauri::command]
+fn approve_action_rust(
+    engine: tauri::State<LlmEngine>,
+    id: i64,
+) -> Result<serde_json::Value, String> {
+    commands::approve_action(&engine, id)
+}
+
+#[tauri::command]
+fn reject_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<(), String> {
+    commands::reject_action(&engine, id)
+}
+
+#[tauri::command]
+fn set_always_allowed_rust(
+    engine: tauri::State<LlmEngine>,
+    tool: String,
+    allowed: bool,
+) -> Result<(), String> {
+    commands::set_always_allowed(&engine, tool, allowed)
+}
+
+#[tauri::command]
 fn get_messages_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::Message> {
     commands::get_messages(&engine, limit)
 }
@@ -573,6 +600,10 @@ fn main() {
             get_static_info_rust,
             get_tools_rust,
             get_actions_rust,
+            pending_actions_rust,
+            approve_action_rust,
+            reject_action_rust,
+            set_always_allowed_rust,
             get_messages_rust,
             clear_messages_rust,
             get_settings_rust,

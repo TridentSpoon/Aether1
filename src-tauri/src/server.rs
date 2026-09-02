@@ -73,6 +73,10 @@ pub async fn run(engine: LlmEngine) {
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
+        .route("/api/actions/pending", get(get_pending_actions))
+        .route("/api/actions/{id}/approve", post(approve_action))
+        .route("/api/actions/{id}/reject", post(reject_action))
+        .route("/api/tools/always-allow", post(set_always_allowed))
         .route("/api/messages", get(get_messages).delete(clear_messages))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
@@ -165,6 +169,47 @@ async fn get_actions(
     Query(q): Query<ActionsQuery>,
 ) -> Json<Vec<llm::ActionRecord>> {
     Json(commands::recent_actions(&state.engine, q.limit))
+}
+
+async fn get_pending_actions(State(state): State<AppState>) -> Json<Vec<llm::ActionRecord>> {
+    Json(commands::pending_actions(&state.engine))
+}
+
+async fn approve_action(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    // Blocking: approving runs the tool, and a tool can take as long as the work takes.
+    tokio::task::spawn_blocking(move || commands::approve_action(&engine, id))
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+async fn reject_action(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    commands::reject_action(&state.engine, id)
+        .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize)]
+struct AlwaysAllowRequest {
+    tool: String,
+    allowed: bool,
+}
+
+async fn set_always_allowed(
+    State(state): State<AppState>,
+    Json(req): Json<AlwaysAllowRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    commands::set_always_allowed(&state.engine, req.tool, req.allowed)
+        .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 #[derive(Deserialize)]
@@ -330,7 +375,10 @@ async fn tts(Json(req): Json<TtsRequest>) -> Result<Json<Value>, (StatusCode, St
     let file_name = path
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "no audio file".to_string()))?;
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "no audio file".to_string(),
+        ))?;
 
     Ok(Json(
         serde_json::json!({ "audio_url": format!("/api/audio/{file_name}") }),

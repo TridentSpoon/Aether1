@@ -74,6 +74,15 @@ pub struct ActionRecord {
     /// Whatever the tool needs to reverse itself, as JSON -- the previous contents of a
     /// file it overwrote, the setting it replaced. None when the action can't be undone.
     pub undo: Option<JsonValue>,
+    /// One line describing what this action does, in the tool's own words -- what an
+    /// approval card shows. Filled in when the record is read back, since it comes from
+    /// the tool rather than from the row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    /// Who let this run: "operator" for an explicit approval, "always-allow" for one the
+    /// operator had pre-approved for this tool, "automatic" for a read-only call that
+    /// needed no approval at all. None while a proposal is still waiting.
+    pub approved_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,8 +135,25 @@ impl MemoryDb {
                 undo_json TEXT
             );",
         )?;
+        db.migrate()?;
         db.restrict_permissions();
         Ok(db)
+    }
+
+    /// Additive column migrations, run on every open. Guarded by a PRAGMA lookup rather
+    /// than a version counter: the check is cheap, it's idempotent, and a database created
+    /// by an older build opens without ceremony.
+    fn migrate(&self) -> rusqlite::Result<()> {
+        let conn = self.connect()?;
+        let mut existing = conn.prepare("PRAGMA table_info(action_log)")?;
+        let columns: Vec<String> = existing
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<_>>()?;
+
+        if !columns.iter().any(|c| c == "approved_by") {
+            conn.execute("ALTER TABLE action_log ADD COLUMN approved_by TEXT", [])?;
+        }
+        Ok(())
     }
 
     /// Locks the database file down to owner-only read/write (0600). This file holds chat
@@ -308,24 +334,52 @@ impl MemoryDb {
         status: ActionStatus,
         result: Option<&str>,
         undo: Option<&JsonValue>,
+        approved_by: Option<&str>,
     ) -> rusqlite::Result<()> {
         self.connect()?.execute(
-            "UPDATE action_log SET status = ?2, result = ?3, undo_json = ?4 WHERE id = ?1",
+            "UPDATE action_log SET status = ?2, result = ?3, undo_json = ?4, \
+             approved_by = COALESCE(?5, approved_by) WHERE id = ?1",
             params![
                 id,
                 status.as_str(),
                 result,
                 undo.map(|u| u.to_string()),
+                approved_by,
             ],
         )?;
         Ok(())
+    }
+
+    /// Actions waiting for the operator, oldest first -- the order they should be answered
+    /// in. Read from the table rather than from memory, so a proposal outlives a restart
+    /// and can't be silently lost when the app is closed with a card still on screen.
+    pub fn pending_actions(&self) -> rusqlite::Result<Vec<ActionRecord>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by \
+             FROM action_log WHERE status = 'proposed' ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], action_from_row)?;
+        rows.collect()
+    }
+
+    /// Rejects proposals older than `minutes`, and returns how many. An approval is
+    /// consent to do a thing *now*: a card answered an hour later is answering a question
+    /// about a machine that has moved on.
+    pub fn expire_stale_proposals(&self, minutes: u32) -> rusqlite::Result<usize> {
+        let changed = self.connect()?.execute(
+            "UPDATE action_log SET status = 'rejected', result = 'expired before approval' \
+             WHERE status = 'proposed' AND ts < datetime('now', ?1)",
+            params![format!("-{minutes} minutes")],
+        )?;
+        Ok(changed)
     }
 
     #[allow(dead_code)] // read by the undo path, once actions can be undone
     pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
         self.connect()?
             .query_row(
-                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json \
+                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by \
                  FROM action_log WHERE id = ?1",
                 params![id],
                 action_from_row,
@@ -337,7 +391,7 @@ impl MemoryDb {
     pub fn recent_actions(&self, limit: u32) -> rusqlite::Result<Vec<ActionRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json \
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by \
              FROM action_log ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], action_from_row)?;
@@ -360,6 +414,8 @@ fn action_from_row(row: &rusqlite::Row) -> rusqlite::Result<ActionRecord> {
         status: ActionStatus::from_str(&status_raw),
         result: row.get(6)?,
         undo: undo_raw.and_then(|u| serde_json::from_str(&u).ok()),
+        approved_by: row.get(8)?,
+        preview: None,
     })
 }
 
@@ -410,12 +466,19 @@ mod tests {
         assert!(logged.undo.is_none());
 
         let undo = serde_json::json!({"restore": "old contents"});
-        db.set_action_outcome(id, ActionStatus::Executed, Some("wrote 12 bytes"), Some(&undo))
-            .unwrap();
+        db.set_action_outcome(
+            id,
+            ActionStatus::Executed,
+            Some("wrote 12 bytes"),
+            Some(&undo),
+            Some("operator"),
+        )
+        .unwrap();
         let done = db.get_action(id).unwrap().unwrap();
         assert_eq!(done.status, ActionStatus::Executed);
         assert_eq!(done.result.as_deref(), Some("wrote 12 bytes"));
         assert_eq!(done.undo, Some(undo));
+        assert_eq!(done.approved_by.as_deref(), Some("operator"));
     }
 
     #[test]

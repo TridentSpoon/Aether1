@@ -270,6 +270,17 @@ class VoiceAudioEngine {
                 gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
                 osc.start(now);
                 osc.stop(now + 0.35);
+            } else if (type === 'alert') {
+                // Approval request: deliberately unlike the message chime. Something is
+                // waiting on the operator, and it should not sound like an answer arriving.
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(880, now);
+                osc.frequency.setValueAtTime(660, now + 0.1);
+                osc.frequency.setValueAtTime(880, now + 0.2);
+                gain.gain.setValueAtTime(0.08, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+                osc.start(now);
+                osc.stop(now + 0.32);
             }
         } catch (e) {
             console.warn("SFX synthesis error:", e);

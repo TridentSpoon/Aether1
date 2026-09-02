@@ -50,7 +50,9 @@ const DENIED_FRAGMENTS: &[&str] = &[
 const DENIED_NAMES: &[&str] = &[".env", "id_rsa", "id_ed25519", ".netrc", ".pgpass"];
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Expands a leading `~` and makes the path absolute, without touching the disk.
@@ -154,7 +156,10 @@ mod tests {
         with_home(|home| {
             let note = home.join("notes.txt");
             write(&note, "hello");
-            assert_eq!(resolve_readable(note.to_str().unwrap()).unwrap(), note.canonicalize().unwrap());
+            assert_eq!(
+                resolve_readable(note.to_str().unwrap()).unwrap(),
+                note.canonicalize().unwrap()
+            );
             // and by its ~ spelling
             assert!(resolve_readable("~/notes.txt").is_ok());
         });

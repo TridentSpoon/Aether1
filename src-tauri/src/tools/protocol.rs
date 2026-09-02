@@ -89,12 +89,7 @@ pub fn trace_line(call: &ToolCall) -> String {
     let args = call
         .arguments
         .as_object()
-        .map(|obj| {
-            obj.values()
-                .map(compact)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|obj| obj.values().map(compact).collect::<Vec<_>>().join(" "))
         .unwrap_or_default();
     format!("\n`⚙ {} {}`\n", call.tool, args).replace(" `", "`")
 }
@@ -253,14 +248,20 @@ mod tests {
 
     #[test]
     fn prose_passes_through_untouched() {
-        assert_eq!(filter_char_by_char("All systems nominal."), "All systems nominal.");
+        assert_eq!(
+            filter_char_by_char("All systems nominal."),
+            "All systems nominal."
+        );
     }
 
     #[test]
     fn a_tool_block_never_reaches_the_operator() {
         let text = "Checking that now.\n```tool\n{\"tool\": \"read_file\"}\n```\nDone.";
         let visible = filter_char_by_char(text);
-        assert!(!visible.contains("read_file"), "leaked the call: {visible:?}");
+        assert!(
+            !visible.contains("read_file"),
+            "leaked the call: {visible:?}"
+        );
         assert!(!visible.contains("```"), "leaked a fence: {visible:?}");
         assert!(visible.contains("Checking that now."));
         assert!(visible.contains("Done."));

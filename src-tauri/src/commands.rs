@@ -150,6 +150,31 @@ pub fn recent_actions(engine: &LlmEngine, limit: Option<u32>) -> Vec<ActionRecor
         .unwrap_or_default()
 }
 
+/// Actions waiting for the operator's answer.
+pub fn pending_actions(engine: &LlmEngine) -> Vec<ActionRecord> {
+    tools::consent::pending(engine.db(), tools::registry())
+}
+
+/// Approves and runs one proposed action.
+pub fn approve_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
+    let ctx = tools::ToolContext { db: engine.db() };
+    let result = tools::consent::approve(tools::registry(), &ctx, id, "operator")?;
+    Ok(serde_json::json!({ "id": id, "result": result }))
+}
+
+/// Declines one proposed action.
+pub fn reject_action(engine: &LlmEngine, id: i64) -> Result<(), String> {
+    tools::consent::reject(engine.db(), id)
+}
+
+/// Adds or removes a tool from the list the operator has stopped being asked about.
+pub fn set_always_allowed(engine: &LlmEngine, tool: String, allowed: bool) -> Result<(), String> {
+    if tools::registry().get(&tool).is_none() {
+        return Err(format!("no such tool {tool:?}"));
+    }
+    tools::consent::set_always_allowed(engine.db(), &tool, allowed)
+}
+
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling
 /// logic in /api/chat and /api/agent/genesis.
 pub fn synthesize_speech(text: &str, voice: Option<&str>) -> Result<PathBuf, String> {

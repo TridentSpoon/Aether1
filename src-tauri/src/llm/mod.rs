@@ -549,8 +549,9 @@ impl LlmEngine {
         let registry = crate::tools::registry();
         let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
         if tools_on {
-            system_prompt
-                .push_str(&crate::tools::protocol::instructions(&registry.prompt_catalog()));
+            system_prompt.push_str(&crate::tools::protocol::instructions(
+                &registry.prompt_catalog(),
+            ));
         }
 
         let reply = if config.provider == Provider::Offline {

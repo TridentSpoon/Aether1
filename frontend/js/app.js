@@ -524,6 +524,124 @@ document.addEventListener('DOMContentLoaded', () => {
         msgDiv.appendChild(playBtn);
     }
 
+    // --- Approval cards -----------------------------------------------------------
+    // A mutating tool never runs from a conversation: it is proposed, and this is where
+    // the operator answers. The card carries what will happen, in the tool's own words,
+    // plus the option to stop being asked about that tool at all.
+
+    async function toolsApi(path, options) {
+        if (IS_TAURI) return null; // callers branch; this is the browser arm only
+        const resp = await apiFetch(path, options);
+        if (!resp.ok) throw new Error((await resp.text()) || `request failed: ${resp.status}`);
+        return resp.status === 204 ? null : resp.json();
+    }
+
+    function renderApprovalCard(action) {
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm msg-agent self-start mr-8 border border-amber-500/50 bg-amber-950/20';
+        card.dataset.actionId = action.id;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-amber-500/30 text-xs font-mono text-amber-300';
+        header.innerHTML = `<span>⚠ <strong>APPROVAL REQUIRED</strong></span><span>${new Date().toLocaleTimeString()}</span>`;
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'text-cyan-100 font-mono text-xs my-2 break-all';
+        body.textContent = action.preview || `${action.tool} ${JSON.stringify(action.args)}`;
+        card.appendChild(body);
+
+        const status = document.createElement('div');
+        status.className = 'text-xs font-mono text-slate-400 mt-2';
+
+        const always = document.createElement('label');
+        always.className = 'flex items-center gap-2 text-[10px] font-mono text-slate-400 mt-2 cursor-pointer';
+        const alwaysBox = document.createElement('input');
+        alwaysBox.type = 'checkbox';
+        alwaysBox.className = 'rounded bg-slate-900 border-amber-500 text-amber-400 focus:ring-0';
+        always.appendChild(alwaysBox);
+        always.appendChild(document.createTextNode(`Stop asking about ${action.tool}`));
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex gap-2 mt-2';
+        const approveBtn = document.createElement('button');
+        approveBtn.className = 'text-xs font-mono border border-emerald-500/50 text-emerald-300 px-3 py-1 rounded bg-emerald-950/40 hover:bg-emerald-900/40 cursor-pointer';
+        approveBtn.textContent = '✔ Approve';
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = 'text-xs font-mono border border-rose-500/50 text-rose-300 px-3 py-1 rounded bg-rose-950/40 hover:bg-rose-900/40 cursor-pointer';
+        rejectBtn.textContent = '✖ Decline';
+        buttons.appendChild(approveBtn);
+        buttons.appendChild(rejectBtn);
+
+        const settle = (text, tone) => {
+            buttons.remove();
+            always.remove();
+            status.className = `text-xs font-mono mt-2 ${tone}`;
+            status.textContent = text;
+        };
+
+        approveBtn.onclick = async () => {
+            approveBtn.disabled = true;
+            rejectBtn.disabled = true;
+            status.textContent = 'Running…';
+            try {
+                if (alwaysBox.checked) await setAlwaysAllowed(action.tool, true);
+                const data = IS_TAURI
+                    ? await tauriInvoke('approve_action_rust', { id: action.id })
+                    : await toolsApi(`/api/actions/${action.id}/approve`, { method: 'POST' });
+                settle(`✔ Done — ${data && data.result ? data.result : 'no output'}`, 'text-emerald-300');
+            } catch (e) {
+                settle(`✖ Failed: ${e.message}`, 'text-rose-300');
+            }
+        };
+
+        rejectBtn.onclick = async () => {
+            approveBtn.disabled = true;
+            rejectBtn.disabled = true;
+            try {
+                if (IS_TAURI) await tauriInvoke('reject_action_rust', { id: action.id });
+                else await toolsApi(`/api/actions/${action.id}/reject`, { method: 'POST' });
+                settle('✖ Declined', 'text-slate-400');
+            } catch (e) {
+                settle(`✖ Failed: ${e.message}`, 'text-rose-300');
+            }
+        };
+
+        card.appendChild(buttons);
+        card.appendChild(always);
+        card.appendChild(status);
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        voiceEngine.playSFX('alert');
+        return card;
+    }
+
+    async function setAlwaysAllowed(tool, allowed) {
+        if (IS_TAURI) return tauriInvoke('set_always_allowed_rust', { tool, allowed });
+        return toolsApi('/api/tools/always-allow', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool, allowed })
+        });
+    }
+
+    /// Draws a card for anything still waiting that isn't already on screen. Called after
+    /// each turn and on load, because a proposal outlives the conversation that made it.
+    async function refreshPendingApprovals() {
+        try {
+            const pending = IS_TAURI
+                ? await tauriInvoke('pending_actions_rust')
+                : await toolsApi('/api/actions/pending');
+            for (const action of pending || []) {
+                if (!chatContainer.querySelector(`[data-action-id="${action.id}"]`)) {
+                    renderApprovalCard(action);
+                }
+            }
+        } catch (e) {
+            console.warn('could not load pending approvals', e);
+        }
+    }
+
     // Splits streamed text into speakable chunks at sentence boundaries. Anything shorter
     // than this is not worth a TTS round-trip of its own -- a stream of two-word clips
     // sounds worse than waiting for the rest of the sentence.
@@ -646,6 +764,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Speak whatever never reached a sentence boundary (the tail of the reply).
             const tail = reply.slice(spoken.length);
             if (tail.trim()) await speakChunk(tail);
+
+            await refreshPendingApprovals();
 
             if (autoSpeak) {
                 attachLazyReplay(replyDiv, reply);
@@ -1136,6 +1256,9 @@ document.addEventListener('DOMContentLoaded', () => {
     loadStaticInfo();
     loadChatHistory();
     loadSettings();
+    // A proposal outlives the conversation that made it, so anything still waiting from a
+    // previous session is put back on screen rather than quietly expiring unseen.
+    refreshPendingApprovals();
     connectTelemetry();
     initVersionAndUpdates();
 

@@ -13,6 +13,7 @@
 // something the caller decides per call.
 
 mod builtin;
+pub mod consent;
 mod fs_guard;
 pub mod protocol;
 
@@ -50,6 +51,15 @@ pub trait Tool: Send + Sync {
     /// factual; errors are returned as Err and reach the model as a failure it can react
     /// to, rather than as a crash.
     fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String>;
+
+    /// One line describing what calling this with `args` would do, addressed to the
+    /// operator rather than to the model. This is what an approval card says, so it has to
+    /// be concrete: "delete 4 files in ~/build" tells them something, "run write_file"
+    /// does not. The default is the tool's name and its arguments, which is honest but
+    /// rarely the clearest thing a tool could say about itself.
+    fn preview(&self, args: &Value) -> String {
+        format!("{} {}", self.name(), args)
+    }
 }
 
 /// What a tool can reach besides its own arguments. Tools are stateless and shared, so
@@ -114,7 +124,10 @@ impl Registry {
     /// by name and would have no way to tell which one it reached.
     pub fn register(&mut self, tool: Box<dyn Tool>) -> Result<(), String> {
         if self.get(tool.name()).is_some() {
-            return Err(format!("a tool named {:?} is already registered", tool.name()));
+            return Err(format!(
+                "a tool named {:?} is already registered",
+                tool.name()
+            ));
         }
         self.tools.push(tool);
         Ok(())
@@ -156,7 +169,11 @@ impl Registry {
                 format!(
                     "- {}{}: {}\n  arguments: {}",
                     t.name(),
-                    if t.mutating() { " (needs approval)" } else { "" },
+                    if t.mutating() {
+                        " (needs approval)"
+                    } else {
+                        ""
+                    },
                     t.description(),
                     t.parameters()
                 )
@@ -208,7 +225,9 @@ fn validate_args(schema: &Value, args: &Value) -> Result<(), String> {
         .map(Vec::as_slice)
         .unwrap_or_default()
     {
-        let Some(key) = required.as_str() else { continue };
+        let Some(key) = required.as_str() else {
+            continue;
+        };
         if args.get(key).is_none() {
             return Err(format!("missing required argument {key:?}"));
         }
@@ -240,12 +259,11 @@ fn validate_args(schema: &Value, args: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs one tool call and records it.
+/// Runs one tool call, or proposes it if it would change the machine.
 ///
-/// The row goes in before the call, so a tool that hangs or crashes the process still
-/// leaves evidence that it was attempted. A mutating tool is refused here rather than
-/// executed: the consent path that would approve it doesn't exist yet, and "there are no
-/// mutating tools registered" is not something this function should have to trust.
+/// This is the single gate: a mutating tool cannot be executed from a conversation, only
+/// proposed, and the check lives here rather than in each tool so that adding a tool
+/// carelessly cannot bypass it.
 pub fn run(
     registry: &Registry,
     ctx: &ToolContext,
@@ -264,15 +282,35 @@ pub fn run(
         ));
     };
 
-    if tool.mutating() {
-        return Err(format!(
-            "{name} changes the system and Aether1 cannot run it yet -- approval for \
-             mutating actions is not implemented"
-        ));
-    }
-
     validate_args(&tool.parameters(), args)?;
 
+    // A mutating call does not run here. It is written down and left for the operator --
+    // unless they have already decided, once, that this tool never needs asking about.
+    if tool.mutating() {
+        if !consent::is_always_allowed(ctx.db, name) {
+            let id = consent::propose(ctx.db, name, args)?;
+            return Ok(format!(
+                "PROPOSED (id {id}): {} is waiting for the operator to approve it. Do not \
+                 assume it happened, and do not propose it again -- tell them what you want \
+                 to do and why, then wait.",
+                tool.preview(args)
+            ));
+        }
+        return run_now(ctx, tool, name, args, "always-allow");
+    }
+
+    run_now(ctx, tool, name, args, "automatic")
+}
+
+/// Executes a tool and records the outcome. The log row goes in before the call, so a
+/// tool that hangs or crashes the process still leaves evidence it was attempted.
+fn run_now(
+    ctx: &ToolContext,
+    tool: &dyn Tool,
+    name: &str,
+    args: &Value,
+    approved_by: &str,
+) -> Result<String, String> {
     let id = ctx
         .db
         .log_action(name, args, tool.mutating(), ActionStatus::Proposed)
@@ -286,10 +324,15 @@ pub fn run(
                 ActionStatus::Executed,
                 Some(&o.result),
                 o.undo.as_ref(),
+                Some(approved_by),
             ),
-            Err(e) => ctx
-                .db
-                .set_action_outcome(id, ActionStatus::Failed, Some(e), None),
+            Err(e) => ctx.db.set_action_outcome(
+                id,
+                ActionStatus::Failed,
+                Some(e),
+                None,
+                Some(approved_by),
+            ),
         };
     }
 
@@ -309,6 +352,8 @@ pub fn catalog(db: &crate::llm::MemoryDb, registry: &Registry) -> Value {
     json!({
         "enabled": tools_enabled(db),
         "tools": registry.schemas(),
+        "always_allowed": consent::always_allowed(db),
+        "proposal_ttl_minutes": consent::PROPOSAL_TTL_MINUTES,
     })
 }
 
@@ -397,17 +442,52 @@ mod tests {
     }
 
     #[test]
-    fn a_mutating_tool_is_refused_until_approval_exists() {
+    fn a_mutating_tool_is_proposed_rather_than_run() {
         let db = temp_db("run_mutating");
         let ctx = ToolContext { db: &db };
         let mut registry = Registry::new();
         registry.register(probe("probe_writer", true)).unwrap();
 
-        let err = run(&registry, &ctx, "probe_writer", &json!({"path": "/tmp"})).unwrap_err();
-        assert!(err.contains("cannot run it yet"), "{err}");
+        let reply = run(&registry, &ctx, "probe_writer", &json!({"path": "/tmp"})).unwrap();
+        assert!(reply.starts_with("PROPOSED"), "{reply}");
+
+        let waiting = consent::pending(&db, &registry);
+        assert_eq!(waiting.len(), 1, "it should be waiting for the operator");
+        assert_eq!(waiting[0].status, ActionStatus::Proposed);
         assert!(
-            db.recent_actions(5).unwrap().is_empty(),
-            "a refused call must not be logged as having happened"
+            waiting[0].result.is_none(),
+            "a proposal has not run, so it has no result"
+        );
+    }
+
+    #[test]
+    fn an_always_allowed_tool_runs_without_asking_and_says_who_let_it() {
+        let db = temp_db("run_always_allowed");
+        let ctx = ToolContext { db: &db };
+        let mut registry = Registry::new();
+        registry.register(probe("probe_writer", true)).unwrap();
+        consent::set_always_allowed(&db, "probe_writer", true).unwrap();
+
+        let reply = run(&registry, &ctx, "probe_writer", &json!({"path": "/tmp"})).unwrap();
+        assert!(!reply.starts_with("PROPOSED"), "{reply}");
+
+        assert!(consent::pending(&db, &registry).is_empty());
+        let logged = db.recent_actions(1).unwrap();
+        assert_eq!(logged[0].status, ActionStatus::Executed);
+        assert_eq!(logged[0].approved_by.as_deref(), Some("always-allow"));
+    }
+
+    #[test]
+    fn a_read_only_call_records_that_it_needed_no_approval() {
+        let db = temp_db("run_automatic");
+        let ctx = ToolContext { db: &db };
+        let mut registry = Registry::new();
+        registry.register(probe("probe_tool", false)).unwrap();
+
+        run(&registry, &ctx, "probe_tool", &json!({"path": "/tmp"})).unwrap();
+        assert_eq!(
+            db.recent_actions(1).unwrap()[0].approved_by.as_deref(),
+            Some("automatic")
         );
     }
 
