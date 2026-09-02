@@ -13,6 +13,17 @@ echo "======================================================================"
 echo "⚡ INITIALIZING AETHER1 AI SETUP"
 echo "======================================================================"
 
+# This script is for Linux. Windows has its own, which needs no system libraries at all --
+# only Rust -- and creates Start Menu and desktop shortcuts.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+        echo ""
+        echo "This looks like Windows. Run setup.bat instead (from cmd or PowerShell)."
+        echo ""
+        exit 1
+        ;;
+esac
+
 # 1. Detect Linux Distribution
 DISTRO="unknown"
 if [ -f /etc/os-release ]; then

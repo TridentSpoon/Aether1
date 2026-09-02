@@ -28,6 +28,8 @@ Intended features
 
 ## Installing
 
+### Linux
+
 ```sh
 git clone https://github.com/TridentSpoon/Aether1.git
 cd Aether1
@@ -37,11 +39,30 @@ cd Aether1
 `setup.sh` installs the build dependencies for your distribution, builds the app, and puts
 it in your launcher and on your `PATH` as `aether1`. It is safe to re-run.
 
+### Windows
+
+Install [Rust](https://rustup.rs) — that is the only prerequisite, since Tauri uses the
+WebView2 runtime that ships with Windows. Then, in the checkout:
+
+```
+setup.bat
+```
+
+It builds the app and adds Start Menu and desktop shortcuts (no administrator rights
+needed). Launch it from either, or run `start.bat`.
+
+Aether1 lives in the **notification area** — click its icon to show or hide the HUD, and
+closing the window leaves it running there rather than quitting.
+
+`start.bat --browser` runs the headless server and opens the HUD in a browser tab instead.
+That is the development flow, and the fallback if the webview misbehaves; there is no tray
+icon on that path, because the tray belongs to the native app.
+
 ### Building from source
 
-Aether1 is a Tauri app, so it links against your system's webview and GTK stack. `setup.sh`
-installs these for you on Arch, Fedora, Debian/Ubuntu and openSUSE; on anything else,
-install the equivalents by hand and re-run it.
+On Linux, Aether1 links against your system's webview and GTK stack. `setup.sh` installs
+these for you on Arch, Fedora, Debian/Ubuntu and openSUSE; on anything else, install the
+equivalents by hand and re-run it. Windows needs none of them — only Rust.
 
 **Rust** is required and is not in any distribution list — install it with
 [rustup](https://rustup.rs):
