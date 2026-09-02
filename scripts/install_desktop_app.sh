@@ -32,7 +32,8 @@ if [ -x "$CARGO_BIN" ] && [ -d "src-tauri" ]; then
     fi
 else
     echo "⚠ Rust/Cargo not found at $CARGO_BIN -- skipping native app build/install."
-    echo "   See README's 'Native Desktop App' section to install Rust, then re-run ./setup.sh."
+    echo "   Install Rust with:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    echo "   then re-run ./setup.sh."
     exit 0
 fi
 
