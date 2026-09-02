@@ -120,6 +120,43 @@ a single sentence — it only ever got whole-reply audio bundled into `/api/chat
 now synthesizes per sentence on both paths and queues the clips in order, so speech starts
 mid-generation; the whole-reply replay button synthesizes lazily on first click instead.
 
+### Step 3a: Local speech synthesis
+
+*Why now:* `llm/tts.rs` opens a WebSocket to a Microsoft endpoint. Every spoken reply
+therefore needs the network, which makes the offline claim in GOALS.md false, and sends the
+text of everything the companion says to a third party — including, once tools land,
+things it read off your disk.
+
+- **`src-tauri/src/llm/tts.rs`** — put the existing msedge-tts path behind a `TtsEngine`
+  enum and add a local one. Piper is the obvious first target: small ONNX voices, a
+  permissive licence, one binary, good enough quality, and it runs on a CPU. Detect it the
+  way `model_scanner.rs` detects Ollama — if it's installed, prefer it.
+- **Voice selection** — persona voices are currently Microsoft voice ids
+  (`en-US-AriaNeural`). Map each persona to a local voice as well, so switching engines
+  doesn't silently change who the companion sounds like.
+- **Settings** — engine choice (auto / local / cloud), with auto meaning "local if present".
+- **Verify:** with the network down and Ollama running, a spoken reply still comes out of
+  the speakers.
+
+### Step 3b: Push-to-talk with local recognition
+
+*Why this shape:* `voice.js` uses the browser's Web Speech API, which in most browsers is a
+cloud service, and auto-sends whatever it thinks it heard. Hold-a-key is both more
+reliable and less alarming than a microphone permanently deciding whether you meant it.
+
+- **`src-tauri/src/llm/stt.rs`** (new) — whisper.cpp via a small local binary, or
+  `whisper-rs` if the build stays manageable. Record while a key is held, transcribe on
+  release.
+- **`src-tauri/src/hotkey.rs`** — a second registered chord for talk. Press-and-hold starts
+  capture, release ends it; the same Wayland caveat and the same `aether1 talk` fallback
+  for compositor keybindings.
+- **Frontend** — the HUD shows listening state while held (the tray already has a Listening
+  colour), then the transcript appears in the input and is sent.
+- **Keep the browser path** as the fallback for `--serve` in a browser, where no local
+  microphone capture is available to the Rust side.
+- **Verify:** hold the key, speak, release, and the answer starts coming back — with the
+  network down.
+
 ---
 
 ## Phase 2 — Hands
@@ -226,53 +263,60 @@ having happened; a call that runs and fails is logged as failed, with the reason
 
 ---
 
-## Phase 3 — Memory that earns its name
+## Phase 3 — The vault
 
-### Step 9: Schema for real memory
+*Changed from the original plan.* Steps 9–12 were written around growing the SQLite store:
+schema columns for provenance, an FTS index, a consolidation pass, and a memory browser in
+the HUD. The better answer, borrowed from
+[fullstack-agent](https://github.com/jaredrhod/fullstack-agent), is that durable memory
+should be **a folder of plain text notes** with an index at its root. It is inspectable
+with tools you already have, syncable with git or Obsidian, portable to any other assistant,
+and it makes the memory browser unnecessary. It also reuses the tools from step 5 —
+`read_file` and `list_dir` are already how the companion would read it.
 
-- **`src-tauri/src/llm/db.rs`** — `long_term_memory` gains `source` (`stated` / `observed`
-  / `derived`), `confidence`, `last_seen`, `expires_at`. Add a `sessions` table with a
-  summary column. Keep the existing columns and defaults so old databases keep working —
-  `ALTER TABLE ... ADD COLUMN` guarded by a `PRAGMA table_info` check, in the same
-  `open()` path as the creates.
-- **`src-tauri/src/llm/mod.rs`** — `check_instant_commands`'s `remember that` path writes
-  `source = 'stated'`; tool executions write `source = 'observed'` facts about what was
-  done.
-- **Verify:** an existing `aether1_memory.db` opens unchanged and gains the columns.
+SQLite keeps chat transcripts, settings, and the action log.
 
-### Step 10: Retrieval
+### Step 9: The vault, and priming from it
 
-- **`src-tauri/src/llm/db.rs`** — an FTS5 virtual table over memory and message text
-  (`rusqlite`'s bundled SQLite has FTS5), kept in sync by triggers. `search_memory(query,
-  limit)`.
-- **`src-tauri/src/llm/mod.rs`** — `system_prompt` currently pastes the first 10 memories
-  verbatim. Replace that with a retrieval against the prompt, so what's recalled is what's
-  relevant. This is the single highest-value change in Phase 3.
-- **Later, optionally:** swap FTS for embeddings once there's a local embedding model worth
-  the RAM. Keep the `search_memory` signature stable so that swap is one module.
-- **Verify:** with 200 stored facts, asking about one topic recalls that topic's facts and
-  not the ten oldest.
+- **New `src-tauri/src/vault/mod.rs`** — resolve the vault path (setting `vault_path`,
+  default `~/Aether1Vault`), create it on first run with a starter layout:
+  `INDEX.md` (what is here, and which notes matter for which kind of question),
+  `profile.md` (who the operator is), `machine.md` (what this box is),
+  `projects/`, `daily/`, `actions/`.
+- **`llm/mod.rs`** — `system_prompt` currently pastes the first ten `long_term_memory`
+  rows. Replace that with the vault's `INDEX.md` plus any notes the index marks as
+  always-loaded. That is the whole priming mechanism: the index tells the model what exists
+  and how to reach it, and `read_file` does the reaching.
+- **Migration** — existing `long_term_memory` rows are written out as
+  `vault/imported-memories.md` on first run, once, and the table is left alone.
+- **Verify:** a fact written into `profile.md` by hand shows up in the companion's answers
+  in the next conversation, with no restart and no import step.
 
-### Step 11: Consolidation and decay
+### Step 10: Writing back
 
-- **New `src-tauri/src/llm/consolidate.rs`** — on session end (or a timer), summarise the
-  session into the `sessions` table and extract durable facts from it using the configured
-  model itself. Facts not seen for a long time lose confidence; expired ones stop being
-  retrieved.
-- **Verify:** a long conversation leaves behind a short summary and a handful of facts
-  instead of unbounded history.
+- **New tools** (mutating, so they land after step 6's consent path):
+  `append_note`, `write_note`, `update_index`. `remember that …` becomes an append to the
+  right note rather than a key-value row.
+- **Session close** — a short note per conversation in `daily/`, written by the model
+  itself: what was discussed, what was decided, what changed.
+- **Verify:** a week of conversations leaves a readable trail of notes, and the index knows
+  about them.
 
-### Step 12: Memory browser
+### Step 11: Retrieval, consolidation, decay
 
-- **`frontend/js/app.js` + `index.html`** — a panel listing memories with source,
-  confidence and age; edit and delete per row; a full-text search box; the action log
-  beside it.
-- **`commands.rs`** — `list_memories`, `update_memory`, `delete_memory`, both transports.
-- **Verify:** you can read everything the companion believes about you and delete any of
-  it, without touching SQLite by hand. This is the promise in GOALS.md principle 5 — it
-  isn't kept until this ships.
+- **Retrieval** — start with the index plus filename/heading search over the vault, since
+  that is what the priming design actually asks for. Add a real index (SQLite FTS over note
+  contents, or embeddings) only if the simple thing measurably fails.
+- **Consolidation** — daily notes fold into topic notes; a note that has stopped being true
+  gets edited or moved to `archive/` rather than silently contradicting a newer one.
+- **Verify:** with 200 notes, asking about one topic pulls that topic's notes and not the
+  ten most recent.
 
----
+### Step 12: Vault in the HUD *(reduced)*
+
+Not a memory browser any more — the browser is the operator's editor. What is still worth
+building is small: show which notes were loaded for the current answer, and a button that
+opens the vault folder. Seeing *why* it said something matters more than another file list.
 
 ## Phase 4 — Situation
 
@@ -315,13 +359,32 @@ Sketched rather than specified, because the earlier steps will change what these
 
 ---
 
-## Suggested first move
+### Step 18a: A fullscreen face
 
-Steps 1 and 2 together are a weekend and change the daily experience more than anything
-else on this list: the companion becomes something you summon rather than something you
-open. Step 3 is the one to budget properly — streaming touches every layer, and doing it
-before the tool loop saves redoing it after.
+Cheap, and it changes how the thing feels: a fullscreen route that shows only the avatar
+and its state (idle / listening / thinking / speaking), for a second monitor or a spare
+screen. The hologram renderer and the state machine already exist; this is a layout and a
+CLI flag (`aether1 face`) away.
 
-Step 4 is worth landing early even though nothing is user-visible when it does, because the
-registry and the action log are what the whole capability layer hangs from, and step 6's
-consent path must exist before the first mutating tool does.
+### Step 18b: Separable parts
+
+`fullstack-agent` ships its four pieces as repos you can take one at a time, and that is
+worth copying as a shape even inside one binary: the vault should be usable by another
+tool, the visualizer runnable on its own, the voice stack callable from a script. Concretely
+that means the vault format is documented and stable, `aether1 face` and `aether1 say`
+work without the HUD running, and nothing in the vault depends on Aether1 to be readable.
+
+## Where this stands
+
+Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies
+stream and are spoken as they arrive, and with inspection switched on it can read files,
+list directories and check processes — every call logged, nothing able to change anything.
+
+Next, in order:
+
+1. **Step 6, the consent path.** It has to exist before any tool that can change the
+   machine, and everything in phase 3 that writes to the vault is such a tool.
+2. **Steps 3a/3b, local voice.** The correction that makes the offline claim true, and the
+   change that most affects what using this feels like day to day.
+3. **Phase 3, the vault.** The largest change in direction, and the one that turns a
+   companion that answers well into one that knows you.

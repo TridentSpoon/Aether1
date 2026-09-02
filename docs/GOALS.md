@@ -12,18 +12,32 @@ about you stays on the same disk. Those three facts compound — an assistant th
 observe and act, and that remembers the last thousand times it did so, becomes personal in
 a way no amount of prompt engineering reproduces.
 
-### On Omarchy
+### Where this sits
 
-The [Omarchy AI manual](https://omarchy.org/manual/ai/) is the reference point for *how
-deeply integrated* an AI layer should be — agents present at a keystroke, local models a
-menu entry away, the system's own configuration something the AI can change, crashes
-routed to it automatically. That level of integration is the bar.
+Two projects are worth naming, because both got something right that this one is aiming at.
 
-It is not the blueprint. Omarchy wires up other people's coding agents on a distribution
-it controls. Aether1 is one resident companion on whatever machine you already run, and
-its job is different: not to write your code, but to be the presence that knows your
-system and your habits. We are taking the integration depth and going somewhere else with
-it.
+The [Omarchy AI manual](https://omarchy.org/manual/ai/) is the reference for *how deeply
+integrated* an AI layer should be: agents present at a keystroke, local models a menu entry
+away, the system's own configuration something the AI can change, crashes routed to it
+automatically. That level of integration is the bar. It is not the blueprint — Omarchy
+wires up other people's coding agents on a distribution it controls.
+
+[Jared Rhodes' fullstack-agent](https://github.com/jaredrhod/fullstack-agent) ("Jarvis") is
+the reference for *shape*: memory, voice, face, hands as four separable parts you can take
+one at a time. Two of its decisions are better than what this project had written down, and
+are now adopted below — **memory as a folder of plain text files** rather than a database,
+and **hold-a-key push-to-talk** rather than always-listening speech recognition. Its
+memory design in particular is the one to beat: notes an agent primes itself from, an index
+telling it which notes matter for which job, and no ceiling because nothing has to fit in
+one context window.
+
+Where Aether1 differs is the runtime. Jarvis is a skin over Claude Code: its hands *are*
+Claude Code's, which is why it can do so much on day one and why it needs a cloud
+subscription to do any of it. Aether1 is one native binary that carries its own engine,
+its own tool layer, and its own consent model, so that a machine running nothing but
+Ollama is still fully functional. That is a slower road to the same capabilities, taken
+deliberately: the whole argument for a companion that lives on your hardware collapses if
+it stops working when the network does.
 
 ## The three things that matter
 
@@ -58,10 +72,21 @@ is a liability; an agent that shows you its plan first is a colleague.
 ### 3. It remembers, and becomes yours
 
 Aether1 already writes chat history and explicit `remember that …` facts to a local SQLite
-store (`src-tauri/src/llm/db.rs`). That is the seed of the real thing: a **memory
-repository** that accumulates into a model of you and your machine.
+store (`src-tauri/src/llm/db.rs`). That is a start, but a database is the wrong home for
+the part of memory that matters.
 
-What belongs in it, beyond what's there now:
+**Durable memory is a folder of plain text files** — a vault, in your home directory,
+that you can open in any editor, keep in Obsidian, search with `grep`, version with `git`,
+back up by copying, and hand to a different tool entirely. An index file at its root says
+what is in it and which notes matter for which kind of job, so the companion primes itself
+from the right handful of notes rather than trying to hold everything at once. There is no
+ceiling: the vault can outgrow any context window because only the relevant part is ever
+loaded.
+
+SQLite keeps what it is genuinely good for and nothing else: chat transcripts, settings,
+and the action log — high-volume, queryable, uninteresting to read by hand.
+
+What accumulates in the vault:
 
 - **Facts you state** — preferences, names, project details, the way you like things done.
 - **Facts it observes** — the tools you actually use, the commands you re-run, the hours
@@ -71,11 +96,11 @@ What belongs in it, beyond what's there now:
 - **Your enquiries over time** — the topics you keep returning to, which shape what it
   offers unprompted.
 
-For that to be useful rather than a growing pile, memory needs retrieval (semantic search
-over the store, not just key lookup), consolidation (summarising old sessions into durable
-facts instead of unbounded history), and decay (what stops being true stops being
-asserted). It also needs to be inspectable and editable — you can read the whole file, see
-what it believes about you, and delete any of it.
+For that to stay useful rather than becoming a pile, it needs retrieval (find the right
+notes for this question), consolidation (a session becomes a note, not another thousand
+lines of transcript), and decay (what stops being true stops being asserted). The files
+being plain text is what makes all three inspectable: when the companion says something
+odd about you, you can find the line that caused it and delete it.
 
 Personalisation then falls out of memory plus persona: the same companion, tuned by what
 it knows, wearing whichever of the personas you chose.
@@ -89,38 +114,45 @@ it knows, wearing whichever of the personas you chose.
    context, not something the model has to be told about.
 4. **Acting requires consent.** Mutating actions go plan → approve → execute → log, and are
    reversible where possible.
-5. **Memory is yours.** On your disk, human-readable, editable, deletable. It never leaves
-   the machine unless you move it yourself.
+5. **Memory is yours.** A folder of plain text on your disk — readable, editable and
+   deletable with the tools you already use, not through an interface we have to build
+   first. It never leaves the machine unless you move it yourself.
 6. **Persona is presentation, capability is shared.** Halcy, R.E.D. 9000, Nexus, the ARX
-   nodes change voice and manner — never what the system can or will do.
+   nodes change voice and manner — never what the system can or will do. Every persona
+   pushes back: a companion that agrees with a bad idea is worse than no companion, and
+   that is a property of all of them, not a personality option.
 7. **One binary, no install ritual.** The Rust/Tauri core plus a static frontend; the
    setup script and `.tar.gz` bundle do the rest.
 
 ## Where we are today
 
-Built:
+Built (steps 1–5 of [IMPLEMENTATION.md](IMPLEMENTATION.md)):
 
-- Multi-provider engine — Ollama, OpenAI-compatible, Gemini, Anthropic
-  (`src-tauri/src/llm/providers.rs`).
-- Provider auto-detection and one-click model pulls (`src-tauri/src/model_scanner.rs`).
-- Cross-platform host telemetry over a WebSocket (`llm/telemetry.rs`, `server.rs`).
-- Personas with per-persona voices, and identity forging from a free-text purpose
-  (`llm/persona.rs`, `llm/genesis.rs`).
-- Local SQLite memory and settings, locked to owner-only (`llm/db.rs`).
-- Neural TTS plus browser speech recognition (`llm/tts.rs`, `frontend/js/voice.js`).
-- Holographic avatars and HUD (`frontend/js/hologram/`), tray presence, setup/packaging
-  scripts.
+- Multi-provider engine — Ollama, OpenAI-compatible, Gemini, Anthropic — streaming, with
+  provider auto-detection and one-click model pulls (`llm/providers.rs`,
+  `model_scanner.rs`).
+- Reachable without the HUD: global hotkey, `aether1 prompt|status|say|toggle`, and a
+  headless HTTP/WebSocket mode (`cli.rs`, `hotkey.rs`, `server.rs`).
+- Read-only tools behind a path guard, a bounded tool loop, and an action log of
+  everything the companion has done (`tools/`, `llm/db.rs`).
+- Cross-platform host telemetry, personas with per-persona voices, identity forging,
+  holographic avatars and HUD, tray presence, setup/packaging scripts.
 
 Missing, against the three things above:
 
-- **No hands.** No tool calling of any kind — the companion cannot read a file, run a
-  command, or change a setting. This is the single largest gap.
-- **No consent machinery.** No plan/approve/execute/log path, which has to exist *before*
-  the tools do.
-- **Memory is flat.** Key-value plus raw history: no retrieval, no consolidation, no
-  observed facts, no record of actions taken, no UI to inspect or edit it.
-- **Not reachable.** No global hotkey, no CLI, no headless prompt mode.
-- **Nothing streams.** Replies arrive whole, which reads as dead air in a voice interface.
+- **It can look but not touch.** Read-only tools exist; nothing can change the machine,
+  because the consent path they would go through is the next thing to build.
+- **Memory is a database, not a vault.** Key-value facts and raw transcript: no notes, no
+  index, no retrieval, no consolidation, no observed facts, and nothing you can open in an
+  editor.
+- **Voice is not local.** Speech synthesis calls a Microsoft endpoint and speech
+  recognition is the browser's Web Speech API, which is also a cloud service in most
+  browsers. Principle 2 is therefore not true today: unplug the network and the companion
+  goes mute and deaf even with a local model answering. Fixing this is a correction, not a
+  feature.
+- **No hands-free input.** Speech recognition auto-sends whatever it hears, which is the
+  wrong shape — hold a key, talk, release is both more reliable and less alarming than a
+  microphone that is always deciding whether you meant it.
 - **Thin context.** Telemetry reaches the prompt; logs, crashes, and the working
   environment do not.
 
@@ -141,18 +173,23 @@ output of capability.
 
 ## Roadmap
 
-**Phase 1 — Reachability and flow.** Global hotkey to summon/dismiss; an `aether1` CLI with
-`prompt`, `status`, and `say`; streaming responses end to end (provider → WebSocket → TTS)
+**Phase 1 — Reachability and flow.** *(shipped)* Global hotkey to summon/dismiss; an
+`aether1` CLI with `prompt`, `status`, `say` and `toggle`; streaming responses end to end
 so speech starts before generation finishes.
+
+**Phase 1b — A voice that works with the network unplugged.** Local speech synthesis and
+local speech recognition, and hold-a-key push-to-talk instead of a microphone deciding for
+itself when you meant it. This is the correction that makes principle 2 true.
 
 **Phase 2 — Hands.** The tool/consent layer, then a first tool set: read files, inspect
 processes and services, change Aether1's own settings, and a vetted command runner. Native
 tool-calling wire formats for the providers that support them, with a prompt-level fallback
 for local models that don't.
 
-**Phase 3 — Memory that earns its name.** Embeddings and semantic retrieval over the store;
-session consolidation into durable facts; an action log; observed-habit capture; and a
-memory browser in the HUD where you can read, edit and delete anything it believes.
+**Phase 3 — The vault.** Durable memory moves out of SQLite and into a folder of notes with
+an index at its root, which the companion primes itself from and writes back to as you
+work. Retrieval over the notes, session consolidation into notes rather than transcript,
+observed-habit capture, decay. No memory browser to build: the browser is your editor.
 
 **Phase 4 — Situation.** Crash and journal capture wired to the tray, so the companion is
 the first responder with the failing process already in context. AI telemetry — provider,
@@ -169,6 +206,9 @@ persona/palette identity the rest of your system can follow.
 ## Non-goals
 
 - **Not a coding agent.** Aether1 may hand work to one; it is not trying to be one.
+- **Not a wrapper around someone else's agent.** Building on a hosted coding agent buys
+  enormous capability immediately and costs the thing this project is for: working when
+  the network doesn't.
 - **Not a cloud service.** No account, no server-side memory, no telemetry leaving the box.
 - **Not a desktop environment or distribution.** It runs on your setup; it doesn't replace
   it.
@@ -180,8 +220,13 @@ persona/palette identity the rest of your system can follow.
 - How wide is the command runner by default — read-only until explicitly widened, or a
   curated allowlist out of the box? Where does "approve once" end and "approve always"
   begin?
-- Embeddings locally means another model resident in RAM. Is that acceptable alongside a
-  chat model, or does retrieval start as SQLite FTS and grow later?
+- Retrieval over a folder of notes: does the index plus the existing `read_file` /
+  `list_dir` tools get far enough on its own, or does it need a real search index — and if
+  so, grep-shaped or embeddings? Embeddings mean a second model resident in RAM alongside
+  the chat model.
+- Where does the vault live, and who owns its layout? An Obsidian-compatible folder is the
+  obvious default, but the notes have to stay useful to someone who has never opened
+  Obsidian.
 - Provider-native tool calling per provider, or one normalised shape that loses fidelity on
   some? And what do we do for small local models that tool-call badly?
 - MCP client, or a first-party tool set? The first buys an ecosystem; the second keeps the
