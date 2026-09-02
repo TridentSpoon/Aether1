@@ -12,6 +12,7 @@ class VoiceAudioEngine {
         this.analyser = null;
         this.dataArray = new Uint8Array(64);
         this.currentAudio = null;
+        this.capture = null;
         this.ttsQueue = [];
         this.isDrainingQueue = false;
         this.recognition = null;
@@ -139,6 +140,106 @@ class VoiceAudioEngine {
             this.currentAudio.pause();
             this.currentAudio = null;
         }
+    }
+
+    // --- Local push-to-talk ---------------------------------------------------------
+    // Hold a key, talk, release. Audio is captured here and assembled into a 16 kHz mono
+    // WAV in the page, then posted to Aether1 to be transcribed by a local model. Nothing
+    // is sent anywhere -- which is the difference between this and the Web Speech API
+    // above, which in most browsers is a cloud service wearing a local-looking API.
+
+    async startCapture() {
+        if (this.capture) return true;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+            });
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioContext();
+            const source = ctx.createMediaStreamSource(stream);
+            // ScriptProcessor is deprecated but universally available and adequate here;
+            // an AudioWorklet would need a separate module file for no practical gain at
+            // this sample rate.
+            const processor = ctx.createScriptProcessor(4096, 1, 1);
+            const chunks = [];
+
+            processor.onaudioprocess = (event) => {
+                chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+            };
+            source.connect(processor);
+            processor.connect(ctx.destination);
+
+            this.capture = { stream, ctx, source, processor, chunks, sampleRate: ctx.sampleRate };
+            if (this.onStateChange) this.onStateChange('LISTENING');
+            this.playSFX('listen_start');
+            return true;
+        } catch (e) {
+            console.warn('microphone unavailable', e);
+            return false;
+        }
+    }
+
+    /** Stops capture and returns the recording as a 16 kHz mono WAV, or null. */
+    stopCapture() {
+        if (!this.capture) return null;
+        const { stream, ctx, source, processor, chunks, sampleRate } = this.capture;
+        this.capture = null;
+
+        processor.disconnect();
+        source.disconnect();
+        stream.getTracks().forEach((track) => track.stop());
+        ctx.close();
+        this.playSFX('listen_end');
+        if (this.onStateChange) this.onStateChange('IDLE');
+
+        const total = chunks.reduce((n, c) => n + c.length, 0);
+        if (!total) return null;
+        const samples = new Float32Array(total);
+        let offset = 0;
+        for (const chunk of chunks) { samples.set(chunk, offset); offset += chunk.length; }
+
+        return VoiceAudioEngine.encodeWav(VoiceAudioEngine.resampleTo16k(samples, sampleRate));
+    }
+
+    /** Nearest-neighbour downsample to 16 kHz, which is what whisper.cpp expects. */
+    static resampleTo16k(samples, sampleRate) {
+        const target = 16000;
+        if (sampleRate === target) return samples;
+        const ratio = sampleRate / target;
+        const out = new Float32Array(Math.floor(samples.length / ratio));
+        for (let i = 0; i < out.length; i++) out[i] = samples[Math.floor(i * ratio)];
+        return out;
+    }
+
+    /** 16-bit PCM mono WAV. */
+    static encodeWav(samples) {
+        const buffer = new ArrayBuffer(44 + samples.length * 2);
+        const view = new DataView(buffer);
+        const writeText = (offset, text) => {
+            for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+        };
+
+        writeText(0, 'RIFF');
+        view.setUint32(4, 36 + samples.length * 2, true);
+        writeText(8, 'WAVE');
+        writeText(12, 'fmt ');
+        view.setUint32(16, 16, true);        // PCM header size
+        view.setUint16(20, 1, true);         // PCM
+        view.setUint16(22, 1, true);         // mono
+        view.setUint32(24, 16000, true);     // sample rate
+        view.setUint32(28, 16000 * 2, true); // byte rate
+        view.setUint16(32, 2, true);         // block align
+        view.setUint16(34, 16, true);        // bits per sample
+        writeText(36, 'data');
+        view.setUint32(40, samples.length * 2, true);
+
+        let offset = 44;
+        for (const sample of samples) {
+            const clamped = Math.max(-1, Math.min(1, sample));
+            view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+            offset += 2;
+        }
+        return new Blob([buffer], { type: 'audio/wav' });
     }
 
     async playTTSAudio(audioUrl) {

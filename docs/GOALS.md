@@ -141,26 +141,22 @@ Built (steps 1–5 of [IMPLEMENTATION.md](IMPLEMENTATION.md)):
   `model_scanner.rs`).
 - Reachable without the HUD: global hotkey, `aether1 prompt|status|say|toggle`, and a
   headless HTTP/WebSocket mode (`cli.rs`, `hotkey.rs`, `server.rs`).
-- Read-only tools behind a path guard, a bounded tool loop, and an action log of
-  everything the companion has done (`tools/`, `llm/db.rs`).
+- Tools behind a path guard and a consent path: read-only ones run freely, anything that
+  changes the machine is proposed and waits for approval, and everything is logged with
+  who allowed it and how to undo it (`tools/`, `llm/db.rs`).
+- Speech in and out without the network, given a local engine: Piper for synthesis,
+  whisper.cpp for recognition, hold-Space to talk (`llm/tts.rs`, `llm/stt.rs`).
 - Cross-platform host telemetry, personas with per-persona voices, identity forging,
   holographic avatars and HUD, tray presence, setup/packaging scripts.
 
 Missing, against the three things above:
 
-- **It can look but not touch.** Read-only tools exist; nothing can change the machine,
-  because the consent path they would go through is the next thing to build.
 - **Memory is a database, not a vault.** Key-value facts and raw transcript: no notes, no
   index, no retrieval, no consolidation, no observed facts, and nothing you can open in an
   editor.
-- **Voice is not local.** Speech synthesis calls a Microsoft endpoint and speech
-  recognition is the browser's Web Speech API, which is also a cloud service in most
-  browsers. Principle 2 is therefore not true today: unplug the network and the companion
-  goes mute and deaf even with a local model answering. Fixing this is a correction, not a
-  feature.
-- **No hands-free input.** Speech recognition auto-sends whatever it hears, which is the
-  wrong shape — hold a key, talk, release is both more reliable and less alarming than a
-  microphone that is always deciding whether you meant it.
+- **The hotkey doesn't reach the microphone.** Push-to-talk works while the HUD has focus;
+  holding a key to talk from another application needs an OS-level press-and-hold that the
+  global-shortcut plugin doesn't express yet.
 - **Thin context.** Telemetry reaches the prompt; logs, crashes, and the working
   environment do not.
 

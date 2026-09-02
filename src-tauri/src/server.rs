@@ -81,6 +81,8 @@ pub async fn run(engine: LlmEngine) {
         .route("/api/messages", get(get_messages).delete(clear_messages))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
+        .route("/api/stt", post(stt))
+        .route("/api/voice/status", get(voice_status))
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
@@ -139,8 +141,9 @@ async fn chat(
             .and_then(Value::as_str)
             .map(str::to_owned)
         {
+            let engine = state.engine.clone();
             audio_url =
-                tokio::task::spawn_blocking(move || commands::synthesize_speech(&reply, None))
+                tokio::task::spawn_blocking(move || commands::synthesize_speech(&engine, &reply, None))
                     .await
                     .ok()
                     .and_then(Result::ok)
@@ -170,6 +173,25 @@ async fn get_actions(
     Query(q): Query<ActionsQuery>,
 ) -> Json<Vec<llm::ActionRecord>> {
     Json(commands::recent_actions(&state.engine, q.limit))
+}
+
+/// Takes a WAV recording made in the page and returns what was said. The body is raw
+/// audio rather than JSON: base64-ing a recording to wrap it in an object would inflate it
+/// by a third for no benefit.
+async fn stt(
+    State(state): State<AppState>,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let text = tokio::task::spawn_blocking(move || commands::transcribe_audio(&engine, &body))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "text": text })))
+}
+
+async fn voice_status(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::voice_status(&state.engine))
 }
 
 async fn get_pending_actions(State(state): State<AppState>) -> Json<Vec<llm::ActionRecord>> {
@@ -253,8 +275,9 @@ async fn genesis(
         .get("voice")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let engine_for_tts = state.engine.clone();
     let audio_url = tokio::task::spawn_blocking(move || {
-        commands::synthesize_speech(&greeting, voice.as_deref())
+        commands::synthesize_speech(&engine_for_tts, &greeting, voice.as_deref())
     })
     .await
     .ok()
@@ -353,8 +376,14 @@ async fn get_audio(Path(filename): Path<String>) -> Result<Response, StatusCode>
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
+    // The local engine writes wav, the cloud one mp3; serving both as audio/mpeg makes
+    // some browsers refuse to play the wav.
+    let content_type = match path.extension().and_then(|e| e.to_str()) {
+        Some("wav") => "audio/wav",
+        _ => "audio/mpeg",
+    };
     Response::builder()
-        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::CONTENT_TYPE, content_type)
         .body(Body::from(bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
@@ -377,9 +406,13 @@ struct TtsRequest {
 /// Synthesizes one piece of text and returns its audio URL. The Tauri path has had this
 /// all along as generate_speech_rust; the browser path only ever got whole-reply audio
 /// bundled into /api/chat, which is no use once replies stream in sentence by sentence.
-async fn tts(Json(req): Json<TtsRequest>) -> Result<Json<Value>, (StatusCode, String)> {
+async fn tts(
+    State(state): State<AppState>,
+    Json(req): Json<TtsRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
     let path = tokio::task::spawn_blocking(move || {
-        commands::synthesize_speech(&req.text, req.voice.as_deref())
+        commands::synthesize_speech(&engine, &req.text, req.voice.as_deref())
     })
     .await
     .map_err(internal_error)?
@@ -480,8 +513,9 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
             .and_then(Value::as_str)
             .map(str::to_owned)
         {
+            let engine = state.engine.clone();
             audio_url =
-                tokio::task::spawn_blocking(move || commands::synthesize_speech(&reply, None))
+                tokio::task::spawn_blocking(move || commands::synthesize_speech(&engine, &reply, None))
                     .await
                     .ok()
                     .and_then(Result::ok)

@@ -8,6 +8,7 @@ mod db;
 mod genesis;
 mod persona;
 mod providers;
+mod stt;
 mod telemetry;
 mod tts;
 
@@ -20,7 +21,10 @@ use persona::{Persona, Provider};
 use providers::ChatContext;
 pub use providers::Sink;
 pub use telemetry::Telemetry;
-pub use tts::{generate_speech, DEFAULT_VOICE};
+pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
+pub use tts::{
+    generate_speech_with, local_status as tts_local_status, Engine as TtsEngine, DEFAULT_VOICE,
+};
 
 /// How many times the model may call tools before it has to answer. High enough for a
 /// real chain (look at a directory, read the interesting file, check a process), low

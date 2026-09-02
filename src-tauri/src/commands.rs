@@ -109,6 +109,10 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "auto_speak": true,
         "tools_enabled": false,
         "command_allowlist": [],
+        "tts_engine": "auto",
+        "tts_local_voice": "",
+        "stt_model_path": "",
+        "stt_language": "en",
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
@@ -184,8 +188,68 @@ pub fn set_always_allowed(engine: &LlmEngine, tool: String, allowed: bool) -> Re
 }
 
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling
-/// logic in /api/chat and /api/agent/genesis.
-pub fn synthesize_speech(text: &str, voice: Option<&str>) -> Result<PathBuf, String> {
+/// logic in /api/chat and /api/agent/genesis. Engine and voices come from settings, so the
+/// operator's choice of local-or-cloud applies wherever speech is produced.
+pub fn synthesize_speech(engine: &LlmEngine, text: &str, voice: Option<&str>) -> Result<PathBuf, String> {
+    let db = engine.db();
     let cache_dir = project_root().join("backend").join("audio_cache");
-    llm::generate_speech(&cache_dir, text, voice)
+    let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);
+    let local_voice = db.get_setting_string("tts_local_voice", "");
+    llm::generate_speech_with(
+        &cache_dir,
+        text,
+        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")),
+        Some(voice.unwrap_or(&configured_voice)),
+        Some(&local_voice),
+    )
+}
+
+/// Transcribes a recording made in the page. The audio is written to the same cache
+/// directory the synthesized speech lives in, transcribed, and deleted -- a recording of
+/// the operator's voice is not something to leave lying around after it has been read.
+pub fn transcribe_audio(engine: &LlmEngine, wav: &[u8]) -> Result<String, String> {
+    let db = engine.db();
+    let cache_dir = project_root().join("backend").join("audio_cache");
+    let staged = llm::stage_audio(&cache_dir, wav)?;
+
+    let model = db.get_setting_string("stt_model_path", "");
+    let language = db.get_setting_string("stt_language", "en");
+    let result = llm::transcribe(&staged, Some(&model), Some(&language));
+
+    let _ = std::fs::remove_file(&staged);
+    result
+}
+
+/// Whether speech in and out can happen without the network, and if not, what is missing.
+/// The settings panel reports this rather than making the operator guess why the
+/// microphone button does nothing.
+pub fn voice_status(engine: &LlmEngine) -> Value {
+    let db = engine.db();
+    let tts_engine = db.get_setting_string("tts_engine", "auto");
+    let local_voice = db.get_setting_string("tts_local_voice", "");
+    let stt_model = db.get_setting_string("stt_model_path", "");
+
+    let speech_out = llm::tts_local_status(Some(&local_voice));
+    let speech_in = llm::stt_local_status(Some(&stt_model));
+
+    serde_json::json!({
+        "tts_engine": tts_engine,
+        "speech_out": match &speech_out {
+            Ok((binary, voice)) => serde_json::json!({
+                "local": true,
+                "binary": binary.display().to_string(),
+                "voice": voice.display().to_string(),
+            }),
+            Err(why) => serde_json::json!({ "local": false, "why": why }),
+        },
+        "speech_in": match &speech_in {
+            Ok((binary, model)) => serde_json::json!({
+                "local": true,
+                "binary": binary.display().to_string(),
+                "model": model.display().to_string(),
+            }),
+            Err(why) => serde_json::json!({ "local": false, "why": why }),
+        },
+        "offline_capable": speech_out.is_ok() && speech_in.is_ok(),
+    })
 }

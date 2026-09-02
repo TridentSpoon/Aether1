@@ -257,10 +257,10 @@
 
             <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
                 <div class="flex items-center gap-2">
-                    <button id="btn-mic" title="Toggle Voice Recognition" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
+                    <button id="btn-mic" title="Hold to talk (or hold Space)" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
                     </button>
-                    <input id="chat-input" type="text" placeholder="Type tactical directive or speak to agent..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
                     </button>
@@ -478,6 +478,16 @@
                         <option value="en-US-JennyNeural">en-US-JennyNeural (hAlcy Alternative)</option>
                         <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural (Cyberpunk Tokyo)</option>
                     </select>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">SPEECH ENGINE</label>
+                    <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <option value="auto">Auto — local if installed, otherwise cloud</option>
+                        <option value="local">Local only (Piper) — never leaves this machine</option>
+                        <option value="cloud">Cloud (Microsoft) — better voices, text is sent away</option>
+                    </select>
+                    <div id="voice-status" class="text-[10px] font-mono text-slate-400 leading-snug"></div>
                 </div>
 
                 <div id="setting-hotkey-wrap" class="space-y-1">

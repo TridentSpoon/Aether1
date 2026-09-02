@@ -253,12 +253,11 @@ fn run_status(json: bool) -> String {
 
 fn run_say(text: Option<String>, voice: Option<String>, play: bool) -> Result<String, String> {
     let text = text_or_stdin(text, "say")?;
-    // The configured voice, so the CLI sounds like whichever persona the HUD is wearing.
-    let voice = voice.or_else(|| {
-        let engine = crate::build_llm_engine();
-        Some(engine.db().get_setting_string("voice_name", DEFAULT_VOICE))
-    });
-    let path = commands::synthesize_speech(&text, voice.as_deref())?;
+    // Engine and voice come from settings, so the CLI sounds like whatever the HUD sounds
+    // like -- including using the local engine when one is installed.
+    let engine = crate::build_llm_engine();
+    let voice = voice.or_else(|| Some(engine.db().get_setting_string("voice_name", DEFAULT_VOICE)));
+    let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
     if play {
         play_audio(&path)?;
         Ok(String::new())

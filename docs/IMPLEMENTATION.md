@@ -120,7 +120,7 @@ a single sentence — it only ever got whole-reply audio bundled into `/api/chat
 now synthesizes per sentence on both paths and queues the clips in order, so speech starts
 mid-generation; the whole-reply replay button synthesizes lazily on first click instead.
 
-### Step 3a: Local speech synthesis
+### Step 3a: Local speech synthesis — **shipped**
 
 *Why now:* `llm/tts.rs` opens a WebSocket to a Microsoft endpoint. Every spoken reply
 therefore needs the network, which makes the offline claim in GOALS.md false, and sends the
@@ -138,7 +138,15 @@ things it read off your disk.
 - **Verify:** with the network down and Ollama running, a spoken reply still comes out of
   the speakers.
 
-### Step 3b: Push-to-talk with local recognition
+Landed in `llm/tts.rs` as an `Engine` (Auto / Local / Cloud) with Piper as the local
+engine — binary and `.onnx` voice both auto-detected, configurable when they live
+somewhere unusual. Auto means "local if installed", which makes installing Piper the whole
+of the setup story. `Local` refuses rather than falling back, because a silent fallback is
+exactly how "it works offline" stops being true without anyone noticing. The engine is part
+of the cache key, so switching it doesn't keep replaying the old voice, and `/api/audio`
+now serves wav as `audio/wav` rather than claiming everything is an mp3.
+
+### Step 3b: Push-to-talk with local recognition — **shipped**
 
 *Why this shape:* `voice.js` uses the browser's Web Speech API, which in most browsers is a
 cloud service, and auto-sends whatever it thinks it heard. Hold-a-key is both more
@@ -156,6 +164,23 @@ reliable and less alarming than a microphone permanently deciding whether you me
   microphone capture is available to the Rust side.
 - **Verify:** hold the key, speak, release, and the answer starts coming back — with the
   network down.
+
+Built differently from the plan, and better for it. The plan called for a Rust-side
+recorder (`cpal` or similar) plus an OS-level press-and-hold chord. Instead the capture
+happens in the page — `getUserMedia` → Web Audio → a 16 kHz mono WAV assembled in
+JavaScript — and is posted to `/api/stt` (or `transcribe_rust`) to be transcribed by a
+local whisper.cpp. That keeps microphone access in the one place both the webview and a
+browser already have it, adds no native audio dependency to the Rust build, and works
+identically on both transports. Hold **Space** anywhere outside a text field, or hold the
+mic button.
+
+The Settings panel now says plainly whether speech in and out are local, and names what is
+missing when they aren't, rather than leaving the operator to discover it by pulling the
+cable.
+
+**Still cloud-shaped:** holding a key while the HUD is *unfocused* needs an OS-level
+press-and-hold, which the global-shortcut plugin doesn't express. That is a follow-up, and
+the browser Web Speech path remains as a fallback where no local model is installed.
 
 ---
 

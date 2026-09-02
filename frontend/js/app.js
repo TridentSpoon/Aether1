@@ -524,6 +524,69 @@ document.addEventListener('DOMContentLoaded', () => {
         msgDiv.appendChild(playBtn);
     }
 
+    // --- Push to talk ---------------------------------------------------------------
+    // Hold the key, talk, release: the recording is transcribed by a local model and the
+    // text is sent as a message. Deliberately not "always listening" -- a microphone
+    // permanently deciding whether you meant it is both less reliable and more alarming
+    // than a key you are holding on purpose.
+
+    const PUSH_TO_TALK_KEY = 'Space';
+    let talkHeld = false;
+
+    async function startTalking() {
+        if (talkHeld || isWaitingForResponse) return;
+        talkHeld = true;
+        voiceEngine.stopSpeech(); // talking over the companion interrupts it
+        hologram.setState('LISTENING');
+        const started = await voiceEngine.startCapture();
+        if (!started) {
+            talkHeld = false;
+            hologram.setState('IDLE');
+            appendMessage(currentAgentName, '⚠️ No microphone available.');
+        }
+    }
+
+    async function stopTalking() {
+        if (!talkHeld) return;
+        talkHeld = false;
+        const wav = voiceEngine.stopCapture();
+        if (!wav) return;
+
+        try {
+            const text = IS_TAURI
+                ? await tauriInvoke('transcribe_rust', { wav: Array.from(new Uint8Array(await wav.arrayBuffer())) })
+                : await (async () => {
+                    const resp = await apiFetch('/api/stt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'audio/wav' },
+                        body: wav
+                    });
+                    if (!resp.ok) throw new Error(await resp.text());
+                    return (await resp.json()).text;
+                })();
+            if (text && text.trim()) handleSendMessage(text.trim());
+        } catch (e) {
+            appendMessage(currentAgentName, `⚠️ Could not make that out: ${e.message}`);
+        }
+    }
+
+    // Held anywhere except a text field, where space is a space.
+    document.addEventListener('keydown', (event) => {
+        const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+        if (event.code === PUSH_TO_TALK_KEY && !typing && !event.repeat) {
+            event.preventDefault();
+            startTalking();
+        }
+    });
+    document.addEventListener('keyup', (event) => {
+        if (event.code === PUSH_TO_TALK_KEY && talkHeld) {
+            event.preventDefault();
+            stopTalking();
+        }
+    });
+    // Losing focus mid-hold would otherwise leave the microphone open.
+    window.addEventListener('blur', () => stopTalking());
+
     // --- Approval cards -----------------------------------------------------------
     // A mutating tool never runs from a conversation: it is proposed, and this is where
     // the operator answers. The card carries what will happen, in the tool's own words,
@@ -691,6 +754,31 @@ document.addEventListener('DOMContentLoaded', () => {
             for (const action of actions) list.appendChild(renderActivityRow(action));
         } catch (e) {
             list.innerHTML = `<div class="text-rose-300">Could not load the activity log: ${e.message}</div>`;
+        }
+    }
+
+    /// Says plainly whether speech works with the network unplugged, and what is missing
+    /// when it doesn't -- rather than leaving the operator to discover it by pulling the
+    /// cable.
+    async function loadVoiceStatus() {
+        const el = document.getElementById('voice-status');
+        if (!el) return;
+        try {
+            const status = IS_TAURI
+                ? await tauriInvoke('voice_status_rust')
+                : await toolsApi('/api/voice/status');
+            const line = (label, part) => part.local
+                ? `<span class="text-emerald-400">✔</span> ${label}: local (${part.binary.split('/').pop()})`
+                : `<span class="text-amber-400">•</span> ${label}: cloud — ${part.why}`;
+            el.innerHTML = [
+                line('Speaking', status.speech_out),
+                line('Listening', status.speech_in),
+                status.offline_capable
+                    ? '<span class="text-emerald-400">Works with the network unplugged.</span>'
+                    : '<span class="text-amber-400">Needs the network for the parts marked above.</span>'
+            ].join('<br/>');
+        } catch (e) {
+            el.textContent = `Could not check the voice engines: ${e.message}`;
         }
     }
 
@@ -1151,6 +1239,8 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleCustomPersonaField();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
+            document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
+            loadVoiceStatus();
             document.getElementById('setting-tools').checked = s.tools_enabled === true;
             document.getElementById('setting-command-allowlist').value =
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
@@ -1179,6 +1269,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 persona_type: document.getElementById('setting-persona').value,
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
+                tts_engine: document.getElementById('setting-tts-engine').value,
                 // Sent only from the native app: the browser fallback has no window for the
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.
@@ -1257,9 +1348,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    btnMic.addEventListener('click', () => {
-        voiceEngine.toggleListening();
-    });
+    // Press and hold, same as the key -- the button is the discoverable version of it.
+    btnMic.addEventListener('mousedown', () => startTalking());
+    btnMic.addEventListener('mouseup', () => stopTalking());
+    btnMic.addEventListener('mouseleave', () => stopTalking());
+    btnMic.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); });
+    btnMic.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); });
 
     const btnActivity = document.getElementById('btn-activity');
     const activityModal = document.getElementById('activity-modal');

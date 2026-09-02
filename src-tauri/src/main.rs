@@ -512,8 +512,18 @@ fn save_settings_rust(
 /// server's /api/chat and /api/agent/genesis handlers call commands::synthesize_speech
 /// directly instead, since they need a URL string rather than a raw path.
 #[tauri::command]
-fn generate_speech_rust(text: String, voice: Option<String>) -> Result<String, String> {
-    let path = commands::synthesize_speech(&text, voice.as_deref())?;
+fn transcribe_rust(engine: tauri::State<LlmEngine>, wav: Vec<u8>) -> Result<String, String> {
+    commands::transcribe_audio(&engine, &wav)
+}
+
+#[tauri::command]
+fn voice_status_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::voice_status(&engine)
+}
+
+#[tauri::command]
+fn generate_speech_rust(engine: tauri::State<LlmEngine>, text: String, voice: Option<String>) -> Result<String, String> {
+    let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -618,6 +628,8 @@ fn main() {
             get_settings_rust,
             save_settings_rust,
             generate_speech_rust,
+            transcribe_rust,
+            voice_status_rust,
             get_version_info,
             check_for_update_rust,
             apply_update_rust
