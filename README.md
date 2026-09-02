@@ -44,12 +44,23 @@ it in your launcher and on your `PATH` as `aether1`. It is safe to re-run.
 Install [Rust](https://rustup.rs) — that is the only prerequisite, since Tauri uses the
 WebView2 runtime that ships with Windows. Then, in the checkout:
 
-```
-setup.bat
+```powershell
+.\setup.bat
 ```
 
+The leading `.\` is required in PowerShell, which does not run scripts from the current
+directory without it. In `cmd.exe`, plain `setup.bat` works.
+
 It builds the app and adds Start Menu and desktop shortcuts (no administrator rights
-needed). Launch it from either, or run `start.bat`.
+needed). Launch it from either, or run `.\start.bat`.
+
+Get the checkout with git rather than as a ZIP if you can — `git pull` is then how you
+update, and the setup script installs hooks that rebuild the app whenever you do:
+
+```powershell
+git clone https://github.com/TridentSpoon/Aether1.git
+cd Aether1
+```
 
 Aether1 lives in the **notification area** — click its icon to show or hide the HUD, and
 closing the window leaves it running there rather than quitting.
