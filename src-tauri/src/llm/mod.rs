@@ -8,18 +8,28 @@ mod db;
 mod genesis;
 mod persona;
 mod providers;
+mod stt;
 mod telemetry;
 mod tts;
 
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub use db::{MemoryDb, Message};
+pub use db::{ActionRecord, ActionStatus, MemoryDb, Message};
 pub use genesis::Identity;
 use persona::{Persona, Provider};
 use providers::ChatContext;
+pub use providers::Sink;
 pub use telemetry::Telemetry;
-pub use tts::{generate_speech, DEFAULT_VOICE};
+pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
+pub use tts::{
+    generate_speech_with, local_status as tts_local_status, Engine as TtsEngine, DEFAULT_VOICE,
+};
+
+/// How many times the model may call tools before it has to answer. High enough for a
+/// real chain (look at a directory, read the interesting file, check a process), low
+/// enough that a model stuck in a loop stops costing time and tokens.
+const MAX_TOOL_ROUNDS: usize = 6;
 
 const SESSION_TOKEN_BUDGET: u64 = 100_000; // matches token_tracker.py's daily_budget_tokens
 const SPARKLINE_LEN: usize = 15; // matches token_tracker.py's history[-15:]
@@ -73,8 +83,8 @@ impl UsageStats {
 
     fn snapshot(&self) -> UsageSnapshot {
         let total_session = self.session_prompt_tokens + self.session_completion_tokens;
-        let used_percent = ((total_session as f64 / SESSION_TOKEN_BUDGET.max(1) as f64) * 100.0)
-            .min(100.0);
+        let used_percent =
+            ((total_session as f64 / SESSION_TOKEN_BUDGET.max(1) as f64) * 100.0).min(100.0);
         let used_percent = (used_percent * 10.0).round() / 10.0;
         let available_tokens = SESSION_TOKEN_BUDGET.saturating_sub(total_session);
 
@@ -90,6 +100,13 @@ impl UsageStats {
             },
         }
     }
+}
+
+/// A provider call that could not be completed. `partial` is whatever text had already
+/// been streamed to the operator before it failed -- empty when nothing had.
+struct StreamFailure {
+    message: String,
+    partial: String,
 }
 
 struct Config {
@@ -184,17 +201,11 @@ impl LlmEngine {
             config.persona.template(&config.agent_name)
         };
 
-        let memories = self.db.get_all_memories().unwrap_or_default();
-        let memory_context = if memories.is_empty() {
-            String::new()
-        } else {
-            let lines: Vec<String> = memories
-                .iter()
-                .take(10)
-                .map(|m| format!("- {}: {}", m.key, m.value))
-                .collect();
-            format!("\n[RECALLED KNOWLEDGE STORE]:\n{}", lines.join("\n"))
-        };
+        // The vault replaces what used to be here: the first ten key-value rows, pasted
+        // in whether or not they had anything to do with the question. Priming from an
+        // index is both smaller and better -- the model is told what exists and reads what
+        // it needs, so memory can outgrow any context window.
+        let memory_context = crate::vault::prime(&self.db);
 
         format!(
             "{base_persona}\n\n\
@@ -247,20 +258,8 @@ impl LlmEngine {
             "who are you" | "who are you?" | "identify" | "identify yourself" => {
                 return Some(config.persona.who_are_you(&config.agent_name));
             }
-            "list memory" | "show memories" | "recall memories" => {
-                let mems = self.db.get_all_memories().unwrap_or_default();
-                return Some(if mems.is_empty() {
-                    "Neural memory banks are currently clear.".to_string()
-                } else {
-                    let lines: Vec<String> = mems
-                        .iter()
-                        .map(|m| format!("- **{}**: {}", m.key, m.value))
-                        .collect();
-                    format!(
-                        "### \u{1f9e0} Active Knowledge Store:\n{}",
-                        lines.join("\n")
-                    )
-                });
+            "list memory" | "show memories" | "recall memories" | "list notes" => {
+                return Some(crate::vault::describe(&self.db));
             }
             _ => {}
         }
@@ -281,6 +280,16 @@ impl LlmEngine {
         } else if let Some(rest) = Self::strip_ci_prefix(trimmed, &lowered, "remember that ")
             .or_else(|| Self::strip_ci_prefix(trimmed, &lowered, "save memory "))
         {
+            // Straight into the vault, without an approval card. This is the operator
+            // typing "remember that ..." themselves -- asking them to approve their own
+            // instruction would be ceremony, not consent. Everything the *model* decides
+            // to record still goes through append_note and waits.
+            let fact = rest.trim();
+            if !fact.is_empty() {
+                if let Ok(note) = crate::vault::remember(&self.db, fact) {
+                    return Some(format!("Written to `{note}`."));
+                }
+            }
             let fact = rest.trim();
             if let Some((k, v)) = fact.split_once(':') {
                 let (k, v) = (k.trim(), v.trim());
@@ -306,11 +315,228 @@ impl LlmEngine {
         None
     }
 
-    pub fn generate_response(&self, prompt: &str, session_id: &str) -> String {
+    /// Runs the configured provider, feeding reply text to `sink` as it arrives.
+    ///
+    /// Streaming is tried first for every provider. If the stream fails before any text
+    /// has reached the operator, the blocking call is retried once -- that's what keeps a
+    /// provider or model that can't stream working, and it costs nothing in the normal
+    /// case. Once text *has* been streamed, a failure can't be retried: the operator is
+    /// already reading a half-finished answer, and starting a second one over the top of
+    /// it would be worse than saying the link dropped.
+    fn call_provider(
+        &self,
+        config: &Config,
+        ctx: &ChatContext,
+        sink: providers::Sink,
+    ) -> Result<String, StreamFailure> {
+        let mut partial = String::new();
+
+        let streamed = {
+            let mut collect = |delta: &str| {
+                partial.push_str(delta);
+                sink(delta);
+            };
+            match config.provider {
+                Provider::Ollama => providers::stream_ollama(
+                    &config.endpoint,
+                    &config.model_name,
+                    ctx,
+                    &mut collect,
+                ),
+                Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                    providers::stream_openai_compatible(
+                        config.provider,
+                        &config.endpoint,
+                        &config.api_key,
+                        &config.model_name,
+                        ctx,
+                        &mut collect,
+                    )
+                }
+                Provider::Gemini => {
+                    providers::stream_gemini(&config.api_key, &config.model_name, ctx, &mut collect)
+                }
+                Provider::Anthropic => providers::stream_anthropic(
+                    &config.api_key,
+                    &config.model_name,
+                    ctx,
+                    &mut collect,
+                ),
+                // Handled before this is ever called.
+                Provider::Offline => Ok(String::new()),
+            }
+        };
+
+        match streamed {
+            Ok(reply) => Ok(reply),
+            Err(stream_error) if partial.is_empty() => {
+                let blocking = match config.provider {
+                    Provider::Ollama => {
+                        providers::call_ollama(&config.endpoint, &config.model_name, ctx)
+                    }
+                    Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                        providers::call_openai_compatible(
+                            config.provider,
+                            &config.endpoint,
+                            &config.api_key,
+                            &config.model_name,
+                            ctx,
+                        )
+                    }
+                    Provider::Gemini => {
+                        providers::call_gemini(&config.api_key, &config.model_name, ctx)
+                    }
+                    Provider::Anthropic => {
+                        providers::call_anthropic(&config.api_key, &config.model_name, ctx)
+                    }
+                    Provider::Offline => Ok(String::new()),
+                };
+                match blocking {
+                    Ok(reply) => {
+                        sink(&reply);
+                        Ok(reply)
+                    }
+                    Err(call_error) => Err(StreamFailure {
+                        message: format!("{stream_error} (retry without streaming: {call_error})"),
+                        partial: String::new(),
+                    }),
+                }
+            }
+            Err(stream_error) => Err(StreamFailure {
+                message: stream_error,
+                partial,
+            }),
+        }
+    }
+
+    /// Runs rounds of model call -> tool calls -> results until the model answers without
+    /// asking for a tool, and returns what the operator saw.
+    ///
+    /// What the operator sees and what the model writes are deliberately different: the
+    /// fenced tool blocks are filtered out of the stream and replaced by a one-line trace
+    /// of what actually ran. The model's raw text is still what gets parsed, and the
+    /// visible text is what gets stored as the reply -- the conversation history should
+    /// read the way the conversation looked.
+    fn tool_loop(
+        &self,
+        config: &Config,
+        system_prompt: &str,
+        base_history: Vec<Message>,
+        user_prompt: &str,
+        sink: providers::Sink,
+    ) -> String {
+        let registry = crate::tools::registry();
+        let tool_ctx = crate::tools::ToolContext { db: &self.db };
+
+        let mut history = base_history;
+        let mut current_prompt = user_prompt.to_string();
+        let mut visible = String::new();
+
+        for _round in 0..MAX_TOOL_ROUNDS {
+            let ctx = ChatContext {
+                system_prompt,
+                history: &history,
+                prompt: &current_prompt,
+                agent_name: &config.agent_name,
+            };
+
+            let mut filter = crate::tools::protocol::FenceFilter::new();
+            let outcome = {
+                let mut round_sink = |delta: &str| {
+                    let shown = filter.push(delta);
+                    if !shown.is_empty() {
+                        visible.push_str(&shown);
+                        sink(&shown);
+                    }
+                };
+                self.call_provider(config, &ctx, &mut round_sink)
+            };
+            let tail = filter.finish();
+            if !tail.is_empty() {
+                visible.push_str(&tail);
+                sink(&tail);
+            }
+
+            let raw = match outcome {
+                Ok(raw) => raw,
+                Err(failure) => {
+                    eprintln!(
+                        "[AETHER1] LLM Engine Error: provider {} error: {}",
+                        config.provider, failure.message
+                    );
+                    let notice = format!(
+                        "\n\n[HUD Alert: Neural link to {} dropped mid-transmission.]",
+                        config.provider
+                    );
+                    sink(&notice);
+                    return format!("{visible}{notice}");
+                }
+            };
+
+            let calls = crate::tools::protocol::parse_calls(&raw);
+            if calls.is_empty() {
+                return visible.trim().to_string();
+            }
+
+            let mut results = Vec::new();
+            for call in &calls {
+                // A mutating tool describes itself for an approval card, and that
+                // description is a better trace line than its raw arguments -- "Create
+                // ~/notes.md (31 bytes)" beats the file's entire contents inlined.
+                let trace = match registry.get(&call.tool) {
+                    Some(tool) if tool.mutating() => {
+                        crate::tools::protocol::trace_of(&tool.preview(&call.arguments))
+                    }
+                    _ => crate::tools::protocol::trace_line(call),
+                };
+                visible.push_str(&trace);
+                sink(&trace);
+                results.push((
+                    call.tool.clone(),
+                    crate::tools::run(registry, &tool_ctx, &call.tool, &call.arguments),
+                ));
+            }
+
+            // Carry the round into the history so the next one can see what it asked for
+            // and what came back.
+            history.push(Message {
+                sender: "user".to_string(),
+                text: current_prompt,
+                timestamp: String::new(),
+            });
+            history.push(Message {
+                sender: "assistant".to_string(),
+                text: raw,
+                timestamp: String::new(),
+            });
+            current_prompt = crate::tools::protocol::format_results(&results);
+        }
+
+        let notice = format!(
+            "\n\n[HUD Alert: stopped after {MAX_TOOL_ROUNDS} rounds of tool calls without \
+             reaching an answer.]"
+        );
+        sink(&notice);
+        format!("{visible}{notice}")
+    }
+
+    /// Generates a reply, feeding it to `sink` in the order it arrives: one call per
+    /// delta while streaming, or a single call with the whole text for instant commands,
+    /// offline mode, and the non-streaming fallback. The returned String is always the
+    /// concatenation of everything the sink was given.
+    pub fn generate_response_streamed(
+        &self,
+        prompt: &str,
+        session_id: &str,
+        sink: providers::Sink,
+    ) -> String {
         let config = self.load_config();
         let start = Instant::now();
 
+        // Instant commands and offline mode produce their whole reply locally, with no
+        // stream to follow -- they arrive as one delta.
         if let Some(reply) = self.check_instant_commands(prompt, &config) {
+            sink(&reply);
             self.usage
                 .lock()
                 .unwrap()
@@ -320,45 +546,69 @@ impl LlmEngine {
 
         let history = self.db.get_messages(session_id, 8).unwrap_or_default();
         let telem = Telemetry::snapshot();
-        let system_prompt = self.system_prompt(&config, &telem);
-        let ctx = ChatContext {
-            system_prompt: &system_prompt,
-            history: &history,
-            prompt,
-            agent_name: &config.agent_name,
-        };
+        let mut system_prompt = self.system_prompt(&config, &telem);
 
-        let result = match config.provider {
-            Provider::Ollama => providers::call_ollama(&config.endpoint, &config.model_name, &ctx),
-            Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
-                providers::call_openai_compatible(
-                    config.provider,
-                    &config.endpoint,
-                    &config.api_key,
-                    &config.model_name,
-                    &ctx,
-                )
-            }
-            Provider::Gemini => providers::call_gemini(&config.api_key, &config.model_name, &ctx),
-            Provider::Anthropic => {
-                providers::call_anthropic(&config.api_key, &config.model_name, &ctx)
-            }
-            Provider::Offline => Ok(config.persona.offline_reply(
+        // Tools are off by default and the catalog can be empty, in which case the prompt
+        // says nothing about tools and the turn is exactly what it was before they existed.
+        let registry = crate::tools::registry();
+        let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
+        if tools_on {
+            system_prompt.push_str(&crate::tools::protocol::instructions(
+                &registry.prompt_catalog(),
+            ));
+        }
+
+        let reply = if config.provider == Provider::Offline {
+            let reply = config.persona.offline_reply(
                 prompt,
                 &telem.os_name,
                 telem.cpu_percent,
                 &config.agent_name,
-            )),
+            );
+            sink(&reply);
+            reply
+        } else if tools_on {
+            self.tool_loop(&config, &system_prompt, history, prompt, sink)
+        } else {
+            let ctx = ChatContext {
+                system_prompt: &system_prompt,
+                history: &history,
+                prompt,
+                agent_name: &config.agent_name,
+            };
+            match self.call_provider(&config, &ctx, sink) {
+                Ok(reply) => reply,
+                Err(failure) => {
+                    eprintln!(
+                        "[AETHER1] LLM Engine Error: provider {} error: {}",
+                        config.provider, failure.message
+                    );
+                    if failure.partial.is_empty() {
+                        let fallback = config.persona.offline_reply(
+                            prompt,
+                            &telem.os_name,
+                            telem.cpu_percent,
+                            &config.agent_name,
+                        );
+                        let reply = format!(
+                            "[HUD Alert: Neural link to {} timed out. Engaging localized cognitive fallback]\n\n{fallback}",
+                            config.provider
+                        );
+                        sink(&reply);
+                        reply
+                    } else {
+                        // Text already reached the operator; append the notice to what
+                        // they are reading instead of replacing it.
+                        let notice = format!(
+                            "\n\n[HUD Alert: Neural link to {} dropped mid-transmission.]",
+                            config.provider
+                        );
+                        sink(&notice);
+                        format!("{}{notice}", failure.partial)
+                    }
+                }
+            }
         };
-
-        let reply = result.unwrap_or_else(|e| {
-            eprintln!("[AETHER1] LLM Engine Error: provider {} error: {e}", config.provider);
-            let fallback = config.persona.offline_reply(prompt, &telem.os_name, telem.cpu_percent, &config.agent_name);
-            format!(
-                "[HUD Alert: Neural link to {} timed out. Engaging localized cognitive fallback]\n\n{fallback}",
-                config.provider
-            )
-        });
 
         self.usage
             .lock()
@@ -419,7 +669,16 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
-        LlmEngine::new(MemoryDb::open(path).expect("temp db should open"))
+        let db = MemoryDb::open(&path).expect("temp db should open");
+        // Point the vault at a scratch directory: an engine test must not create or read
+        // notes in the developer's own home.
+        let vault = path.with_extension("vault");
+        let _ = std::fs::remove_dir_all(&vault);
+        let _ = db.set_setting(
+            "vault_path",
+            &serde_json::Value::String(vault.to_string_lossy().to_string()),
+        );
+        LlmEngine::new(db)
     }
 
     #[test]
@@ -449,11 +708,25 @@ mod tests {
         assert_eq!(config.agent_name, "HALCY");
     }
 
+    /// Every reply in these tests goes through the streaming path and asserts the
+    /// invariant the whole design rests on: the deltas handed to the sink, concatenated,
+    /// are exactly the reply that was returned.
+    fn generate(engine: &LlmEngine, prompt: &str, session_id: &str) -> String {
+        let mut streamed = String::new();
+        let reply = engine
+            .generate_response_streamed(prompt, session_id, &mut |delta| streamed.push_str(delta));
+        assert_eq!(
+            streamed, reply,
+            "the sink's deltas must reconstruct the returned reply"
+        );
+        reply
+    }
+
     #[test]
     fn generate_response_offline_default_mentions_standby() {
         let _guard = env_guard();
         let engine = temp_engine("offline_default");
-        let reply = engine.generate_response("hello there", "test-session");
+        let reply = generate(&engine, "hello there", "test-session");
         assert!(reply.contains("Offline Standby Mode"), "reply was: {reply}");
     }
 
@@ -461,27 +734,45 @@ mod tests {
     fn who_are_you_instant_command_short_circuits_network() {
         let _guard = env_guard();
         let engine = temp_engine("who_are_you");
-        let reply = engine.generate_response("who are you?", "test-session");
+        let reply = generate(&engine, "who are you?", "test-session");
         assert!(reply.contains("HALCY"), "reply was: {reply}");
     }
 
     #[test]
-    fn remember_that_persists_and_list_memory_reads_it_back() {
+    fn remember_that_writes_a_note_the_operator_can_open() {
         let _guard = env_guard();
         let engine = temp_engine("remember");
-        let ack = engine.generate_response("remember that favorite_color: blue", "test-session");
-        assert!(ack.contains("favorite_color"), "ack was: {ack}");
 
-        let listing = engine.generate_response("list memory", "test-session");
-        assert!(listing.contains("favorite_color"), "listing was: {listing}");
-        assert!(listing.contains("blue"), "listing was: {listing}");
+        let ack = generate(&engine, "remember that the laptop is called tycho", "test-session");
+        assert!(ack.contains("memories.md"), "ack was: {ack}");
+
+        // The point of the vault: what was remembered is a file, readable without us.
+        let note = crate::vault::vault_path(engine.db()).join("memories.md");
+        let contents = std::fs::read_to_string(&note).expect("the note should exist");
+        assert!(contents.contains("the laptop is called tycho"), "{contents}");
+    }
+
+    #[test]
+    fn the_vault_is_what_primes_the_prompt() {
+        let _guard = env_guard();
+        let engine = temp_engine("priming");
+        crate::vault::ensure(engine.db()).unwrap();
+        let profile = crate::vault::vault_path(engine.db()).join("profile.md");
+        std::fs::write(&profile, "# Profile\n\nThe operator prefers helix.\n").unwrap();
+
+        let config = engine.load_config();
+        let prompt = engine.system_prompt(&config, &Telemetry::snapshot());
+        assert!(
+            prompt.contains("The operator prefers helix."),
+            "a fact written into the vault by hand must reach the prompt"
+        );
     }
 
     #[test]
     fn set_name_updates_agent_name_case_preserving() {
         let _guard = env_guard();
         let engine = temp_engine("set_name");
-        let reply = engine.generate_response("Set Name Aria", "test-session");
+        let reply = generate(&engine, "Set Name Aria", "test-session");
         assert!(reply.contains("Aria"), "reply was: {reply}");
         assert_eq!(engine.agent_name(), "Aria");
     }
@@ -533,7 +824,8 @@ mod tests {
             &serde_json::Value::String("http://localhost:11434".to_string()),
         );
 
-        let reply = engine.generate_response(
+        let reply = generate(
+            &engine,
             "Reply with only the single word PONG, nothing else, no punctuation.",
             "live-test-session",
         );

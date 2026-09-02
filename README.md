@@ -25,3 +25,32 @@ Intended features
 - **1-Click Packaging & Portability**:
   - Auto-installer for Linux and Windows.
   - Easy installation from GitHub via script or via packaging the entire system into a single `.tar.gz` bundle to transfer to a separate system.
+
+## Command line
+
+Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that
+runs the desktop app answers from a terminal without the HUD open:
+
+```sh
+aether1 prompt "what is eating my RAM"   # ask; the reply goes to stdout
+echo "status" | aether1 prompt           # or pipe the question in
+aether1 status                           # system diagnostic report (--json for raw)
+aether1 say "systems nominal"            # speak, in the configured persona voice
+aether1 toggle                           # summon/dismiss the HUD of a running instance
+aether1 --help
+```
+
+The HUD is also bound to a global hotkey — `Super+Shift+A` by default, changeable under
+Settings (empty disables it). On Wayland, where no application is allowed to grab keys
+system-wide, bind your compositor to `aether1 toggle` instead; for Hyprland:
+
+```
+bind = SUPER SHIFT, A, exec, aether1 toggle
+```
+
+`prompt` shares one conversation history and one memory store with the HUD, so anything
+you tell it from a script is there next time you open the window.
+
+## Project goals
+
+Where this is headed, and why: [docs/GOALS.md](docs/GOALS.md).
