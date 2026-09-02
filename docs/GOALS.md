@@ -86,6 +86,14 @@ loaded.
 SQLite keeps what it is genuinely good for and nothing else: chat transcripts, settings,
 and the action log — high-volume, queryable, uninteresting to read by hand.
 
+**The notes link to each other, which means the mind map already exists.** Wiki-style
+links between notes are what Obsidian, Logseq and every other tool of that family render as
+a graph — so the picture of what the companion knows, and how it connects, is something an
+existing app draws for free. Building that view natively would be months of work to arrive
+somewhere worse: worse at layout, worse at search, worse at editing, and unable to open
+anyone else's notes. The right move is to write notes that a mind-map app is good at
+reading, and let it be the mind map.
+
 What accumulates in the vault:
 
 - **Facts you state** — preferences, names, project details, the way you like things done.

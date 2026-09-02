@@ -283,6 +283,12 @@ SQLite keeps chat transcripts, settings, and the action log.
   `INDEX.md` (what is here, and which notes matter for which kind of question),
   `profile.md` (who the operator is), `machine.md` (what this box is),
   `projects/`, `daily/`, `actions/`.
+- **Notes link to each other with `[[wiki links]]`**, because that is what turns a folder
+  into a graph an existing mind-map app can draw. Obsidian's graph view then *is* the
+  visualization of the companion's mind, at no cost to us and with better layout, search
+  and editing than we would ever build natively. Note-writing tools (step 10) link
+  deliberately rather than incidentally: a new project note links to the profile, a daily
+  note links to what it touched.
 - **`llm/mod.rs`** — `system_prompt` currently pastes the first ten `long_term_memory`
   rows. Replace that with the vault's `INDEX.md` plus any notes the index marks as
   always-loaded. That is the whole priming mechanism: the index tells the model what exists
