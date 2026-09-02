@@ -115,6 +115,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "stt_language": "en",
         "vault_path": "",
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
+        "desktop_sprite_enabled": false,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())

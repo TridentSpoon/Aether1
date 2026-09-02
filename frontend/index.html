@@ -347,6 +347,18 @@
                 </div>
             </div>
 
+            <!-- SECTION: DESKTOP SPRITE MODE (native desktop app only -- see IS_TAURI below) -->
+            <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
+                    🖥️ DESKTOP SPRITE MODE
+                </h3>
+                <div class="flex items-center gap-2">
+                    <input id="setting-sprite-mode" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                    <label for="setting-sprite-mode" class="text-xs font-mono text-slate-300">Float the avatar on your desktop, PNGTuber-style -- click it to chat, drag it anywhere</label>
+                </div>
+                <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. Toggle applies once you click Save Changes below.</span>
+            </div>
+
             <!-- SECTION: AGENT IDENTITY & GENESIS -->
             <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
                 <div class="flex items-center justify-between">
@@ -558,11 +570,11 @@
     <script src="js/hologram/geometry-helpers.js?v=18"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
-    <script src="js/hologram/avatar-nexus.js?v=26"></script>
+    <script src="js/hologram/avatar-nexus.js?v=27"></script>
     <script src="js/hologram/avatar-red9000.js?v=16"></script>
     <script src="js/hologram/avatar-arx-logos.js?v=16"></script>
-    <script src="js/hologram/animate.js?v=27"></script>
+    <script src="js/hologram/animate.js?v=28"></script>
     <script src="js/voice.js?v=16"></script>
-    <script src="js/app.js?v=16"></script>
+    <script src="js/app.js?v=17"></script>
 </body>
 </html>

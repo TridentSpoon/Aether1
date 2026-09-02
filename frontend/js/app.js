@@ -1196,6 +1196,14 @@ document.addEventListener('DOMContentLoaded', () => {
         handleCheckForUpdate();
     }
 
+    // Desktop Sprite Mode is a transparent/always-on-top native window -- meaningless in the
+    // plain browser flow, so the whole section stays hidden there (mirrors initVersionAndUpdates).
+    function initSpriteMode() {
+        if (!IS_TAURI) return;
+        const section = document.getElementById('sprite-mode-section');
+        if (section) section.classList.remove('hidden');
+    }
+
     async function loadChatHistory() {
         try {
             const msgs = IS_TAURI
@@ -1247,6 +1255,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
             autoSpeak = s.auto_speak !== false;
+            const spriteModeToggle = document.getElementById('setting-sprite-mode');
+            if (spriteModeToggle) spriteModeToggle.checked = s.desktop_sprite_enabled === true;
         } catch (e) {
             console.warn("Could not load settings", e);
         }
@@ -1260,6 +1270,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function saveSettings(notify = true) {
+        const spriteModeToggle = document.getElementById('setting-sprite-mode');
         const payload = {
             settings: {
                 agent_name: document.getElementById('setting-agent-name').value.trim() || "HALCY",
@@ -1279,7 +1290,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 tools_enabled: document.getElementById('setting-tools').checked,
                 command_allowlist: document.getElementById('setting-command-allowlist').value
                     .split(',').map(p => p.trim()).filter(Boolean),
-                auto_speak: document.getElementById('setting-autospeak').checked
+                auto_speak: document.getElementById('setting-autospeak').checked,
+                desktop_sprite_enabled: spriteModeToggle ? spriteModeToggle.checked : false
             }
         };
         autoSpeak = payload.settings.auto_speak;
@@ -1288,6 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             if (IS_TAURI) {
                 await tauriInvoke('save_settings_rust', { settings: payload.settings });
+                await tauriInvoke('toggle_sprite_window_rust', { enabled: payload.settings.desktop_sprite_enabled });
             } else {
                 const resp = await apiFetch('/api/settings', {
                     method: 'POST',
@@ -1451,6 +1464,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshPendingApprovals();
     connectTelemetry();
     initVersionAndUpdates();
+    initSpriteMode();
 
     document.body.addEventListener('click', () => {
         voiceEngine.playSFX('boot');

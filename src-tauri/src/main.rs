@@ -41,6 +41,8 @@ use llm::{LlmEngine, MemoryDb};
 
 const UPDATE_REPO: &str = "TridentSpoon/Aether1";
 const TRAY_ID: &str = "main-tray";
+const MAIN_LABEL: &str = "main";
+const SPRITE_LABEL: &str = "sprite";
 
 /// Set by build.rs from `git rev-parse HEAD` at compile time; "unknown" if this wasn't
 /// built from a git checkout (e.g. a source tarball without a .git directory).
@@ -528,6 +530,80 @@ fn generate_speech_rust(engine: tauri::State<LlmEngine>, text: String, voice: Op
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Builds (but does not show-if-already-open -- callers check first) the floating "desktop
+/// sprite" window: a small, transparent, undecorated, always-on-top webview showing just the
+/// hologram avatar (frontend/sprite.html reuses the same Three.js avatar code as the main
+/// HUD), PNGTuber-style. Positioned in the bottom-right corner of the primary monitor when
+/// that's available; falls back to Tauri's default placement otherwise.
+fn build_sprite_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    const WIDTH: f64 = 300.0;
+    const HEIGHT: f64 = 380.0;
+    const MARGIN: f64 = 24.0;
+
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        app,
+        SPRITE_LABEL,
+        tauri::WebviewUrl::App("sprite.html".into()),
+    )
+    .title("AETHER1")
+    .inner_size(WIDTH, HEIGHT)
+    .min_inner_size(160.0, 200.0)
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .resizable(true);
+
+    if let Ok(Some(monitor)) = app.primary_monitor() {
+        let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
+        builder = builder.position(size.width - WIDTH - MARGIN, size.height - HEIGHT - MARGIN);
+    }
+
+    builder.build()
+}
+
+/// Rust-native command backing the Settings modal's "Desktop Sprite Mode" toggle: opens (or
+/// re-shows an already-built) sprite window, or closes it. The frontend persists the
+/// preference itself via save_settings_rust -- this command only ever manages window
+/// lifecycle, it never touches storage.
+#[tauri::command]
+fn toggle_sprite_window_rust(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        match app.get_webview_window(SPRITE_LABEL) {
+            Some(window) => window.show().map_err(|e| e.to_string()),
+            None => build_sprite_window(&app).map(|_| ()).map_err(|e| e.to_string()),
+        }
+    } else if let Some(window) = app.get_webview_window(SPRITE_LABEL) {
+        window.close().map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Re-shows and focuses the main HUD window -- used by the sprite's "open main HUD" button,
+/// since closing to tray (see the CloseRequested handler in main()) hides rather than
+/// destroys it.
+#[tauri::command]
+fn show_main_window_rust(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Starts an OS-native window drag for whichever window invoked this command. The sprite
+/// window has no decorations (so no native title bar to drag by); the frontend calls this on
+/// mousedown over the avatar instead (see frontend/js/sprite.js), matching Tauri's usual
+/// pattern for custom-titlebar dragging. `window` is auto-populated by Tauri with the
+/// invoking window, not necessarily the sprite -- harmless either way.
+#[tauri::command]
+fn start_window_drag_rust(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
 /// Shared by both the native Tauri path and `--serve`: opens the real sqlite file at
 /// backend/aether1_memory.db, falling back to a temp-dir sqlite file if that fails.
 fn build_llm_engine() -> LlmEngine {
@@ -641,8 +717,27 @@ fn main() {
             voice_status_rust,
             get_version_info,
             check_for_update_rust,
-            apply_update_rust
+            apply_update_rust,
+            toggle_sprite_window_rust,
+            show_main_window_rust,
+            start_window_drag_rust
         ])
+        .on_window_event(|window, event| {
+            // Closing the main HUD window would otherwise exit the whole app (Tauri's
+            // default with no other running windows/tray keeping it alive) -- but if the
+            // desktop sprite is up, the app should keep running headless-with-sprite instead,
+            // matching the tray's existing "Show AETHER1" affordance. Only intercepts the
+            // close when the sprite is actually open, so anyone not using that feature sees
+            // the same close-quits-the-app behavior as before.
+            if window.label() == MAIN_LABEL {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if window.app_handle().get_webview_window(SPRITE_LABEL).is_some() {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
         .setup(|app| {
             // Let the webview load synthesized speech files directly off disk via
             // convertFileSrc (see synthesizeSpeechUrl in frontend/js/app.js) -- the asset
@@ -756,6 +851,24 @@ fn main() {
                     run_update_check(&tray, &update_item, &update_available);
                     update_in_progress.store(false, Ordering::Relaxed);
                 });
+            }
+
+            // Re-open the desktop sprite on launch if it was left enabled last session
+            // (persisted the same way as every other setting -- see
+            // toggle_sprite_window_rust/save_settings_rust). Defaults to off: this is an
+            // opt-in feature, not something a fresh install should surprise anyone with.
+            let sprite_was_enabled = app
+                .state::<LlmEngine>()
+                .db()
+                .get_setting("desktop_sprite_enabled")
+                .ok()
+                .flatten()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if sprite_was_enabled {
+                if let Err(e) = build_sprite_window(app.handle()) {
+                    eprintln!("[AETHER1] Could not reopen the desktop sprite window: {e}");
+                }
             }
 
             // Live telemetry push, replacing the Python backend's /ws/telemetry loop: an
