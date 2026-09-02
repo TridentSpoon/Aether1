@@ -481,6 +481,17 @@
                 </div>
 
                 <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">MEMORY VAULT</label>
+                    <input id="setting-vault-path" type="text" placeholder="~/Aether1Vault" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        A folder of markdown notes &mdash; what the AI remembers about you. Open it in
+                        any editor or in Obsidian, where the <span class="text-cyan-300">[[links]]</span>
+                        between notes draw themselves as a graph. Edit or delete anything; it is
+                        your folder. Notes are only written with your approval.
+                    </p>
+                </div>
+
+                <div class="space-y-1">
                     <label class="text-xs font-mono text-cyan-300 block">SPEECH ENGINE</label>
                     <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                         <option value="auto">Auto — local if installed, otherwise cloud</option>

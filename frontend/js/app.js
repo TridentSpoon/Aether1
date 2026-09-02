@@ -1240,6 +1240,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
             document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
+            document.getElementById('setting-vault-path').value = s.vault_path || '';
             loadVoiceStatus();
             document.getElementById('setting-tools').checked = s.tools_enabled === true;
             document.getElementById('setting-command-allowlist').value =
@@ -1270,6 +1271,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
                 tts_engine: document.getElementById('setting-tts-engine').value,
+                vault_path: document.getElementById('setting-vault-path').value.trim(),
                 // Sent only from the native app: the browser fallback has no window for the
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.

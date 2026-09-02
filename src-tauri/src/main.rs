@@ -24,6 +24,7 @@ mod llm;
 mod model_scanner;
 mod server;
 mod tools;
+mod vault;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -540,7 +541,15 @@ fn build_llm_engine() -> LlmEngine {
         let _ = std::fs::create_dir_all(parent);
     }
     match MemoryDb::open(&db_path) {
-        Ok(db) => LlmEngine::new(db),
+        Ok(db) => {
+            // Create the vault on first run, so the very first conversation already has
+            // somewhere to remember things. Best-effort: a companion that refuses to start
+            // because it could not create a folder would be worse than one with no memory.
+            if let Err(e) = vault::ensure(&db) {
+                eprintln!("[AETHER1] Memory vault unavailable: {e}");
+            }
+            LlmEngine::new(db)
+        }
         Err(e) => {
             // NOT ":memory:" -- MemoryDb opens a fresh connection per call (matching
             // memory_db.py's own pattern, which is fine for a real file), so a literal

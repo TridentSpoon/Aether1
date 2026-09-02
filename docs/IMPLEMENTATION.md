@@ -323,7 +323,7 @@ and it makes the memory browser unnecessary. It also reuses the tools from step 
 
 SQLite keeps chat transcripts, settings, and the action log.
 
-### Step 9: The vault, and priming from it
+### Step 9: The vault, and priming from it — **shipped**
 
 - **New `src-tauri/src/vault/mod.rs`** — resolve the vault path (setting `vault_path`,
   default `~/Aether1Vault`), create it on first run with a starter layout:
@@ -345,7 +345,16 @@ SQLite keeps chat transcripts, settings, and the action log.
 - **Verify:** a fact written into `profile.md` by hand shows up in the companion's answers
   in the next conversation, with no restart and no import step.
 
-### Step 10: Writing back
+Landed as `src/vault/`. `system_prompt` no longer pastes the first ten `long_term_memory`
+rows: it carries the index and the always-loaded notes, and the model reaches for the rest
+with `read_file`. Old rows are *copied* into `imported-memories.md` rather than migrated,
+so a bad import loses nothing and the note can simply be deleted. `list memory` now
+describes the vault and points at the folder instead of dumping key-value pairs.
+
+An existing note is never overwritten, so pointing the vault at a folder you already have
+is safe.
+
+### Step 10: Writing back — **shipped**
 
 - **New tools** (mutating, so they land after step 6's consent path):
   `append_note`, `write_note`, `update_index`. `remember that …` becomes an append to the
@@ -354,6 +363,21 @@ SQLite keeps chat transcripts, settings, and the action log.
   itself: what was discussed, what was decided, what changed.
 - **Verify:** a week of conversations leaves a readable trail of notes, and the index knows
   about them.
+
+Landed as `tools/notes.rs`: `append_note` and `write_note`, both mutating, so what the
+companion decides to record about you is proposed and waits — an approval card is a chance
+to correct a fact before it becomes one. `remember that …` is the exception and writes
+straight through: that is the operator's own instruction, and asking them to approve it
+would be ceremony rather than consent.
+
+Notes that get created also get linked from `INDEX.md` if they aren't already, because a
+note the index never mentions is a note nothing will go looking for. A separate
+`update_index` tool turned out to be unnecessary — `write_note` on `INDEX.md` is the same
+operation with one fewer thing to explain.
+
+**Not done in this pass:** step 11 (retrieval beyond the index, consolidation, decay) and
+the session-close note. The index plus `read_file` is the whole retrieval mechanism today,
+which is enough while a vault is small and is the thing to measure before adding search.
 
 ### Step 11: Retrieval, consolidation, decay
 

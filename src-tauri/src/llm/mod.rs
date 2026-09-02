@@ -201,17 +201,11 @@ impl LlmEngine {
             config.persona.template(&config.agent_name)
         };
 
-        let memories = self.db.get_all_memories().unwrap_or_default();
-        let memory_context = if memories.is_empty() {
-            String::new()
-        } else {
-            let lines: Vec<String> = memories
-                .iter()
-                .take(10)
-                .map(|m| format!("- {}: {}", m.key, m.value))
-                .collect();
-            format!("\n[RECALLED KNOWLEDGE STORE]:\n{}", lines.join("\n"))
-        };
+        // The vault replaces what used to be here: the first ten key-value rows, pasted
+        // in whether or not they had anything to do with the question. Priming from an
+        // index is both smaller and better -- the model is told what exists and reads what
+        // it needs, so memory can outgrow any context window.
+        let memory_context = crate::vault::prime(&self.db);
 
         format!(
             "{base_persona}\n\n\
@@ -264,20 +258,8 @@ impl LlmEngine {
             "who are you" | "who are you?" | "identify" | "identify yourself" => {
                 return Some(config.persona.who_are_you(&config.agent_name));
             }
-            "list memory" | "show memories" | "recall memories" => {
-                let mems = self.db.get_all_memories().unwrap_or_default();
-                return Some(if mems.is_empty() {
-                    "Neural memory banks are currently clear.".to_string()
-                } else {
-                    let lines: Vec<String> = mems
-                        .iter()
-                        .map(|m| format!("- **{}**: {}", m.key, m.value))
-                        .collect();
-                    format!(
-                        "### \u{1f9e0} Active Knowledge Store:\n{}",
-                        lines.join("\n")
-                    )
-                });
+            "list memory" | "show memories" | "recall memories" | "list notes" => {
+                return Some(crate::vault::describe(&self.db));
             }
             _ => {}
         }
@@ -298,6 +280,16 @@ impl LlmEngine {
         } else if let Some(rest) = Self::strip_ci_prefix(trimmed, &lowered, "remember that ")
             .or_else(|| Self::strip_ci_prefix(trimmed, &lowered, "save memory "))
         {
+            // Straight into the vault, without an approval card. This is the operator
+            // typing "remember that ..." themselves -- asking them to approve their own
+            // instruction would be ceremony, not consent. Everything the *model* decides
+            // to record still goes through append_note and waits.
+            let fact = rest.trim();
+            if !fact.is_empty() {
+                if let Ok(note) = crate::vault::remember(&self.db, fact) {
+                    return Some(format!("Written to `{note}`."));
+                }
+            }
             let fact = rest.trim();
             if let Some((k, v)) = fact.split_once(':') {
                 let (k, v) = (k.trim(), v.trim());
@@ -677,7 +669,16 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
-        LlmEngine::new(MemoryDb::open(path).expect("temp db should open"))
+        let db = MemoryDb::open(&path).expect("temp db should open");
+        // Point the vault at a scratch directory: an engine test must not create or read
+        // notes in the developer's own home.
+        let vault = path.with_extension("vault");
+        let _ = std::fs::remove_dir_all(&vault);
+        let _ = db.set_setting(
+            "vault_path",
+            &serde_json::Value::String(vault.to_string_lossy().to_string()),
+        );
+        LlmEngine::new(db)
     }
 
     #[test]
@@ -738,19 +739,33 @@ mod tests {
     }
 
     #[test]
-    fn remember_that_persists_and_list_memory_reads_it_back() {
+    fn remember_that_writes_a_note_the_operator_can_open() {
         let _guard = env_guard();
         let engine = temp_engine("remember");
-        let ack = generate(
-            &engine,
-            "remember that favorite_color: blue",
-            "test-session",
-        );
-        assert!(ack.contains("favorite_color"), "ack was: {ack}");
 
-        let listing = generate(&engine, "list memory", "test-session");
-        assert!(listing.contains("favorite_color"), "listing was: {listing}");
-        assert!(listing.contains("blue"), "listing was: {listing}");
+        let ack = generate(&engine, "remember that the laptop is called tycho", "test-session");
+        assert!(ack.contains("memories.md"), "ack was: {ack}");
+
+        // The point of the vault: what was remembered is a file, readable without us.
+        let note = crate::vault::vault_path(engine.db()).join("memories.md");
+        let contents = std::fs::read_to_string(&note).expect("the note should exist");
+        assert!(contents.contains("the laptop is called tycho"), "{contents}");
+    }
+
+    #[test]
+    fn the_vault_is_what_primes_the_prompt() {
+        let _guard = env_guard();
+        let engine = temp_engine("priming");
+        crate::vault::ensure(engine.db()).unwrap();
+        let profile = crate::vault::vault_path(engine.db()).join("profile.md");
+        std::fs::write(&profile, "# Profile\n\nThe operator prefers helix.\n").unwrap();
+
+        let config = engine.load_config();
+        let prompt = engine.system_prompt(&config, &Telemetry::snapshot());
+        assert!(
+            prompt.contains("The operator prefers helix."),
+            "a fact written into the vault by hand must reach the prompt"
+        );
     }
 
     #[test]

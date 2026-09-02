@@ -113,6 +113,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "tts_local_voice": "",
         "stt_model_path": "",
         "stt_language": "en",
+        "vault_path": "",
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =

@@ -16,6 +16,7 @@ mod builtin;
 pub mod consent;
 mod fs_guard;
 mod mutating;
+mod notes;
 pub mod protocol;
 
 use std::sync::LazyLock;
@@ -213,6 +214,8 @@ pub fn registry() -> &'static Registry {
             Box::new(mutating::WriteFile),
             Box::new(mutating::SetSetting),
             Box::new(mutating::RunCommand),
+            Box::new(notes::AppendNote),
+            Box::new(notes::WriteNote),
         ] {
             registry
                 .register(tool)
@@ -423,7 +426,13 @@ mod tests {
         changing.sort();
         assert_eq!(
             changing,
-            vec!["run_command", "set_aether_setting", "write_file"],
+            vec![
+                "append_note",
+                "run_command",
+                "set_aether_setting",
+                "write_file",
+                "write_note"
+            ],
             "adding a tool that changes the machine is a deliberate act; update this test \
              along with the reasoning for it"
         );
@@ -453,7 +462,7 @@ mod tests {
         // better than the default.
         for tool_name in registry().schemas().iter().filter(|s| s.mutating).map(|s| s.name) {
             let tool = registry().get(tool_name).unwrap();
-            let args = json!({"path": "/tmp/x", "content": "hi", "key": "agent_name", "value": "A", "program": "echo"});
+            let args = json!({"path": "/tmp/x", "content": "hi", "key": "agent_name", "value": "A", "program": "echo", "note": "profile.md"});
             let default = format!("{tool_name} {args}");
             assert_ne!(
                 tool.preview(&args),
