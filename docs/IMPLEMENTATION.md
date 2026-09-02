@@ -240,7 +240,7 @@ having happened; a call that runs and fails is logged as failed, with the reason
 - **Verify:** a proposed action does nothing until approved; rejecting it is recorded;
   "always allow" survives a restart.
 
-### Step 7: Mutating tools and undo
+### Step 7: Mutating tools and undo — **shipped**
 
 - **`src-tauri/src/tools/`** — `set_aether_setting`, `write_file` (snapshot the previous
   contents into `undo_json` first), `run_command` (allowlist-gated, no shell interpolation,
@@ -251,6 +251,28 @@ having happened; a call that runs and fails is logged as failed, with the reason
   button where one is available.
 - **Verify:** the companion changes its own persona on request via the approval flow; a
   written file can be reverted from the history panel.
+
+Landed as `tools/mutating.rs` — `write_file`, `set_aether_setting`, `run_command` — plus
+`fs_guard::resolve_writable`, `Tool::undo`, `consent::undo`, and an Activity panel in the
+HUD. Notes on what was decided:
+
+- **The write guard is much narrower than the read guard.** Reading `/etc` tells the
+  companion how the machine is configured; writing there changes how it boots. Writes are
+  confined to the home directory, and it is the file's *parent* that gets canonicalized,
+  because the file may not exist yet.
+- **`write_file` refuses to overwrite a file it cannot read as text.** The undo payload is
+  the previous contents, so a binary file is one it could not put back.
+- **`set_aether_setting` cannot reach `tools_enabled`, `tool_always_allow`,
+  `command_allowlist` or `llm_api_key`.** Nothing should be able to widen its own
+  permissions, and there is a test that says so by name.
+- **`run_command` has no shell** — argv only, so pipes, redirects and globs are text — the
+  program must be on an allowlist that starts empty, and the name may not contain a path
+  separator, so nothing gets smuggled in as `./curl`. It is also the one tool that admits
+  it cannot be undone rather than pretending.
+
+**Not built:** `service_control`. Starting and stopping system services is `run_command`
+with a longer name once an allowlist exists, and it deserves its own guard rather than
+being tacked on here.
 
 ### Step 8: Native tool calling
 

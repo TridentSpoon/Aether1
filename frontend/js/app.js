@@ -616,6 +616,84 @@ document.addEventListener('DOMContentLoaded', () => {
         return card;
     }
 
+    // --- Activity log --------------------------------------------------------------
+    // The record of what the companion has done, and the only place an action can be
+    // taken back. Undo is offered exactly where it exists: a tool that recorded no way
+    // back says so rather than showing a button that fails.
+
+    const ACTION_TONES = {
+        executed: 'text-emerald-300 border-emerald-500/30',
+        failed: 'text-rose-300 border-rose-500/30',
+        rejected: 'text-slate-400 border-slate-600/40',
+        proposed: 'text-amber-300 border-amber-500/40',
+        undone: 'text-cyan-300 border-cyan-500/30'
+    };
+
+    function renderActivityRow(action) {
+        const row = document.createElement('div');
+        row.className = `border rounded p-2 bg-black/30 ${ACTION_TONES[action.status] || 'border-slate-600/40'}`;
+
+        const head = document.createElement('div');
+        head.className = 'flex items-center justify-between gap-2';
+        head.innerHTML = `<span><strong>${action.tool}</strong> — ${action.status}${
+            action.approved_by ? ` <span class="text-slate-500">(${action.approved_by})</span>` : ''
+        }</span><span class="text-slate-500">${action.timestamp}</span>`;
+        row.appendChild(head);
+
+        const detail = document.createElement('div');
+        detail.className = 'text-slate-300 mt-1 whitespace-pre-wrap break-all';
+        detail.textContent = action.result || JSON.stringify(action.args);
+        row.appendChild(detail);
+
+        if (action.status === 'executed' && action.undo) {
+            const undoBtn = document.createElement('button');
+            undoBtn.className = 'mt-2 text-[10px] border border-cyan-500/40 text-cyan-300 px-2 py-0.5 rounded bg-cyan-950/40 hover:bg-cyan-900/40 cursor-pointer';
+            undoBtn.textContent = '↩ Undo';
+            undoBtn.onclick = async () => {
+                undoBtn.disabled = true;
+                undoBtn.textContent = '↩ Undoing…';
+                try {
+                    const data = IS_TAURI
+                        ? await tauriInvoke('undo_action_rust', { id: action.id })
+                        : await toolsApi(`/api/actions/${action.id}/undo`, { method: 'POST' });
+                    undoBtn.replaceWith(Object.assign(document.createElement('div'), {
+                        className: 'mt-2 text-[10px] text-cyan-300',
+                        textContent: `↩ ${data && data.result ? data.result : 'undone'}`
+                    }));
+                } catch (e) {
+                    undoBtn.disabled = false;
+                    undoBtn.textContent = `↩ Undo failed: ${e.message}`;
+                }
+            };
+            row.appendChild(undoBtn);
+        } else if (action.status === 'executed') {
+            const note = document.createElement('div');
+            note.className = 'mt-1 text-[10px] text-slate-500';
+            note.textContent = 'Cannot be undone.';
+            row.appendChild(note);
+        }
+
+        return row;
+    }
+
+    async function loadActivityLog() {
+        const list = document.getElementById('activity-list');
+        list.innerHTML = '<div class="text-slate-400">Loading…</div>';
+        try {
+            const actions = IS_TAURI
+                ? await tauriInvoke('get_actions_rust', { limit: 50 })
+                : await toolsApi('/api/actions?limit=50');
+            list.innerHTML = '';
+            if (!actions || !actions.length) {
+                list.innerHTML = '<div class="text-slate-400">Nothing yet — the companion has not used a tool.</div>';
+                return;
+            }
+            for (const action of actions) list.appendChild(renderActivityRow(action));
+        } catch (e) {
+            list.innerHTML = `<div class="text-rose-300">Could not load the activity log: ${e.message}</div>`;
+        }
+    }
+
     async function setAlwaysAllowed(tool, allowed) {
         if (IS_TAURI) return tauriInvoke('set_always_allowed_rust', { tool, allowed });
         return toolsApi('/api/tools/always-allow', {
@@ -1074,6 +1152,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
             document.getElementById('setting-tools').checked = s.tools_enabled === true;
+            document.getElementById('setting-command-allowlist').value =
+                Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
             autoSpeak = s.auto_speak !== false;
         } catch (e) {
@@ -1104,6 +1184,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // happen. See setting-hotkey-wrap, hidden on that path.
                 ...(IS_TAURI ? { hotkey_toggle: document.getElementById('setting-hotkey').value.trim() } : {}),
                 tools_enabled: document.getElementById('setting-tools').checked,
+                command_allowlist: document.getElementById('setting-command-allowlist').value
+                    .split(',').map(p => p.trim()).filter(Boolean),
                 auto_speak: document.getElementById('setting-autospeak').checked
             }
         };
@@ -1177,6 +1259,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnMic.addEventListener('click', () => {
         voiceEngine.toggleListening();
+    });
+
+    const btnActivity = document.getElementById('btn-activity');
+    const activityModal = document.getElementById('activity-modal');
+    btnActivity.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        activityModal.classList.remove('hidden');
+        loadActivityLog();
+    });
+    document.getElementById('btn-close-activity').addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        activityModal.classList.add('hidden');
     });
 
     btnSettings.addEventListener('click', () => {

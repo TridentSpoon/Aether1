@@ -75,6 +75,7 @@ pub async fn run(engine: LlmEngine) {
         .route("/api/actions", get(get_actions))
         .route("/api/actions/pending", get(get_pending_actions))
         .route("/api/actions/{id}/approve", post(approve_action))
+        .route("/api/actions/{id}/undo", post(undo_action))
         .route("/api/actions/{id}/reject", post(reject_action))
         .route("/api/tools/always-allow", post(set_always_allowed))
         .route("/api/messages", get(get_messages).delete(clear_messages))
@@ -182,6 +183,18 @@ async fn approve_action(
     let engine = state.engine.clone();
     // Blocking: approving runs the tool, and a tool can take as long as the work takes.
     tokio::task::spawn_blocking(move || commands::approve_action(&engine, id))
+        .await
+        .map_err(internal_error)?
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+async fn undo_action(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || commands::undo_action(&engine, id))
         .await
         .map_err(internal_error)?
         .map(Json)

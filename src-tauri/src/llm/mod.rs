@@ -484,7 +484,15 @@ impl LlmEngine {
 
             let mut results = Vec::new();
             for call in &calls {
-                let trace = crate::tools::protocol::trace_line(call);
+                // A mutating tool describes itself for an approval card, and that
+                // description is a better trace line than its raw arguments -- "Create
+                // ~/notes.md (31 bytes)" beats the file's entire contents inlined.
+                let trace = match registry.get(&call.tool) {
+                    Some(tool) if tool.mutating() => {
+                        crate::tools::protocol::trace_of(&tool.preview(&call.arguments))
+                    }
+                    _ => crate::tools::protocol::trace_line(call),
+                };
                 visible.push_str(&trace);
                 sink(&trace);
                 results.push((

@@ -108,6 +108,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "enable_sfx": true,
         "auto_speak": true,
         "tools_enabled": false,
+        "command_allowlist": [],
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
@@ -159,6 +160,13 @@ pub fn pending_actions(engine: &LlmEngine) -> Vec<ActionRecord> {
 pub fn approve_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
     let ctx = tools::ToolContext { db: engine.db() };
     let result = tools::consent::approve(tools::registry(), &ctx, id, "operator")?;
+    Ok(serde_json::json!({ "id": id, "result": result }))
+}
+
+/// Reverses an action that ran.
+pub fn undo_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
+    let ctx = tools::ToolContext { db: engine.db() };
+    let result = tools::consent::undo(tools::registry(), &ctx, id)?;
     Ok(serde_json::json!({ "id": id, "result": result }))
 }
 

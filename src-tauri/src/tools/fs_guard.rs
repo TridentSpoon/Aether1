@@ -118,6 +118,71 @@ pub fn resolve_readable(path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+/// Resolves `path` for writing, or explains why it can't be written.
+///
+/// Deliberately much narrower than reading. Reading /etc tells the companion how the
+/// machine is configured; writing there changes how it boots. So writes are confined to
+/// the operator's home directory, and the file's *parent* is what gets canonicalized --
+/// the file itself may not exist yet, and a resolver that required it to exist could not
+/// create anything.
+pub fn resolve_writable(path: &str) -> Result<PathBuf, String> {
+    let expanded = expand(path);
+
+    let Some(parent) = expanded.parent() else {
+        return Err(format!("{} has no parent directory", expanded.display()));
+    };
+    let Some(name) = expanded.file_name() else {
+        return Err(format!("{} does not name a file", expanded.display()));
+    };
+
+    // Canonicalizing the parent is what closes the symlink hole: a directory that links
+    // out of home resolves to where it really points before containment is checked.
+    let resolved_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("cannot write into {}: {e}", parent.display()))?;
+    let resolved = resolved_parent.join(name);
+
+    if denied(&resolved) {
+        return Err(format!(
+            "{} is off limits: it matches Aether1's list of paths that are never touched",
+            resolved.display()
+        ));
+    }
+
+    let Some(home) = home_dir() else {
+        return Err("no home directory to write into".to_string());
+    };
+    if !resolved.starts_with(&home) {
+        return Err(format!(
+            "{} is outside {}, and Aether1 only writes inside the operator's home directory",
+            resolved.display(),
+            home.display()
+        ));
+    }
+
+    // An existing symlink is followed to its target, and the target is judged too --
+    // otherwise a link inside home is a hole straight out of it.
+    if resolved.is_symlink() {
+        let target = resolved
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve the symlink {}: {e}", resolved.display()))?;
+        if denied(&target) || !target.starts_with(&home) {
+            return Err(format!(
+                "{} is a symlink pointing outside the writable area ({})",
+                resolved.display(),
+                target.display()
+            ));
+        }
+        return Ok(target);
+    }
+
+    if resolved.is_dir() {
+        return Err(format!("{} is a directory", resolved.display()));
+    }
+
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +293,56 @@ mod tests {
             let db = home.join("backend/aether1_memory.db");
             write(&db, "sqlite");
             let err = resolve_readable(db.to_str().unwrap()).unwrap_err();
+            assert!(err.contains("off limits"), "{err}");
+        });
+    }
+
+    #[test]
+    fn a_new_file_under_home_is_writable() {
+        with_home(|home| {
+            let target = home.join("notes/new.md");
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            assert!(resolve_writable(target.to_str().unwrap()).is_ok());
+        });
+    }
+
+    #[test]
+    fn writing_outside_home_is_refused_even_where_reading_is_allowed() {
+        with_home(|_home| {
+            // /etc is readable; it is not writable.
+            let err = resolve_writable("/etc/hostname").unwrap_err();
+            assert!(err.contains("only writes inside"), "{err}");
+        });
+    }
+
+    #[test]
+    fn writing_through_a_symlink_out_of_home_is_refused() {
+        with_home(|home| {
+            let link = home.join("escape.conf");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink("/etc/hostname", &link).unwrap();
+            let err = resolve_writable(link.to_str().unwrap()).unwrap_err();
+            assert!(err.contains("pointing outside"), "{err}");
+        });
+    }
+
+    #[test]
+    fn writing_into_a_directory_that_links_out_of_home_is_refused() {
+        with_home(|home| {
+            let link_dir = home.join("linked_etc");
+            let _ = std::fs::remove_file(&link_dir);
+            std::os::unix::fs::symlink("/etc", &link_dir).unwrap();
+            let err = resolve_writable(link_dir.join("newfile").to_str().unwrap()).unwrap_err();
+            assert!(err.contains("only writes inside"), "{err}");
+        });
+    }
+
+    #[test]
+    fn secrets_are_not_writable_either() {
+        with_home(|home| {
+            std::fs::create_dir_all(home.join(".ssh")).unwrap();
+            let err = resolve_writable(home.join(".ssh/authorized_keys").to_str().unwrap())
+                .unwrap_err();
             assert!(err.contains("off limits"), "{err}");
         });
     }

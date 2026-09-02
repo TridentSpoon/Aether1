@@ -98,6 +98,9 @@
             <button id="btn-clear-chat" class="cyber-btn text-xs py-1 px-2.5 text-slate-400 hover:text-red-400">
                 🗑️ Clear
             </button>
+            <button id="btn-activity" class="cyber-btn text-xs py-1 px-3">
+                📜 Activity
+            </button>
             <button id="btn-settings" class="cyber-btn text-xs py-1 px-3">
                 ⚙️ Settings
             </button>
@@ -266,6 +269,23 @@
         </section>
 
     </main>
+
+    <!-- ACTIVITY LOG MODAL -- everything the companion has actually done -->
+    <div id="activity-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    📜 ACTIVITY LOG
+                </h2>
+                <button id="btn-close-activity" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
+            </div>
+            <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                Every tool call, in order, with what it returned. Anything that changed something
+                and recorded a way back can be undone here.
+            </p>
+            <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
+        </div>
+    </div>
 
     <!-- SETTINGS & IDENTITY MATRIX MODAL -->
     <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
@@ -481,6 +501,16 @@
                         <span class="text-cyan-300">/proc</span> and <span class="text-cyan-300">/var/log</span>;
                         never credentials or keys. Every use is recorded. Nothing can be changed &mdash;
                         no tool that alters this machine exists yet.
+                    </p>
+                </div>
+
+                <div class="space-y-1 pt-1">
+                    <label class="text-xs font-mono text-cyan-300 block">COMMAND ALLOWLIST</label>
+                    <input id="setting-command-allowlist" type="text" placeholder="e.g. git, docker, systemctl" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        Programs the AI may ask to run, comma separated. Empty means none, which is
+                        the default. Every run still needs your approval &mdash; this only decides
+                        what it is allowed to ask for. There is no shell: no pipes, redirects or globs.
                     </p>
                 </div>
 

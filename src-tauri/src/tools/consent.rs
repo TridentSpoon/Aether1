@@ -137,6 +137,38 @@ pub fn approve(
     outcome.map(|o| o.result)
 }
 
+/// Reverses an action that ran, using the undo payload it recorded at the time.
+///
+/// Only an executed action can be undone, and only once -- the row moves to `undone`, so a
+/// second attempt finds nothing to reverse rather than replaying a stale snapshot over
+/// whatever is there now.
+pub fn undo(registry: &Registry, ctx: &ToolContext, id: i64) -> Result<String, String> {
+    let record = ctx
+        .db
+        .get_action(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no action {id}"))?;
+
+    if record.status != ActionStatus::Executed {
+        return Err(format!(
+            "action {id} is {} -- only something that ran can be undone",
+            record.status.as_str()
+        ));
+    }
+    let Some(payload) = record.undo else {
+        return Err(format!("{} did not record a way to undo itself", record.tool));
+    };
+    let Some(tool) = registry.get(&record.tool) else {
+        return Err(format!("{} is no longer available", record.tool));
+    };
+
+    let result = tool.undo(&payload, ctx)?;
+    ctx.db
+        .set_action_outcome(id, ActionStatus::Undone, Some(&result), None, None)
+        .map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
 /// Declines a proposal. Recorded rather than deleted: what the companion asked to do and
 /// was told not to do is part of the history worth keeping.
 pub fn reject(db: &MemoryDb, id: i64) -> Result<(), String> {
@@ -189,6 +221,9 @@ mod tests {
                 format!("wrote {}", args["path"]),
                 json!({"restore": "previous"}),
             ))
+        }
+        fn undo(&self, _undo: &Value, _ctx: &ToolContext) -> Result<String, String> {
+            Ok("the write was undone".to_string())
         }
     }
 
@@ -310,6 +345,34 @@ mod tests {
         );
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("already rejected"), "{err}");
+    }
+
+    #[test]
+    fn an_executed_action_can_be_undone_once() {
+        let (db, registry) = fixture("undo");
+        let ctx = ToolContext { db: &db };
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        approve(&registry, &ctx, id, "operator").unwrap();
+
+        let result = undo(&registry, &ctx, id).unwrap();
+        assert!(result.contains("undone"), "{result}");
+        assert_eq!(
+            db.get_action(id).unwrap().unwrap().status,
+            ActionStatus::Undone
+        );
+
+        let err = undo(&registry, &ctx, id).unwrap_err();
+        assert!(err.contains("only something that ran"), "{err}");
+    }
+
+    #[test]
+    fn a_proposal_that_never_ran_cannot_be_undone() {
+        let (db, registry) = fixture("undo_pending");
+        let ctx = ToolContext { db: &db };
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+
+        let err = undo(&registry, &ctx, id).unwrap_err();
+        assert!(err.contains("only something that ran"), "{err}");
     }
 
     #[test]

@@ -445,6 +445,14 @@ fn approve_action_rust(
 }
 
 #[tauri::command]
+fn undo_action_rust(
+    engine: tauri::State<LlmEngine>,
+    id: i64,
+) -> Result<serde_json::Value, String> {
+    commands::undo_action(&engine, id)
+}
+
+#[tauri::command]
 fn reject_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<(), String> {
     commands::reject_action(&engine, id)
 }
@@ -602,6 +610,7 @@ fn main() {
             get_actions_rust,
             pending_actions_rust,
             approve_action_rust,
+            undo_action_rust,
             reject_action_rust,
             set_always_allowed_rust,
             get_messages_rust,

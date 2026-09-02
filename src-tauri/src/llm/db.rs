@@ -275,6 +275,14 @@ impl MemoryDb {
         }
     }
 
+    /// Removes a setting, so it falls back to its default. Used by undo, where "there was
+    /// no value before" has to be restorable as faithfully as an old value would be.
+    pub fn delete_setting(&self, key: &str) -> rusqlite::Result<()> {
+        self.connect()?
+            .execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
     /// A stored boolean, tolerating the string forms ("true"/"false") that a settings
     /// payload from the frontend can carry for a checkbox.
     pub fn get_setting_bool(&self, key: &str, default: bool) -> bool {

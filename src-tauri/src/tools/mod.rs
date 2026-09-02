@@ -15,6 +15,7 @@
 mod builtin;
 pub mod consent;
 mod fs_guard;
+mod mutating;
 pub mod protocol;
 
 use std::sync::LazyLock;
@@ -59,6 +60,13 @@ pub trait Tool: Send + Sync {
     /// rarely the clearest thing a tool could say about itself.
     fn preview(&self, args: &Value) -> String {
         format!("{} {}", self.name(), args)
+    }
+
+    /// Reverses a call, given the `undo` payload its Outcome carried. The default is to
+    /// refuse: most things cannot be taken back, and a tool that silently pretends to undo
+    /// itself is worse than one that admits it can't.
+    fn undo(&self, _undo: &Value, _ctx: &ToolContext) -> Result<String, String> {
+        Err(format!("{} cannot be undone", self.name()))
     }
 }
 
@@ -192,7 +200,7 @@ impl Registry {
 pub fn registry() -> &'static Registry {
     static REGISTRY: LazyLock<Registry> = LazyLock::new(|| {
         let mut registry = Registry::new();
-        // Read-only, every one of them. Nothing here can change the machine, which is what
+        // The read-only ones first: nothing here can change the machine, which is what
         // lets them run without asking the operator first.
         for tool in [
             Box::new(builtin::ReadFile) as Box<dyn Tool>,
@@ -200,6 +208,11 @@ pub fn registry() -> &'static Registry {
             Box::new(builtin::ListProcesses),
             Box::new(builtin::TelemetryDetail),
             Box::new(builtin::SearchMemory),
+            // Everything below changes something, so everything below goes through the
+            // consent path -- proposed to the operator, never run from a conversation.
+            Box::new(mutating::WriteFile),
+            Box::new(mutating::SetSetting),
+            Box::new(mutating::RunCommand),
         ] {
             registry
                 .register(tool)
@@ -400,12 +413,54 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_registry_is_read_only() {
-        // The invariant that lets these tools run without asking: nothing registered can
-        // change the machine until the consent path exists.
-        let registry = registry();
-        assert!(!registry.is_empty());
-        assert!(registry.schemas().iter().all(|s| !s.mutating));
+    fn the_shipped_registry_separates_looking_from_changing() {
+        let mut changing: Vec<&str> = registry()
+            .schemas()
+            .iter()
+            .filter(|s| s.mutating)
+            .map(|s| s.name)
+            .collect();
+        changing.sort();
+        assert_eq!(
+            changing,
+            vec!["run_command", "set_aether_setting", "write_file"],
+            "adding a tool that changes the machine is a deliberate act; update this test \
+             along with the reasoning for it"
+        );
+    }
+
+    #[test]
+    fn nothing_is_pre_approved_out_of_the_box() {
+        let db = temp_db("nothing_preapproved");
+        for schema in registry().schemas() {
+            assert!(
+                !consent::is_always_allowed(&db, schema.name),
+                "{} must start off asking",
+                schema.name
+            );
+        }
+        assert!(
+            crate::tools::mutating::command_allowlist(&db).is_empty(),
+            "the command allowlist starts empty: an allowlist that ships populated is a \
+             decision made on someone else's behalf"
+        );
+    }
+
+    #[test]
+    fn every_mutating_tool_describes_itself_for_an_approval_card() {
+        // The default preview is the tool name and raw JSON, which is not something an
+        // operator can make a decision from. Anything that changes the machine has to do
+        // better than the default.
+        for tool_name in registry().schemas().iter().filter(|s| s.mutating).map(|s| s.name) {
+            let tool = registry().get(tool_name).unwrap();
+            let args = json!({"path": "/tmp/x", "content": "hi", "key": "agent_name", "value": "A", "program": "echo"});
+            let default = format!("{tool_name} {args}");
+            assert_ne!(
+                tool.preview(&args),
+                default,
+                "{tool_name} must override preview() with something an operator can judge"
+            );
+        }
     }
 
     #[test]

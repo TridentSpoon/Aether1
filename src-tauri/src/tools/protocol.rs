@@ -85,13 +85,20 @@ pub fn parse_calls(text: &str) -> Vec<ToolCall> {
 /// The one-line trace shown to the operator in place of the tool call they didn't see.
 /// Backticks so it renders as inline code and reads as machinery rather than as the
 /// companion talking.
+/// Wraps an already-rendered description as a trace line. Newlines are flattened: the
+/// trace is one line of inline code in the chat, and a tool argument containing a whole
+/// file would otherwise break out of it.
+pub fn trace_of(description: &str) -> String {
+    format!("\n`⚙ {}`\n", description.replace('\n', " ").trim())
+}
+
 pub fn trace_line(call: &ToolCall) -> String {
     let args = call
         .arguments
         .as_object()
         .map(|obj| obj.values().map(compact).collect::<Vec<_>>().join(" "))
         .unwrap_or_default();
-    format!("\n`⚙ {} {}`\n", call.tool, args).replace(" `", "`")
+    trace_of(format!("{} {}", call.tool, args).trim())
 }
 
 fn compact(value: &Value) -> String {
@@ -287,6 +294,12 @@ mod tests {
             visible.push_str(&filter.finish());
             assert_eq!(visible, "Before  after", "split at {split}");
         }
+    }
+
+    #[test]
+    fn a_trace_line_is_always_one_line() {
+        let trace = trace_of("Create ~/notes.md\nwith two lines");
+        assert_eq!(trace.matches('\n').count(), 2, "only the wrapping newlines: {trace:?}");
     }
 
     #[test]
