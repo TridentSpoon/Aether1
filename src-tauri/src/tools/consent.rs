@@ -38,7 +38,28 @@ pub fn is_always_allowed(db: &MemoryDb, tool: &str) -> bool {
 }
 
 /// Adds or removes a tool from the pre-approved list.
-pub fn set_always_allowed(db: &MemoryDb, tool: &str, allowed: bool) -> Result<(), String> {
+///
+/// Refuses to pre-approve a tool that says it can't be -- turning the switch on for
+/// `run_command` would store a setting the gate ignores, which is worse than an error:
+/// the operator would believe they had granted something they hadn't. Removal is always
+/// allowed, so a name left over from an older database can still be cleared out.
+pub fn set_always_allowed(
+    db: &MemoryDb,
+    registry: &Registry,
+    tool: &str,
+    allowed: bool,
+) -> Result<(), String> {
+    if allowed {
+        match registry.get(tool) {
+            None => return Err(format!("no such tool {tool:?}")),
+            Some(t) if !t.always_allowable() => {
+                return Err(format!(
+                    "{tool} is asked about every time: its name doesn't say what it would do, so agreeing to it once would be agreeing to all of it"
+                ))
+            }
+            Some(_) => {}
+        }
+    }
     let mut list = always_allowed(db);
     list.retain(|t| t != tool);
     if allowed {
@@ -62,9 +83,10 @@ pub fn pending(db: &MemoryDb, registry: &Registry) -> Vec<ActionRecord> {
     let _ = db.expire_stale_proposals(PROPOSAL_TTL_MINUTES);
     let mut waiting = db.pending_actions().unwrap_or_default();
     for action in &mut waiting {
-        action.preview = registry
-            .get(&action.tool)
-            .map(|tool| tool.preview(&action.args));
+        if let Some(tool) = registry.get(&action.tool) {
+            action.preview = Some(tool.preview(&action.args));
+            action.always_allowable = Some(tool.always_allowable());
+        }
     }
     waiting
 }
@@ -230,6 +252,34 @@ mod tests {
         }
     }
 
+    /// A mutating tool that refuses to be pre-approved, standing in for `run_command`.
+    struct Unallowable;
+
+    impl Tool for Unallowable {
+        fn name(&self) -> &'static str {
+            "probe_runner"
+        }
+        fn description(&self) -> &'static str {
+            "a mutating test tool that must be approved every time"
+        }
+        fn parameters(&self) -> Value {
+            json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"]
+            })
+        }
+        fn mutating(&self) -> bool {
+            true
+        }
+        fn always_allowable(&self) -> bool {
+            false
+        }
+        fn call(&self, _args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
+            Ok(Outcome::text("ran"))
+        }
+    }
+
     fn fixture(name: &str) -> (MemoryDb, Registry) {
         let path =
             std::env::temp_dir().join(format!("aether1_consent_{name}_{}.db", std::process::id()));
@@ -380,18 +430,68 @@ mod tests {
 
     #[test]
     fn the_always_allow_list_round_trips() {
-        let (db, _registry) = fixture("always_allow");
+        let (db, registry) = fixture("always_allow");
         assert!(!is_always_allowed(&db, "probe_writer"));
 
-        set_always_allowed(&db, "probe_writer", true).unwrap();
+        set_always_allowed(&db, &registry, "probe_writer", true).unwrap();
         assert!(is_always_allowed(&db, "probe_writer"));
         assert_eq!(always_allowed(&db), vec!["probe_writer".to_string()]);
 
         // Idempotent: allowing twice doesn't duplicate the entry.
-        set_always_allowed(&db, "probe_writer", true).unwrap();
+        set_always_allowed(&db, &registry, "probe_writer", true).unwrap();
         assert_eq!(always_allowed(&db).len(), 1);
 
-        set_always_allowed(&db, "probe_writer", false).unwrap();
+        set_always_allowed(&db, &registry, "probe_writer", false).unwrap();
         assert!(!is_always_allowed(&db, "probe_writer"));
+    }
+
+    /// A tool that refuses pre-approval can't be switched on, and the refusal happens
+    /// before anything is written -- so the operator never ends up with a stored
+    /// permission that the gate quietly ignores.
+    #[test]
+    fn a_tool_that_refuses_pre_approval_cannot_be_switched_on() {
+        let (db, _) = fixture("no_pre_approval");
+        let mut registry = Registry::new();
+        registry.register(Box::new(Unallowable)).unwrap();
+
+        let err = set_always_allowed(&db, &registry, "probe_runner", true).unwrap_err();
+        assert!(err.contains("every time"), "{err}");
+        assert!(always_allowed(&db).is_empty(), "nothing was stored");
+
+        // Clearing one is still allowed: a name left by an older version has to be
+        // removable even though it can no longer be added.
+        set_always_allowed(&db, &registry, "probe_runner", false).unwrap();
+    }
+
+    /// Unknown names are refused too, rather than accumulating in a setting that no tool
+    /// will ever match.
+    #[test]
+    fn an_unknown_tool_cannot_be_pre_approved() {
+        let (db, registry) = fixture("unknown_pre_approval");
+        let err = set_always_allowed(&db, &registry, "probe_ghost", true).unwrap_err();
+        assert!(err.contains("no such tool"), "{err}");
+    }
+
+    /// The approval card is told which tools can be pre-approved, so it can leave the
+    /// checkbox off a card whose tool would refuse it.
+    #[test]
+    fn a_pending_action_says_whether_it_can_be_pre_approved() {
+        let (db, _) = fixture("pending_allowable");
+        let mut registry = Registry::new();
+        registry.register(Box::new(Writer)).unwrap();
+        registry.register(Box::new(Unallowable)).unwrap();
+
+        propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        propose(&db, "probe_runner", &json!({"path": "/tmp/x"})).unwrap();
+
+        let waiting = pending(&db, &registry);
+        let allowable = |name: &str| {
+            waiting
+                .iter()
+                .find(|a| a.tool == name)
+                .and_then(|a| a.always_allowable)
+        };
+        assert_eq!(allowable("probe_writer"), Some(true));
+        assert_eq!(allowable("probe_runner"), Some(false));
     }
 }

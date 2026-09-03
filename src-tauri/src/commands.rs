@@ -183,10 +183,7 @@ pub fn reject_action(engine: &LlmEngine, id: i64) -> Result<(), String> {
 
 /// Adds or removes a tool from the list the operator has stopped being asked about.
 pub fn set_always_allowed(engine: &LlmEngine, tool: String, allowed: bool) -> Result<(), String> {
-    if tools::registry().get(&tool).is_none() {
-        return Err(format!("no such tool {tool:?}"));
-    }
-    tools::consent::set_always_allowed(engine.db(), &tool, allowed)
+    tools::consent::set_always_allowed(engine.db(), tools::registry(), &tool, allowed)
 }
 
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling

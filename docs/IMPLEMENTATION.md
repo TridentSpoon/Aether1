@@ -294,6 +294,14 @@ HUD. Notes on what was decided:
   program must be on an allowlist that starts empty, and the name may not contain a path
   separator, so nothing gets smuggled in as `./curl`. It is also the one tool that admits
   it cannot be undone rather than pretending.
+- **`run_command` cannot be pre-approved at all.** Always-allow is per *tool*, which only
+  means something when the tool's name tells you roughly what it will do. `write_file`
+  qualifies — the path guard has already decided where it may write. `run_command` does
+  not: ticking "stop asking" once would silently pre-approve every allowlisted program,
+  with any arguments, from then on, which is the whole of the permission the allowlist
+  exists to hand out one call at a time. `Tool::always_allowable` says so, the run gate
+  asks the tool before it consults the operator's list, and the approval card shows a
+  line explaining it instead of a checkbox.
 
 **Not built:** `service_control`. Starting and stopping system services is `run_command`
 with a longer name once an allowlist exists, and it deserves its own guard rather than

@@ -79,6 +79,11 @@ pub struct ActionRecord {
     /// the tool rather than from the row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// Whether "stop asking about this tool" is on offer for this one. Filled in with the
+    /// preview, from the tool rather than the row, so an approval card doesn't show a
+    /// checkbox the consent layer would refuse. None when the tool is no longer known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always_allowable: Option<bool>,
     /// Who let this run: "operator" for an explicit approval, "always-allow" for one the
     /// operator had pre-approved for this tool, "automatic" for a read-only call that
     /// needed no approval at all. None while a proposal is still waiting.
@@ -424,6 +429,7 @@ fn action_from_row(row: &rusqlite::Row) -> rusqlite::Result<ActionRecord> {
         undo: undo_raw.and_then(|u| serde_json::from_str(&u).ok()),
         approved_by: row.get(8)?,
         preview: None,
+        always_allowable: None,
     })
 }
 

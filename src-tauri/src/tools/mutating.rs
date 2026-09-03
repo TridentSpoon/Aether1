@@ -296,6 +296,14 @@ impl Tool for RunCommand {
         true
     }
 
+    /// Never pre-approvable. "Always allow run_command" reads like a decision about one
+    /// tool and is really a decision about every program on the allowlist, with any
+    /// arguments, from then on -- which is the whole of the permission the allowlist was
+    /// there to hand out one call at a time.
+    fn always_allowable(&self) -> bool {
+        false
+    }
+
     fn preview(&self, args: &Value) -> String {
         let program = args.get("program").and_then(Value::as_str).unwrap_or("?");
         let argv: Vec<String> = args

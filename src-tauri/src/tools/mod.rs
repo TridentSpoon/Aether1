@@ -47,6 +47,18 @@ pub trait Tool: Send + Sync {
     /// a file, a setting, a process, a service. Read-only inspection is false.
     fn mutating(&self) -> bool;
 
+    /// True if "stop asking about this tool" is a coherent thing for the operator to say.
+    ///
+    /// Always-allow is per *tool*, not per call, so it only means something when knowing
+    /// the tool's name tells you roughly what it will do. `write_file` qualifies: the path
+    /// guard already decides where it may write, and the operator is agreeing to that
+    /// bounded thing. `run_command` does not: its name says nothing about what runs, so
+    /// pre-approving it once would silently pre-approve every allowlisted program with any
+    /// arguments, forever. A tool that answers false here is proposed every time.
+    fn always_allowable(&self) -> bool {
+        true
+    }
+
     /// Runs the tool. `args` has been checked against `parameters` for required keys and
     /// their primitive types -- anything beyond that a tool validates itself. The returned
     /// string goes back to the model as the tool's result, so it should be terse and
@@ -115,6 +127,9 @@ pub struct ToolSchema {
     pub description: &'static str,
     pub input_schema: Value,
     pub mutating: bool,
+    /// Whether the operator may pre-approve this tool at all. False means every call is
+    /// proposed, so the settings UI shouldn't offer a switch that would do nothing.
+    pub always_allowable: bool,
 }
 
 /// The set of tools available to a turn.
@@ -161,6 +176,7 @@ impl Registry {
                 description: t.description(),
                 input_schema: t.parameters(),
                 mutating: t.mutating(),
+                always_allowable: t.always_allowable(),
             })
             .collect()
     }
@@ -303,7 +319,10 @@ pub fn run(
     // A mutating call does not run here. It is written down and left for the operator --
     // unless they have already decided, once, that this tool never needs asking about.
     if tool.mutating() {
-        if !consent::is_always_allowed(ctx.db, name) {
+        // The trait is asked first, and the operator's list second: a tool that refuses
+        // to be pre-approved stays proposed even if its name is somehow on that list --
+        // from an older database, or a tool that used to allow it and no longer does.
+        if !tool.always_allowable() || !consent::is_always_allowed(ctx.db, name) {
             let id = consent::propose(ctx.db, name, args)?;
             return Ok(format!(
                 "PROPOSED (id {id}): {} is waiting for the operator to approve it. Do not \
@@ -380,6 +399,7 @@ mod tests {
     struct Probe {
         name: &'static str,
         mutating: bool,
+        always_allowable: bool,
     }
 
     impl Tool for Probe {
@@ -399,13 +419,29 @@ mod tests {
         fn mutating(&self) -> bool {
             self.mutating
         }
+        fn always_allowable(&self) -> bool {
+            self.always_allowable
+        }
         fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
             Ok(Outcome::text(format!("saw {}", args["path"])))
         }
     }
 
     fn probe(name: &'static str, mutating: bool) -> Box<dyn Tool> {
-        Box::new(Probe { name, mutating })
+        Box::new(Probe {
+            name,
+            mutating,
+            always_allowable: true,
+        })
+    }
+
+    /// A mutating tool that must be approved every time, as `run_command` is.
+    fn unallowable_probe(name: &'static str) -> Box<dyn Tool> {
+        Box::new(Probe {
+            name,
+            mutating: true,
+            always_allowable: false,
+        })
     }
 
     fn temp_db(name: &str) -> MemoryDb {
@@ -535,7 +571,7 @@ mod tests {
         let ctx = ToolContext { db: &db };
         let mut registry = Registry::new();
         registry.register(probe("probe_writer", true)).unwrap();
-        consent::set_always_allowed(&db, "probe_writer", true).unwrap();
+        consent::set_always_allowed(&db, &registry, "probe_writer", true).unwrap();
 
         let reply = run(&registry, &ctx, "probe_writer", &json!({"path": "/tmp"})).unwrap();
         assert!(!reply.starts_with("PROPOSED"), "{reply}");
@@ -544,6 +580,44 @@ mod tests {
         let logged = db.recent_actions(1).unwrap();
         assert_eq!(logged[0].status, ActionStatus::Executed);
         assert_eq!(logged[0].approved_by.as_deref(), Some("always-allow"));
+    }
+
+    /// The list is advice, not authority. A tool that refuses pre-approval is proposed
+    /// even when its name somehow sits on the always-allow list -- which is what a
+    /// database written by an older version, or edited by hand, looks like.
+    #[test]
+    fn a_tool_that_refuses_pre_approval_is_proposed_even_when_the_list_says_otherwise() {
+        let db = temp_db("run_unallowable");
+        let ctx = ToolContext { db: &db };
+        let mut registry = Registry::new();
+        registry
+            .register(unallowable_probe("probe_runner"))
+            .unwrap();
+
+        // Straight into the setting, bypassing set_always_allowed, which would refuse.
+        db.set_setting("tool_always_allow", &json!(["probe_runner"]))
+            .unwrap();
+        assert!(consent::is_always_allowed(&db, "probe_runner"));
+
+        let reply = run(&registry, &ctx, "probe_runner", &json!({"path": "/tmp"})).unwrap();
+        assert!(reply.starts_with("PROPOSED"), "{reply}");
+        assert_eq!(consent::pending(&db, &registry).len(), 1);
+    }
+
+    /// `run_command` is the tool this rule exists for: its name says nothing about what
+    /// would run, so it is never pre-approvable, while the bounded ones still are.
+    #[test]
+    fn run_command_is_the_one_tool_that_cannot_be_pre_approved() {
+        let schemas = registry().schemas();
+        let allowable = |name: &str| {
+            schemas
+                .iter()
+                .find(|s| s.name == name)
+                .map(|s| s.always_allowable)
+        };
+        assert_eq!(allowable("run_command"), Some(false));
+        assert_eq!(allowable("write_file"), Some(true));
+        assert_eq!(allowable("append_note"), Some(true));
     }
 
     #[test]
