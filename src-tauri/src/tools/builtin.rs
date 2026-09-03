@@ -390,10 +390,20 @@ mod tests {
     fn the_read_only_tools_are_the_ones_that_only_look() {
         // The boundary this file exists to hold: everything here answers a question about
         // the machine and changes nothing, which is why these run without asking.
-        let looking = ["read_file", "list_dir", "list_processes", "telemetry_detail", "search_memory"];
+        let looking = [
+            "read_file",
+            "list_dir",
+            "list_processes",
+            "telemetry_detail",
+            "search_memory",
+        ];
         for schema in super::super::registry().schemas() {
             if looking.contains(&schema.name) {
-                assert!(!schema.mutating, "{} only looks and must not mutate", schema.name);
+                assert!(
+                    !schema.mutating,
+                    "{} only looks and must not mutate",
+                    schema.name
+                );
             }
         }
     }

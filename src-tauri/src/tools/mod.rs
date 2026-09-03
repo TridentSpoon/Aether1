@@ -460,7 +460,12 @@ mod tests {
         // The default preview is the tool name and raw JSON, which is not something an
         // operator can make a decision from. Anything that changes the machine has to do
         // better than the default.
-        for tool_name in registry().schemas().iter().filter(|s| s.mutating).map(|s| s.name) {
+        for tool_name in registry()
+            .schemas()
+            .iter()
+            .filter(|s| s.mutating)
+            .map(|s| s.name)
+        {
             let tool = registry().get(tool_name).unwrap();
             let args = json!({"path": "/tmp/x", "content": "hi", "key": "agent_name", "value": "A", "program": "echo", "note": "profile.md"});
             let default = format!("{tool_name} {args}");

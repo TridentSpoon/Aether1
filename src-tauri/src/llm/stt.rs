@@ -23,16 +23,6 @@ const MODEL_DIRS: &[&str] = &[
     "/usr/local/share/whisper",
 ];
 
-fn expand_home(path: &str) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => match std::env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(rest),
-            None => PathBuf::from(path),
-        },
-        None => PathBuf::from(path),
-    }
-}
-
 pub fn whisper_binary() -> Option<PathBuf> {
     WHISPER_BINARIES
         .iter()
@@ -42,11 +32,11 @@ pub fn whisper_binary() -> Option<PathBuf> {
 /// The model file: the configured path, or the first `.bin` in the usual places.
 pub fn whisper_model(configured: Option<&str>) -> Option<PathBuf> {
     if let Some(path) = configured.filter(|p| !p.trim().is_empty()) {
-        let path = expand_home(path);
+        let path = crate::paths::expand_home(path);
         return path.exists().then_some(path);
     }
     for dir in MODEL_DIRS {
-        let Ok(entries) = std::fs::read_dir(expand_home(dir)) else {
+        let Ok(entries) = std::fs::read_dir(crate::paths::expand_home(dir)) else {
             continue;
         };
         let mut models: Vec<PathBuf> = entries
@@ -200,7 +190,8 @@ mod tests {
         // with a bare "unavailable".
         if let Err(message) = local_status(Some("/nonexistent/model.bin")) {
             assert!(
-                message.contains("no local speech recognition") || message.contains("no .bin model"),
+                message.contains("no local speech recognition")
+                    || message.contains("no .bin model"),
                 "{message}"
             );
         }

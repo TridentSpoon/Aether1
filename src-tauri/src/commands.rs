@@ -192,7 +192,11 @@ pub fn set_always_allowed(engine: &LlmEngine, tool: String, allowed: bool) -> Re
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling
 /// logic in /api/chat and /api/agent/genesis. Engine and voices come from settings, so the
 /// operator's choice of local-or-cloud applies wherever speech is produced.
-pub fn synthesize_speech(engine: &LlmEngine, text: &str, voice: Option<&str>) -> Result<PathBuf, String> {
+pub fn synthesize_speech(
+    engine: &LlmEngine,
+    text: &str,
+    voice: Option<&str>,
+) -> Result<PathBuf, String> {
     let db = engine.db();
     let cache_dir = project_root().join("backend").join("audio_cache");
     let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);

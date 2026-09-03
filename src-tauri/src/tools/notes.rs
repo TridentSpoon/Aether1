@@ -58,7 +58,9 @@ impl Tool for AppendNote {
     }
 
     fn parameters(&self) -> Value {
-        note_parameters("Markdown to add. It is appended as-is, so include its own heading or bullet.")
+        note_parameters(
+            "Markdown to add. It is appended as-is, so include its own heading or bullet.",
+        )
     }
 
     fn mutating(&self) -> bool {
@@ -234,14 +236,20 @@ mod tests {
         let before = std::fs::read_to_string(root.join("profile.md")).unwrap();
 
         let outcome = AppendNote
-            .call(&json!({"note": "profile.md", "content": "- Prefers helix"}), &ctx)
+            .call(
+                &json!({"note": "profile.md", "content": "- Prefers helix"}),
+                &ctx,
+            )
             .unwrap();
         let after = std::fs::read_to_string(root.join("profile.md")).unwrap();
         assert!(after.starts_with(&before), "appending keeps what was there");
         assert!(after.contains("Prefers helix"));
 
         AppendNote.undo(&outcome.undo.unwrap(), &ctx).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("profile.md")).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(root.join("profile.md")).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -268,7 +276,10 @@ mod tests {
         let before = std::fs::read_to_string(root.join("machine.md")).unwrap();
 
         let outcome = WriteNote
-            .call(&json!({"note": "machine.md", "content": "# Machine\n\nRewritten.\n"}), &ctx)
+            .call(
+                &json!({"note": "machine.md", "content": "# Machine\n\nRewritten.\n"}),
+                &ctx,
+            )
             .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("machine.md")).unwrap(),
@@ -276,7 +287,10 @@ mod tests {
         );
 
         WriteNote.undo(&outcome.undo.unwrap(), &ctx).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("machine.md")).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(root.join("machine.md")).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -285,7 +299,9 @@ mod tests {
         let ctx = ToolContext { db: &db };
         for bad in ["../escape.md", "/etc/passwd.md", "notes/../../escape.md"] {
             assert!(
-                AppendNote.call(&json!({"note": bad, "content": "x"}), &ctx).is_err(),
+                AppendNote
+                    .call(&json!({"note": bad, "content": "x"}), &ctx)
+                    .is_err(),
                 "{bad} should be refused"
             );
         }

@@ -156,7 +156,10 @@ pub fn undo(registry: &Registry, ctx: &ToolContext, id: i64) -> Result<String, S
         ));
     }
     let Some(payload) = record.undo else {
-        return Err(format!("{} did not record a way to undo itself", record.tool));
+        return Err(format!(
+            "{} did not record a way to undo itself",
+            record.tool
+        ));
     };
     let Some(tool) = registry.get(&record.tool) else {
         return Err(format!("{} is no longer available", record.tool));
