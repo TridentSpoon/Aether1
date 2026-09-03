@@ -63,6 +63,7 @@ class HologramAvatar {
         this.nexusHeadOutlineMat = null;
         this.nexusHeadPoints = null; // sparse point cloud at every hull vertex -- brightest of the three, the "nodes" depth cue
         this.nexusHullPointsMat = null;
+        this.nexusHeadHeightScale = 1; // head-on Y squash (0.6 -- same width, 60% height); animateNexus's pulse multiplies on top of this
         this.nexusRibMat = null; // shared material for the three carapace ribs
         this.nexusGridMat = null; // faint rotating radar-grid backdrop sprite
         this.nexusTentacleLineMat = null; // shared dashed-line material -- the dash pattern itself reads as chain links

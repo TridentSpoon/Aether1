@@ -138,6 +138,18 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
     this.nexusHeadPoints = new THREE.Points(hullGeom, this.nexusHullPointsMat);
     this.nexusRestTiltGroup.add(this.nexusHeadPoints);
 
+    // Squash to an oval in head-on view: same width (X), 60% of the height (Y). Applied as
+    // an Object3D-level scale (not baked into hullGeom's vertices) so it's one shared factor
+    // across all four hull representations above, and so the ribs/eye-lens cluster below --
+    // children of nexusHeadMesh -- automatically flatten along with it instead of needing
+    // their own hand-adjusted Y coordinates. animate.js's per-frame "breathing" pulse
+    // multiplies on top of this base scale rather than overwriting it, so the oval
+    // proportions hold through that too.
+    this.nexusHeadHeightScale = 0.6; // read by animateNexus's breathing-pulse code
+    [this.nexusHeadMesh, this.nexusHeadInnerWire, this.nexusHeadOutline, this.nexusHeadPoints].forEach(obj => {
+        obj.scale.set(1, this.nexusHeadHeightScale, 1);
+    });
+
     // Ribbed carapace bands -- three thin wireframe rings encircling the hull like a
     // segmented armored shell, radii approximating the hull's own profile at each Z so
     // they sit flush on the surface instead of floating inside/outside it.

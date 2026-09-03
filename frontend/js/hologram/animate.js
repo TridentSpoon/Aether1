@@ -238,8 +238,9 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
         } else {
             headScale = 1.0 + clickPulse * 0.12;
         }
+        const headScaleY = headScale * this.nexusHeadHeightScale; // keep the oval (60%-height) proportions through the pulse
         [this.nexusHeadMesh, this.nexusHeadInnerWire, this.nexusHeadOutline, this.nexusHeadPoints].forEach(obj => {
-            if (obj) obj.scale.set(headScale, headScale, headScale);
+            if (obj) obj.scale.set(headScale, headScaleY, headScale);
         });
         if (this.nexusHullInnerWireMat) this.nexusHullInnerWireMat.opacity = 0.22 * crtFlicker;
         if (this.nexusHeadOutlineMat) this.nexusHeadOutlineMat.opacity = 0.9 * crtFlicker;
