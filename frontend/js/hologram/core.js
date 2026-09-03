@@ -6,7 +6,8 @@
  * 2. A.R.X.LIMES: Faceted Floating Hub with a Fractured Convex Dome of Plates
  * 3. The Nexus: Squid/Brain Creature with Trailing Tentacles that Hunts the Cursor,
  *    Set Against Falling NEXUS Letter Rain
- * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Blinking Eyelid Arcs
+ * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with a Hot Lens Glow, Two Depth-Stacked Blinking
+ *    Eyelid Arcs, and a Speech-Reactive Light
  * 5. A.R.X.LOGOS: Hexagonal Core Eye with Six Spiraling Aperture-Blade Arms, Two Tumbling
  *    Hex-Frame Rings, and an Orbiting Hex Swarm
  * 6. A1ter_nul: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
@@ -84,6 +85,12 @@ class HologramAvatar {
         this.redLensOuter = null;
         this.redBlueCircle = null;
         this.redCyanCircle = null;
+        // Lens glow: a fixed yellow-hot-to-crimson sprite sitting on the core's front face,
+        // plus a warm point light seated at the lens -- both pulse with speech/thinking/
+        // blink in animateRed9000. Fixed color regardless of theme, same convention as the
+        // obsidian core itself.
+        this.redLensGlow = null;
+        this.redEyeLight = null;
         // Blink scheduling -- see animateRed9000. redBlinkStartTime is elapsedTime when the
         // eyelids started closing; redNextBlinkTime is when the next autonomous blink fires.
         this.redBlinkStartTime = -999;
@@ -353,6 +360,8 @@ class HologramAvatar {
         if (this.redLensOuter) this.redLensOuter.material.color.setHex(p.hex);
         if (this.redBlueCircle) this.redBlueCircle.material.color.setHex(p.hex2);
         if (this.redCyanCircle) this.redCyanCircle.material.color.setHex(p.hex3);
+        // redLensGlow / redEyeLight are fixed (real "hot lens" glow, like the obsidian core
+        // itself) and stay untouched here.
 
         // A1ter_nul (Cunningham): each shard's glass fill is a fixed obsidian material
         // (see buildAltAvatar) -- only the glowing edges retint, ramped from hex2 at the

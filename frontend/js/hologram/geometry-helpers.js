@@ -16,6 +16,24 @@ HologramAvatar.prototype.createGlowSpriteTexture = function(size = 32) {
     return new THREE.CanvasTexture(canvas);
 };
 
+// A two-color radial gradient on a transparent canvas (used by R.E.D. 9000's lens glow) --
+// baked with real CSS colors rather than left white, since this represents a fixed physical
+// glow (like an obsidian core) rather than a themeable UI accent, so material.color tinting
+// doesn't apply here.
+HologramAvatar.prototype.createRadialGlowTexture = function(size, centerColor, edgeColor) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, centerColor);
+    gradient.addColorStop(0.55, edgeColor);
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(canvas);
+};
+
 // A thin stroked ring on a transparent canvas (used by The Nexus's eye-lens outlines) --
 // rendered white so material.color can tint it. A sprite rather than flat geometry so the
 // ring always faces the camera regardless of how the parent head is rotated.
