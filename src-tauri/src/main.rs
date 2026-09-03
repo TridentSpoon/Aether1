@@ -17,10 +17,15 @@
     windows_subsystem = "windows"
 )]
 
+mod cli;
 mod commands;
+mod hotkey;
 mod llm;
 mod model_scanner;
+mod paths;
 mod server;
+mod tools;
+mod vault;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -414,6 +419,26 @@ fn generate_response_rust(
 /// Rust-native equivalent of POST /api/agent/genesis (backend/main.py), minus TTS audio
 /// generation (see generate_speech_rust). Body lives in commands::agent_genesis, shared
 /// with the axum server's /api/agent/genesis handler.
+/// Streaming counterpart of generate_response_rust: the reply is emitted delta by delta as
+/// `chat-delta` events (each tagged with the caller's stream_id so two in-flight turns can't
+/// interleave in the UI), and the whole reply still comes back as the return value. The
+/// frontend renders the deltas and uses the return value as the authoritative final text.
+#[tauri::command]
+fn generate_response_streaming_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    prompt: String,
+    session_id: Option<String>,
+    stream_id: String,
+) -> Result<serde_json::Value, String> {
+    commands::generate_response_streamed(&engine, prompt, session_id, &mut |delta| {
+        let _ = app.emit(
+            "chat-delta",
+            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+        );
+    })
+}
+
 #[tauri::command]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
@@ -446,6 +471,48 @@ fn get_static_info_rust() -> serde_json::Value {
 
 /// Rust-native equivalent of GET /api/messages (backend/main.py).
 #[tauri::command]
+fn get_tools_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::tool_catalog(&engine)
+}
+
+#[tauri::command]
+fn get_actions_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::ActionRecord> {
+    commands::recent_actions(&engine, limit)
+}
+
+#[tauri::command]
+fn pending_actions_rust(engine: tauri::State<LlmEngine>) -> Vec<llm::ActionRecord> {
+    commands::pending_actions(&engine)
+}
+
+#[tauri::command]
+fn approve_action_rust(
+    engine: tauri::State<LlmEngine>,
+    id: i64,
+) -> Result<serde_json::Value, String> {
+    commands::approve_action(&engine, id)
+}
+
+#[tauri::command]
+fn undo_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<serde_json::Value, String> {
+    commands::undo_action(&engine, id)
+}
+
+#[tauri::command]
+fn reject_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<(), String> {
+    commands::reject_action(&engine, id)
+}
+
+#[tauri::command]
+fn set_always_allowed_rust(
+    engine: tauri::State<LlmEngine>,
+    tool: String,
+    allowed: bool,
+) -> Result<(), String> {
+    commands::set_always_allowed(&engine, tool, allowed)
+}
+
+#[tauri::command]
 fn get_messages_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::Message> {
     commands::get_messages(&engine, limit)
 }
@@ -466,10 +533,22 @@ fn get_settings_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
 #[tauri::command]
 fn save_settings_rust(
+    app: tauri::AppHandle,
     engine: tauri::State<LlmEngine>,
     settings: serde_json::Value,
 ) -> Result<(), String> {
-    commands::save_settings(&engine, settings)
+    let hotkey_changed = settings.get("hotkey_toggle").is_some();
+    commands::save_settings(&engine, settings)?;
+    // Rebind the global hotkey in place so a chord edited in Settings takes effect without
+    // a restart. A chord that won't parse is reported to the operator but doesn't fail the
+    // save -- the rest of the settings were still written, and refusing the whole save
+    // would lose them. (The axum path has no window to summon, so it has no equivalent.)
+    if hotkey_changed {
+        if let Err(e) = hotkey::reregister_from_settings(&app) {
+            return Err(format!("settings saved, but the hotkey was not: {e}"));
+        }
+    }
+    Ok(())
 }
 
 /// Rust-native equivalent of POST /api/tts + GET /api/audio/{filename} (backend/main.py)
@@ -479,8 +558,22 @@ fn save_settings_rust(
 /// server's /api/chat and /api/agent/genesis handlers call commands::synthesize_speech
 /// directly instead, since they need a URL string rather than a raw path.
 #[tauri::command]
-fn generate_speech_rust(text: String, voice: Option<String>) -> Result<String, String> {
-    let path = commands::synthesize_speech(&text, voice.as_deref())?;
+fn transcribe_rust(engine: tauri::State<LlmEngine>, wav: Vec<u8>) -> Result<String, String> {
+    commands::transcribe_audio(&engine, &wav)
+}
+
+#[tauri::command]
+fn voice_status_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::voice_status(&engine)
+}
+
+#[tauri::command]
+fn generate_speech_rust(
+    engine: tauri::State<LlmEngine>,
+    text: String,
+    voice: Option<String>,
+) -> Result<String, String> {
+    let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -527,7 +620,9 @@ fn toggle_sprite_window_rust(app: tauri::AppHandle, enabled: bool) -> Result<(),
     if enabled {
         match app.get_webview_window(SPRITE_LABEL) {
             Some(window) => window.show().map_err(|e| e.to_string()),
-            None => build_sprite_window(&app).map(|_| ()).map_err(|e| e.to_string()),
+            None => build_sprite_window(&app)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
         }
     } else if let Some(window) = app.get_webview_window(SPRITE_LABEL) {
         window.close().map_err(|e| e.to_string())
@@ -562,8 +657,24 @@ fn start_window_drag_rust(window: tauri::WebviewWindow) -> Result<(), String> {
 /// backend/aether1_memory.db, falling back to a temp-dir sqlite file if that fails.
 fn build_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
+    // The native path creates backend/ as a side effect of setting up the audio cache in
+    // setup(), but a headless run (--serve, or a CLI subcommand) reaches this first. Without
+    // this, sqlite can't create the file in a directory that doesn't exist yet, and every
+    // headless invocation on a fresh checkout would silently fall back to a temp database --
+    // i.e. the CLI would keep its own separate memory until the GUI had been opened once.
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     match MemoryDb::open(&db_path) {
-        Ok(db) => LlmEngine::new(db),
+        Ok(db) => {
+            // Create the vault on first run, so the very first conversation already has
+            // somewhere to remember things. Best-effort: a companion that refuses to start
+            // because it could not create a folder would be worse than one with no memory.
+            if let Err(e) = vault::ensure(&db) {
+                eprintln!("[AETHER1] Memory vault unavailable: {e}");
+            }
+            LlmEngine::new(db)
+        }
         Err(e) => {
             // NOT ":memory:" -- MemoryDb opens a fresh connection per call (matching
             // memory_db.py's own pattern, which is fine for a real file), so a literal
@@ -592,34 +703,67 @@ fn main() {
         .install_default()
         .expect("installing the rustls crypto provider should only fail if called twice");
 
-    // Headless HTTP mode: short-circuit before tauri::Builder is ever constructed, so the
-    // native app's setup (tray, asset-protocol scope, window) never runs in this process.
-    // See server.rs for the actual axum app.
-    if std::env::args().any(|arg| arg == "--serve") {
-        let engine = build_llm_engine();
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime for --serve");
-        runtime.block_on(server::run(engine));
-        return;
+    // Everything except a bare launch short-circuits before tauri::Builder is ever
+    // constructed, so the native app's setup (tray, asset-protocol scope, window) never
+    // runs in a headless process. See cli.rs for the argument parsing and server.rs for
+    // the axum app.
+    let invocation = cli::parse(&std::env::args().collect::<Vec<_>>());
+    match invocation {
+        // `show`/`toggle` continue into the app path: the single-instance plugin below
+        // hands their argv to the already-running instance, and if there isn't one, this
+        // launch becomes it.
+        cli::Invocation::App | cli::Invocation::Window { .. } => {}
+        // Headless HTTP mode.
+        cli::Invocation::Serve => {
+            let engine = build_llm_engine();
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime for --serve");
+            runtime.block_on(server::run(engine));
+            return;
+        }
+        // One-shot CLI: prompt/status/say/help/version.
+        other => std::process::exit(cli::run(other)),
     }
 
     let llm_engine = build_llm_engine();
 
     tauri::Builder::default()
+        // Must be the first plugin registered (see the plugin's own docs). A second
+        // `aether1` launch -- including `aether1 show` and `aether1 toggle` -- exits
+        // immediately after handing its argv to the instance already running, which is
+        // what makes those subcommands reach this window, and what stops the tray from
+        // sprouting a second icon when the app is launched twice.
+        .plugin(tauri_plugin_single_instance::init(
+            |app, argv, _cwd| match cli::parse(&argv) {
+                cli::Invocation::Window { toggle: true } => hotkey::toggle_window(app),
+                _ => hotkey::show_window(app),
+            },
+        ))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(llm_engine)
         .invoke_handler(tauri::generate_handler![
             generate_response_rust,
+            generate_response_streaming_rust,
             agent_genesis_rust,
             scan_models_rust,
             pull_model_rust,
             get_static_info_rust,
+            get_tools_rust,
+            get_actions_rust,
+            pending_actions_rust,
+            approve_action_rust,
+            undo_action_rust,
+            reject_action_rust,
+            set_always_allowed_rust,
             get_messages_rust,
             clear_messages_rust,
             get_settings_rust,
             save_settings_rust,
             generate_speech_rust,
+            transcribe_rust,
+            voice_status_rust,
             get_version_info,
             check_for_update_rust,
             apply_update_rust,
@@ -636,7 +780,11 @@ fn main() {
             // the same close-quits-the-app behavior as before.
             if window.label() == MAIN_LABEL {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if window.app_handle().get_webview_window(SPRITE_LABEL).is_some() {
+                    if window
+                        .app_handle()
+                        .get_webview_window(SPRITE_LABEL)
+                        .is_some()
+                    {
                         api.prevent_close();
                         let _ = window.hide();
                     }
@@ -653,6 +801,18 @@ fn main() {
             std::fs::create_dir_all(&audio_cache_dir)?;
             app.asset_protocol_scope()
                 .allow_directory(&audio_cache_dir, false)?;
+
+            // Global hotkey to summon/dismiss the HUD. A chord that won't parse or is
+            // already taken by another application is a warning, never a startup failure --
+            // the tray and `aether1 toggle` both still work without it.
+            match hotkey::reregister_from_settings(app.handle()) {
+                Ok(()) => hotkey::warn_if_wayland(
+                    &app.state::<LlmEngine>()
+                        .db()
+                        .get_setting_string("hotkey_toggle", hotkey::DEFAULT_TOGGLE),
+                ),
+                Err(e) => eprintln!("[AETHER1] Global hotkey not registered: {e}"),
+            }
 
             // Native tray icon so there's a visible indicator (and a quick way to
             // reopen/quit) while AETHER1 runs headlessly in the background.

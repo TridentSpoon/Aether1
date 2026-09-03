@@ -1,0 +1,56 @@
+/* The three faces the HUD is drawn in, served from disk instead of fonts.googleapis.com.
+   Latin subsets only, woff2 only -- every browser Aether1 runs in supports it, and the
+   .woff fallback would double the size for nobody. font-display: swap keeps text visible
+   while a face loads, which on local files is imperceptible anyway. */
+
+@font-face {
+    font-family: 'Orbitron';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('fonts/orbitron-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Orbitron';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/orbitron-latin-700-normal.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Orbitron';
+    font-style: normal;
+    font-weight: 900;
+    font-display: swap;
+    src: url('fonts/orbitron-latin-900-normal.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Rajdhani';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('fonts/rajdhani-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Rajdhani';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('fonts/rajdhani-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Rajdhani';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/rajdhani-latin-700-normal.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Share Tech Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/share-tech-mono-latin-400-normal.woff2') format('woff2');
+}

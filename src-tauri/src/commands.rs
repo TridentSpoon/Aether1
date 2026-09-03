@@ -7,14 +7,27 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::llm::{self, LlmEngine};
+use crate::llm::{self, ActionRecord, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
+use crate::tools;
 
 pub fn generate_response(
     engine: &LlmEngine,
     prompt: String,
     session_id: Option<String>,
+) -> Result<Value, String> {
+    generate_response_streamed(engine, prompt, session_id, &mut |_| {})
+}
+
+/// generate_response, with each piece of the reply handed to `sink` as it arrives. The
+/// returned value is identical either way -- the sink is an extra, not an alternative, so
+/// history and usage accounting can't differ between a streamed and an unstreamed turn.
+pub fn generate_response_streamed(
+    engine: &LlmEngine,
+    prompt: String,
+    session_id: Option<String>,
+    sink: llm::Sink,
 ) -> Result<Value, String> {
     if prompt.trim().is_empty() {
         return Err("Empty message".to_string());
@@ -22,7 +35,7 @@ pub fn generate_response(
     let session_id = session_id.unwrap_or_else(|| "default".to_string());
 
     engine.add_message(&session_id, "user", &prompt);
-    let reply = engine.generate_response(&prompt, &session_id);
+    let reply = engine.generate_response_streamed(&prompt, &session_id, sink);
     let agent_name = engine.agent_name();
     engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
 
@@ -94,6 +107,14 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "voice_name": llm::DEFAULT_VOICE,
         "enable_sfx": true,
         "auto_speak": true,
+        "tools_enabled": false,
+        "command_allowlist": [],
+        "tts_engine": "auto",
+        "tts_local_voice": "",
+        "stt_model_path": "",
+        "stt_language": "en",
+        "vault_path": "",
+        "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
         "desktop_sprite_enabled": false,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
@@ -121,9 +142,117 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
     Ok(())
 }
 
+/// What the companion can currently do to the machine, and whether that is switched on.
+/// The list is empty until the first tools are registered; the shape is stable from now
+/// on so the UI and the prompt renderer can both be built against it.
+pub fn tool_catalog(engine: &LlmEngine) -> Value {
+    tools::catalog(engine.db(), tools::registry())
+}
+
+/// The record of what the companion has actually done, newest first.
+pub fn recent_actions(engine: &LlmEngine, limit: Option<u32>) -> Vec<ActionRecord> {
+    engine
+        .db()
+        .recent_actions(limit.unwrap_or(50))
+        .unwrap_or_default()
+}
+
+/// Actions waiting for the operator's answer.
+pub fn pending_actions(engine: &LlmEngine) -> Vec<ActionRecord> {
+    tools::consent::pending(engine.db(), tools::registry())
+}
+
+/// Approves and runs one proposed action.
+pub fn approve_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
+    let ctx = tools::ToolContext { db: engine.db() };
+    let result = tools::consent::approve(tools::registry(), &ctx, id, "operator")?;
+    Ok(serde_json::json!({ "id": id, "result": result }))
+}
+
+/// Reverses an action that ran.
+pub fn undo_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
+    let ctx = tools::ToolContext { db: engine.db() };
+    let result = tools::consent::undo(tools::registry(), &ctx, id)?;
+    Ok(serde_json::json!({ "id": id, "result": result }))
+}
+
+/// Declines one proposed action.
+pub fn reject_action(engine: &LlmEngine, id: i64) -> Result<(), String> {
+    tools::consent::reject(engine.db(), id)
+}
+
+/// Adds or removes a tool from the list the operator has stopped being asked about.
+pub fn set_always_allowed(engine: &LlmEngine, tool: String, allowed: bool) -> Result<(), String> {
+    tools::consent::set_always_allowed(engine.db(), tools::registry(), &tool, allowed)
+}
+
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling
-/// logic in /api/chat and /api/agent/genesis.
-pub fn synthesize_speech(text: &str, voice: Option<&str>) -> Result<PathBuf, String> {
+/// logic in /api/chat and /api/agent/genesis. Engine and voices come from settings, so the
+/// operator's choice of local-or-cloud applies wherever speech is produced.
+pub fn synthesize_speech(
+    engine: &LlmEngine,
+    text: &str,
+    voice: Option<&str>,
+) -> Result<PathBuf, String> {
+    let db = engine.db();
     let cache_dir = project_root().join("backend").join("audio_cache");
-    llm::generate_speech(&cache_dir, text, voice)
+    let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);
+    let local_voice = db.get_setting_string("tts_local_voice", "");
+    llm::generate_speech_with(
+        &cache_dir,
+        text,
+        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")),
+        Some(voice.unwrap_or(&configured_voice)),
+        Some(&local_voice),
+    )
+}
+
+/// Transcribes a recording made in the page. The audio is written to the same cache
+/// directory the synthesized speech lives in, transcribed, and deleted -- a recording of
+/// the operator's voice is not something to leave lying around after it has been read.
+pub fn transcribe_audio(engine: &LlmEngine, wav: &[u8]) -> Result<String, String> {
+    let db = engine.db();
+    let cache_dir = project_root().join("backend").join("audio_cache");
+    let staged = llm::stage_audio(&cache_dir, wav)?;
+
+    let model = db.get_setting_string("stt_model_path", "");
+    let language = db.get_setting_string("stt_language", "en");
+    let result = llm::transcribe(&staged, Some(&model), Some(&language));
+
+    let _ = std::fs::remove_file(&staged);
+    result
+}
+
+/// Whether speech in and out can happen without the network, and if not, what is missing.
+/// The settings panel reports this rather than making the operator guess why the
+/// microphone button does nothing.
+pub fn voice_status(engine: &LlmEngine) -> Value {
+    let db = engine.db();
+    let tts_engine = db.get_setting_string("tts_engine", "auto");
+    let local_voice = db.get_setting_string("tts_local_voice", "");
+    let stt_model = db.get_setting_string("stt_model_path", "");
+
+    let speech_out = llm::tts_local_status(Some(&local_voice));
+    let speech_in = llm::stt_local_status(Some(&stt_model));
+
+    serde_json::json!({
+        "tts_engine": tts_engine,
+        "speech_out": match &speech_out {
+            Ok((binary, voice)) => serde_json::json!({
+                "local": true,
+                "binary": binary.display().to_string(),
+                "voice": voice.display().to_string(),
+            }),
+            Err(why) => serde_json::json!({ "local": false, "why": why }),
+        },
+        "speech_in": match &speech_in {
+            Ok((binary, model)) => serde_json::json!({
+                "local": true,
+                "binary": binary.display().to_string(),
+                "model": model.display().to_string(),
+            }),
+            Err(why) => serde_json::json!({ "local": false, "why": why }),
+        },
+        "offline_capable": speech_out.is_ok() && speech_in.is_ok(),
+    })
 }

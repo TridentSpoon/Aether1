@@ -33,6 +33,34 @@ HologramAvatar.prototype.createRingSpriteTexture = function(size = 64, thickness
     return new THREE.CanvasTexture(canvas);
 };
 
+// A faint tiled grid on a transparent canvas (used by The Nexus's CRT-radar backdrop) --
+// rendered white so material.color can tint it per the active color theme.
+HologramAvatar.prototype.createGridSpriteTexture = function(size = 256, divisions = 10) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1;
+    const step = size / divisions;
+    for (let i = 0; i <= divisions; i++) {
+        const p = i * step;
+        ctx.beginPath();
+        ctx.moveTo(p, 0);
+        ctx.lineTo(p, size);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, p);
+        ctx.lineTo(size, p);
+        ctx.stroke();
+    }
+    // A brighter border ring reads as a radar bezel rather than a plain grid tile.
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, size - 2, size - 2);
+    return new THREE.CanvasTexture(canvas);
+};
+
 // A single glowing glyph on a transparent canvas (used by The Nexus's letter rain).
 // Rendered white so material.color can tint it per the active color theme.
 HologramAvatar.prototype.createLetterSpriteTexture = function(char, size = 64) {

@@ -32,7 +32,8 @@ if [ -x "$CARGO_BIN" ] && [ -d "src-tauri" ]; then
     fi
 else
     echo "⚠ Rust/Cargo not found at $CARGO_BIN -- skipping native app build/install."
-    echo "   See README's 'Native Desktop App' section to install Rust, then re-run ./setup.sh."
+    echo "   Install Rust with:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    echo "   then re-run ./setup.sh."
     exit 0
 fi
 
@@ -60,3 +61,8 @@ mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
 cp desktop/icons/icon.png "$HOME/.local/share/icons/hicolor/256x256/apps/aether1.png" 2>/dev/null || true
 
 echo "✔ Desktop app rebuilt and installed to $INSTALL_BIN; launcher entry refreshed."
+echo "  The same binary is the CLI: 'aether1 prompt \"...\"', 'aether1 status', 'aether1 say \"...\"' (aether1 --help)."
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) echo "  Note: $HOME/.local/bin is not on your PATH, so 'aether1' won't resolve as a command yet." ;;
+esac

@@ -4,39 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aether1 Platform // CYBERNETIC AI HUD</title>
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        cyber: {
-                            cyan: 'var(--neon-cyan)',
-                            blue: 'var(--neon-blue)',
-                            purple: 'var(--neon-purple)',
-                            green: 'var(--neon-green)',
-                            amber: 'var(--neon-amber)',
-                            dark: 'var(--bg-core)',
-                            panel: 'var(--bg-panel)'
-                        }
-                    },
-                    fontFamily: {
-                        orbitron: ['Orbitron', 'sans-serif'],
-                        rajdhani: ['Rajdhani', 'sans-serif'],
-                        mono: ['"Share Tech Mono"', 'monospace']
-                    }
-                }
-            }
-        }
-    </script>
-    <link rel="stylesheet" href="css/A1theme.css?v=17">
-    <!-- Three.js CDN -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Everything the HUD needs to draw itself is on disk. It used to fetch Tailwind,
+         three.js and the fonts from three CDNs on every launch, which meant an offline
+         machine (or a blocked network, or a bad afternoon at Cloudflare) got an unstyled
+         page with no avatar and nothing saying why -- in an app whose whole point is
+         running on your own hardware. See frontend/vendor/README.md. -->
+    <link rel="stylesheet" href="vendor/fonts.css?v=1">
+    <link rel="stylesheet" href="vendor/tailwind.css?v=1">
+    <link rel="stylesheet" href="css/A1theme.css?v=18">
+    <script src="vendor/three.min.js?v=1"></script>
 </head>
 <body class="bg-cyber-dark text-slate-100 flex flex-col h-screen select-none">
     <div class="scanlines"></div>
@@ -63,6 +39,7 @@
                 <button class="avatar-pill px-2 py-0.5 rounded text-amber-400 hover:bg-amber-950/60 font-bold" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-avatar-val="red">🔴 R.E.D. 9000</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-yellow-300 hover:bg-yellow-950/60 font-bold" data-avatar-val="alt">⚠️ A1ter_nul</button>
             </div>
 
             <!-- COLOR THEME QUICK PICKER -->
@@ -74,6 +51,7 @@
                     <option value="arx-limes">🔶 A.R.X.LIMES Amber</option>
                     <option value="arx-logos">🟣 A.R.X.LOGOS Magenta</option>
                     <option value="red">🔴 Crimson</option>
+                    <option value="night-city">⚠️ Night City</option>
                 </select>
             </div>
 
@@ -97,6 +75,9 @@
             </button>
             <button id="btn-clear-chat" class="cyber-btn text-xs py-1 px-2.5 text-slate-400 hover:text-red-400">
                 🗑️ Clear
+            </button>
+            <button id="btn-activity" class="cyber-btn text-xs py-1 px-3">
+                📜 Activity
             </button>
             <button id="btn-settings" class="cyber-btn text-xs py-1 px-3">
                 ⚙️ Settings
@@ -254,10 +235,10 @@
 
             <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
                 <div class="flex items-center gap-2">
-                    <button id="btn-mic" title="Toggle Voice Recognition" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
+                    <button id="btn-mic" title="Hold to talk (or hold Space)" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
                     </button>
-                    <input id="chat-input" type="text" placeholder="Type tactical directive or speak to agent..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
                     </button>
@@ -266,6 +247,23 @@
         </section>
 
     </main>
+
+    <!-- ACTIVITY LOG MODAL -- everything the companion has actually done -->
+    <div id="activity-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    📜 ACTIVITY LOG
+                </h2>
+                <button id="btn-close-activity" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
+            </div>
+            <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                Every tool call, in order, with what it returned. Anything that changed something
+                and recorded a way back can be undone here.
+            </p>
+            <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
+        </div>
+    </div>
 
     <!-- SETTINGS & IDENTITY MATRIX MODAL -->
     <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
@@ -292,6 +290,7 @@
                         <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-avatar="arx-limes">🔶 A.R.X.LIMES</button>
                         <button class="avatar-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-avatar="arx-logos">🟣 A.R.X.LOGOS</button>
                         <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-avatar="red">🔴 R.E.D. 9000</button>
+                        <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-yellow-300 border-yellow-300" data-avatar="alt">⚠️ A1ter_nul</button>
                     </div>
                 </div>
 
@@ -304,6 +303,7 @@
                         <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-color-theme="arx-limes">🔶 A.R.X.LIMES Amber</button>
                         <button class="color-theme-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 A.R.X.LOGOS Magenta</button>
                         <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
+                        <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-yellow-300 border-yellow-300" data-color-theme="night-city">⚠️ Night City</button>
                     </div>
                 </div>
 
@@ -316,6 +316,7 @@
                         <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
                         <option value="arx-limes">A.R.X.LIMES (Archival, Reasoning, matriX — Limes)</option>
                         <option value="arx-logos">A.R.X.LOGOS (Archival, Reasoning, matriX — Logos)</option>
+                        <option value="alt">A1ter_nul (Cunningham — Security & Intrusion Countermeasures)</option>
                         <option value="tactical">Tactical Military HUD</option>
                         <option value="cyberpunk">Cyberpunk Netrunner</option>
                         <option value="custom">Custom Directive (write your own below)</option>
@@ -370,7 +371,7 @@
             <div class="bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
                 <div class="flex items-center justify-between">
                     <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
-                        🔍 INSTALL OR INSTALLED LOCAL MODEL / PROVIDER API SCANNER
+                        🔍 FIND LOCAL LLM SERVERS AND API KEYS
                     </h3>
                     <button id="btn-scan-system" class="cyber-btn text-[11px] py-1 px-2.5">
                         🔄 Scan System & Keys
@@ -378,7 +379,7 @@
                 </div>
 
                 <div id="scanner-results-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
-                    <div>Status: Click Scan to detect Provider API keys, Ollama, and LM Studio.</div>
+                    <div>Status: press Scan to look for local LLM servers on this machine and API keys in the environment.</div>
                 </div>
 
                 <div class="space-y-1.5 pt-1">
@@ -396,7 +397,7 @@
                         </button>
                     </div>
                     <span class="text-[11px] font-mono text-slate-500 block">
-                        Prefer a GUI? LM Studio (lmstudio.ai) works the same way on Windows, macOS, and Linux -- install it, download any model from its in-app browser, then select "LM Studio" as the provider below.
+                        Any local server works, not just this one: anything speaking the OpenAI-compatible or native API on a common port is found by the scan, and anything else can be typed into the endpoint box by hand.
                     </span>
                 </div>
             </div>
@@ -432,32 +433,50 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div class="space-y-1">
                         <label class="text-xs font-mono text-cyan-300 block">LLM PROVIDER</label>
+                        <!-- Named by what they are, not by whose product they are: the two
+                             local options are API shapes, and a dozen programs speak each. -->
                         <select id="setting-provider" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="offline">Offline Standby (Instant Local Fallback)</option>
-                            <option value="ollama">Ollama (Local Private LLM)</option>
-                            <option value="lmstudio">LM Studio (Local OpenAI API)</option>
-                            <option value="gemini">Google Gemini API</option>
-                            <option value="groq">Groq (Ultra-Fast Cloud)</option>
-                            <option value="openai">OpenAI (ChatGPT)</option>
-                            <option value="anthropic">Anthropic Claude</option>
+                            <option value="offline">Offline standby -- no model, instant local replies</option>
+                            <option value="lmstudio">Local LLM server -- OpenAI-compatible API</option>
+                            <option value="ollama">Local LLM server -- native API</option>
+                            <option value="gemini">Google Gemini API (cloud)</option>
+                            <option value="groq">Groq API (cloud)</option>
+                            <option value="openai">OpenAI API (cloud)</option>
+                            <option value="anthropic">Anthropic Claude API (cloud)</option>
                         </select>
                     </div>
 
                     <div class="space-y-1">
                         <label class="text-xs font-mono text-cyan-300 block">MODEL NAME / ID</label>
-                        <input id="setting-model" type="text" placeholder="e.g. llama3, gemini-2.0-flash, gpt-4o-mini" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <!-- The dropdown lists what a detected server says it can run; the box
+                             below stays typeable, because a cloud model is a name you know
+                             and nothing local can enumerate it. -->
+                        <select id="setting-model-picker" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <option value="">-- models on the selected server --</option>
+                        </select>
+                        <input id="setting-model" type="text" placeholder="or type one: llama3.2, gemini-2.0-flash, gpt-4o-mini" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">LOCAL SERVERS FOUND ON THIS MACHINE</label>
+                    <select id="setting-local-server" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <option value="">-- none found yet; press Scan below --</option>
+                    </select>
+                    <span class="text-[11px] font-mono text-slate-500 block">
+                        Picking one fills in the provider, endpoint and model list for you.
+                    </span>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">ENDPOINT (for Ollama / LM Studio)</label>
+                        <label class="text-xs font-mono text-cyan-300 block">ENDPOINT (for a local server)</label>
                         <input id="setting-endpoint" type="text" placeholder="http://localhost:11434" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
 
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">API KEY (stored securely in SQLite)</label>
-                        <input id="setting-apikey" type="password" placeholder="API Key for Gemini / OpenAI / Groq / Claude" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <label class="text-xs font-mono text-cyan-300 block">API KEY (cloud providers only)</label>
+                        <input id="setting-apikey" type="password" placeholder="Key for the cloud provider selected above" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
 
@@ -470,6 +489,61 @@
                         <option value="en-US-JennyNeural">en-US-JennyNeural (hAlcy Alternative)</option>
                         <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural (Cyberpunk Tokyo)</option>
                     </select>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">MEMORY VAULT</label>
+                    <input id="setting-vault-path" type="text" placeholder="~/Aether1Vault" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        A folder of markdown notes &mdash; what the AI remembers about you. Open it in
+                        any editor or in Obsidian, where the <span class="text-cyan-300">[[links]]</span>
+                        between notes draw themselves as a graph. Edit or delete anything; it is
+                        your folder. Notes are only written with your approval.
+                    </p>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">SPEECH ENGINE</label>
+                    <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <option value="auto">Auto — local if installed, otherwise cloud</option>
+                        <option value="local">Local only (Piper) — never leaves this machine</option>
+                        <option value="cloud">Cloud (Microsoft) — better voices, text is sent away</option>
+                    </select>
+                    <div id="voice-status" class="text-[10px] font-mono text-slate-400 leading-snug"></div>
+                </div>
+
+                <div id="setting-hotkey-wrap" class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">GLOBAL SUMMON HOTKEY</label>
+                    <input id="setting-hotkey" type="text" placeholder="Super+Shift+A" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        Shows or hides this HUD from anywhere. Modifiers: Super, Control, Alt, Shift.
+                        Leave empty to disable. On Wayland an app can't grab keys system-wide &mdash;
+                        bind your compositor to <span class="text-cyan-300">aether1 toggle</span> instead.
+                    </p>
+                </div>
+
+                <div class="space-y-1 pt-1">
+                    <div class="flex items-center gap-2">
+                        <input id="setting-tools" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                        <label for="setting-tools" class="text-xs font-mono text-slate-300">Allow inspection of this machine (read-only)</label>
+                    </div>
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                        Lets the AI read files, list directories and check processes to answer you.
+                        Only your home directory, <span class="text-cyan-300">/etc</span>,
+                        <span class="text-cyan-300">/proc</span> and <span class="text-cyan-300">/var/log</span>;
+                        never credentials or keys. Every use is recorded. Nothing can be changed &mdash;
+                        no tool that alters this machine exists yet.
+                    </p>
+                </div>
+
+                <div class="space-y-1 pt-1">
+                    <label class="text-xs font-mono text-cyan-300 block">COMMAND ALLOWLIST</label>
+                    <input id="setting-command-allowlist" type="text" placeholder="e.g. git, docker, systemctl" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        Programs the AI may ask to run, comma separated. Empty means none, which is
+                        the default. Every run still needs your approval &mdash; this only decides
+                        what it is allowed to ask for. There is no shell: no pipes, redirects or globs.
+                    </p>
                 </div>
 
                 <div class="flex items-center gap-2 pt-1">
@@ -490,15 +564,16 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/palettes.js?v=16"></script>
-    <script src="js/hologram/core.js?v=28"></script>
-    <script src="js/hologram/geometry-helpers.js?v=18"></script>
+    <script src="js/hologram/palettes.js?v=17"></script>
+    <script src="js/hologram/core.js?v=31"></script>
+    <script src="js/hologram/geometry-helpers.js?v=19"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
-    <script src="js/hologram/avatar-nexus.js?v=27"></script>
+    <script src="js/hologram/avatar-nexus.js?v=28"></script>
     <script src="js/hologram/avatar-red9000.js?v=16"></script>
     <script src="js/hologram/avatar-arx-logos.js?v=16"></script>
-    <script src="js/hologram/animate.js?v=28"></script>
+    <script src="js/hologram/avatar-alt.js?v=2"></script>
+    <script src="js/hologram/animate.js?v=31"></script>
     <script src="js/voice.js?v=16"></script>
     <script src="js/app.js?v=17"></script>
 </body>

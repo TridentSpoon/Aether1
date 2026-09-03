@@ -118,6 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
             else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
             else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
+            else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
             else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
         }
 
@@ -171,6 +172,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage("A.R.X.LOGOS", "🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let's make something worth cataloguing.");
             }
         }
+        // A1ter_nul (Cunningham) Preset
+        else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') {
+            updateAgentNameDisplay("A1ter_nul");
+            if (updatePersona) {
+                document.getElementById('setting-persona').value = 'alt';
+                document.getElementById('setting-voice').value = 'en-US-JennyNeural';
+                saveSettings(false);
+                appendMessage("A1ter_nul", "⚠️ **A1ter_nul online.** Firewall's up, perimeter's lit. Show me what you're worried got in.");
+            }
+        }
     }
 
     // Color Theme Handler — purely cosmetic, independent of the selected avatar shape
@@ -205,6 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (currentColorTheme === 'arx-limes') strokeColor = '#ffaa00';
         else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') strokeColor = '#00ff66';
         else if (currentColorTheme === 'arx-logos') strokeColor = '#e024c3';
+        else if (currentColorTheme === 'night-city') strokeColor = '#fcee0a';
 
         canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         canvasCtx.lineWidth = 1;
@@ -272,6 +284,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (currentColorTheme === 'arx-logos') {
             lineColor = '#e024c3';
             fillColor = 'rgba(224, 36, 195, 0.15)';
+        } else if (currentColorTheme === 'night-city') {
+            lineColor = '#fcee0a';
+            fillColor = 'rgba(252, 238, 10, 0.15)';
         }
 
         tokensCanvasCtx.beginPath();
@@ -497,7 +512,380 @@ document.addEventListener('DOMContentLoaded', () => {
 
         chatContainer.appendChild(msgDiv);
         chatContainer.scrollTop = chatContainer.scrollHeight;
+        msgDiv.bodyDiv = bodyDiv;
         return msgDiv;
+    }
+
+    // A streamed reply has no single audio file to replay: it was spoken sentence by
+    // sentence as it arrived. Synthesize the whole thing on demand instead, the first time
+    // the operator actually asks for it.
+    function attachLazyReplay(msgDiv, text) {
+        const playBtn = document.createElement('button');
+        playBtn.className = 'mt-2 text-xs text-cyan-400 hover:text-cyan-200 flex items-center gap-1 font-mono cursor-pointer border border-cyan-500/30 px-2 py-0.5 rounded bg-cyan-950/40';
+        playBtn.innerHTML = '▶ Replay Voice';
+        let cachedUrl = null;
+        playBtn.onclick = async () => {
+            try {
+                if (!cachedUrl) {
+                    playBtn.innerHTML = '⋯ Synthesizing';
+                    cachedUrl = await synthesizeSpeechUrl(text);
+                }
+                playBtn.innerHTML = '▶ Replay Voice';
+                if (cachedUrl) await voiceEngine.playTTSAudio(cachedUrl);
+            } catch (e) {
+                playBtn.innerHTML = '⚠ Voice unavailable';
+            }
+        };
+        msgDiv.appendChild(playBtn);
+    }
+
+    // --- Push to talk ---------------------------------------------------------------
+    // Hold the key, talk, release: the recording is transcribed by a local model and the
+    // text is sent as a message. Deliberately not "always listening" -- a microphone
+    // permanently deciding whether you meant it is both less reliable and more alarming
+    // than a key you are holding on purpose.
+
+    const PUSH_TO_TALK_KEY = 'Space';
+    let talkHeld = false;
+
+    async function startTalking() {
+        if (talkHeld || isWaitingForResponse) return;
+        talkHeld = true;
+        voiceEngine.stopSpeech(); // talking over the companion interrupts it
+        hologram.setState('LISTENING');
+        const started = await voiceEngine.startCapture();
+        if (!started) {
+            talkHeld = false;
+            hologram.setState('IDLE');
+            appendMessage(currentAgentName, '⚠️ No microphone available.');
+        }
+    }
+
+    async function stopTalking() {
+        if (!talkHeld) return;
+        talkHeld = false;
+        const wav = voiceEngine.stopCapture();
+        if (!wav) return;
+
+        try {
+            const text = IS_TAURI
+                ? await tauriInvoke('transcribe_rust', { wav: Array.from(new Uint8Array(await wav.arrayBuffer())) })
+                : await (async () => {
+                    const resp = await apiFetch('/api/stt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'audio/wav' },
+                        body: wav
+                    });
+                    if (!resp.ok) throw new Error(await resp.text());
+                    return (await resp.json()).text;
+                })();
+            if (text && text.trim()) handleSendMessage(text.trim());
+        } catch (e) {
+            appendMessage(currentAgentName, `⚠️ Could not make that out: ${e.message}`);
+        }
+    }
+
+    // Held anywhere except a text field, where space is a space.
+    document.addEventListener('keydown', (event) => {
+        const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+        if (event.code === PUSH_TO_TALK_KEY && !typing && !event.repeat) {
+            event.preventDefault();
+            startTalking();
+        }
+    });
+    document.addEventListener('keyup', (event) => {
+        if (event.code === PUSH_TO_TALK_KEY && talkHeld) {
+            event.preventDefault();
+            stopTalking();
+        }
+    });
+    // Losing focus mid-hold would otherwise leave the microphone open.
+    window.addEventListener('blur', () => stopTalking());
+
+    // --- Approval cards -----------------------------------------------------------
+    // A mutating tool never runs from a conversation: it is proposed, and this is where
+    // the operator answers. The card carries what will happen, in the tool's own words,
+    // plus the option to stop being asked about that tool at all.
+
+    async function toolsApi(path, options) {
+        if (IS_TAURI) return null; // callers branch; this is the browser arm only
+        const resp = await apiFetch(path, options);
+        if (!resp.ok) throw new Error((await resp.text()) || `request failed: ${resp.status}`);
+        return resp.status === 204 ? null : resp.json();
+    }
+
+    function renderApprovalCard(action) {
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm msg-agent self-start mr-8 border border-amber-500/50 bg-amber-950/20';
+        card.dataset.actionId = action.id;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-amber-500/30 text-xs font-mono text-amber-300';
+        header.innerHTML = `<span>⚠ <strong>APPROVAL REQUIRED</strong></span><span>${new Date().toLocaleTimeString()}</span>`;
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'text-cyan-100 font-mono text-xs my-2 break-all';
+        body.textContent = action.preview || `${action.tool} ${JSON.stringify(action.args)}`;
+        card.appendChild(body);
+
+        const status = document.createElement('div');
+        status.className = 'text-xs font-mono text-slate-400 mt-2';
+
+        // "Stop asking" is a promise about a tool, so it is only offered by tools whose
+        // name is enough to know what you are agreeing to. run_command's isn't: allowing
+        // it once would allow every allowlisted program, with any arguments, from then
+        // on. Those tools get a line saying so instead of a checkbox that would be
+        // refused on the way back.
+        const alwaysAllowable = action.always_allowable !== false;
+        const always = document.createElement('label');
+        always.className = 'flex items-center gap-2 text-[10px] font-mono text-slate-400 mt-2 cursor-pointer';
+        const alwaysBox = document.createElement('input');
+        alwaysBox.type = 'checkbox';
+        alwaysBox.className = 'rounded bg-slate-900 border-amber-500 text-amber-400 focus:ring-0';
+        if (alwaysAllowable) {
+            always.appendChild(alwaysBox);
+            always.appendChild(document.createTextNode(`Stop asking about ${action.tool}`));
+        } else {
+            always.className = 'block text-[10px] font-mono text-slate-500 mt-2';
+            always.textContent = `${action.tool} is asked about every time — approving it once would approve every command.`;
+        }
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex gap-2 mt-2';
+        const approveBtn = document.createElement('button');
+        approveBtn.className = 'text-xs font-mono border border-emerald-500/50 text-emerald-300 px-3 py-1 rounded bg-emerald-950/40 hover:bg-emerald-900/40 cursor-pointer';
+        approveBtn.textContent = '✔ Approve';
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = 'text-xs font-mono border border-rose-500/50 text-rose-300 px-3 py-1 rounded bg-rose-950/40 hover:bg-rose-900/40 cursor-pointer';
+        rejectBtn.textContent = '✖ Decline';
+        buttons.appendChild(approveBtn);
+        buttons.appendChild(rejectBtn);
+
+        const settle = (text, tone) => {
+            buttons.remove();
+            always.remove();
+            status.className = `text-xs font-mono mt-2 ${tone}`;
+            status.textContent = text;
+        };
+
+        approveBtn.onclick = async () => {
+            approveBtn.disabled = true;
+            rejectBtn.disabled = true;
+            status.textContent = 'Running…';
+            try {
+                if (alwaysAllowable && alwaysBox.checked) await setAlwaysAllowed(action.tool, true);
+                const data = IS_TAURI
+                    ? await tauriInvoke('approve_action_rust', { id: action.id })
+                    : await toolsApi(`/api/actions/${action.id}/approve`, { method: 'POST' });
+                settle(`✔ Done — ${data && data.result ? data.result : 'no output'}`, 'text-emerald-300');
+            } catch (e) {
+                settle(`✖ Failed: ${e.message}`, 'text-rose-300');
+            }
+        };
+
+        rejectBtn.onclick = async () => {
+            approveBtn.disabled = true;
+            rejectBtn.disabled = true;
+            try {
+                if (IS_TAURI) await tauriInvoke('reject_action_rust', { id: action.id });
+                else await toolsApi(`/api/actions/${action.id}/reject`, { method: 'POST' });
+                settle('✖ Declined', 'text-slate-400');
+            } catch (e) {
+                settle(`✖ Failed: ${e.message}`, 'text-rose-300');
+            }
+        };
+
+        card.appendChild(buttons);
+        card.appendChild(always);
+        card.appendChild(status);
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        voiceEngine.playSFX('alert');
+        return card;
+    }
+
+    // --- Activity log --------------------------------------------------------------
+    // The record of what the companion has done, and the only place an action can be
+    // taken back. Undo is offered exactly where it exists: a tool that recorded no way
+    // back says so rather than showing a button that fails.
+
+    const ACTION_TONES = {
+        executed: 'text-emerald-300 border-emerald-500/30',
+        failed: 'text-rose-300 border-rose-500/30',
+        rejected: 'text-slate-400 border-slate-600/40',
+        proposed: 'text-amber-300 border-amber-500/40',
+        undone: 'text-cyan-300 border-cyan-500/30'
+    };
+
+    function renderActivityRow(action) {
+        const row = document.createElement('div');
+        row.className = `border rounded p-2 bg-black/30 ${ACTION_TONES[action.status] || 'border-slate-600/40'}`;
+
+        const head = document.createElement('div');
+        head.className = 'flex items-center justify-between gap-2';
+        head.innerHTML = `<span><strong>${action.tool}</strong> — ${action.status}${
+            action.approved_by ? ` <span class="text-slate-500">(${action.approved_by})</span>` : ''
+        }</span><span class="text-slate-500">${action.timestamp}</span>`;
+        row.appendChild(head);
+
+        const detail = document.createElement('div');
+        detail.className = 'text-slate-300 mt-1 whitespace-pre-wrap break-all';
+        detail.textContent = action.result || JSON.stringify(action.args);
+        row.appendChild(detail);
+
+        if (action.status === 'executed' && action.undo) {
+            const undoBtn = document.createElement('button');
+            undoBtn.className = 'mt-2 text-[10px] border border-cyan-500/40 text-cyan-300 px-2 py-0.5 rounded bg-cyan-950/40 hover:bg-cyan-900/40 cursor-pointer';
+            undoBtn.textContent = '↩ Undo';
+            undoBtn.onclick = async () => {
+                undoBtn.disabled = true;
+                undoBtn.textContent = '↩ Undoing…';
+                try {
+                    const data = IS_TAURI
+                        ? await tauriInvoke('undo_action_rust', { id: action.id })
+                        : await toolsApi(`/api/actions/${action.id}/undo`, { method: 'POST' });
+                    undoBtn.replaceWith(Object.assign(document.createElement('div'), {
+                        className: 'mt-2 text-[10px] text-cyan-300',
+                        textContent: `↩ ${data && data.result ? data.result : 'undone'}`
+                    }));
+                } catch (e) {
+                    undoBtn.disabled = false;
+                    undoBtn.textContent = `↩ Undo failed: ${e.message}`;
+                }
+            };
+            row.appendChild(undoBtn);
+        } else if (action.status === 'executed') {
+            const note = document.createElement('div');
+            note.className = 'mt-1 text-[10px] text-slate-500';
+            note.textContent = 'Cannot be undone.';
+            row.appendChild(note);
+        }
+
+        return row;
+    }
+
+    async function loadActivityLog() {
+        const list = document.getElementById('activity-list');
+        list.innerHTML = '<div class="text-slate-400">Loading…</div>';
+        try {
+            const actions = IS_TAURI
+                ? await tauriInvoke('get_actions_rust', { limit: 50 })
+                : await toolsApi('/api/actions?limit=50');
+            list.innerHTML = '';
+            if (!actions || !actions.length) {
+                list.innerHTML = '<div class="text-slate-400">Nothing yet — the companion has not used a tool.</div>';
+                return;
+            }
+            for (const action of actions) list.appendChild(renderActivityRow(action));
+        } catch (e) {
+            list.innerHTML = `<div class="text-rose-300">Could not load the activity log: ${e.message}</div>`;
+        }
+    }
+
+    /// Says plainly whether speech works with the network unplugged, and what is missing
+    /// when it doesn't -- rather than leaving the operator to discover it by pulling the
+    /// cable.
+    async function loadVoiceStatus() {
+        const el = document.getElementById('voice-status');
+        if (!el) return;
+        try {
+            const status = IS_TAURI
+                ? await tauriInvoke('voice_status_rust')
+                : await toolsApi('/api/voice/status');
+            const line = (label, part) => part.local
+                ? `<span class="text-emerald-400">✔</span> ${label}: local (${part.binary.split('/').pop()})`
+                : `<span class="text-amber-400">•</span> ${label}: cloud — ${part.why}`;
+            el.innerHTML = [
+                line('Speaking', status.speech_out),
+                line('Listening', status.speech_in),
+                status.offline_capable
+                    ? '<span class="text-emerald-400">Works with the network unplugged.</span>'
+                    : '<span class="text-amber-400">Needs the network for the parts marked above.</span>'
+            ].join('<br/>');
+        } catch (e) {
+            el.textContent = `Could not check the voice engines: ${e.message}`;
+        }
+    }
+
+    async function setAlwaysAllowed(tool, allowed) {
+        if (IS_TAURI) return tauriInvoke('set_always_allowed_rust', { tool, allowed });
+        return toolsApi('/api/tools/always-allow', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool, allowed })
+        });
+    }
+
+    /// Draws a card for anything still waiting that isn't already on screen. Called after
+    /// each turn and on load, because a proposal outlives the conversation that made it.
+    async function refreshPendingApprovals() {
+        try {
+            const pending = IS_TAURI
+                ? await tauriInvoke('pending_actions_rust')
+                : await toolsApi('/api/actions/pending');
+            for (const action of pending || []) {
+                if (!chatContainer.querySelector(`[data-action-id="${action.id}"]`)) {
+                    renderApprovalCard(action);
+                }
+            }
+        } catch (e) {
+            console.warn('could not load pending approvals', e);
+        }
+    }
+
+    // Splits streamed text into speakable chunks at sentence boundaries. Anything shorter
+    // than this is not worth a TTS round-trip of its own -- a stream of two-word clips
+    // sounds worse than waiting for the rest of the sentence.
+    const MIN_SPEAKABLE = 24;
+
+    function takeSpeakableChunk(buffer) {
+        const match = /[.!?:](?=\s|$)|\n\n/g;
+        let lastEnd = -1;
+        let m;
+        while ((m = match.exec(buffer)) !== null) {
+            if (m.index + m[0].length >= MIN_SPEAKABLE) { lastEnd = m.index + m[0].length; break; }
+        }
+        if (lastEnd < 0) return null;
+        return { chunk: buffer.slice(0, lastEnd), rest: buffer.slice(lastEnd) };
+    }
+
+    /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
+    /// Resolves with the authoritative final reply -- the deltas are for display, the
+    /// return value is what gets rendered as final text.
+    async function streamChat(text, sessionId, onDelta) {
+        if (IS_TAURI) {
+            const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
+            const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            try {
+                return await tauriInvoke('generate_response_streaming_rust', {
+                    prompt: text, sessionId, streamId
+                });
+            } finally {
+                unlisten();
+            }
+        }
+
+        // Browser fallback: the same conversation over a WebSocket, since the socket
+        // plumbing already exists here for telemetry (see /ws/chat in server.rs).
+        return await new Promise((resolve, reject) => {
+            const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
+            const socket = new WebSocket(`${wsBase}/ws/chat`);
+            socket.onopen = () => socket.send(JSON.stringify({
+                message: text, session_id: sessionId, generate_voice: false
+            }));
+            socket.onmessage = (event) => {
+                let data;
+                try { data = JSON.parse(event.data); } catch (e) { return; }
+                if (data.type === 'delta') onDelta(data.delta);
+                else if (data.type === 'error') { socket.close(); reject(new Error(data.error)); }
+                else if (data.type === 'done') { socket.close(); resolve(data); }
+            };
+            socket.onerror = () => reject(new Error('chat socket failed'));
+            socket.onclose = () => reject(new Error('chat socket closed before the reply finished'));
+        });
     }
 
     async function handleSendMessage(customPrompt = null) {
@@ -507,57 +895,82 @@ document.addEventListener('DOMContentLoaded', () => {
         chatInput.value = '';
         appendMessage('user', text);
         voiceEngine.playSFX('click');
+        voiceEngine.stopSpeech(); // a new question supersedes anything still being spoken
 
         isWaitingForResponse = true;
         hologram.setState('THINKING');
         if (voiceEngine.onStateChange) voiceEngine.onStateChange('THINKING');
 
-        const thinkingDiv = document.createElement('div');
-        thinkingDiv.className = 'p-3 rounded my-2 text-sm leading-relaxed msg-agent self-start mr-8 typing-cursor';
-        thinkingDiv.innerHTML = `<span class="text-xs font-mono text-cyan-400">🌐 ${currentAgentName} // Reactive processing</span>`;
-        chatContainer.appendChild(thinkingDiv);
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+        // The reply's own message node, created empty and filled in as deltas arrive --
+        // the cursor class marks it as still being written.
+        const replyDiv = appendMessage(currentAgentName, '');
+        replyDiv.classList.add('typing-cursor');
+
+        let rendered = '';
+        let spoken = '';        // text already handed to TTS
+        let pending = '';       // text waiting for a sentence boundary
+        let firstDelta = true;
+
+        const speakChunk = async (chunk) => {
+            if (!autoSpeak || !chunk.trim()) return;
+            try {
+                const url = await synthesizeSpeechUrl(chunk);
+                if (url) voiceEngine.enqueueTTS(url);
+            } catch (e) {
+                console.warn('sentence TTS failed', e);
+            }
+        };
+
+        const onDelta = (delta) => {
+            if (!delta) return;
+            if (firstDelta) {
+                // Generation has actually started; stop pretending to think.
+                firstDelta = false;
+                hologram.setState('IDLE');
+            }
+            rendered += delta;
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            pending += delta;
+            let taken;
+            while ((taken = takeSpeakableChunk(pending)) !== null) {
+                pending = taken.rest;
+                spoken += taken.chunk;
+                speakChunk(taken.chunk);
+            }
+        };
 
         try {
-            let reply, agentName, audioUrl;
-            if (IS_TAURI) {
-                const data = await tauriInvoke('generate_response_rust', { prompt: text, sessionId: 'default' });
-                reply = data.reply;
-                agentName = data.agent_name;
-                audioUrl = autoSpeak ? await synthesizeSpeechUrl(reply) : null;
-            } else {
-                const resp = await apiFetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message: text,
-                        session_id: 'default',
-                        generate_voice: autoSpeak
-                    })
-                });
-                if (!resp.ok) throw new Error(`chat request failed: ${resp.status}`);
-                const data = await resp.json();
-                reply = data.reply;
-                agentName = data.agent_name;
-                audioUrl = data.audio_url ? API_BASE + data.audio_url : null;
-            }
-
-            chatContainer.removeChild(thinkingDiv);
+            const data = await streamChat(text, 'default', onDelta);
+            const reply = data.reply;
+            const agentName = data.agent_name;
 
             if (agentName) updateAgentNameDisplay(agentName);
+            // The return value is authoritative: render it in place of the accumulated
+            // deltas, which also repairs the display if any delta was dropped.
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
+            replyDiv.classList.remove('typing-cursor');
             voiceEngine.playSFX('incoming');
-            appendMessage(currentAgentName, reply, audioUrl);
 
-            if (audioUrl && autoSpeak) {
-                await voiceEngine.playTTSAudio(audioUrl);
+            // Speak whatever never reached a sentence boundary (the tail of the reply).
+            const tail = reply.slice(spoken.length);
+            if (tail.trim()) await speakChunk(tail);
+
+            await refreshPendingApprovals();
+
+            if (autoSpeak) {
+                attachLazyReplay(replyDiv, reply);
             } else {
                 hologram.setState('IDLE');
                 if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
             }
         } catch (e) {
             console.error("Chat error", e);
-            if (chatContainer.contains(thinkingDiv)) chatContainer.removeChild(thinkingDiv);
-            appendMessage(currentAgentName, `⚠️ System Error: ${e.message}`);
+            replyDiv.classList.remove('typing-cursor');
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(
+                rendered ? `${rendered}\n\n⚠️ System Error: ${e.message}` : `⚠️ System Error: ${e.message}`
+            );
             hologram.setState('IDLE');
             if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
         } finally {
@@ -612,9 +1025,83 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- Local server discovery ------------------------------------------------------
+    // What the scan found last, so the two dropdowns can be rebuilt without probing
+    // again. Deliberately not persisted: a server that was up ten minutes ago is not
+    // evidence of anything, and offering a stale endpoint is how you get a mystery.
+    let discoveredServers = [];
+
+    /// Fills the model dropdown from one server's list. Leaves the free-text box alone --
+    /// it may hold a cloud model name the operator typed, which no scan can know about.
+    function populateModelPicker(server) {
+        const picker = document.getElementById('setting-model-picker');
+        if (!picker) return;
+        picker.innerHTML = '';
+        const models = (server && server.models) || [];
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = models.length
+            ? '-- choose one of the models on this server --'
+            : '-- no models to list; type one below --';
+        picker.appendChild(first);
+        for (const model of models) {
+            const opt = document.createElement('option');
+            opt.value = model;
+            opt.textContent = model;
+            picker.appendChild(opt);
+        }
+        const current = document.getElementById('setting-model').value;
+        if (models.includes(current)) picker.value = current;
+    }
+
+    /// Rebuilds the "local servers found" dropdown. Each entry carries everything needed
+    /// to configure the app for it, so choosing one is the whole setup step.
+    function populateLocalServers(servers) {
+        discoveredServers = Array.isArray(servers) ? servers : [];
+        const select = document.getElementById('setting-local-server');
+        if (!select) return;
+        select.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = discoveredServers.length
+            ? `-- ${discoveredServers.length} found; choose one to use it --`
+            : '-- none found yet; press Scan below --';
+        select.appendChild(first);
+        discoveredServers.forEach((server, index) => {
+            const opt = document.createElement('option');
+            opt.value = String(index);
+            opt.textContent = server.label;
+            select.appendChild(opt);
+        });
+
+        // Keep it selected if the configured endpoint is one of the servers found.
+        const endpoint = document.getElementById('setting-endpoint').value.trim();
+        const match = discoveredServers.findIndex(s => s.endpoint === endpoint);
+        if (match >= 0) {
+            select.value = String(match);
+            populateModelPicker(discoveredServers[match]);
+        }
+    }
+
+    /// Choosing a server is the setup: provider, endpoint and the model list all follow
+    /// from it, so the operator never has to know which API shape their server speaks or
+    /// whether its URL needs a /v1 on the end.
+    function applyLocalServer(index) {
+        const server = discoveredServers[index];
+        if (!server) return;
+        document.getElementById('setting-provider').value = server.provider_key;
+        document.getElementById('setting-endpoint').value = server.endpoint;
+        populateModelPicker(server);
+        const model = document.getElementById('setting-model');
+        if (server.models.length && !server.models.includes(model.value)) {
+            model.value = server.models[0];
+            document.getElementById('setting-model-picker').value = server.models[0];
+        }
+    }
+
     async function handleScanSystem() {
         if (scannerResultsBox) {
-            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Scanning for Provider API keys, Ollama, and LM Studio...</div>';
+            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Looking for local LLM servers and API keys...</div>';
         }
         voiceEngine.playSFX('click');
 
@@ -635,22 +1122,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 html += `<div class="text-slate-400">⚪ No Provider API keys found in environment.</div>`;
             }
 
-            if (data.ollama.available) {
-                const modelsStr = data.ollama.models.length > 0 ? data.ollama.models.join(', ') : 'No models pulled yet';
-                html += `<div class="text-green-400">✔ Ollama Online (Port 11434) - Models: <strong>${modelsStr}</strong></div>`;
-            } else if (data.ollama.cli_installed) {
-                html += `<div class="text-yellow-400">⚠ Ollama CLI is installed but server not running (\`ollama serve\`).</div>`;
+            // Reported by what answered, not by which product it is presumed to be: a
+            // probe can tell you a server is there and what it can run, and guessing at a
+            // brand on top of that is a guess the operator would have to check anyway.
+            const servers = data.local_servers || [];
+            if (servers.length) {
+                for (const server of servers) {
+                    const models = server.models.length ? server.models.join(', ') : 'no models loaded';
+                    html += `<div class="text-green-400">✔ ${server.label} <span class="text-slate-400">(${server.endpoint})</span><br><span class="pl-6 text-cyan-300">${models}</span></div>`;
+                }
+                html += `<div class="text-slate-400">Pick one from LOCAL SERVERS FOUND above to use it.</div>`;
             } else {
-                html += `<div class="text-slate-400">⚪ Ollama is not active on localhost:11434.</div>`;
+                html += `<div class="text-slate-400">⚪ No local LLM server answered on this machine. Start one, or type its address into the endpoint box if it uses an unusual port.</div>`;
             }
 
-            if (data.lmstudio.available) {
-                const lmStr = data.lmstudio.models.length > 0 ? data.lmstudio.models.join(', ') : 'Ready';
-                html += `<div class="text-green-400">✔ LM Studio Active (Port 1234) - ${lmStr}</div>`;
-            } else {
-                html += `<div class="text-slate-400">⚪ LM Studio is not active on localhost:1234.</div>`;
+            if (data.ollama.cli_installed && !servers.some(s => s.port === 11434)) {
+                html += `<div class="text-yellow-400">⚠ A local model runner is installed but not serving -- start it first (for Ollama, \`ollama serve\`).</div>`;
             }
 
+            populateLocalServers(servers);
             if (scannerResultsBox) scannerResultsBox.innerHTML = html;
         } catch (e) {
             if (scannerResultsBox) scannerResultsBox.innerHTML = `<div class="text-red-400">Scan failed: ${e.message}</div>`;
@@ -697,10 +1187,22 @@ document.addEventListener('DOMContentLoaded', () => {
     // filesystem path to Tauri's asset:// protocol; see the assetProtocol scope this path's
     // directory is allowed under in tauri.conf.json / main.rs's setup()). Returns null on
     // any failure so callers can just skip voice playback instead of erroring the whole chat.
+    // Both transports: the native path synthesizes over IPC and plays the file directly,
+    // the browser path posts to /api/tts and plays it back over HTTP.
     async function synthesizeSpeechUrl(text, voiceName) {
         try {
-            const path = await tauriInvoke('generate_speech_rust', { text, voice: voiceName || null });
-            return window.__TAURI__.core.convertFileSrc(path);
+            if (IS_TAURI) {
+                const path = await tauriInvoke('generate_speech_rust', { text, voice: voiceName || null });
+                return window.__TAURI__.core.convertFileSrc(path);
+            }
+            const resp = await apiFetch('/api/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice: voiceName || null })
+            });
+            if (!resp.ok) throw new Error(`tts request failed: ${resp.status}`);
+            const data = await resp.json();
+            return data.audio_url ? API_BASE + data.audio_url : null;
         } catch (e) {
             console.warn('TTS synthesis failed', e);
             return null;
@@ -787,7 +1289,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function initVersionAndUpdates() {
-        if (!IS_TAURI) return;
+        if (!IS_TAURI) {
+            document.getElementById('setting-hotkey-wrap')?.classList.add('hidden');
+            return;
+        }
         if (versionBadge) versionBadge.classList.remove('hidden');
         if (updateSection) updateSection.classList.remove('hidden');
         loadVersionInfo();
@@ -844,6 +1349,13 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-custom-directive').value = s.custom_directive || '';
             toggleCustomPersonaField();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
+            document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
+            document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
+            document.getElementById('setting-vault-path').value = s.vault_path || '';
+            loadVoiceStatus();
+            document.getElementById('setting-tools').checked = s.tools_enabled === true;
+            document.getElementById('setting-command-allowlist').value =
+                Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
             autoSpeak = s.auto_speak !== false;
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
@@ -872,6 +1384,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 persona_type: document.getElementById('setting-persona').value,
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
+                tts_engine: document.getElementById('setting-tts-engine').value,
+                vault_path: document.getElementById('setting-vault-path').value.trim(),
+                // Sent only from the native app: the browser fallback has no window for the
+                // OS to summon, and saving a chord there would promise something that can't
+                // happen. See setting-hotkey-wrap, hidden on that path.
+                ...(IS_TAURI ? { hotkey_toggle: document.getElementById('setting-hotkey').value.trim() } : {}),
+                tools_enabled: document.getElementById('setting-tools').checked,
+                command_allowlist: document.getElementById('setting-command-allowlist').value
+                    .split(',').map(p => p.trim()).filter(Boolean),
                 auto_speak: document.getElementById('setting-autospeak').checked,
                 desktop_sprite_enabled: spriteModeToggle ? spriteModeToggle.checked : false
             }
@@ -945,14 +1466,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    btnMic.addEventListener('click', () => {
-        voiceEngine.toggleListening();
+    // Press and hold, same as the key -- the button is the discoverable version of it.
+    btnMic.addEventListener('mousedown', () => startTalking());
+    btnMic.addEventListener('mouseup', () => stopTalking());
+    btnMic.addEventListener('mouseleave', () => stopTalking());
+    btnMic.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); });
+    btnMic.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); });
+
+    const btnActivity = document.getElementById('btn-activity');
+    const activityModal = document.getElementById('activity-modal');
+    btnActivity.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        activityModal.classList.remove('hidden');
+        loadActivityLog();
+    });
+    document.getElementById('btn-close-activity').addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        activityModal.classList.add('hidden');
     });
 
     btnSettings.addEventListener('click', () => {
         voiceEngine.playSFX('click');
-        loadSettings();
-        handleScanSystem();
+        // The scan waits for the settings: it preselects whichever found server matches
+        // the configured endpoint, and that field has to be filled in before it looks.
+        loadSettings().then(handleScanSystem);
         settingsModal.classList.remove('hidden');
     });
 
@@ -970,6 +1507,23 @@ document.addEventListener('DOMContentLoaded', () => {
     btnScanSystem.addEventListener('click', () => {
         handleScanSystem();
     });
+
+    const localServerSelect = document.getElementById('setting-local-server');
+    if (localServerSelect) {
+        localServerSelect.addEventListener('change', (e) => {
+            if (e.target.value === '') return;
+            applyLocalServer(Number(e.target.value));
+            voiceEngine.playSFX('click');
+        });
+    }
+
+    const modelPicker = document.getElementById('setting-model-picker');
+    if (modelPicker) {
+        modelPicker.addEventListener('change', (e) => {
+            if (e.target.value === '') return;
+            document.getElementById('setting-model').value = e.target.value;
+        });
+    }
 
     btnPullLlama.addEventListener('click', () => {
         handlePullLlama();
@@ -1024,8 +1578,15 @@ document.addEventListener('DOMContentLoaded', () => {
     applyAvatar(currentAvatar, false);
     applyColorTheme(currentColorTheme);
     loadStaticInfo();
-    loadChatHistory();
     loadSettings();
+    // A proposal outlives the conversation that made it, so anything still waiting from a
+    // previous session is put back on screen rather than quietly expiring unseen.
+    //
+    // Strictly after the history, never alongside it: loadChatHistory clears the container
+    // when its own fetch returns, so starting both at once is a race the cards lose about
+    // as often as they win -- and losing it means an approval waiting on the operator is
+    // erased from the screen while the action stays pending in the database.
+    loadChatHistory().then(refreshPendingApprovals);
     connectTelemetry();
     initVersionAndUpdates();
     initSpriteMode();

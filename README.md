@@ -26,25 +26,150 @@ Intended features
   - Auto-installer for Linux and Windows.
   - Easy installation from GitHub via script or via packaging the entire system into a single `.tar.gz` bundle to transfer to a separate system.
 
-## Native Desktop App
+## Installing
 
-AETHER1 is a native [Tauri](https://tauri.app) app, so building it needs Rust plus
-the OS's native WebView toolkit -- these aren't Rust crates and can't be pulled in
-by `cargo` alone.
+### Linux
 
-- **Rust**: install via [rustup](https://rustup.rs) if `~/.cargo/bin/cargo` doesn't
-  already exist.
-- **Linux build dependencies**: `./setup.sh` installs these automatically for
-  Arch-based (CachyOS, Arch, Manjaro, EndeavourOS), Fedora-based, and
-  Debian/Ubuntu-based distros. On an unrecognized distro, or if `./setup.sh`'s
-  package install step fails or was skipped, install the equivalent of:
-  `webkit2gtk` (4.1), `gtk3`, `librsvg`, an appindicator library
-  (`libappindicator-gtk3` / `libayatana-appindicator3-dev`), and a C toolchain
-  (`base-devel` / `build-essential`) -- see the
-  [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/) for your
-  distro's exact package names.
+```sh
+git clone https://github.com/TridentSpoon/Aether1.git
+cd Aether1
+./setup.sh
+```
 
-If `./setup.sh` reports the app isn't appearing in your app launcher, it's almost
-always because one of these system packages is missing, which makes
-`cargo build --release` fail silently under `scripts/install_desktop_app.sh` --
-install the packages above, then re-run `./setup.sh`.
+`setup.sh` installs the build dependencies for your distribution, builds the app, and puts
+it in your launcher and on your `PATH` as `aether1`. It is safe to re-run.
+
+### Windows
+
+Install [Rust](https://rustup.rs) — that is the only prerequisite, since Tauri uses the
+WebView2 runtime that ships with Windows. Then, in PowerShell:
+
+```powershell
+mkdir "$env:USERPROFILE\Projects" -Force
+cd "$env:USERPROFILE\Projects"
+git clone https://github.com/TridentSpoon/Aether1.git
+cd Aether1
+.\setup.bat
+```
+
+`C:\Users\<you>\Projects` is where this expects to live. The checkout is not a temporary
+build directory: the app runs *from* it — `backend\` holds your database and the shortcuts
+point at it — so it needs somewhere permanent, and moving or deleting the folder later
+breaks both shortcuts.
+
+Clone it rather than downloading the ZIP. A ZIP arrives without a `.git` directory, so
+`git pull` answers *"not a git repository"* and there is no way to update; with a clone,
+`git pull` is the update, and setup installs hooks that rebuild the app whenever you do.
+
+The leading `.\` is required in PowerShell, which does not run scripts from the current
+directory without it. In `cmd.exe`, plain `setup.bat` works.
+
+Setup builds the app and adds Start Menu and desktop shortcuts (no administrator rights
+needed). Launch it from either, or run `.\start.bat`.
+
+Aether1 lives in the **notification area** — click its icon to show or hide the HUD, and
+closing the window leaves it running there rather than quitting.
+
+`start.bat --browser` runs the headless server and opens the HUD in a browser tab instead.
+That is the development flow, and the fallback if the webview misbehaves; there is no tray
+icon on that path, because the tray belongs to the native app.
+
+### Building from source
+
+On Linux, Aether1 links against your system's webview and GTK stack. `setup.sh` installs
+these for you on Arch, Fedora, Debian/Ubuntu and openSUSE; on anything else, install the
+equivalents by hand and re-run it. Windows needs none of them — only Rust.
+
+**Rust** is required and is not in any distribution list — install it with
+[rustup](https://rustup.rs):
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+**System libraries**, by distribution:
+
+| Distribution | Packages |
+| --- | --- |
+| Arch, CachyOS, Manjaro, EndeavourOS | `base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify` |
+| Fedora, Nobara, RHEL | `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel curl wget file xdotool libnotify` plus the `c-development` group |
+| Debian, Ubuntu, Pop!\_OS, Mint | `build-essential pkg-config curl wget file libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libnotify-bin` |
+| openSUSE | `webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel libopenssl-devel curl wget file xdotool libnotify-tools` |
+
+If the build fails, the error names the missing piece: look for a package ending in `-dev`
+or `-devel`, install it, and re-run `./setup.sh`.
+
+### Optional: a voice that works offline
+
+Speech works out of the box using a cloud service, which means the text of everything the
+AI says leaves your machine. To keep it local, install either or both:
+
+- **[Piper](https://github.com/rhasspy/piper)** for speech, plus a `.onnx` voice in
+  `~/.local/share/piper/voices`.
+- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for listening, plus a `.bin`
+  model in `~/.local/share/whisper`.
+
+Aether1 finds them on its own and prefers them. Settings → Speech Engine says which of the
+two are local and what is missing.
+
+## Choosing a model
+
+Open **Settings** and Aether1 looks for model servers already running on this machine. Any
+that answer appear in **LOCAL SERVERS FOUND ON THIS MACHINE**; picking one fills in the
+provider, the address and the list of models it can run, so there is nothing to look up.
+
+The scan probes the loopback ports these tools tend to use and identifies them by the API
+they speak, not by which program they are — so it finds the popular runners, most of the
+less popular ones, and anything else that has adopted a common port. A server on an
+unusual port isn't lost: type its address into the endpoint box and pick the matching API
+shape (**OpenAI-compatible** for most things, **native** for the `/api/tags` style).
+
+Cloud providers — Gemini, Groq, OpenAI, Anthropic — need a key in the **API KEY** box and a
+model name typed in. If a call fails, the HUD says why: a rejected key, a model name that
+doesn't exist, a proxy in the way and an unreachable server each say so in those words.
+
+## Command line
+
+Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that
+runs the desktop app answers from a terminal without the HUD open:
+
+```sh
+aether1 prompt "what is eating my RAM"   # ask; the reply goes to stdout
+echo "status" | aether1 prompt           # or pipe the question in
+aether1 status                           # system diagnostic report (--json for raw)
+aether1 say "systems nominal"            # speak, in the configured persona voice
+aether1 toggle                           # summon/dismiss the HUD of a running instance
+aether1 --help
+```
+
+The HUD is also bound to a global hotkey — `Super+Shift+A` by default, changeable under
+Settings (empty disables it). On Wayland, where no application is allowed to grab keys
+system-wide, bind your compositor to `aether1 toggle` instead; for Hyprland:
+
+```
+bind = SUPER SHIFT, A, exec, aether1 toggle
+```
+
+On **Windows**, `setup.bat` creates shortcuts but does not put anything on `PATH`, so
+`aether1` is not a command there — call the executable by path from the checkout:
+
+```powershell
+.\src-tauri\target\release\aether1.exe prompt "what is eating my RAM"
+```
+
+To type `aether1` instead, add that folder to your own `PATH` once (no administrator
+rights needed, and it takes effect in new terminals):
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+    'PATH',
+    [Environment]::GetEnvironmentVariable('PATH', 'User') + ';' + (Resolve-Path .\src-tauri\target\release),
+    'User')
+```
+
+`prompt` shares one conversation history and one memory store with the HUD, so anything
+you tell it from a script is there next time you open the window.
+
+## Project goals
+
+Where this is headed, and why: [docs/GOALS.md](docs/GOALS.md).

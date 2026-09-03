@@ -98,6 +98,27 @@
   --bg-grid-color: rgba(224, 36, 195, 0.035);
 }
 
+/* NIGHT CITY (CYBERPUNK 2077 CLASSIC YELLOW/BLACK, CYAN & RED ACCENTS) */
+[data-theme="night-city"] {
+  --bg-core: #0a0a06;
+  --bg-panel: rgba(24, 22, 4, 0.82);
+  --bg-panel-hover: rgba(40, 36, 6, 0.9);
+  --border-neon: rgba(252, 238, 10, 0.4);
+  --border-neon-bright: #fcee0a;
+  --neon-cyan: #fcee0a; /* Night City Phosphor Yellow */
+  --neon-blue: #00e5ff;
+  --neon-purple: #ff003c;
+  --neon-green: #fff066;
+  --neon-amber: #ff003c;
+  --neon-red: #ff003c;
+  --text-main: #fdf9e0;
+  --text-dim: #b7ac6e;
+  --glow-cyan: 0 0 15px rgba(252, 238, 10, 0.6), 0 0 30px rgba(255, 0, 60, 0.3);
+  --viewport-glow: rgba(252, 238, 10, 0.5);
+  --scanline-color: rgba(252, 238, 10, 0.03);
+  --bg-grid-color: rgba(252, 238, 10, 0.035);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -179,6 +200,65 @@ body {
   background-color: #000;
   background-image: radial-gradient(ellipse 110% 55% at 50% 118%, var(--viewport-glow) 0%, transparent 75%);
   transition: background-image 0.4s ease;
+}
+
+/* The Nexus Crew's CRT "live sensor feed" dressing (see HologramAvatar.setAvatar in
+   core.js, which toggles this class only while the Nexus avatar is selected): tight
+   horizontal scanline rasterization plus an irregular flicker, layered over the WebGL
+   canvas without touching its rendering. */
+#hologram-viewport.crt-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 1px,
+    rgba(0, 0, 0, 0.35) 2px,
+    rgba(0, 0, 0, 0.35) 3px
+  );
+  mix-blend-mode: overlay;
+  animation: crtFlicker 3.2s infinite steps(24);
+}
+
+@keyframes crtFlicker {
+  0%, 100% { opacity: 0.85; }
+  8% { opacity: 0.6; }
+  9% { opacity: 0.9; }
+  33% { opacity: 0.8; }
+  47% { opacity: 0.55; }
+  48% { opacity: 0.9; }
+  70% { opacity: 0.75; }
+  91% { opacity: 0.85; }
+}
+
+/* A1ter_nul's chromatic-glitch "unstable data-construct" overlay (toggled in core.js's
+   setAvatar, which adds this class only while A1ter_nul is the active avatar): a red/cyan
+   channel-split double-image plus an irregular scanline flicker, layered over the WebGL
+   canvas without touching its rendering. */
+#hologram-viewport.glitch-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background:
+    repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.28) 3px, rgba(0,0,0,0.28) 4px),
+    linear-gradient(90deg, rgba(255,0,60,0.05) 0%, transparent 2%, transparent 98%, rgba(0,229,255,0.05) 100%);
+  mix-blend-mode: screen;
+  animation: glitchFlicker 2.6s infinite steps(20);
+}
+
+@keyframes glitchFlicker {
+  0%, 100% { opacity: 0.8; }
+  11% { opacity: 0.55; }
+  12% { opacity: 0.9; }
+  40% { opacity: 0.75; }
+  41% { opacity: 0.4; }
+  73% { opacity: 0.85; }
+  74% { opacity: 0.6; }
 }
 
 .glow-cyan {

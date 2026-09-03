@@ -9,6 +9,19 @@ echo ======================================================================
 
 set BIN=src-tauri\target\release\aether1.exe
 
+REM --- Two ways to run. The default is the native app: a real window, an icon in the
+REM     notification area, and the global hotkey. `start.bat --browser` runs the headless
+REM     server instead and opens the HUD in a browser tab, which is the development flow
+REM     and the fallback if the webview misbehaves.
+REM
+REM     This used to always take the --browser path, which is why the app built fine and
+REM     then appeared only as a browser tab with no tray icon anywhere.
+set MODE=native
+if /i "%~1"=="--browser" set MODE=browser
+if /i "%~1"=="-b" set MODE=browser
+
+if "%MODE%"=="native" goto :build_check
+
 REM --- If an AETHER1 instance is already listening on :8378 (e.g. this script was
 REM     already run once, or the native app is open), just reopen the HUD instead of
 REM     launching a second server -- server.rs's bind() panics if the port's taken, so
@@ -36,6 +49,7 @@ REM --- Build the release binary if it doesn't exist yet. This is the ONLY thing
 REM     needs to be installed to run AETHER1 -- once built, %BIN% is a single,
 REM     self-contained .exe (no Python, no other runtime install) and every future run
 REM     of this script skips straight past this whole block, no Rust required again.
+:build_check
 if not exist "%BIN%" (
     where cargo >nul 2>&1
     if errorlevel 1 (
@@ -72,6 +86,20 @@ if not exist "%BIN%" (
     echo This .exe is self-contained -- future runs of this script use it directly.
 )
 
+if "%MODE%"=="browser" goto :run_browser
+
+REM --- Native app. Launching it twice is harmless: the second copy hands over to the
+REM     one already running and exits, so this doubles as "show the HUD".
+echo Starting AETHER1...
+start "" "%BIN%"
+echo.
+echo AETHER1 is running. Look for its icon in the notification area ^(system tray^)
+echo -- click it to show or hide the HUD. Closing the window leaves it running there.
+echo.
+echo Run setup.bat once to add Start Menu and desktop shortcuts.
+exit /b 0
+
+:run_browser
 echo Starting AETHER1 server on http://localhost:8378...
 start "AETHER1 Server" "%BIN%" --serve
 

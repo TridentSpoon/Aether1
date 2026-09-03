@@ -19,6 +19,77 @@ pub struct Message {
     pub timestamp: String,
 }
 
+/// Where an action stands. Every tool call the companion makes gets a row in action_log,
+/// so this is also the record of what it did on the operator's behalf -- the thing the
+/// memory browser and the undo path in later steps both read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionStatus {
+    /// A mutating call waiting for the operator to approve it.
+    Proposed,
+    /// Ran, and the result is recorded.
+    Executed,
+    /// Ran and failed; `result` carries the error.
+    Failed,
+    /// The operator declined it.
+    Rejected,
+    /// Executed and then reversed.
+    Undone,
+}
+
+impl ActionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ActionStatus::Proposed => "proposed",
+            ActionStatus::Executed => "executed",
+            ActionStatus::Failed => "failed",
+            ActionStatus::Rejected => "rejected",
+            ActionStatus::Undone => "undone",
+        }
+    }
+
+    fn from_str(raw: &str) -> ActionStatus {
+        match raw {
+            "executed" => ActionStatus::Executed,
+            "failed" => ActionStatus::Failed,
+            "rejected" => ActionStatus::Rejected,
+            "undone" => ActionStatus::Undone,
+            _ => ActionStatus::Proposed,
+        }
+    }
+}
+
+/// One row of the action log.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionRecord {
+    pub id: i64,
+    pub timestamp: String,
+    pub tool: String,
+    /// The arguments the tool was called with, as JSON.
+    pub args: JsonValue,
+    pub mutating: bool,
+    pub status: ActionStatus,
+    /// Output on success, the error on failure, None while still proposed.
+    pub result: Option<String>,
+    /// Whatever the tool needs to reverse itself, as JSON -- the previous contents of a
+    /// file it overwrote, the setting it replaced. None when the action can't be undone.
+    pub undo: Option<JsonValue>,
+    /// One line describing what this action does, in the tool's own words -- what an
+    /// approval card shows. Filled in when the record is read back, since it comes from
+    /// the tool rather than from the row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    /// Whether "stop asking about this tool" is on offer for this one. Filled in with the
+    /// preview, from the tool rather than the row, so an approval card doesn't show a
+    /// checkbox the consent layer would refuse. None when the tool is no longer known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always_allowable: Option<bool>,
+    /// Who let this run: "operator" for an explicit approval, "always-allow" for one the
+    /// operator had pre-approved for this tool, "automatic" for a read-only call that
+    /// needed no approval at all. None while a proposal is still waiting.
+    pub approved_by: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryEntry {
     pub key: String,
@@ -57,10 +128,37 @@ impl MemoryDb {
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS action_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                tool TEXT NOT NULL,
+                args_json TEXT NOT NULL,
+                mutating INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                result TEXT,
+                undo_json TEXT
             );",
         )?;
+        db.migrate()?;
         db.restrict_permissions();
         Ok(db)
+    }
+
+    /// Additive column migrations, run on every open. Guarded by a PRAGMA lookup rather
+    /// than a version counter: the check is cheap, it's idempotent, and a database created
+    /// by an older build opens without ceremony.
+    fn migrate(&self) -> rusqlite::Result<()> {
+        let conn = self.connect()?;
+        let mut existing = conn.prepare("PRAGMA table_info(action_log)")?;
+        let columns: Vec<String> = existing
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<_>>()?;
+
+        if !columns.iter().any(|c| c == "approved_by") {
+            conn.execute("ALTER TABLE action_log ADD COLUMN approved_by TEXT", [])?;
+        }
+        Ok(())
     }
 
     /// Locks the database file down to owner-only read/write (0600). This file holds chat
@@ -182,6 +280,28 @@ impl MemoryDb {
         }
     }
 
+    /// Removes a setting, so it falls back to its default. Used by undo, where "there was
+    /// no value before" has to be restorable as faithfully as an old value would be.
+    pub fn delete_setting(&self, key: &str) -> rusqlite::Result<()> {
+        self.connect()?
+            .execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    /// A stored boolean, tolerating the string forms ("true"/"false") that a settings
+    /// payload from the frontend can carry for a checkbox.
+    pub fn get_setting_bool(&self, key: &str, default: bool) -> bool {
+        match self.get_setting(key) {
+            Ok(Some(JsonValue::Bool(b))) => b,
+            Ok(Some(JsonValue::String(s))) => match s.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                _ => default,
+            },
+            _ => default,
+        }
+    }
+
     /// Every stored setting as a single object, matching memory_db.py's
     /// get_all_settings -- used for the Settings modal's bulk load/save.
     pub fn get_all_settings(&self) -> rusqlite::Result<JsonValue> {
@@ -201,6 +321,116 @@ impl MemoryDb {
         }
         Ok(JsonValue::Object(map))
     }
+
+    /// Records a tool call and returns its id. Every call is logged, mutating or not, and
+    /// logged *before* it runs -- an action that panics or never returns still leaves a
+    /// trace of having been attempted, which is the whole point of having the log.
+    pub fn log_action(
+        &self,
+        tool: &str,
+        args: &JsonValue,
+        mutating: bool,
+        status: ActionStatus,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT INTO action_log (tool, args_json, mutating, status) VALUES (?1, ?2, ?3, ?4)",
+            params![tool, args.to_string(), mutating as i64, status.as_str()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Fills in how an action turned out. `undo` is stored only when the tool provides it.
+    pub fn set_action_outcome(
+        &self,
+        id: i64,
+        status: ActionStatus,
+        result: Option<&str>,
+        undo: Option<&JsonValue>,
+        approved_by: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        self.connect()?.execute(
+            "UPDATE action_log SET status = ?2, result = ?3, undo_json = ?4, \
+             approved_by = COALESCE(?5, approved_by) WHERE id = ?1",
+            params![
+                id,
+                status.as_str(),
+                result,
+                undo.map(|u| u.to_string()),
+                approved_by,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Actions waiting for the operator, oldest first -- the order they should be answered
+    /// in. Read from the table rather than from memory, so a proposal outlives a restart
+    /// and can't be silently lost when the app is closed with a card still on screen.
+    pub fn pending_actions(&self) -> rusqlite::Result<Vec<ActionRecord>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by \
+             FROM action_log WHERE status = 'proposed' ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], action_from_row)?;
+        rows.collect()
+    }
+
+    /// Rejects proposals older than `minutes`, and returns how many. An approval is
+    /// consent to do a thing *now*: a card answered an hour later is answering a question
+    /// about a machine that has moved on.
+    pub fn expire_stale_proposals(&self, minutes: u32) -> rusqlite::Result<usize> {
+        let changed = self.connect()?.execute(
+            "UPDATE action_log SET status = 'rejected', result = 'expired before approval' \
+             WHERE status = 'proposed' AND ts < datetime('now', ?1)",
+            params![format!("-{minutes} minutes")],
+        )?;
+        Ok(changed)
+    }
+
+    #[allow(dead_code)] // read by the undo path, once actions can be undone
+    pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
+        self.connect()?
+            .query_row(
+                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by \
+                 FROM action_log WHERE id = ?1",
+                params![id],
+                action_from_row,
+            )
+            .optional()
+    }
+
+    /// Most recent first -- the order an operator reading back what happened wants.
+    pub fn recent_actions(&self, limit: u32) -> rusqlite::Result<Vec<ActionRecord>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by \
+             FROM action_log ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], action_from_row)?;
+        rows.collect()
+    }
+}
+
+/// Stored JSON that no longer parses (a hand-edited row, a schema change) becomes Null
+/// rather than failing the whole read -- a corrupt row shouldn't hide the rest of the log.
+fn action_from_row(row: &rusqlite::Row) -> rusqlite::Result<ActionRecord> {
+    let args_raw: String = row.get(3)?;
+    let undo_raw: Option<String> = row.get(7)?;
+    let status_raw: String = row.get(5)?;
+    Ok(ActionRecord {
+        id: row.get(0)?,
+        timestamp: row.get(1)?,
+        tool: row.get(2)?,
+        args: serde_json::from_str(&args_raw).unwrap_or(JsonValue::Null),
+        mutating: row.get::<_, i64>(4)? != 0,
+        status: ActionStatus::from_str(&status_raw),
+        result: row.get(6)?,
+        undo: undo_raw.and_then(|u| serde_json::from_str(&u).ok()),
+        approved_by: row.get(8)?,
+        preview: None,
+        always_allowable: None,
+    })
 }
 
 #[cfg(test)]
@@ -229,6 +459,79 @@ mod tests {
             "db file should be owner-read/write only, got {:o}",
             mode & 0o777
         );
+    }
+
+    #[test]
+    fn actions_are_logged_before_they_run_and_updated_after() {
+        let db = temp_db("actions");
+        let args = serde_json::json!({"path": "/etc/hostname"});
+
+        // Logged as proposed, with no outcome yet -- this is the state a mutating call
+        // sits in while it waits for the operator.
+        let id = db
+            .log_action("write_file", &args, true, ActionStatus::Proposed)
+            .unwrap();
+        let logged = db.get_action(id).unwrap().expect("action should be stored");
+        assert_eq!(logged.tool, "write_file");
+        assert_eq!(logged.args, args);
+        assert!(logged.mutating);
+        assert_eq!(logged.status, ActionStatus::Proposed);
+        assert!(logged.result.is_none());
+        assert!(logged.undo.is_none());
+
+        let undo = serde_json::json!({"restore": "old contents"});
+        db.set_action_outcome(
+            id,
+            ActionStatus::Executed,
+            Some("wrote 12 bytes"),
+            Some(&undo),
+            Some("operator"),
+        )
+        .unwrap();
+        let done = db.get_action(id).unwrap().unwrap();
+        assert_eq!(done.status, ActionStatus::Executed);
+        assert_eq!(done.result.as_deref(), Some("wrote 12 bytes"));
+        assert_eq!(done.undo, Some(undo));
+        assert_eq!(done.approved_by.as_deref(), Some("operator"));
+    }
+
+    #[test]
+    fn recent_actions_are_newest_first_and_bounded() {
+        let db = temp_db("recent_actions");
+        for i in 0..5 {
+            db.log_action(
+                "read_file",
+                &serde_json::json!({"n": i}),
+                false,
+                ActionStatus::Executed,
+            )
+            .unwrap();
+        }
+        let recent = db.recent_actions(3).unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].args["n"], serde_json::json!(4));
+        assert_eq!(recent[2].args["n"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn an_unknown_action_id_is_none_not_an_error() {
+        let db = temp_db("missing_action");
+        assert!(db.get_action(4242).unwrap().is_none());
+    }
+
+    #[test]
+    fn setting_bools_tolerate_the_string_forms_a_checkbox_can_send() {
+        let db = temp_db("setting_bool");
+        assert!(!db.get_setting_bool("tools_enabled", false));
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(true))
+            .unwrap();
+        assert!(db.get_setting_bool("tools_enabled", false));
+        db.set_setting(
+            "tools_enabled",
+            &serde_json::Value::String("false".to_string()),
+        )
+        .unwrap();
+        assert!(!db.get_setting_bool("tools_enabled", true));
     }
 
     #[test]
