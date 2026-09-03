@@ -131,9 +131,21 @@ HologramAvatar.prototype.animateRed9000 = function(elapsedTime, audioIntensity, 
             this.redGroup.rotation.y = Math.sin(elapsedTime * 0.3) * 0.15;
             this.redGroup.rotation.x = Math.sin(elapsedTime * 0.2) * 0.1;
         } else {
-            // Front-facing and still at rest -- only a faint click-triggered nod.
+            // Front-facing and still at rest -- only a faint click-triggered nod, plus the
+            // blink below (a click also triggers an immediate blink; otherwise it blinks on
+            // its own every few seconds so the eye never reads as a fixed prop).
             this.redGroup.rotation.y += (clickPulse * 0.12 - this.redGroup.rotation.y) * 0.15;
             this.redGroup.rotation.x += (clickPulse * 0.08 - this.redGroup.rotation.x) * 0.15;
+
+            if (this.lastClickTime !== this.redLastHandledBlinkClick) {
+                this.redLastHandledBlinkClick = this.lastClickTime;
+                this.redBlinkStartTime = elapsedTime;
+                this.redNextBlinkTime = elapsedTime + 4 + Math.random() * 4;
+            }
+            if (elapsedTime >= this.redNextBlinkTime) {
+                this.redBlinkStartTime = elapsedTime;
+                this.redNextBlinkTime = elapsedTime + 4 + Math.random() * 5;
+            }
         }
     }
 
@@ -158,11 +170,26 @@ HologramAvatar.prototype.animateRed9000 = function(elapsedTime, audioIntensity, 
         this.redLensOuter.scale.set(lensScale, lensScale, lensScale);
     }
 
-    // Eyelid arcs stay static, cupping the core -- only a faint audio-reactive
-    // opacity flicker while speaking, no continuous rotation.
-    const lidOpacity = isSpeaking ? 0.85 + audioIntensity * 0.15 : 0.85;
-    if (this.redBlueCircle) this.redBlueCircle.material.opacity = lidOpacity;
-    if (this.redCyanCircle) this.redCyanCircle.material.opacity = lidOpacity;
+    // Eyelid arcs stay put, cupping the core, aside from a quick blink: both lids scale
+    // toward the eye's equator (y = 0) and back, meeting in the middle over the core sphere
+    // for an instant -- triggered by a click or, at rest, on their own every few seconds
+    // (see the idle branch above). A faint audio-reactive opacity flicker continues while
+    // speaking, brightened further for the instant of a blink.
+    const BLINK_DURATION = 0.28;
+    const blinkAge = elapsedTime - this.redBlinkStartTime;
+    const blinkCloseness = (blinkAge >= 0 && blinkAge < BLINK_DURATION)
+        ? Math.sin((blinkAge / BLINK_DURATION) * Math.PI)
+        : 0;
+    const lidScaleY = 1 - blinkCloseness * 0.96;
+    const lidOpacity = (isSpeaking ? 0.85 + audioIntensity * 0.15 : 0.85) + blinkCloseness * 0.15;
+    if (this.redBlueCircle) {
+        this.redBlueCircle.scale.y = lidScaleY;
+        this.redBlueCircle.material.opacity = lidOpacity;
+    }
+    if (this.redCyanCircle) {
+        this.redCyanCircle.scale.y = lidScaleY;
+        this.redCyanCircle.material.opacity = lidOpacity;
+    }
 };
 
 // ==============================================================

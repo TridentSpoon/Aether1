@@ -6,7 +6,7 @@
  * 2. A.R.X.LIMES: Faceted Floating Hub with a Fractured Convex Dome of Plates
  * 3. The Nexus: Squid/Brain Creature with Trailing Tentacles that Hunts the Cursor,
  *    Set Against Falling NEXUS Letter Rain
- * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Static Eyelid Arcs
+ * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Blinking Eyelid Arcs
  * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
  * 6. A1ter_nul: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
  * 7. Real-time Audio Frequency and State deformation.
@@ -83,6 +83,11 @@ class HologramAvatar {
         this.redLensOuter = null;
         this.redBlueCircle = null;
         this.redCyanCircle = null;
+        // Blink scheduling -- see animateRed9000. redBlinkStartTime is elapsedTime when the
+        // eyelids started closing; redNextBlinkTime is when the next autonomous blink fires.
+        this.redBlinkStartTime = -999;
+        this.redNextBlinkTime = 4 + Math.random() * 4;
+        this.redLastHandledBlinkClick = -999; // dedupes a click's blink to a single trigger
 
         // 5. A.R.X.LOGOS - Central Hexagon with Six Spiraling Hexagon Arms + Dotted Outer Ring
         this.arxLogosGroup = null;

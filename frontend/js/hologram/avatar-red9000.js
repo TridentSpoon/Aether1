@@ -1,4 +1,5 @@
-// Avatar 4: R.E.D. 9000 (HAL 9000) -- Obsidian Eye with Two Static Eyelid Arcs.
+// Avatar 4: R.E.D. 9000 (HAL 9000) -- Obsidian Eye with Two Eyelid Arcs that Blink
+// (see animateRed9000 in animate.js for the blink itself; the arcs are built static here).
 
 HologramAvatar.prototype.buildRed9000Avatar = function() {
     this.redGroup = new THREE.Group();
