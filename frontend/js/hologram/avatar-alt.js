@@ -1,35 +1,37 @@
 // Avatar 6: A1ter_nul -- modelled on Cyberpunk 2077's Black Wall / relic aesthetic: a
-// column of irregular dark-glass shards lying flat (horizontal panes, not standing plates
-// facing the camera), stacked on top of each other with visible gaps between them -- not a
-// solid body -- each shard a fixed obsidian-glass pane with a theme-tinted glowing edge.
-// While speaking, each shard's edge brightness is driven by its own audio frequency bin --
-// the stack reads as a vertical equalizer built out of broken relic glass. Colour-theme-
-// neutral by design (see core.js) so any palette is one applyColorPalette() call away,
-// same as every other avatar shape here.
+// horizontal row of irregular dark-glass shards, each standing edge-on as a thin vertical
+// bar, tapering shortest at the two ends of the row and tallest in the middle (so a vector
+// from the shortest shard to the shortest shard runs horizontal) -- not a solid body, gaps
+// visible between shards -- each a fixed obsidian-glass pane with a theme-tinted glowing
+// edge. While speaking, each shard's edge brightness is driven by its own audio frequency
+// bin -- the row reads as a classic vertical-bar equalizer built out of broken relic glass.
+// Colour-theme-neutral by design (see core.js) so any palette is one applyColorPalette()
+// call away, same as every other avatar shape here.
 
 HologramAvatar.prototype.buildAltAvatar = function() {
     this.altGroup = new THREE.Group();
 
-    // --- The Black Wall: a stack of jittered, irregular glass-pane shards with gaps
-    // between them, tapering top and bottom like the in-game relic chip's lens profile. ---
+    // --- The Black Wall: a row of jittered, irregular glass-pane shards with gaps
+    // between them, tapering shortest at both ends like the in-game relic chip's lens
+    // profile, just oriented as a horizontal spectrum-analyzer row instead of a column. ---
     this.altShardGroup = new THREE.Group();
     const shardCount = 9;
-    const totalHeight = 84;
-    const slotHeight = totalHeight / shardCount;
+    const totalSpan = 84; // the row's span along the stacking axis (now horizontal, X)
+    const slotSpan = totalSpan / shardCount;
     const gap = 2.6;
-    const shardHeight = slotHeight - gap;
-    const maxWidth = 54;
-    const minWidth = 24;
+    const shardThickness = slotSpan - gap; // the thin dimension, collapsed into depth below
+    const maxLength = 54; // the tapered, visible (vertical) bar length
+    const minLength = 24;
 
     for (let i = 0; i < shardCount; i++) {
         const t = shardCount > 1 ? i / (shardCount - 1) : 0.5;
         const taper = 1 - Math.pow(Math.abs(t - 0.5) * 2, 1.6); // lens/oval profile, 0..1
-        const width = minWidth + (maxWidth - minWidth) * taper;
-        const y = -totalHeight / 2 + i * slotHeight + slotHeight / 2;
+        const length = minLength + (maxLength - minLength) * taper;
+        const x = -totalSpan / 2 + i * slotSpan + slotSpan / 2;
 
         // Irregular quad -- jittered corners so each pane reads as a broken glass shard
-        // rather than a tidy rectangle in a tower.
-        const hw = width / 2, hh = shardHeight / 2;
+        // rather than a tidy rectangle in a row.
+        const hw = length / 2, hh = shardThickness / 2;
         const jitter = () => (Math.random() - 0.5) * 3.5;
         const pts = [
             new THREE.Vector3(-hw + jitter(), -hh + jitter(), 0),
@@ -60,15 +62,16 @@ HologramAvatar.prototype.buildAltAvatar = function() {
         const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), outlineMat);
 
         const shardPivot = new THREE.Group();
-        // Each shard's quad is built flat in local XY (see pts above); rotating 90 deg
-        // about X tips it from "standing plate facing the camera" to "lying flat, seen
-        // edge-on from the front" -- so the stack reads as horizontal panes resting on
-        // top of each other, like real stacked glass sheets, rather than a shelf of
-        // upright picture frames. The small extra X/Z jitter on top keeps them askew
-        // rather than a tidy, perfectly level tower.
-        shardPivot.rotation.x = Math.PI / 2 + (Math.random() - 0.5) * 0.16;
-        shardPivot.rotation.z = (Math.random() - 0.5) * 0.09;
-        shardPivot.position.set((Math.random() - 0.5) * 4, y, (Math.random() - 0.5) * 3);
+        // Each shard's quad is built flat in local XY (see pts above), its long axis
+        // (hw) along local X and its thin axis (hh) along local Y. Rotating 90 deg about
+        // Z swings the long axis onto world Y (a vertical bar); rotating a further 90 deg
+        // about Y then tips the now-thin local axis into depth (Z), so the bar is seen
+        // edge-on from the front instead of as a face-on rectangle. Net effect: a row of
+        // thin vertical glass bars, not a shelf of upright picture frames. The small extra
+        // jitter on top keeps them askew rather than a tidy, perfectly level row.
+        shardPivot.rotation.z = Math.PI / 2 + (Math.random() - 0.5) * 0.09;
+        shardPivot.rotation.y = Math.PI / 2 + (Math.random() - 0.5) * 0.16;
+        shardPivot.position.set(x, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 3);
         shardPivot.add(fillMesh);
         shardPivot.add(outline);
         this.altShardGroup.add(shardPivot);
