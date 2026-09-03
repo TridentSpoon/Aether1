@@ -63,6 +63,7 @@
                 <button class="avatar-pill px-2 py-0.5 rounded text-amber-400 hover:bg-amber-950/60 font-bold" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-avatar-val="red">🔴 R.E.D. 9000</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-yellow-300 hover:bg-yellow-950/60 font-bold" data-avatar-val="alt">⚠️ ALT</button>
             </div>
 
             <!-- COLOR THEME QUICK PICKER -->
@@ -74,6 +75,7 @@
                     <option value="arx-limes">🔶 A.R.X.LIMES Amber</option>
                     <option value="arx-logos">🟣 A.R.X.LOGOS Magenta</option>
                     <option value="red">🔴 Crimson</option>
+                    <option value="night-city">⚠️ Night City</option>
                 </select>
             </div>
 
@@ -312,6 +314,7 @@
                         <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-avatar="arx-limes">🔶 A.R.X.LIMES</button>
                         <button class="avatar-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-avatar="arx-logos">🟣 A.R.X.LOGOS</button>
                         <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-avatar="red">🔴 R.E.D. 9000</button>
+                        <button class="avatar-btn cyber-btn text-xs py-2 justify-center font-bold text-yellow-300 border-yellow-300" data-avatar="alt">⚠️ ALT</button>
                     </div>
                 </div>
 
@@ -324,6 +327,7 @@
                         <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-amber-400 border-amber-400" data-color-theme="arx-limes">🔶 A.R.X.LIMES Amber</button>
                         <button class="color-theme-btn cyber-btn text-xs py-2 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 A.R.X.LOGOS Magenta</button>
                         <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
+                        <button class="color-theme-btn cyber-btn text-xs py-2 justify-center font-bold text-yellow-300 border-yellow-300" data-color-theme="night-city">⚠️ Night City</button>
                     </div>
                 </div>
 
@@ -336,6 +340,7 @@
                         <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
                         <option value="arx-limes">A.R.X.LIMES (Archival, Reasoning, matriX — Limes)</option>
                         <option value="arx-logos">A.R.X.LOGOS (Archival, Reasoning, matriX — Logos)</option>
+                        <option value="alt">ALT (Cunningham — Security & Intrusion Countermeasures)</option>
                         <option value="tactical">Tactical Military HUD</option>
                         <option value="cyberpunk">Cyberpunk Netrunner</option>
                         <option value="custom">Custom Directive (write your own below)</option>
@@ -565,15 +570,16 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/palettes.js?v=16"></script>
-    <script src="js/hologram/core.js?v=28"></script>
+    <script src="js/hologram/palettes.js?v=17"></script>
+    <script src="js/hologram/core.js?v=29"></script>
     <script src="js/hologram/geometry-helpers.js?v=18"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
     <script src="js/hologram/avatar-nexus.js?v=27"></script>
     <script src="js/hologram/avatar-red9000.js?v=16"></script>
     <script src="js/hologram/avatar-arx-logos.js?v=16"></script>
-    <script src="js/hologram/animate.js?v=28"></script>
+    <script src="js/hologram/avatar-alt.js?v=1"></script>
+    <script src="js/hologram/animate.js?v=29"></script>
     <script src="js/voice.js?v=16"></script>
     <script src="js/app.js?v=17"></script>
 </body>

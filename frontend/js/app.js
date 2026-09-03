@@ -118,6 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
             else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
             else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
+            else if (avatarName === 'alt' || avatarName === 'cunningham') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
             else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
         }
 
@@ -171,6 +172,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage("A.R.X.LOGOS", "🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let's make something worth cataloguing.");
             }
         }
+        // ALT (Cunningham) Preset
+        else if (avatarName === 'alt' || avatarName === 'cunningham') {
+            updateAgentNameDisplay("ALT");
+            if (updatePersona) {
+                document.getElementById('setting-persona').value = 'alt';
+                document.getElementById('setting-voice').value = 'en-US-JennyNeural';
+                saveSettings(false);
+                appendMessage("ALT", "⚠️ **ALT online.** Firewall's up, perimeter's lit. Show me what you're worried got in.");
+            }
+        }
     }
 
     // Color Theme Handler — purely cosmetic, independent of the selected avatar shape
@@ -205,6 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (currentColorTheme === 'arx-limes') strokeColor = '#ffaa00';
         else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') strokeColor = '#00ff66';
         else if (currentColorTheme === 'arx-logos') strokeColor = '#e024c3';
+        else if (currentColorTheme === 'night-city') strokeColor = '#fcee0a';
 
         canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         canvasCtx.lineWidth = 1;
@@ -272,6 +284,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (currentColorTheme === 'arx-logos') {
             lineColor = '#e024c3';
             fillColor = 'rgba(224, 36, 195, 0.15)';
+        } else if (currentColorTheme === 'night-city') {
+            lineColor = '#fcee0a';
+            fillColor = 'rgba(252, 238, 10, 0.15)';
         }
 
         tokensCanvasCtx.beginPath();
