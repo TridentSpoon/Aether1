@@ -32,21 +32,34 @@ fi
 # for the Tauri Linux build prerequisites (webkit2gtk, libappindicator-gtk3, etc.) if
 # the build step below fails on a missing system library.
 echo "📦 Installing system dependencies ($DISTRO)..."
+# Beyond git/libnotify, this also installs Tauri v2's native Linux build
+# dependencies (webkit2gtk, appindicator, librsvg, a C toolchain, ...) --
+# without these, `cargo build` for the desktop app fails and
+# install_desktop_app.sh (step 3 below) never gets far enough to write the
+# launcher entry, so the app silently never appears in the app launcher.
 case "$DISTRO" in
     cachyos|arch|manjaro|endeavouros)
         $SUDO pacman -Sy --needed --noconfirm git libnotify \
+            base-devel curl wget file openssl \
+            webkit2gtk-4.1 gtk3 librsvg libappindicator-gtk3 \
             || echo "⚠ System package install failed or was skipped -- continuing anyway."
         ;;
     fedora|nobara|rhel|centos)
         $SUDO dnf install -y git libnotify \
+            gcc gcc-c++ make curl wget file openssl-devel \
+            webkit2gtk4.1-devel gtk3-devel librsvg2-devel libappindicator-gtk3-devel \
             || echo "⚠ System package install failed or was skipped -- continuing anyway."
         ;;
     ubuntu|debian|pop|linuxmint)
         $SUDO apt-get update && $SUDO apt-get install -y git libnotify-bin \
+            build-essential curl wget file libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev \
             || echo "⚠ System package install failed or was skipped -- continuing anyway."
         ;;
     *)
-        echo "⚠ Unrecognized distro ($DISTRO). Please ensure git and libnotify are installed manually."
+        echo "⚠ Unrecognized distro ($DISTRO). Please ensure git, libnotify, and Tauri's Linux build"
+        echo "  dependencies (webkit2gtk, gtk3, librsvg, an appindicator library, a C toolchain) are"
+        echo "  installed manually -- see README's 'Native Desktop App' section."
         ;;
 esac
 

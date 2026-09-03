@@ -25,3 +25,26 @@ Intended features
 - **1-Click Packaging & Portability**:
   - Auto-installer for Linux and Windows.
   - Easy installation from GitHub via script or via packaging the entire system into a single `.tar.gz` bundle to transfer to a separate system.
+
+## Native Desktop App
+
+AETHER1 is a native [Tauri](https://tauri.app) app, so building it needs Rust plus
+the OS's native WebView toolkit -- these aren't Rust crates and can't be pulled in
+by `cargo` alone.
+
+- **Rust**: install via [rustup](https://rustup.rs) if `~/.cargo/bin/cargo` doesn't
+  already exist.
+- **Linux build dependencies**: `./setup.sh` installs these automatically for
+  Arch-based (CachyOS, Arch, Manjaro, EndeavourOS), Fedora-based, and
+  Debian/Ubuntu-based distros. On an unrecognized distro, or if `./setup.sh`'s
+  package install step fails or was skipped, install the equivalent of:
+  `webkit2gtk` (4.1), `gtk3`, `librsvg`, an appindicator library
+  (`libappindicator-gtk3` / `libayatana-appindicator3-dev`), and a C toolchain
+  (`base-devel` / `build-essential`) -- see the
+  [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/) for your
+  distro's exact package names.
+
+If `./setup.sh` reports the app isn't appearing in your app launcher, it's almost
+always because one of these system packages is missing, which makes
+`cargo build --release` fail silently under `scripts/install_desktop_app.sh` --
+install the packages above, then re-run `./setup.sh`.
