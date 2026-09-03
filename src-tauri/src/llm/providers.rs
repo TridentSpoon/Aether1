@@ -59,7 +59,9 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
         );
     }
     if lowered.contains("429") || lowered.contains("too many requests") {
-        return format!("{provider} is rate-limiting this key -- wait a moment, or check its quota.");
+        return format!(
+            "{provider} is rate-limiting this key -- wait a moment, or check its quota."
+        );
     }
     if lowered.contains("500")
         || lowered.contains("502")
@@ -81,7 +83,9 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
         || lowered.contains("no such host")
         || lowered.contains("name or service not known")
     {
-        return format!("{provider}'s address could not be resolved -- this machine looks offline.");
+        return format!(
+            "{provider}'s address could not be resolved -- this machine looks offline."
+        );
     }
     if lowered.contains("timed out") || lowered.contains("timeout") {
         return if local {
@@ -96,7 +100,9 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
         );
     }
     if lowered.contains("api key") || lowered.contains("api_key") {
-        return format!("{provider} would not accept the request -- check the {key_field}. ({raw})");
+        return format!(
+            "{provider} would not accept the request -- check the {key_field}. ({raw})"
+        );
     }
 
     format!("{provider} could not be reached: {raw}")

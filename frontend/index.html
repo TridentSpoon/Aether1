@@ -371,7 +371,7 @@
             <div class="bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
                 <div class="flex items-center justify-between">
                     <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
-                        🔍 INSTALL OR INSTALLED LOCAL MODEL / PROVIDER API SCANNER
+                        🔍 FIND LOCAL LLM SERVERS AND API KEYS
                     </h3>
                     <button id="btn-scan-system" class="cyber-btn text-[11px] py-1 px-2.5">
                         🔄 Scan System & Keys
@@ -379,7 +379,7 @@
                 </div>
 
                 <div id="scanner-results-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
-                    <div>Status: Click Scan to detect Provider API keys, Ollama, and LM Studio.</div>
+                    <div>Status: press Scan to look for local LLM servers on this machine and API keys in the environment.</div>
                 </div>
 
                 <div class="space-y-1.5 pt-1">
@@ -397,7 +397,7 @@
                         </button>
                     </div>
                     <span class="text-[11px] font-mono text-slate-500 block">
-                        Prefer a GUI? LM Studio (lmstudio.ai) works the same way on Windows, macOS, and Linux -- install it, download any model from its in-app browser, then select "LM Studio" as the provider below.
+                        Any local server works, not just this one: anything speaking the OpenAI-compatible or native API on a common port is found by the scan, and anything else can be typed into the endpoint box by hand.
                     </span>
                 </div>
             </div>
@@ -433,32 +433,50 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div class="space-y-1">
                         <label class="text-xs font-mono text-cyan-300 block">LLM PROVIDER</label>
+                        <!-- Named by what they are, not by whose product they are: the two
+                             local options are API shapes, and a dozen programs speak each. -->
                         <select id="setting-provider" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="offline">Offline Standby (Instant Local Fallback)</option>
-                            <option value="ollama">Ollama (Local Private LLM)</option>
-                            <option value="lmstudio">LM Studio (Local OpenAI API)</option>
-                            <option value="gemini">Google Gemini API</option>
-                            <option value="groq">Groq (Ultra-Fast Cloud)</option>
-                            <option value="openai">OpenAI (ChatGPT)</option>
-                            <option value="anthropic">Anthropic Claude</option>
+                            <option value="offline">Offline standby -- no model, instant local replies</option>
+                            <option value="lmstudio">Local LLM server -- OpenAI-compatible API</option>
+                            <option value="ollama">Local LLM server -- native API</option>
+                            <option value="gemini">Google Gemini API (cloud)</option>
+                            <option value="groq">Groq API (cloud)</option>
+                            <option value="openai">OpenAI API (cloud)</option>
+                            <option value="anthropic">Anthropic Claude API (cloud)</option>
                         </select>
                     </div>
 
                     <div class="space-y-1">
                         <label class="text-xs font-mono text-cyan-300 block">MODEL NAME / ID</label>
-                        <input id="setting-model" type="text" placeholder="e.g. llama3, gemini-2.0-flash, gpt-4o-mini" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <!-- The dropdown lists what a detected server says it can run; the box
+                             below stays typeable, because a cloud model is a name you know
+                             and nothing local can enumerate it. -->
+                        <select id="setting-model-picker" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <option value="">-- models on the selected server --</option>
+                        </select>
+                        <input id="setting-model" type="text" placeholder="or type one: llama3.2, gemini-2.0-flash, gpt-4o-mini" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="text-xs font-mono text-cyan-300 block">LOCAL SERVERS FOUND ON THIS MACHINE</label>
+                    <select id="setting-local-server" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <option value="">-- none found yet; press Scan below --</option>
+                    </select>
+                    <span class="text-[11px] font-mono text-slate-500 block">
+                        Picking one fills in the provider, endpoint and model list for you.
+                    </span>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">ENDPOINT (for Ollama / LM Studio)</label>
+                        <label class="text-xs font-mono text-cyan-300 block">ENDPOINT (for a local server)</label>
                         <input id="setting-endpoint" type="text" placeholder="http://localhost:11434" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
 
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">API KEY (stored securely in SQLite)</label>
-                        <input id="setting-apikey" type="password" placeholder="API Key for Gemini / OpenAI / Groq / Claude" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <label class="text-xs font-mono text-cyan-300 block">API KEY (cloud providers only)</label>
+                        <input id="setting-apikey" type="password" placeholder="Key for the cloud provider selected above" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
 

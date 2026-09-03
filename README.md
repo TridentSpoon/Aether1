@@ -112,6 +112,22 @@ AI says leaves your machine. To keep it local, install either or both:
 Aether1 finds them on its own and prefers them. Settings → Speech Engine says which of the
 two are local and what is missing.
 
+## Choosing a model
+
+Open **Settings** and Aether1 looks for model servers already running on this machine. Any
+that answer appear in **LOCAL SERVERS FOUND ON THIS MACHINE**; picking one fills in the
+provider, the address and the list of models it can run, so there is nothing to look up.
+
+The scan probes the loopback ports these tools tend to use and identifies them by the API
+they speak, not by which program they are — so it finds the popular runners, most of the
+less popular ones, and anything else that has adopted a common port. A server on an
+unusual port isn't lost: type its address into the endpoint box and pick the matching API
+shape (**OpenAI-compatible** for most things, **native** for the `/api/tags` style).
+
+Cloud providers — Gemini, Groq, OpenAI, Anthropic — need a key in the **API KEY** box and a
+model name typed in. If a call fails, the HUD says why: a rejected key, a model name that
+doesn't exist, a proxy in the way and an unreachable server each say so in those words.
+
 ## Command line
 
 Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that

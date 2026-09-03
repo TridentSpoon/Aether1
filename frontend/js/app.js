@@ -1025,9 +1025,83 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- Local server discovery ------------------------------------------------------
+    // What the scan found last, so the two dropdowns can be rebuilt without probing
+    // again. Deliberately not persisted: a server that was up ten minutes ago is not
+    // evidence of anything, and offering a stale endpoint is how you get a mystery.
+    let discoveredServers = [];
+
+    /// Fills the model dropdown from one server's list. Leaves the free-text box alone --
+    /// it may hold a cloud model name the operator typed, which no scan can know about.
+    function populateModelPicker(server) {
+        const picker = document.getElementById('setting-model-picker');
+        if (!picker) return;
+        picker.innerHTML = '';
+        const models = (server && server.models) || [];
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = models.length
+            ? '-- choose one of the models on this server --'
+            : '-- no models to list; type one below --';
+        picker.appendChild(first);
+        for (const model of models) {
+            const opt = document.createElement('option');
+            opt.value = model;
+            opt.textContent = model;
+            picker.appendChild(opt);
+        }
+        const current = document.getElementById('setting-model').value;
+        if (models.includes(current)) picker.value = current;
+    }
+
+    /// Rebuilds the "local servers found" dropdown. Each entry carries everything needed
+    /// to configure the app for it, so choosing one is the whole setup step.
+    function populateLocalServers(servers) {
+        discoveredServers = Array.isArray(servers) ? servers : [];
+        const select = document.getElementById('setting-local-server');
+        if (!select) return;
+        select.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = discoveredServers.length
+            ? `-- ${discoveredServers.length} found; choose one to use it --`
+            : '-- none found yet; press Scan below --';
+        select.appendChild(first);
+        discoveredServers.forEach((server, index) => {
+            const opt = document.createElement('option');
+            opt.value = String(index);
+            opt.textContent = server.label;
+            select.appendChild(opt);
+        });
+
+        // Keep it selected if the configured endpoint is one of the servers found.
+        const endpoint = document.getElementById('setting-endpoint').value.trim();
+        const match = discoveredServers.findIndex(s => s.endpoint === endpoint);
+        if (match >= 0) {
+            select.value = String(match);
+            populateModelPicker(discoveredServers[match]);
+        }
+    }
+
+    /// Choosing a server is the setup: provider, endpoint and the model list all follow
+    /// from it, so the operator never has to know which API shape their server speaks or
+    /// whether its URL needs a /v1 on the end.
+    function applyLocalServer(index) {
+        const server = discoveredServers[index];
+        if (!server) return;
+        document.getElementById('setting-provider').value = server.provider_key;
+        document.getElementById('setting-endpoint').value = server.endpoint;
+        populateModelPicker(server);
+        const model = document.getElementById('setting-model');
+        if (server.models.length && !server.models.includes(model.value)) {
+            model.value = server.models[0];
+            document.getElementById('setting-model-picker').value = server.models[0];
+        }
+    }
+
     async function handleScanSystem() {
         if (scannerResultsBox) {
-            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Scanning for Provider API keys, Ollama, and LM Studio...</div>';
+            scannerResultsBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Looking for local LLM servers and API keys...</div>';
         }
         voiceEngine.playSFX('click');
 
@@ -1048,22 +1122,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 html += `<div class="text-slate-400">⚪ No Provider API keys found in environment.</div>`;
             }
 
-            if (data.ollama.available) {
-                const modelsStr = data.ollama.models.length > 0 ? data.ollama.models.join(', ') : 'No models pulled yet';
-                html += `<div class="text-green-400">✔ Ollama Online (Port 11434) - Models: <strong>${modelsStr}</strong></div>`;
-            } else if (data.ollama.cli_installed) {
-                html += `<div class="text-yellow-400">⚠ Ollama CLI is installed but server not running (\`ollama serve\`).</div>`;
+            // Reported by what answered, not by which product it is presumed to be: a
+            // probe can tell you a server is there and what it can run, and guessing at a
+            // brand on top of that is a guess the operator would have to check anyway.
+            const servers = data.local_servers || [];
+            if (servers.length) {
+                for (const server of servers) {
+                    const models = server.models.length ? server.models.join(', ') : 'no models loaded';
+                    html += `<div class="text-green-400">✔ ${server.label} <span class="text-slate-400">(${server.endpoint})</span><br><span class="pl-6 text-cyan-300">${models}</span></div>`;
+                }
+                html += `<div class="text-slate-400">Pick one from LOCAL SERVERS FOUND above to use it.</div>`;
             } else {
-                html += `<div class="text-slate-400">⚪ Ollama is not active on localhost:11434.</div>`;
+                html += `<div class="text-slate-400">⚪ No local LLM server answered on this machine. Start one, or type its address into the endpoint box if it uses an unusual port.</div>`;
             }
 
-            if (data.lmstudio.available) {
-                const lmStr = data.lmstudio.models.length > 0 ? data.lmstudio.models.join(', ') : 'Ready';
-                html += `<div class="text-green-400">✔ LM Studio Active (Port 1234) - ${lmStr}</div>`;
-            } else {
-                html += `<div class="text-slate-400">⚪ LM Studio is not active on localhost:1234.</div>`;
+            if (data.ollama.cli_installed && !servers.some(s => s.port === 11434)) {
+                html += `<div class="text-yellow-400">⚠ A local model runner is installed but not serving -- start it first (for Ollama, \`ollama serve\`).</div>`;
             }
 
+            populateLocalServers(servers);
             if (scannerResultsBox) scannerResultsBox.innerHTML = html;
         } catch (e) {
             if (scannerResultsBox) scannerResultsBox.innerHTML = `<div class="text-red-400">Scan failed: ${e.message}</div>`;
@@ -1410,8 +1487,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnSettings.addEventListener('click', () => {
         voiceEngine.playSFX('click');
-        loadSettings();
-        handleScanSystem();
+        // The scan waits for the settings: it preselects whichever found server matches
+        // the configured endpoint, and that field has to be filled in before it looks.
+        loadSettings().then(handleScanSystem);
         settingsModal.classList.remove('hidden');
     });
 
@@ -1429,6 +1507,23 @@ document.addEventListener('DOMContentLoaded', () => {
     btnScanSystem.addEventListener('click', () => {
         handleScanSystem();
     });
+
+    const localServerSelect = document.getElementById('setting-local-server');
+    if (localServerSelect) {
+        localServerSelect.addEventListener('change', (e) => {
+            if (e.target.value === '') return;
+            applyLocalServer(Number(e.target.value));
+            voiceEngine.playSFX('click');
+        });
+    }
+
+    const modelPicker = document.getElementById('setting-model-picker');
+    if (modelPicker) {
+        modelPicker.addEventListener('change', (e) => {
+            if (e.target.value === '') return;
+            document.getElementById('setting-model').value = e.target.value;
+        });
+    }
 
     btnPullLlama.addEventListener('click', () => {
         handlePullLlama();
