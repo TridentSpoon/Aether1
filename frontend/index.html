@@ -4,39 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aether1 Platform // CYBERNETIC AI HUD</title>
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        cyber: {
-                            cyan: 'var(--neon-cyan)',
-                            blue: 'var(--neon-blue)',
-                            purple: 'var(--neon-purple)',
-                            green: 'var(--neon-green)',
-                            amber: 'var(--neon-amber)',
-                            dark: 'var(--bg-core)',
-                            panel: 'var(--bg-panel)'
-                        }
-                    },
-                    fontFamily: {
-                        orbitron: ['Orbitron', 'sans-serif'],
-                        rajdhani: ['Rajdhani', 'sans-serif'],
-                        mono: ['"Share Tech Mono"', 'monospace']
-                    }
-                }
-            }
-        }
-    </script>
+    <!-- Everything the HUD needs to draw itself is on disk. It used to fetch Tailwind,
+         three.js and the fonts from three CDNs on every launch, which meant an offline
+         machine (or a blocked network, or a bad afternoon at Cloudflare) got an unstyled
+         page with no avatar and nothing saying why -- in an app whose whole point is
+         running on your own hardware. See frontend/vendor/README.md. -->
+    <link rel="stylesheet" href="vendor/fonts.css?v=1">
+    <link rel="stylesheet" href="vendor/tailwind.css?v=1">
     <link rel="stylesheet" href="css/A1theme.css?v=18">
-    <!-- Three.js CDN -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="vendor/three.min.js?v=1"></script>
 </head>
 <body class="bg-cyber-dark text-slate-100 flex flex-col h-screen select-none">
     <div class="scanlines"></div>
