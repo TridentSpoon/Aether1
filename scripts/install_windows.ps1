@@ -38,12 +38,34 @@ function New-AetherShortcut {
     $shortcut.Save()
 }
 
-# The per-user Start Menu, not the machine-wide one: this needs no administrator rights,
-# and an install that demands elevation for a shortcut is an install people abandon.
-$startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Aether1.lnk'
-New-AetherShortcut -Path $startMenu
-Write-Host "  Start Menu:  $startMenu"
+# Each shortcut is attempted on its own. GetFolderPath returns an empty string for a
+# special folder that isn't there, and a profile with a redirected or missing Desktop
+# should still get a Start Menu entry -- so one failure reports itself and the other is
+# still tried, rather than the first one aborting the script.
+$made = 0
+foreach ($target in @(
+    @{ Label = 'Start Menu'; Folder = 'Programs' },
+    @{ Label = 'Desktop';    Folder = 'Desktop'  }
+)) {
+    # The per-user folders, not the machine-wide ones: these need no administrator
+    # rights, and an install that demands elevation for a shortcut is one people abandon.
+    $dir = [Environment]::GetFolderPath($target.Folder)
+    if ([string]::IsNullOrWhiteSpace($dir) -or -not (Test-Path $dir)) {
+        Write-Host "  $($target.Label): skipped -- Windows reports no $($target.Folder) folder for this profile." -ForegroundColor Yellow
+        continue
+    }
 
-$desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Aether1.lnk'
-New-AetherShortcut -Path $desktop
-Write-Host "  Desktop:     $desktop"
+    $path = Join-Path $dir 'Aether1.lnk'
+    try {
+        New-AetherShortcut -Path $path
+        Write-Host "  $($target.Label): $path"
+        $made++
+    } catch {
+        Write-Host "  $($target.Label): could not be created -- $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+if ($made -eq 0) {
+    Write-Host "  No shortcuts were created." -ForegroundColor Yellow
+    exit 1
+}

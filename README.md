@@ -42,25 +42,30 @@ it in your launcher and on your `PATH` as `aether1`. It is safe to re-run.
 ### Windows
 
 Install [Rust](https://rustup.rs) — that is the only prerequisite, since Tauri uses the
-WebView2 runtime that ships with Windows. Then, in the checkout:
+WebView2 runtime that ships with Windows. Then, in PowerShell:
 
 ```powershell
+mkdir "$env:USERPROFILE\Projects" -Force
+cd "$env:USERPROFILE\Projects"
+git clone https://github.com/TridentSpoon/Aether1.git
+cd Aether1
 .\setup.bat
 ```
+
+`C:\Users\<you>\Projects` is where this expects to live. The checkout is not a temporary
+build directory: the app runs *from* it — `backend\` holds your database and the shortcuts
+point at it — so it needs somewhere permanent, and moving or deleting the folder later
+breaks both shortcuts.
+
+Clone it rather than downloading the ZIP. A ZIP arrives without a `.git` directory, so
+`git pull` answers *"not a git repository"* and there is no way to update; with a clone,
+`git pull` is the update, and setup installs hooks that rebuild the app whenever you do.
 
 The leading `.\` is required in PowerShell, which does not run scripts from the current
 directory without it. In `cmd.exe`, plain `setup.bat` works.
 
-It builds the app and adds Start Menu and desktop shortcuts (no administrator rights
+Setup builds the app and adds Start Menu and desktop shortcuts (no administrator rights
 needed). Launch it from either, or run `.\start.bat`.
-
-Get the checkout with git rather than as a ZIP if you can — `git pull` is then how you
-update, and the setup script installs hooks that rebuild the app whenever you do:
-
-```powershell
-git clone https://github.com/TridentSpoon/Aether1.git
-cd Aether1
-```
 
 Aether1 lives in the **notification area** — click its icon to show or hide the HUD, and
 closing the window leaves it running there rather than quitting.
@@ -107,6 +112,22 @@ AI says leaves your machine. To keep it local, install either or both:
 Aether1 finds them on its own and prefers them. Settings → Speech Engine says which of the
 two are local and what is missing.
 
+## Choosing a model
+
+Open **Settings** and Aether1 looks for model servers already running on this machine. Any
+that answer appear in **LOCAL SERVERS FOUND ON THIS MACHINE**; picking one fills in the
+provider, the address and the list of models it can run, so there is nothing to look up.
+
+The scan probes the loopback ports these tools tend to use and identifies them by the API
+they speak, not by which program they are — so it finds the popular runners, most of the
+less popular ones, and anything else that has adopted a common port. A server on an
+unusual port isn't lost: type its address into the endpoint box and pick the matching API
+shape (**OpenAI-compatible** for most things, **native** for the `/api/tags` style).
+
+Cloud providers — Gemini, Groq, OpenAI, Anthropic — need a key in the **API KEY** box and a
+model name typed in. If a call fails, the HUD says why: a rejected key, a model name that
+doesn't exist, a proxy in the way and an unreachable server each say so in those words.
+
 ## Command line
 
 Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that
@@ -127,6 +148,23 @@ system-wide, bind your compositor to `aether1 toggle` instead; for Hyprland:
 
 ```
 bind = SUPER SHIFT, A, exec, aether1 toggle
+```
+
+On **Windows**, `setup.bat` creates shortcuts but does not put anything on `PATH`, so
+`aether1` is not a command there — call the executable by path from the checkout:
+
+```powershell
+.\src-tauri\target\release\aether1.exe prompt "what is eating my RAM"
+```
+
+To type `aether1` instead, add that folder to your own `PATH` once (no administrator
+rights needed, and it takes effect in new terminals):
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+    'PATH',
+    [Environment]::GetEnvironmentVariable('PATH', 'User') + ';' + (Resolve-Path .\src-tauri\target\release),
+    'User')
 ```
 
 `prompt` shares one conversation history and one memory store with the HUD, so anything

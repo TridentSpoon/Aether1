@@ -466,8 +466,12 @@ impl LlmEngine {
                         config.provider, failure.message
                     );
                     let notice = format!(
-                        "\n\n[HUD Alert: Neural link to {} dropped mid-transmission.]",
-                        config.provider
+                        "\n\n[HUD Alert: {}]",
+                        providers::explain_failure(
+                            config.provider,
+                            &config.endpoint,
+                            &failure.message
+                        )
                     );
                     sink(&notice);
                     return format!("{visible}{notice}");
@@ -592,8 +596,12 @@ impl LlmEngine {
                             &config.agent_name,
                         );
                         let reply = format!(
-                            "[HUD Alert: Neural link to {} timed out. Engaging localized cognitive fallback]\n\n{fallback}",
-                            config.provider
+                            "[HUD Alert: {} Answering locally instead.]\n\n{fallback}",
+                            providers::explain_failure(
+                                config.provider,
+                                &config.endpoint,
+                                &failure.message
+                            )
                         );
                         sink(&reply);
                         reply
@@ -601,8 +609,12 @@ impl LlmEngine {
                         // Text already reached the operator; append the notice to what
                         // they are reading instead of replacing it.
                         let notice = format!(
-                            "\n\n[HUD Alert: Neural link to {} dropped mid-transmission.]",
-                            config.provider
+                            "\n\n[HUD Alert: {}]",
+                            providers::explain_failure(
+                                config.provider,
+                                &config.endpoint,
+                                &failure.message
+                            )
                         );
                         sink(&notice);
                         format!("{}{notice}", failure.partial)

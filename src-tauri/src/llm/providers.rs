@@ -23,6 +23,91 @@ use super::persona::Provider;
 pub type Sink<'a> = &'a mut dyn FnMut(&str);
 
 /// Blocking calls wait for the whole reply, so this bounds the entire request.
+/// Turns a provider failure into something the operator can act on.
+///
+/// Every one of these used to reach the HUD as "Neural link dropped" with the reason
+/// printed to stderr -- which, for an app launched from a Start Menu shortcut, is nowhere.
+/// A rejected key, a mistyped model name and an unplugged network all looked identical,
+/// and the honest reading of that screen was "the API does nothing". The cause is what
+/// makes the difference between a mystery and a two-second fix, so it goes on screen.
+///
+/// The raw text is kept for anything unrecognised: a wrong guess dressed up as a
+/// diagnosis is worse than the error itself.
+pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String {
+    let lowered = raw.to_lowercase();
+    let local = matches!(provider, Provider::Ollama | Provider::LmStudio);
+
+    // Where the operator would go to fix it, named as it appears in Settings.
+    let key_field = "API KEY in Settings";
+
+    if lowered.contains("401") || lowered.contains("unauthorized") {
+        return format!("{provider} rejected the API key -- check the {key_field}.");
+    }
+    if lowered.contains("403") || lowered.contains("forbidden") {
+        if lowered.contains("proxy") {
+            return format!(
+                "a proxy on this network refused the connection to {provider}, so the request never arrived."
+            );
+        }
+        return format!(
+            "{provider} refused the API key -- it may lack access to this model, or be for the wrong account."
+        );
+    }
+    if lowered.contains("404") || lowered.contains("not found") {
+        return format!(
+            "{provider} has no model by that name -- check MODEL NAME / ID in Settings."
+        );
+    }
+    if lowered.contains("429") || lowered.contains("too many requests") {
+        return format!(
+            "{provider} is rate-limiting this key -- wait a moment, or check its quota."
+        );
+    }
+    if lowered.contains("500")
+        || lowered.contains("502")
+        || lowered.contains("503")
+        || lowered.contains("504")
+    {
+        return format!("{provider} itself returned an error -- nothing here is misconfigured.");
+    }
+    if lowered.contains("connection refused") || lowered.contains("connectionrefused") {
+        if local {
+            return format!(
+                "nothing is listening at {endpoint} -- is {provider} running, and is that the right port?"
+            );
+        }
+        return format!("the connection to {provider} was refused.");
+    }
+    if lowered.contains("dns")
+        || lowered.contains("resolve")
+        || lowered.contains("no such host")
+        || lowered.contains("name or service not known")
+    {
+        return format!(
+            "{provider}'s address could not be resolved -- this machine looks offline."
+        );
+    }
+    if lowered.contains("timed out") || lowered.contains("timeout") {
+        return if local {
+            format!("{provider} did not answer in time -- a large model on modest hardware can take longer than the timeout.")
+        } else {
+            format!("{provider} did not answer in time.")
+        };
+    }
+    if lowered.contains("certificate") || lowered.contains("tls") || lowered.contains("ssl") {
+        return format!(
+            "the secure connection to {provider} could not be verified -- often a proxy or antivirus intercepting HTTPS."
+        );
+    }
+    if lowered.contains("api key") || lowered.contains("api_key") {
+        return format!(
+            "{provider} would not accept the request -- check the {key_field}. ({raw})"
+        );
+    }
+
+    format!("{provider} could not be reached: {raw}")
+}
+
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 /// A stream is alive as long as tokens keep arriving, and a long answer from a local model
 /// on modest hardware legitimately outlasts the blocking timeout -- applying 45s to the
@@ -728,5 +813,57 @@ mod tests {
         assert_eq!(payload.model, "llama-3.3-70b-versatile");
         assert!(url.starts_with("https://api.groq.com/"));
         assert_eq!(gemini_model(""), "gemini-2.0-flash");
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    /// The four causes that actually happen, each named in terms of the thing the
+    /// operator would have to change.
+    #[test]
+    fn a_rejected_key_says_so_and_points_at_the_setting() {
+        let msg = explain_failure(Provider::OpenAi, "", "http status: 401");
+        assert!(msg.contains("rejected the API key"), "{msg}");
+        assert!(msg.contains("API KEY in Settings"), "{msg}");
+    }
+
+    #[test]
+    fn a_wrong_model_name_is_not_reported_as_a_key_problem() {
+        let msg = explain_failure(Provider::Anthropic, "", "http status: 404");
+        assert!(msg.contains("no model by that name"), "{msg}");
+        assert!(msg.contains("MODEL NAME"), "{msg}");
+    }
+
+    /// The local providers are the ones where "nothing is listening" is the likely
+    /// story, and the endpoint is the thing to check -- so it appears in the message.
+    #[test]
+    fn a_dead_local_server_names_the_endpoint() {
+        let msg = explain_failure(
+            Provider::LmStudio,
+            "http://localhost:1234/v1",
+            "io error: Connection refused (os error 111)",
+        );
+        assert!(msg.contains("http://localhost:1234/v1"), "{msg}");
+        assert!(msg.contains("lmstudio"), "{msg}");
+    }
+
+    #[test]
+    fn a_proxy_refusal_is_not_blamed_on_the_key() {
+        let msg = explain_failure(
+            Provider::OpenAi,
+            "",
+            "CONNECT proxy failed: proxy server responded 403/403",
+        );
+        assert!(msg.contains("proxy"), "{msg}");
+        assert!(!msg.contains("API key"), "{msg}");
+    }
+
+    /// Anything unrecognised keeps the original text rather than being guessed at.
+    #[test]
+    fn an_unknown_failure_is_passed_through_verbatim() {
+        let msg = explain_failure(Provider::Gemini, "", "something nobody has seen before");
+        assert!(msg.contains("something nobody has seen before"), "{msg}");
     }
 }

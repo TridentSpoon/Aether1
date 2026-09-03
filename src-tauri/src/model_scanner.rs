@@ -40,6 +40,10 @@ pub struct ScanResult {
     pub cloud_keys: CloudKeys,
     pub ollama: OllamaStatus,
     pub lmstudio: LmStudioStatus,
+    /// Everything found by port, whatever it is -- the list the Settings dropdown is
+    /// built from. The two fields above are the same information for the two ports that
+    /// predate this, kept because the older UI and the Python port both read them.
+    pub local_servers: Vec<LocalServer>,
     pub has_local_provider: bool,
     pub has_cloud_key: bool,
 }
@@ -196,16 +200,142 @@ pub fn scan_all() -> ScanResult {
     let cloud_keys = detect_cloud_keys();
     let ollama = scan_ollama();
     let lmstudio = scan_lmstudio();
-    let has_local_provider = ollama.available || lmstudio.available;
+    let local_servers = scan_local_servers();
+    let has_local_provider = ollama.available || lmstudio.available || !local_servers.is_empty();
     let has_cloud_key = !cloud_keys.detected_key.is_empty();
 
     ScanResult {
         cloud_keys,
         ollama,
         lmstudio,
+        local_servers,
         has_local_provider,
         has_cloud_key,
     }
+}
+
+/// The loopback ports a local model server is likely to be listening on.
+///
+/// Deliberately a list of *ports*, not of products. Every one of these is somebody's
+/// default, but which program answers is neither knowable from a probe nor interesting:
+/// what matters is that something on this machine speaks a known API and can name its
+/// models. New tools appear constantly and most adopt one of these ports; adding a
+/// number here is the whole cost of supporting one.
+const LOCAL_PORTS: &[u16] = &[
+    11434, // the common native-API default
+    1234, 8080, 1337, 8000, 5001, 5000, 4891, 8081,
+];
+
+/// How a local server expects to be talked to. Both are already implemented -- this is
+/// only which of the two existing paths a discovered server should be driven through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalApi {
+    /// The OpenAI-compatible shape: `/v1/models`, `/v1/chat/completions`.
+    OpenAi,
+    /// The native shape: `/api/tags`, `/api/generate`.
+    Native,
+}
+
+impl LocalApi {
+    /// The `llm_provider` setting that drives a server of this kind.
+    pub fn provider_key(self) -> &'static str {
+        match self {
+            LocalApi::OpenAi => "lmstudio",
+            LocalApi::Native => "ollama",
+        }
+    }
+}
+
+/// A local model server that answered.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LocalServer {
+    /// Exactly what belongs in the ENDPOINT setting -- including the `/v1` suffix where
+    /// the API wants one, so the operator never has to know that detail.
+    pub endpoint: String,
+    pub port: u16,
+    pub api: LocalApi,
+    pub provider_key: &'static str,
+    /// What it says it can run. May be empty: a server with no model loaded is still
+    /// found, and saying so is more useful than pretending it isn't there.
+    pub models: Vec<String>,
+    /// One line for a dropdown, naming the port rather than guessing at a product.
+    pub label: String,
+}
+
+fn describe_local(port: u16, models: &[String]) -> String {
+    match models.len() {
+        0 => format!("Local server on port {port} (no model loaded)"),
+        1 => format!("Local server on port {port} -- {}", models[0]),
+        n => format!("Local server on port {port} -- {n} models"),
+    }
+}
+
+/// Asks one port whether it is a model server, OpenAI-compatible shape first.
+///
+/// The native API is tried second and only as a fallback, because a server that speaks
+/// both is then driven through the OpenAI-compatible path -- the one every other tool
+/// here also uses.
+fn probe_local_port(port: u16) -> Option<LocalServer> {
+    let base = format!("http://127.0.0.1:{port}");
+
+    let openai: Option<Vec<String>> = ureq::get(format!("{base}/v1/models"))
+        .config()
+        .timeout_global(Some(PROBE_TIMEOUT))
+        .build()
+        .call()
+        .ok()
+        .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
+        .map(|data| data.data.into_iter().map(|m| m.id).collect());
+
+    if let Some(models) = openai {
+        return Some(LocalServer {
+            endpoint: format!("{base}/v1"),
+            port,
+            api: LocalApi::OpenAi,
+            provider_key: LocalApi::OpenAi.provider_key(),
+            label: describe_local(port, &models),
+            models,
+        });
+    }
+
+    let native: Option<Vec<String>> = ureq::get(format!("{base}/api/tags"))
+        .config()
+        .timeout_global(Some(PROBE_TIMEOUT))
+        .build()
+        .call()
+        .ok()
+        .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
+        .map(|data| data.models.into_iter().map(|m| m.name).collect());
+
+    native.map(|models| LocalServer {
+        endpoint: base,
+        port,
+        api: LocalApi::Native,
+        provider_key: LocalApi::Native.provider_key(),
+        label: describe_local(port, &models),
+        models,
+    })
+}
+
+/// Every local model server that answers, in port order.
+///
+/// Probed in parallel: a closed port on loopback refuses immediately, but a port held by
+/// something that accepts the connection and then says nothing costs the full timeout,
+/// and nine of those in a row is a scan the operator is sitting and waiting through.
+pub fn scan_local_servers() -> Vec<LocalServer> {
+    let mut found: Vec<LocalServer> = std::thread::scope(|scope| {
+        let handles: Vec<_> = LOCAL_PORTS
+            .iter()
+            .map(|&port| scope.spawn(move || probe_local_port(port)))
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok().flatten())
+            .collect()
+    });
+    found.sort_by_key(|server| server.port);
+    found
 }
 
 #[derive(Serialize)]
@@ -264,6 +394,66 @@ pub fn pull_model(model_name: &str) -> PullResult {
 // code can reach it.
 #[cfg(test)]
 pub(crate) static CLOUD_ENV_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod local_server_tests {
+    use super::*;
+
+    /// A port nobody is listening on is not a server, and refusing it must not take the
+    /// full timeout -- the whole scan is something the operator waits through.
+    #[test]
+    fn a_closed_port_finds_nothing_and_returns_promptly() {
+        let started = std::time::Instant::now();
+        // 9 is discard; nothing binds it here, and it is not in LOCAL_PORTS either.
+        assert_eq!(probe_local_port(9), None);
+        assert!(
+            started.elapsed() < PROBE_TIMEOUT * 2,
+            "a refused connection should not wait out the timeout"
+        );
+    }
+
+    /// The label is what the operator reads in the dropdown, so it says what was found
+    /// and where -- never which product it is guessed to be.
+    #[test]
+    fn the_label_names_the_port_and_never_a_product() {
+        let none = describe_local(8080, &[]);
+        assert!(none.contains("port 8080"), "{none}");
+        assert!(none.contains("no model loaded"), "{none}");
+
+        let one = describe_local(1234, &["qwen2.5-7b".to_string()]);
+        assert!(one.contains("qwen2.5-7b"), "{one}");
+
+        let many = describe_local(11434, &["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert!(many.contains("3 models"), "{many}");
+
+        for label in [none, one, many] {
+            let lowered = label.to_lowercase();
+            for product in ["ollama", "lm studio", "lmstudio", "llama.cpp", "jan"] {
+                assert!(!lowered.contains(product), "{label} names a product");
+            }
+        }
+    }
+
+    /// The endpoint a discovered server reports is the one that belongs in the setting,
+    /// /v1 suffix and all -- picking a server has to be the whole configuration step.
+    #[test]
+    fn each_api_shape_maps_to_the_provider_that_drives_it() {
+        assert_eq!(LocalApi::OpenAi.provider_key(), "lmstudio");
+        assert_eq!(LocalApi::Native.provider_key(), "ollama");
+    }
+
+    /// Whatever is running locally, the scan must not hang: every port is probed at once.
+    #[test]
+    fn scanning_every_port_costs_about_one_probe() {
+        let started = std::time::Instant::now();
+        let _ = scan_local_servers();
+        assert!(
+            started.elapsed() < PROBE_TIMEOUT * 3,
+            "the scan took {:?}, which suggests the ports are being probed one at a time",
+            started.elapsed()
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -377,11 +567,14 @@ mod tests {
         }
         let status = scan_ollama();
         assert!(status.available);
-        assert!(
-            status.cli_installed,
-            "the `ollama` binary should be on PATH if its server is running"
+        // Deliberately not asserting the CLI is installed: something answering on this
+        // port is not evidence of a particular program. It could be a container, a
+        // forwarded port, or another tool that speaks the same API -- all of which the
+        // scan is meant to accept.
+        println!(
+            "live server on :11434 -- models {:?}, cli_installed {}",
+            status.models, status.cli_installed
         );
-        println!("live Ollama models: {:?}", status.models);
     }
 
     #[test]
@@ -418,12 +611,16 @@ mod tests {
     }
 
     #[test]
-    fn scan_lmstudio_when_not_running_reports_unavailable() {
-        // LM Studio isn't part of this dev environment, so this exercises the "service is
-        // down" path for real rather than skipping -- still a genuine assertion, just
-        // about absence instead of presence.
+    fn scan_lmstudio_reports_what_is_actually_there() {
         let status = scan_lmstudio();
-        assert!(!status.available);
+        if status.available {
+            // Somebody is running a server on :1234 -- which, for anyone working on this
+            // project, is the normal case rather than a broken environment. Asserting
+            // absence here would fail on exactly the machines this feature is for.
+            assert!(status.endpoint.ends_with("/v1"), "{}", status.endpoint);
+            assert!(!status.recommended_model.is_empty());
+            return;
+        }
         assert!(status.models.is_empty());
         assert_eq!(status.recommended_model, "local-model");
     }
