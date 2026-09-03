@@ -51,6 +51,14 @@ HologramAvatar.prototype.animate = function() {
         this.animateHalcy(elapsedTime, audioIntensity, clickPulse);
     }
 
+    // Drag-to-spin inertia -- once you let go, the yaw picked up during the drag (see
+    // core.js's pointermove handler) keeps coasting and decays, like a spun globe settling.
+    if (!this.isDraggingView && this.viewSpinVelocity) {
+        this.scene.rotation.y += this.viewSpinVelocity;
+        this.viewSpinVelocity *= 0.94;
+        if (Math.abs(this.viewSpinVelocity) < 0.00005) this.viewSpinVelocity = 0;
+    }
+
     this.renderer.render(this.scene, this.camera);
 };
 
