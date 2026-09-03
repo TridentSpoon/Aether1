@@ -7,7 +7,8 @@
  * 3. The Nexus: Squid/Brain Creature with Trailing Tentacles that Hunts the Cursor,
  *    Set Against Falling NEXUS Letter Rain
  * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Blinking Eyelid Arcs
- * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
+ * 5. A.R.X.LOGOS: Hexagonal Core Eye with Six Spiraling Aperture-Blade Arms, Two Tumbling
+ *    Hex-Frame Rings, and an Orbiting Hex Swarm
  * 6. A1ter_nul: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
  * 7. Real-time Audio Frequency and State deformation.
  *
@@ -93,12 +94,31 @@ class HologramAvatar {
         this.arxLogosGroup = null;
         this.arxLogosCentralFill = null;
         this.arxLogosCentralOutline = null;
-        this.arxLogosArmHexes = []; // { mesh, armIndex, stepIndex }
+        this.arxLogosArmHexes = []; // { mesh, armIndex, stepIndex, baseX, baseY, phase }
         this.arxLogosOuterDots = [];
         this.arxLogosArmMatNear = null;
         this.arxLogosArmMatMid = null;
         this.arxLogosArmMatFar = null;
         this.arxLogosOuterDotMat = null;
+        // Core eye -- a fixed dark pupil + catchlight nested in the central hex (real "eye"
+        // material, not theme-tinted, same convention as every other avatar's obsidian core).
+        this.arxLogosPupil = null;
+        this.arxLogosCatchlight = null;
+        // Two hex-frame rings beyond the dotted boundary, each tumbling on its own axis --
+        // see buildArxLogosAvatar.
+        this.arxLogosShellRings = []; // { mesh, speed: {x,y,z} }
+        this.arxLogosShellRingMats = [];
+        // A small swarm of hex nodes orbiting freely in 3D around the whole structure,
+        // unlike the arm hexes (locked to the flat spiral) -- real depth beyond one plane.
+        this.arxLogosSwarmGroup = null;
+        this.arxLogosSwarmNodes = []; // { mesh, radius, angle, heightOffset, speed, bobPhase }
+        this.arxLogosSwarmMat = null;
+        // Aperture-close scheduling -- see animateArxLogos. Pulls every arm hex in toward
+        // the core-eye and back, like a camera iris snapping shut over it. Same click +
+        // autonomous-idle-timer pattern as R.E.D. 9000's blink.
+        this.arxLogosApertureStartTime = -999;
+        this.arxLogosNextApertureTime = 5 + Math.random() * 4;
+        this.arxLogosLastHandledApertureClick = -999;
 
         // 6. A1ter_nul (Cunningham) -- modelled on Cyberpunk 2077's Black Wall / relic: a
         // stack of irregular dark-glass shards with gaps between them (not a solid body),
@@ -324,6 +344,10 @@ class HologramAvatar {
         if (this.arxLogosArmMatMid) this.arxLogosArmMatMid.color.setHex(p.hex2);
         if (this.arxLogosArmMatFar) this.arxLogosArmMatFar.color.setHex(p.hex3);
         if (this.arxLogosOuterDotMat) this.arxLogosOuterDotMat.color.setHex(p.hex3);
+        // Pupil and catchlight are fixed (real "eye" material) and stay untouched here.
+        if (this.arxLogosShellRingMats[0]) this.arxLogosShellRingMats[0].color.setHex(p.hex2);
+        if (this.arxLogosShellRingMats[1]) this.arxLogosShellRingMats[1].color.setHex(p.hex3);
+        if (this.arxLogosSwarmMat) this.arxLogosSwarmMat.color.setHex(p.hex);
 
         // R.E.D. 9000 (the obsidian core is a fixed material, not theme-tinted -- see buildRed9000Avatar)
         if (this.redLensOuter) this.redLensOuter.material.color.setHex(p.hex);
