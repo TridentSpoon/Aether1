@@ -1,6 +1,7 @@
 // Avatar 6: A1ter_nul -- modelled on Cyberpunk 2077's Black Wall / relic aesthetic: a
-// column of irregular dark-glass shards, stacked with visible gaps between them (not a
-// solid body), each shard a fixed obsidian-glass pane with a theme-tinted glowing edge.
+// column of irregular dark-glass shards lying flat (horizontal panes, not standing plates
+// facing the camera), stacked on top of each other with visible gaps between them -- not a
+// solid body -- each shard a fixed obsidian-glass pane with a theme-tinted glowing edge.
 // While speaking, each shard's edge brightness is driven by its own audio frequency bin --
 // the stack reads as a vertical equalizer built out of broken relic glass. Colour-theme-
 // neutral by design (see core.js) so any palette is one applyColorPalette() call away,
@@ -59,8 +60,13 @@ HologramAvatar.prototype.buildAltAvatar = function() {
         const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), outlineMat);
 
         const shardPivot = new THREE.Group();
-        // A slight random tilt/offset per shard -- stacked but askew, like broken glass
-        // layers rather than a tidy tower.
+        // Each shard's quad is built flat in local XY (see pts above); rotating 90 deg
+        // about X tips it from "standing plate facing the camera" to "lying flat, seen
+        // edge-on from the front" -- so the stack reads as horizontal panes resting on
+        // top of each other, like real stacked glass sheets, rather than a shelf of
+        // upright picture frames. The small extra X/Z jitter on top keeps them askew
+        // rather than a tidy, perfectly level tower.
+        shardPivot.rotation.x = Math.PI / 2 + (Math.random() - 0.5) * 0.16;
         shardPivot.rotation.z = (Math.random() - 0.5) * 0.09;
         shardPivot.position.set((Math.random() - 0.5) * 4, y, (Math.random() - 0.5) * 3);
         shardPivot.add(fillMesh);
