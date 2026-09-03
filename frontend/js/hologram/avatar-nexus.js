@@ -220,14 +220,18 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
     });
 
     // --- Tentacles: 10 long, segmented, chain-like tendrils trailing from the hull's
-    // tail. Each is a shared BufferGeometry (its positions rewritten every frame by
-    // animateNexus) driving both a dashed Line (the dash pattern itself reads as chain
-    // links) and a Points cloud of glowing joint markers -- brighter than the connecting
-    // line, the same "nodes brighter than structure lines" depth cue as the hull. ---
+    // tail. Each tentacle's joint positions live in one shared Float32Array (rewritten
+    // every frame by animateNexus); a chain of tapered cylinder links spans every
+    // consecutive pair for real, controllable thickness -- a plain Line's width can't be
+    // reliably controlled across browsers/GPUs in WebGL, so this is deliberately actual
+    // geometry, not a wide line. A Points cloud at the same positions gives the glowing
+    // joint markers, brighter than the links between them -- the same "nodes brighter than
+    // structure lines" depth cue as the hull, and read together as banded chain links. ---
     const tentacleCount = 10;
-    const segmentsPerTentacle = 14;
-    this.nexusTentacleLineMat = new THREE.LineDashedMaterial({
-        color: 0x00ff66, transparent: true, opacity: 0.6, dashSize: 2.4, gapSize: 1.3
+    const segmentsPerTentacle = 21; // 1.5x the original 14
+    const linkUnitGeom = new THREE.CylinderGeometry(1, 1, 1, 6); // unit cylinder along Y, one shared geometry rescaled per link per frame
+    this.nexusTentacleLinkMat = new THREE.MeshBasicMaterial({
+        color: 0x00ff66, transparent: true, opacity: 0.65
     });
     this.nexusTentaclePointMat = new THREE.PointsMaterial({
         color: 0x00ffaa, map: this.createGlowSpriteTexture(24), size: 3.2,
@@ -249,10 +253,17 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
         const positions = new Float32Array(segmentsPerTentacle * 3);
         geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-        const line = new THREE.Line(geom, this.nexusTentacleLineMat);
-        this.nexusRestTiltGroup.add(line);
         const points = new THREE.Points(geom, this.nexusTentaclePointMat);
         this.nexusRestTiltGroup.add(points);
+
+        // One link per gap between consecutive joints; animateNexus rescales/reorients each
+        // one every frame to span its two endpoints, tapering thinner toward the tip.
+        const links = [];
+        for (let l = 0; l < segmentsPerTentacle - 1; l++) {
+            const link = new THREE.Mesh(linkUnitGeom, this.nexusTentacleLinkMat);
+            this.nexusRestTiltGroup.add(link);
+            links.push(link);
+        }
 
         const claws = [];
         for (let c = 0; c < 3; c++) {
@@ -268,8 +279,8 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
         this.nexusTentacles.push({
             geom,
             positions,
-            line,
             points,
+            links,
             claws,
             baseAngle,
             // Per-tentacle speed/phase variance so they never move in lockstep, whether

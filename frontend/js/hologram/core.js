@@ -66,9 +66,9 @@ class HologramAvatar {
         this.nexusHeadHeightScale = 1; // head-on Y squash (0.6 -- same width, 60% height); animateNexus's pulse multiplies on top of this
         this.nexusRibMat = null; // shared material for the three carapace ribs
         this.nexusGridMat = null; // faint rotating radar-grid backdrop sprite
-        this.nexusTentacleLineMat = null; // shared dashed-line material -- the dash pattern itself reads as chain links
-        this.nexusTentaclePointMat = null; // shared glowing joint-marker material, brighter than the line
-        this.nexusTentacles = []; // { geom, positions, line, points, claws, baseAngle, speedMult, phaseSeed, aggroT }
+        this.nexusTentacleLinkMat = null; // shared tapered-cylinder chain-link material
+        this.nexusTentaclePointMat = null; // shared glowing joint-marker material, brighter than the links
+        this.nexusTentacles = []; // { geom, positions, points, links, claws, baseAngle, speedMult, phaseSeed, aggroT }
         this.nexusEyes = []; // { mesh, glow, ring, highlight } — fixed phosphor red/orange, blink together in idle
         this.nexusEyeRingMat = null; // shared bezel-outline sprite material, slowly spins
         this.nexusEyeHighlightMat = null; // shared anime/cartoon eye-shine sprite material
@@ -238,7 +238,7 @@ class HologramAvatar {
         if (this.nexusHullPointsMat) this.nexusHullPointsMat.color.setHex(p.hex3);
         if (this.nexusRibMat) this.nexusRibMat.color.setHex(p.hex3);
         if (this.nexusGridMat) this.nexusGridMat.color.setHex(p.hex);
-        if (this.nexusTentacleLineMat) this.nexusTentacleLineMat.color.setHex(p.hex);
+        if (this.nexusTentacleLinkMat) this.nexusTentacleLinkMat.color.setHex(p.hex);
         if (this.nexusTentaclePointMat) this.nexusTentaclePointMat.color.setHex(p.hex3);
         this.nexusRainMaterials.forEach(mat => mat.color.setHex(p.hex));
 

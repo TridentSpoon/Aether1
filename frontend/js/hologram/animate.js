@@ -291,6 +291,12 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
     const idleSharpness = 1.0, aggroSharpness = 0.35;
     const tmpTip = new THREE.Vector3();
     const tmpPrev = new THREE.Vector3();
+    const tmpLinkA = new THREE.Vector3();
+    const tmpLinkB = new THREE.Vector3();
+    const tmpLinkGap = new THREE.Vector3();
+    const LINK_UP = new THREE.Vector3(0, 1, 0);
+    const LINK_BASE_RADIUS = 0.55; // "slightly thicker" than the previous hairline
+    const LINK_TIP_RADIUS = 0.22;
     this.nexusTentacles.forEach(tentacle => {
         tentacle.aggroT += ((isAggressive ? 1 : 0) - tentacle.aggroT) * 0.06;
         const at = tentacle.aggroT;
@@ -328,7 +334,23 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
         }
         tentacle.geom.attributes.position.needsUpdate = true;
         tentacle.geom.computeBoundingSphere();
-        tentacle.line.computeLineDistances(); // required after any position change for the dashed material
+
+        // Chain links: one tapered cylinder per gap between consecutive joints, rescaled
+        // and reoriented to span its two endpoints every frame -- the same technique the
+        // Crew's earlier build used for its (since-removed) mandible rods.
+        tentacle.links.forEach((link, lIdx) => {
+            tmpLinkA.set(tentacle.positions[lIdx * 3], tentacle.positions[lIdx * 3 + 1], tentacle.positions[lIdx * 3 + 2]);
+            tmpLinkB.set(tentacle.positions[(lIdx + 1) * 3], tentacle.positions[(lIdx + 1) * 3 + 1], tentacle.positions[(lIdx + 1) * 3 + 2]);
+            tmpLinkGap.subVectors(tmpLinkB, tmpLinkA);
+            const len = tmpLinkGap.length();
+            const t = lIdx / (tentacle.links.length - 1); // 0 at the base, 1 at the tip
+            const radius = LINK_BASE_RADIUS + (LINK_TIP_RADIUS - LINK_BASE_RADIUS) * t;
+            link.position.copy(tmpLinkA).addScaledVector(tmpLinkGap, 0.5);
+            link.scale.set(radius, len, radius);
+            if (len > 0.0001) {
+                link.quaternion.setFromUnitVectors(LINK_UP, tmpLinkGap.normalize());
+            }
+        });
 
         // Clawed pincers at the tip -- three prongs fanned around the last segment,
         // oriented to continue the tentacle's current direction of travel.
@@ -349,7 +371,7 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
             );
         });
     });
-    if (this.nexusTentacleLineMat) this.nexusTentacleLineMat.opacity = 0.6 * crtFlicker;
+    if (this.nexusTentacleLinkMat) this.nexusTentacleLinkMat.opacity = 0.65 * crtFlicker;
     if (this.nexusTentaclePointMat) this.nexusTentaclePointMat.opacity = 0.9 * crtFlicker;
 };
 
