@@ -42,25 +42,30 @@ it in your launcher and on your `PATH` as `aether1`. It is safe to re-run.
 ### Windows
 
 Install [Rust](https://rustup.rs) — that is the only prerequisite, since Tauri uses the
-WebView2 runtime that ships with Windows. Then, in the checkout:
+WebView2 runtime that ships with Windows. Then, in PowerShell:
 
 ```powershell
+mkdir "$env:USERPROFILE\Projects" -Force
+cd "$env:USERPROFILE\Projects"
+git clone https://github.com/TridentSpoon/Aether1.git
+cd Aether1
 .\setup.bat
 ```
+
+`C:\Users\<you>\Projects` is where this expects to live. The checkout is not a temporary
+build directory: the app runs *from* it — `backend\` holds your database and the shortcuts
+point at it — so it needs somewhere permanent, and moving or deleting the folder later
+breaks both shortcuts.
+
+Clone it rather than downloading the ZIP. A ZIP arrives without a `.git` directory, so
+`git pull` answers *"not a git repository"* and there is no way to update; with a clone,
+`git pull` is the update, and setup installs hooks that rebuild the app whenever you do.
 
 The leading `.\` is required in PowerShell, which does not run scripts from the current
 directory without it. In `cmd.exe`, plain `setup.bat` works.
 
-It builds the app and adds Start Menu and desktop shortcuts (no administrator rights
+Setup builds the app and adds Start Menu and desktop shortcuts (no administrator rights
 needed). Launch it from either, or run `.\start.bat`.
-
-Get the checkout with git rather than as a ZIP if you can — `git pull` is then how you
-update, and the setup script installs hooks that rebuild the app whenever you do:
-
-```powershell
-git clone https://github.com/TridentSpoon/Aether1.git
-cd Aether1
-```
 
 Aether1 lives in the **notification area** — click its icon to show or hide the HUD, and
 closing the window leaves it running there rather than quitting.
