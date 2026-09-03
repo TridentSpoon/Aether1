@@ -95,22 +95,15 @@ class HologramAvatar {
         this.arxLogosArmMatFar = null;
         this.arxLogosOuterDotMat = null;
 
-        // 6. A1ter_nul (Cunningham) -- a faceted, semi-transparent "digital ghost" bust (a rogue
-        // netrunner engram, not a solid body) behind a rotating firewall/ICE perimeter ring.
-        // The chromatic cyan/red split silhouette is a fixed accent, independent of color
-        // theme, like The Nexus's fixed-red eyes -- see buildAltAvatar.
+        // 6. A1ter_nul (Cunningham) -- modelled on Cyberpunk 2077's Black Wall / relic: a
+        // stack of irregular dark-glass shards with gaps between them (not a solid body),
+        // behind a rotating firewall/ICE perimeter ring. Each shard's glass fill is a
+        // fixed obsidian material; its glowing edge is theme-tinted and, while speaking,
+        // driven by its own audio frequency bin -- the stack as a vertical equalizer built
+        // out of broken relic glass -- see buildAltAvatar.
         this.altGroup = null;
-        this.altBustGroup = null; // holds the oval head-and-shoulders squash; scaled uniformly for the breathing pulse
-        this.altBustMesh = null;
-        this.altBustFillMat = null;
-        this.altBustInnerWire = null;
-        this.altBustWireMat = null;
-        this.altGlitchCyanOutline = null;
-        this.altGlitchMagentaOutline = null;
-        this.altGlitchCyanMat = null;
-        this.altGlitchMagentaMat = null;
-        this.altBustPoints = null;
-        this.altBustPointsMat = null;
+        this.altShardGroup = null;
+        this.altShards = []; // { fillMat, outlineMat, baseOpacity, phase, binIndex }
         this.altFirewallRing = null;
         this.altFirewallRingMat = null;
         this.altShieldGroup = null;
@@ -292,11 +285,16 @@ class HologramAvatar {
         if (this.redBlueCircle) this.redBlueCircle.material.color.setHex(p.hex2);
         if (this.redCyanCircle) this.redCyanCircle.material.color.setHex(p.hex3);
 
-        // A1ter_nul (Cunningham): bust fill/inner-wire and the firewall ring/shield tiles pick up
-        // the theme hue; the chromatic cyan/red split silhouette stays fixed regardless of
-        // theme (see buildAltAvatar), like every avatar's always-lit accent.
-        if (this.altBustFillMat) this.altBustFillMat.color.setHex(p.hex);
-        if (this.altBustWireMat) this.altBustWireMat.color.setHex(p.hex);
+        // A1ter_nul (Cunningham): each shard's glass fill is a fixed obsidian material
+        // (see buildAltAvatar) -- only the glowing edges retint, ramped from hex2 at the
+        // bottom of the stack to hex3 at the top so the equalizer reads as a spectrum,
+        // like a real EQ's color ramp, rather than one flat color.
+        const altBottom = new THREE.Color(p.hex2);
+        const altTop = new THREE.Color(p.hex3);
+        this.altShards.forEach((shard, i) => {
+            const tt = this.altShards.length > 1 ? i / (this.altShards.length - 1) : 0;
+            shard.outlineMat.color.copy(altBottom).lerp(altTop, tt);
+        });
         if (this.altFirewallRingMat) this.altFirewallRingMat.color.setHex(p.hex);
         if (this.altShieldFillMat) this.altShieldFillMat.color.setHex(p.hex);
         if (this.altShieldOutlineMat) this.altShieldOutlineMat.color.setHex(p.hex3);

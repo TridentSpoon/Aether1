@@ -1,52 +1,80 @@
-// Avatar 6: A1ter_nul -- a security-focused netrunner ghost (Alt Cunningham), rendered as a
-// faceted, semi-transparent "digital ghost" bust behind a rotating firewall/ICE perimeter.
-// Colour-theme-neutral by design (see core.js) so the classic Cyberpunk 2077 palette
-// (night-city: phosphor yellow + cyan + red) is one applyColorPalette() call away, same
-// as every other avatar shape here.
+// Avatar 6: A1ter_nul -- modelled on Cyberpunk 2077's Black Wall / relic aesthetic: a
+// column of irregular dark-glass shards, stacked with visible gaps between them (not a
+// solid body), each shard a fixed obsidian-glass pane with a theme-tinted glowing edge.
+// While speaking, each shard's edge brightness is driven by its own audio frequency bin --
+// the stack reads as a vertical equalizer built out of broken relic glass. Colour-theme-
+// neutral by design (see core.js) so any palette is one applyColorPalette() call away,
+// same as every other avatar shape here.
 
 HologramAvatar.prototype.buildAltAvatar = function() {
     this.altGroup = new THREE.Group();
 
-    // --- Bust: a low-poly faceted silhouette (an unstable data-construct/engram, not a
-    // solid body) -- stretched taller than wide so it reads as a head-and-shoulders ghost. ---
-    const bustGeom = new THREE.IcosahedronGeometry(34, 1);
+    // --- The Black Wall: a stack of jittered, irregular glass-pane shards with gaps
+    // between them, tapering top and bottom like the in-game relic chip's lens profile. ---
+    this.altShardGroup = new THREE.Group();
+    const shardCount = 9;
+    const totalHeight = 84;
+    const slotHeight = totalHeight / shardCount;
+    const gap = 2.6;
+    const shardHeight = slotHeight - gap;
+    const maxWidth = 54;
+    const minWidth = 24;
 
-    // The oval head-and-shoulders proportions live on this sub-group so animateAlt's
-    // breathing pulse can scale the group uniformly without fighting the baked-in squash.
-    this.altBustGroup = new THREE.Group();
-    this.altBustGroup.scale.set(0.82, 1.28, 0.82);
-    this.altGroup.add(this.altBustGroup);
+    for (let i = 0; i < shardCount; i++) {
+        const t = shardCount > 1 ? i / (shardCount - 1) : 0.5;
+        const taper = 1 - Math.pow(Math.abs(t - 0.5) * 2, 1.6); // lens/oval profile, 0..1
+        const width = minWidth + (maxWidth - minWidth) * taper;
+        const y = -totalHeight / 2 + i * slotHeight + slotHeight / 2;
 
-    this.altBustFillMat = new THREE.MeshBasicMaterial({
-        color: 0xfcee0a, transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending, depthWrite: false
-    });
-    this.altBustMesh = new THREE.Mesh(bustGeom, this.altBustFillMat);
-    this.altBustGroup.add(this.altBustMesh);
+        // Irregular quad -- jittered corners so each pane reads as a broken glass shard
+        // rather than a tidy rectangle in a tower.
+        const hw = width / 2, hh = shardHeight / 2;
+        const jitter = () => (Math.random() - 0.5) * 3.5;
+        const pts = [
+            new THREE.Vector3(-hw + jitter(), -hh + jitter(), 0),
+            new THREE.Vector3(hw + jitter(), -hh + jitter(), 0),
+            new THREE.Vector3(hw + jitter(), hh + jitter(), 0),
+            new THREE.Vector3(-hw + jitter(), hh + jitter(), 0)
+        ];
 
-    this.altBustWireMat = new THREE.LineBasicMaterial({ color: 0xfcee0a, transparent: true, opacity: 0.2 });
-    this.altBustInnerWire = new THREE.LineSegments(new THREE.WireframeGeometry(bustGeom), this.altBustWireMat);
-    this.altBustGroup.add(this.altBustInnerWire);
+        const fillGeom = new THREE.BufferGeometry();
+        const positions = [
+            pts[0].x, pts[0].y, 0, pts[1].x, pts[1].y, 0, pts[2].x, pts[2].y, 0,
+            pts[0].x, pts[0].y, 0, pts[2].x, pts[2].y, 0, pts[3].x, pts[3].y, 0
+        ];
+        fillGeom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
 
-    // Chromatic-split silhouette: the same facet edges traced twice, offset in opposite
-    // directions and fixed to a cyan/red split regardless of color theme -- the classic
-    // VHS/glitch "digital ghost" look, same fixed-accent pattern as The Nexus's red eyes.
-    const bustEdges = new THREE.EdgesGeometry(bustGeom, 15);
-    this.altGlitchCyanMat = new THREE.LineBasicMaterial({
-        color: 0x00e5ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending
-    });
-    this.altGlitchMagentaMat = new THREE.LineBasicMaterial({
-        color: 0xff003c, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending
-    });
-    this.altGlitchCyanOutline = new THREE.LineSegments(bustEdges, this.altGlitchCyanMat);
-    this.altGlitchMagentaOutline = new THREE.LineSegments(bustEdges, this.altGlitchMagentaMat);
-    this.altBustGroup.add(this.altGlitchCyanOutline);
-    this.altBustGroup.add(this.altGlitchMagentaOutline);
+        // Obsidian glass fill -- fixed, not theme-tinted (real glass doesn't change hue
+        // with the UI theme), same fixed-material pattern as R.E.D. 9000's core sphere.
+        const fillMat = new THREE.MeshBasicMaterial({
+            color: 0x0a0a0c, transparent: true, opacity: 0.55, side: THREE.DoubleSide
+        });
+        const fillMesh = new THREE.Mesh(fillGeom, fillMat);
 
-    this.altBustPointsMat = new THREE.PointsMaterial({
-        color: 0xff003c, size: 2.4, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending
-    });
-    this.altBustPoints = new THREE.Points(bustGeom, this.altBustPointsMat);
-    this.altBustGroup.add(this.altBustPoints);
+        // The glowing edge -- theme-tinted, and the one thing animateAlt drives per frame
+        // to turn the stack into an equalizer while speaking.
+        const outlineMat = new THREE.LineBasicMaterial({
+            color: 0xfcee0a, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending
+        });
+        const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), outlineMat);
+
+        const shardPivot = new THREE.Group();
+        // A slight random tilt/offset per shard -- stacked but askew, like broken glass
+        // layers rather than a tidy tower.
+        shardPivot.rotation.z = (Math.random() - 0.5) * 0.09;
+        shardPivot.position.set((Math.random() - 0.5) * 4, y, (Math.random() - 0.5) * 3);
+        shardPivot.add(fillMesh);
+        shardPivot.add(outline);
+        this.altShardGroup.add(shardPivot);
+
+        this.altShards.push({
+            fillMat, outlineMat,
+            baseOpacity: 0.3 + Math.random() * 0.15,
+            phase: i * 0.9,
+            binIndex: i % 16
+        });
+    }
+    this.altGroup.add(this.altShardGroup);
 
     // --- Firewall perimeter ring: a thin scanning halo, like an active ICE boundary. ---
     this.altFirewallRingMat = new THREE.MeshBasicMaterial({
@@ -55,7 +83,7 @@ HologramAvatar.prototype.buildAltAvatar = function() {
     this.altFirewallRing = new THREE.Mesh(new THREE.RingGeometry(76, 78.5, 64), this.altFirewallRingMat);
     this.altGroup.add(this.altFirewallRing);
 
-    // --- Shield tiles: small hex "ICE nodes" ringing the bust, individually lit in
+    // --- Shield tiles: small hex "ICE nodes" ringing the stack, individually lit in
     // sequence like a security scanner sweeping the perimeter. ---
     this.altShieldGroup = new THREE.Group();
     this.altShieldFillMat = new THREE.MeshBasicMaterial({
