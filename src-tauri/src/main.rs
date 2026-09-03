@@ -262,10 +262,17 @@ enum UpdateStage {
 }
 
 /// Actually applies an update: `git pull --ff-only` (see the auth note on github_token),
-/// rebuild + reinstall via scripts/install_desktop_app.sh, then relaunch the freshly built
-/// binary and exit this process so the new build takes over. Blocking (a rebuild can take
-/// over a minute); always call this off the main thread. On success this process exits and
-/// never returns to the caller; on failure it returns which stage failed.
+/// rebuild, then relaunch the freshly built binary and exit this process so the new build
+/// takes over. Blocking (a rebuild can take over a minute); always call this off the main
+/// thread. On success this process exits and never returns to the caller; on failure it
+/// returns which stage failed.
+///
+/// Windows has no XDG-style stable install location -- start.bat just builds straight into
+/// src-tauri/target/release/aether1.exe and runs it from there -- so on Windows this rebuilds
+/// in place via `cargo build --release` and relaunches that same .exe (see the Windows branch
+/// below for why the running exe has to be renamed out of the way first). Elsewhere it
+/// delegates to scripts/install_desktop_app.sh, which also copies the binary to
+/// $HOME/.local/bin/aether1 and refreshes the desktop launcher entry.
 fn perform_update_core<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<(), (UpdateStage, String)> {
@@ -283,36 +290,74 @@ fn perform_update_core<R: tauri::Runtime>(
         return Err((UpdateStage::Pull, "git pull did not succeed".to_string()));
     }
 
-    println!("[AETHER1] Update: rebuilding via scripts/install_desktop_app.sh...");
-    let build_ok = Command::new("bash")
-        .arg(root.join("scripts").join("install_desktop_app.sh"))
-        .current_dir(&root)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let new_binary = if cfg!(target_os = "windows") {
+        let release_dir = root.join("src-tauri").join("target").join("release");
+        let target_exe = release_dir.join("aether1.exe");
 
-    if !build_ok {
-        return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
-    }
+        // Unlike a plain overwrite-by-rename on Linux (see the "Text file busy" note in
+        // install_desktop_app.sh), Windows won't let the linker write straight over the
+        // .exe this very process is running from -- it stays open for execution and the
+        // write fails with a sharing violation (LNK1104). Windows *does* allow renaming a
+        // running executable's file out from under it (the already-loaded image keeps
+        // running on its open handle), so move it aside first to free up the path for
+        // `cargo build --release` to write a fresh one to.
+        let old_exe = release_dir.join("aether1.exe.old");
+        let _ = std::fs::remove_file(&old_exe); // leftover .old from a previous update, if any
+        if target_exe.exists() {
+            if let Err(e) = std::fs::rename(&target_exe, &old_exe) {
+                return Err((
+                    UpdateStage::Build,
+                    format!("could not move the running binary aside before rebuilding: {e}"),
+                ));
+            }
+        }
 
-    // Relaunch the installed copy at ~/.local/bin/aether1 (see
-    // scripts/install_desktop_app.sh), not the raw build artifact under
-    // src-tauri/target/ -- the whole point of that install step is that the
-    // launcher (and now the self-update relaunch too) runs from a stable
-    // location, not from wherever this checkout happens to live.
-    let new_binary = std::env::var("HOME")
-        .map(|home| {
-            PathBuf::from(home)
-                .join(".local")
-                .join("bin")
-                .join("aether1")
-        })
-        .unwrap_or_else(|_| {
-            root.join("src-tauri")
-                .join("target")
-                .join("release")
-                .join("aether1")
-        });
+        println!("[AETHER1] Update: rebuilding via `cargo build --release`...");
+        let build_ok = Command::new("cargo")
+            .args(["build", "--release"])
+            .current_dir(root.join("src-tauri"))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !build_ok {
+            return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
+        }
+
+        target_exe
+    } else {
+        println!("[AETHER1] Update: rebuilding via scripts/install_desktop_app.sh...");
+        let build_ok = Command::new("bash")
+            .arg(root.join("scripts").join("install_desktop_app.sh"))
+            .current_dir(&root)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !build_ok {
+            return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
+        }
+
+        // Relaunch the installed copy at ~/.local/bin/aether1 (see
+        // scripts/install_desktop_app.sh), not the raw build artifact under
+        // src-tauri/target/ -- the whole point of that install step is that the
+        // launcher (and now the self-update relaunch too) runs from a stable
+        // location, not from wherever this checkout happens to live.
+        std::env::var("HOME")
+            .map(|home| {
+                PathBuf::from(home)
+                    .join(".local")
+                    .join("bin")
+                    .join("aether1")
+            })
+            .unwrap_or_else(|_| {
+                root.join("src-tauri")
+                    .join("target")
+                    .join("release")
+                    .join("aether1")
+            })
+    };
+
     println!("[AETHER1] Update: relaunching {}...", new_binary.display());
     match Command::new(&new_binary).current_dir(&root).spawn() {
         Ok(_child) => {
