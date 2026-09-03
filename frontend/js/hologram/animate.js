@@ -76,11 +76,31 @@ HologramAvatar.prototype.animateArxLogos = function(elapsedTime, audioIntensity,
             this.arxLogosGroup.rotation.x = Math.sin(elapsedTime * 0.4) * 0.1;
             this.arxLogosGroup.rotation.y = Math.cos(elapsedTime * 0.35) * 0.1;
         } else {
-            // Front-facing and still at rest -- only a faint click-triggered nod.
+            // Front-facing and still at rest -- only a faint click-triggered nod, plus the
+            // aperture-close below (a click also triggers one immediately; otherwise it
+            // closes on its own every several seconds so the eye never reads as a fixed prop).
             this.arxLogosGroup.rotation.x += (clickPulse * 0.08 - this.arxLogosGroup.rotation.x) * 0.15;
             this.arxLogosGroup.rotation.y += (0 - this.arxLogosGroup.rotation.y) * 0.15;
+
+            if (this.lastClickTime !== this.arxLogosLastHandledApertureClick) {
+                this.arxLogosLastHandledApertureClick = this.lastClickTime;
+                this.arxLogosApertureStartTime = elapsedTime;
+                this.arxLogosNextApertureTime = elapsedTime + 5 + Math.random() * 4;
+            }
+            if (elapsedTime >= this.arxLogosNextApertureTime) {
+                this.arxLogosApertureStartTime = elapsedTime;
+                this.arxLogosNextApertureTime = elapsedTime + 5 + Math.random() * 6;
+            }
         }
     }
+
+    // How far into an aperture-close/reopen cycle we are (0 = fully open, 1 = fully closed),
+    // on the same sine close-then-reopen curve as R.E.D. 9000's blink.
+    const APERTURE_DURATION = 0.5;
+    const apertureAge = elapsedTime - this.arxLogosApertureStartTime;
+    const apertureCloseness = (apertureAge >= 0 && apertureAge < APERTURE_DURATION)
+        ? Math.sin((apertureAge / APERTURE_DURATION) * Math.PI)
+        : 0;
 
     if (this.arxLogosCentralFill && this.arxLogosCentralOutline) {
         let coreScale = 1.0;
@@ -95,8 +115,15 @@ HologramAvatar.prototype.animateArxLogos = function(elapsedTime, audioIntensity,
         this.arxLogosCentralOutline.scale.set(coreScale, coreScale, coreScale);
     }
 
-    // Arm hexagons — energy pulses outward along each arm while speaking/thinking,
-    // otherwise still, with just a brief pulse on click.
+    // The catchlight flashes brighter right at the peak of an aperture-close -- a glint off
+    // the core-eye as the blades sweep shut over it.
+    if (this.arxLogosCatchlight) this.arxLogosCatchlight.material.opacity = 0.5 + apertureCloseness * 0.45;
+
+    // Arm hexagons — double as camera-aperture blades: energy pulses outward along each arm
+    // while speaking/thinking (or a brief pulse on click), same as always, but on top of
+    // that every hex is pulled in from its resting spot toward the core-eye and twisted
+    // during an aperture-close, then released back out (see the idle branch above for what
+    // triggers this and apertureCloseness's 0..1 progress through it).
     this.arxLogosArmHexes.forEach(hex => {
         let pulseFactor = 1.0;
         if (isSpeaking) {
@@ -108,6 +135,10 @@ HologramAvatar.prototype.animateArxLogos = function(elapsedTime, audioIntensity,
             pulseFactor = 1.0 + clickPulse * 0.2;
         }
         hex.scale.set(pulseFactor, pulseFactor, pulseFactor);
+
+        hex.position.x = -hex.userData.baseX * apertureCloseness * 0.92;
+        hex.position.y = -hex.userData.baseY * apertureCloseness * 0.92;
+        hex.rotation.z = apertureCloseness * 1.1 * (hex.userData.armIndex % 2 === 0 ? 1 : -1);
     });
 
     // Outer dotted boundary ring — shimmers while speaking, otherwise still.
@@ -116,6 +147,26 @@ HologramAvatar.prototype.animateArxLogos = function(elapsedTime, audioIntensity,
             ? 1.0 + Math.sin(elapsedTime * 2 + dot.userData.phase) * 0.35
             : 1.0 + clickPulse * 0.25;
         dot.scale.set(shimmer, shimmer, shimmer);
+    });
+
+    // Two hex-frame shell rings, each tumbling on its own axis at its own speed, always --
+    // like hAlcy's rings, they never go fully still, just faster while thinking/speaking.
+    const shellSpinMult = isThinking ? 2.2 : (isSpeaking ? 1.5 : 1.0);
+    this.arxLogosShellRings.forEach(ring => {
+        ring.rotation.x += ring.userData.speed.x * shellSpinMult;
+        ring.rotation.y += ring.userData.speed.y * shellSpinMult;
+        ring.rotation.z += ring.userData.speed.z * shellSpinMult;
+    });
+
+    // Orbiting hex swarm — drifts around the whole structure in 3D continuously, each node
+    // also slowly tumbling on its own.
+    this.arxLogosSwarmNodes.forEach(node => {
+        node.userData.angle += node.userData.speed * 0.01;
+        node.position.x = Math.cos(node.userData.angle) * node.userData.radius;
+        node.position.z = Math.sin(node.userData.angle) * node.userData.radius;
+        node.position.y = node.userData.heightOffset + Math.sin(elapsedTime * 1.5 + node.userData.bobPhase) * 4;
+        node.rotation.x += 0.015;
+        node.rotation.y += 0.02;
     });
 };
 
