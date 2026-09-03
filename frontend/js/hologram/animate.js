@@ -587,7 +587,7 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
 };
 
 // ==============================================================
-// A1TER_NUL (CUNNINGHAM): CHROMATIC-GLITCH GHOST BUST + FIREWALL/ICE RING
+// A1TER_NUL (CUNNINGHAM): BLACK WALL GLASS-SHARD EQUALIZER + FIREWALL/ICE RING
 // ==============================================================
 HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clickPulse) {
     const isThinking = this.state === 'THINKING';
@@ -605,33 +605,29 @@ HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clic
         }
     }
 
-    // Bust breathing pulse -- an unstable data-construct never sits perfectly still.
-    // altBustGroup already carries the fixed oval (0.82/1.28/0.82) squash, so this pulse
-    // multiplies a uniform factor on top of it rather than overwriting that proportion.
-    let bustPulse = 1.0;
-    if (isSpeaking) {
-        bustPulse = 1.0 + audioIntensity * 0.22;
-    } else if (isThinking) {
-        bustPulse = 1.0 + Math.sin(elapsedTime * 9) * 0.06;
-    } else {
-        bustPulse = 1.0 + Math.sin(elapsedTime * 1.4) * 0.015 + clickPulse * 0.1;
-    }
-    if (this.altBustGroup) {
-        this.altBustGroup.scale.set(0.82 * bustPulse, 1.28 * bustPulse, 0.82 * bustPulse);
+    // Whole-stack breathing pulse -- subtle, so it doesn't fight the per-shard equalizer.
+    if (this.altShardGroup) {
+        const stackPulse = 1.0 + audioIntensity * 0.03 + clickPulse * 0.04;
+        this.altShardGroup.scale.set(stackPulse, stackPulse, stackPulse);
     }
 
-    // Chromatic-split glitch offset: a small constant drift plus intermittent sharp
-    // "desync" spikes -- more frequent and further apart while alert, like active ICE
-    // fighting off an intrusion instead of an idle ghost signal.
-    const glitchBase = isAlert ? 1.6 : 0.5;
-    const spikeFreq = isAlert ? 9.0 : 3.0;
-    const spikeThreshold = isAlert ? 0.75 : 0.94;
-    const spikeRaw = Math.sin(elapsedTime * spikeFreq + 12.3);
-    const spike = spikeRaw > spikeThreshold ? (spikeRaw - spikeThreshold) / (1 - spikeThreshold) : 0;
-    const glitchOffset = glitchBase + spike * (isAlert ? 5.5 : 2.5) + clickPulse * 2.0;
-
-    if (this.altGlitchCyanOutline) this.altGlitchCyanOutline.position.set(glitchOffset * 0.5, glitchOffset * 0.2, 0.5);
-    if (this.altGlitchMagentaOutline) this.altGlitchMagentaOutline.position.set(-glitchOffset * 0.5, -glitchOffset * 0.2, -0.5);
+    // Each shard's glowing edge is its own equalizer bar: idle shards shimmer gently and
+    // out of phase with each other (an inert relic still flickering faintly); speaking
+    // drives each shard's brightness off its own audio frequency bin, so the stack reads
+    // as a real spectrum analyzer built out of broken glass; thinking is a fast, uniform
+    // flicker across the whole stack instead of a per-bin readout.
+    this.altShards.forEach(shard => {
+        let opacity;
+        if (isSpeaking) {
+            const fVal = (this.audioData[shard.binIndex] || 0) / 255;
+            opacity = 0.2 + fVal * 0.85 + Math.sin(elapsedTime * 6 + shard.phase) * 0.04;
+        } else if (isThinking) {
+            opacity = shard.baseOpacity + Math.sin(elapsedTime * 13 + shard.phase) * 0.35;
+        } else {
+            opacity = shard.baseOpacity + Math.sin(elapsedTime * 1.1 + shard.phase) * 0.15 + clickPulse * 0.3;
+        }
+        shard.outlineMat.opacity = Math.max(0.05, Math.min(1, opacity));
+    });
 
     // Firewall perimeter ring -- a slow idle scan that snaps into a fast active sweep.
     if (this.altFirewallRing) {
