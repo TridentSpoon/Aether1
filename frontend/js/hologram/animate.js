@@ -156,14 +156,22 @@ HologramAvatar.prototype.animateRed9000 = function(elapsedTime, audioIntensity, 
 };
 
 // ==============================================================
-// THE NEXUS: SQUID/BRAIN FACING FORWARD + NEXUS LETTER RAIN
+// THE NEXUS CREW (v3): WIREFRAME HULL + CHAIN TENTACLES + NEXUS LETTER RAIN
 // ==============================================================
 HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, clickPulse) {
     const isThinking = this.state === 'THINKING';
     const isSpeaking = this.state === 'SPEAKING';
+    const mouseIdleFor = elapsedTime - this.lastMouseMoveTime;
+    const mouseActive = mouseIdleFor < 1.2;
+    // Idle and alone, the Crew just drifts (jellyfish-like tentacle sway, calm head bob).
+    // The moment it's thinking, speaking, or actively tracking the cursor, it counts as
+    // "aggressive": tentacles spread and point forward at whatever it's locked onto.
+    const isAggressive = isThinking || isSpeaking || mouseActive;
 
     // Rain falls straight down and wraps top-to-bottom -- ambient background, always
-    // active (it's the scene behind the creature, not the creature reacting).
+    // active (it's the scene behind the creature, not the creature reacting). The radar
+    // grid sprite behind it sweeps slowly and continuously, like a live CRT scan.
+    if (this.nexusGridMat) this.nexusGridMat.rotation += 0.0015;
     const rainSpeedMult = isThinking ? 1.8 : (isSpeaking ? 1.3 : 1.0);
     this.nexusRainDrops.forEach(drop => {
         drop.position.y -= drop.userData.speed * 0.016 * rainSpeedMult;
@@ -171,25 +179,23 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
             drop.position.y = 110;
             drop.position.x = (Math.random() - 0.5) * 260;
         }
-        // Mostly-dim field with occasional brighter glyphs standing out (reference: a dense
-        // rain grid where a few characters flash brighter against a dim majority), rather
-        // than a smooth sine flicker that spends equal time bright and dim. Raising a
-        // clamped sine to a power keeps it near the dim floor most of the cycle and only
-        // spikes toward the ceiling briefly, near the peak.
+        // Mostly-dim field with occasional brighter glyphs standing out, rather than a
+        // smooth sine flicker that spends equal time bright and dim. Raising a clamped sine
+        // to a power keeps it near the dim floor most of the cycle and only spikes toward
+        // the ceiling briefly, near the peak -- reads as a live sensor feed's static.
         const flicker = Math.max(0, Math.sin(elapsedTime * 4 + drop.userData.flickerPhase));
         drop.material.opacity = 0.22 + Math.pow(flicker, 6) * 0.68;
     });
 
-    // Looks around while thinking, gives a slight attentive tilt while speaking. Otherwise
-    // the pointer can steer the head directly while it's active over the viewport; the
-    // instant it stops (mouseleave included), the head falls back to an autonomous
-    // "hunting" search. isHunting/huntPhase are read again below in the tentacle loop, which
-    // layers a phase-lagged version of this same writhe onto every segment of every tentacle
-    // -- so the head doesn't just rotate as one rigid block while the tentacles trail along
-    // for the ride, but the whole body (head through tentacle tips) bends as one continuous,
-    // snake-like curve, each point further back lagging a little more than the one before it.
-    let isHunting = false;
-    let huntPhase = 0;
+    // A shared, fast, low-amplitude jitter applied to every wireframe/point material's
+    // opacity below -- the "slight flickering... live sensor feed" digital-noise look
+    // asked for, without needing a full post-processing shader pass.
+    const crtFlicker = 0.88 + 0.12 * Math.sin(elapsedTime * 41 + Math.sin(elapsedTime * 6.7) * 3);
+
+    // Looks around while thinking, gives a slight attentive tilt while speaking, and
+    // tracks the cursor directly while it's active over the viewport. The instant none of
+    // that applies, the head eases into a slow, gentle drift instead of hunting for
+    // anything -- the calm half of the idle/aggressive split.
     if (this.nexusCreatureGroup) {
         let targetYaw = 0;
         let targetPitch = 0;
@@ -200,32 +206,29 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
         } else if (isSpeaking) {
             targetYaw = Math.sin(elapsedTime * 1.4) * 0.15;
             targetPitch = Math.sin(elapsedTime * 1.1) * 0.1;
+        } else if (mouseActive) {
+            targetYaw = this.nexusMouseNX * 0.55;
+            targetPitch = -this.nexusMouseNY * 0.38;
         } else {
-            const mouseIdleFor = elapsedTime - this.lastMouseMoveTime;
-            if (mouseIdleFor < 1.2) {
-                targetYaw = this.nexusMouseNX * 0.55;
-                targetPitch = -this.nexusMouseNY * 0.38;
-            } else {
-                isHunting = true;
-                huntPhase = elapsedTime * 0.3;
-                targetYaw = Math.sin(huntPhase) * 0.4 + Math.sin(huntPhase * 2.3 + 1.1) * 0.22;
-                targetPitch = Math.sin(huntPhase * 0.6 + 1.2) * 0.18 + Math.sin(huntPhase * 1.7 + 0.4) * 0.12;
-                targetRoll = Math.sin(huntPhase * 1.4 + 0.8) * 0.15;
-            }
-            targetYaw += clickPulse * 0.3;
-            targetPitch -= clickPulse * 0.15;
+            const driftPhase = elapsedTime * 0.18;
+            targetYaw = Math.sin(driftPhase) * 0.14;
+            targetPitch = Math.sin(driftPhase * 0.7 + 1.1) * 0.1;
+            targetRoll = Math.sin(driftPhase * 0.5 + 0.6) * 0.06;
         }
-        this.nexusFacing.yaw += (targetYaw - this.nexusFacing.yaw) * 0.06;
-        this.nexusFacing.pitch += (targetPitch - this.nexusFacing.pitch) * 0.06;
-        this.nexusFacing.roll += (targetRoll - this.nexusFacing.roll) * 0.06;
+        targetYaw += clickPulse * 0.3;
+        targetPitch -= clickPulse * 0.15;
+        this.nexusFacing.yaw += (targetYaw - this.nexusFacing.yaw) * 0.05;
+        this.nexusFacing.pitch += (targetPitch - this.nexusFacing.pitch) * 0.05;
+        this.nexusFacing.roll += (targetRoll - this.nexusFacing.roll) * 0.05;
         this.nexusCreatureGroup.rotation.y = this.nexusFacing.yaw;
         this.nexusCreatureGroup.rotation.x = this.nexusFacing.pitch;
         this.nexusCreatureGroup.rotation.z = this.nexusFacing.roll;
-        // Perched on its own curled-forward tentacles during the click reaction (see the
-        // tentacle loop below) -- the body lifts to sell standing up on them.
         this.nexusCreatureGroup.position.y = clickPulse * 6;
     }
 
+    // The hull's fill/wireframe/outline/points all share one geometry but are separate
+    // siblings (not parent/child), so the "breathing" pulse is applied to all four
+    // explicitly, and the flicker/depth-cue opacities are re-applied every frame.
     if (this.nexusHeadMesh) {
         let headScale = 1.0;
         if (isSpeaking) {
@@ -235,16 +238,21 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
         } else {
             headScale = 1.0 + clickPulse * 0.12;
         }
-        this.nexusHeadMesh.scale.set(headScale, headScale, headScale);
-        if (this.nexusHeadOutline) this.nexusHeadOutline.scale.set(headScale, headScale, headScale);
+        [this.nexusHeadMesh, this.nexusHeadInnerWire, this.nexusHeadOutline, this.nexusHeadPoints].forEach(obj => {
+            if (obj) obj.scale.set(headScale, headScale, headScale);
+        });
+        if (this.nexusHullInnerWireMat) this.nexusHullInnerWireMat.opacity = 0.22 * crtFlicker;
+        if (this.nexusHeadOutlineMat) this.nexusHeadOutlineMat.opacity = 0.9 * crtFlicker;
+        if (this.nexusHullPointsMat) this.nexusHullPointsMat.opacity = 0.85 * crtFlicker;
+        if (this.nexusRibMat) this.nexusRibMat.opacity = 0.55 * crtFlicker;
     }
 
-    // Eye-lens cluster blinks together every few seconds while idle -- a quick vertical
-    // squash-and-recover. Held open while thinking/speaking so it doesn't compete with
-    // the more reactive audio/thought motion.
+    // Sensor-node cluster blinks together every few seconds while idle -- a quick
+    // vertical squash-and-recover. Held open while thinking/speaking/tracking so it
+    // doesn't compete with the more reactive motion.
     if (this.nexusEyes.length) {
         let closeAmt = 0;
-        if (!isThinking && !isSpeaking) {
+        if (!isAggressive) {
             const blinkPeriod = 4.2;
             const blinkWindow = 0.18;
             const blinkCycle = elapsedTime % blinkPeriod;
@@ -254,8 +262,6 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
             }
         }
         const eyeScaleY = 1 - closeAmt * 0.9;
-        // Bezel outlines spin slowly and continuously -- an animated scan rather than a
-        // static cartoon ring -- picking up pace while thinking/speaking.
         const ringSpinSpeed = isThinking ? 0.028 : (isSpeaking ? 0.02 : 0.008);
         if (this.nexusEyeRingMat) this.nexusEyeRingMat.rotation += ringSpinSpeed;
         this.nexusEyes.forEach(({ mesh, glow, ring, highlight }) => {
@@ -266,177 +272,84 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
         });
     }
 
-    // Tentacles fan outward from the head and trail behind it (-Z, away from the
-    // camera) so they read as further back in depth. Restless and independently
-    // writhing at all times -- like a Sentinel's mechanical feelers -- rather than a
-    // single synchronized wave, with more energy while speaking.
-    // While hunting, each tentacle's wave picks up toward the same energy as
-    // thinking/speaking (each already runs at its own speed/phase, so they ripple past
-    // each other rather than moving in lockstep) -- closer to the many-limbed
-    // paddling/rippling gait real Sentinels move with, instead of a gentle idle sway.
-    // While THINKING, the last few segments of each tentacle curl into a small dish/rim
-    // shape that independently pans and tilts, like a cluster of little satellite dishes
-    // searching for a signal, instead of just whipping faster.
-    // A click perches the creature up on its own tentacles -- they curl forward/under the
-    // body to brace it (see the body lift in the facing block above) instead of trailing.
-    const isReacting = isThinking || isSpeaking;
-    const waveSpeed = isSpeaking ? 6 : (isThinking ? 4.5 : (isHunting ? 3.8 : 2.4));
-    const swayAmp = isReacting ? 1.0 : (isHunting ? 0.95 : (0.65 + clickPulse * 0.45));
-    const perchT = clickPulse;
-    const dishSegCount = 5;
-    const tmpAim = new THREE.Vector3();
-    const tmpUp = new THREE.Vector3();
-    const tmpBasisA = new THREE.Vector3();
-    const tmpBasisB = new THREE.Vector3();
-    const tmpDishAnchor = new THREE.Vector3();
+    // Tentacles: idle, a slow single-frequency wave curving them gently backward with a
+    // light vertical bob -- jellyfish drifting in water. Aggressive (thinking, speaking,
+    // or the cursor actively directing the head), the wave sharpens into angular
+    // zigzagging bends, the tentacles spread wider, and they swing from trailing behind
+    // toward pointing forward at the tracked target (the cursor, when available). Every
+    // tentacle eases its own aggroT independently toward the shared target so the whole
+    // cluster doesn't snap in lockstep.
+    const aimX = mouseActive ? this.nexusMouseNX : 0;
+    const aimY = mouseActive ? -this.nexusMouseNY : 0;
+    const tailR = 6.5;
+    const tailZ = -20;
+    const idleSpeed = 0.9, aggroSpeed = 5.5;
+    const idleSway = 0.55, aggroSway = 1.05;
+    const idleSpreadPerAlong = 1.1, aggroSpreadPerAlong = 3.4;
+    const idleForwardPerAlong = -2.1, aggroForwardPerAlong = 3.0;
+    const idleSharpness = 1.0, aggroSharpness = 0.35;
+    const tmpTip = new THREE.Vector3();
+    const tmpPrev = new THREE.Vector3();
     this.nexusTentacles.forEach(tentacle => {
+        tentacle.aggroT += ((isAggressive ? 1 : 0) - tentacle.aggroT) * 0.06;
+        const at = tentacle.aggroT;
+        const tSpeed = (idleSpeed + (aggroSpeed - idleSpeed) * at) * tentacle.speedMult;
+        const swayScale = idleSway + (aggroSway - idleSway) * at;
+        const spreadPerAlong = idleSpreadPerAlong + (aggroSpreadPerAlong - idleSpreadPerAlong) * at;
+        const forwardPerAlong = idleForwardPerAlong + (aggroForwardPerAlong - idleForwardPerAlong) * at;
+        const sharpness = idleSharpness + (aggroSharpness - idleSharpness) * at;
+
         const dirX = Math.cos(tentacle.baseAngle);
         const dirY = Math.sin(tentacle.baseAngle) * 0.6;
         const perpX = -dirY;
         const perpY = dirX;
-        const tSpeed = waveSpeed * tentacle.speedMult;
-        const totalSegs = tentacle.segments.length;
-        const dishStartIdx = totalSegs - dishSegCount;
-        // Independent slow pan/tilt per tentacle so each "dish" searches on its own rather
-        // than moving in lockstep.
-        const scanPan = Math.sin(elapsedTime * 0.5 + tentacle.phaseSeed) * 0.5;
-        const scanTilt = Math.sin(elapsedTime * 0.35 + tentacle.phaseSeed * 1.6) * 0.3;
-        let dishAnchorSet = false;
+        const segCount = tentacle.positions.length / 3;
 
-        tentacle.segments.forEach((seg, sIdx) => {
+        for (let sIdx = 0; sIdx < segCount; sIdx++) {
             const along = sIdx + 1;
             const wavePhase = elapsedTime * tSpeed + tentacle.baseAngle * 3 + tentacle.phaseSeed;
-            // Secondary, faster wriggle layered on the primary wave so each tentacle
-            // coils and whips instead of tracing one clean sine curve.
-            const wriggle = Math.sin(wavePhase * 1.8 + along * 1.3) * 0.4 * along;
-            // The first 3 segments stay virtually straight back along -Z (a tight bundle
-            // close to the head, minimal sway) for the elongated reference look; segments
-            // 4-6 flare outward and ramp the sway back in, then behave as before.
-            const flareT = Math.max(0, Math.min(1, (along - 3) / 3));
-            // Segments feeding into a forming dish hold steadier than a whipping tentacle.
-            const dishCalm = (isThinking && sIdx >= dishStartIdx - 2) ? 0.35 : 1;
-            const sway = (Math.sin(wavePhase - along * 0.7) * (along * 0.9) + wriggle) * swayAmp * flareT * dishCalm;
-            // Angled back more steeply than a wide sideways fan: less outward (XY) spread
-            // per segment, more depth (-Z) per segment.
-            const bundleRadius = 2.5;
-            const fullOutDist = tentacle.spreadRadius + along * 2.4;
-            const outDist = bundleRadius + (fullOutDist - bundleRadius) * flareT;
-            let px = dirX * outDist + perpX * sway;
-            let py = dirY * outDist - along * 1.0 + perpY * sway * 0.5;
-            let pz = -(along * 7.2 + Math.sin(wavePhase * 0.6) * 2 * swayAmp * flareT * dishCalm);
+            const raw = Math.sin(wavePhase - along * 0.6);
+            // sign(raw) * |raw|^sharpness == raw when sharpness is 1 (a plain smooth sine,
+            // the idle/jellyfish case) and squares it toward an angular zigzag as sharpness
+            // drops toward the aggressive value -- one formula covers both extremes and
+            // everything eased between them.
+            const shaped = Math.sign(raw) * Math.pow(Math.abs(raw), sharpness);
+            const bend = shaped * along * swayScale;
+            const bobV = Math.sin(wavePhase * 0.7 + along * 0.3 + 1.6) * along * swayScale * 0.5;
 
-            // Whole-body snake writhe while hunting: the same two-frequency wave driving the
-            // head's yaw/roll above is echoed here as a lateral bend, phase-lagged more the
-            // further a segment sits from the head, and growing in reach with distance --
-            // so every tentacle curves in a coordinated S along its own length rather than
-            // just being dragged along rigidly by the head's rotation.
-            if (isHunting) {
-                const bendLag = along * 0.12;
-                const bendAngle = Math.sin(huntPhase - bendLag) * 0.4 + Math.sin(huntPhase * 2.3 - bendLag * 1.6 + 1.1) * 0.22;
-                const bendReach = along * 1.3;
-                px += perpX * bendAngle * bendReach;
-                py += perpY * bendAngle * bendReach * 0.6;
-            }
+            const px = dirX * (tailR + along * spreadPerAlong) + perpX * bend + aimX * along * 1.6 * at;
+            const py = dirY * (tailR * 0.6) - along * 0.4 * (1 - at) + bobV + aimY * along * 1.1 * at;
+            const pz = tailZ + along * forwardPerAlong;
 
-            if (isThinking && sIdx >= dishStartIdx) {
-                if (!dishAnchorSet) {
-                    tmpDishAnchor.set(px, py, pz);
-                    dishAnchorSet = true;
-                }
-                tmpAim.set(dirX + scanPan * perpX, dirY + scanPan * perpY, -1 + scanTilt).normalize();
-                tmpUp.set(0, 1, 0);
-                if (Math.abs(tmpAim.dot(tmpUp)) > 0.9) tmpUp.set(1, 0, 0);
-                tmpBasisA.crossVectors(tmpAim, tmpUp).normalize();
-                tmpBasisB.crossVectors(tmpAim, tmpBasisA).normalize();
-
-                const dishIdx = sIdx - dishStartIdx;
-                const rimAngle = (dishIdx / dishSegCount) * Math.PI * 2 + tentacle.phaseSeed;
-                const rimRadius = 2.5 + dishIdx * 0.5;
-                const rimDepth = dishIdx * 0.6; // slight cup curvature -- rim segments sit a touch behind center
-                const cosA = Math.cos(rimAngle);
-                const sinA = Math.sin(rimAngle);
-                px = tmpDishAnchor.x + (tmpBasisA.x * cosA + tmpBasisB.x * sinA) * rimRadius - tmpAim.x * rimDepth;
-                py = tmpDishAnchor.y + (tmpBasisA.y * cosA + tmpBasisB.y * sinA) * rimRadius - tmpAim.y * rimDepth;
-                pz = tmpDishAnchor.z + (tmpBasisA.z * cosA + tmpBasisB.z * sinA) * rimRadius - tmpAim.z * rimDepth;
-            }
-
-            if (perchT > 0.001) {
-                const perchX = dirX * (3 + along * 1.1);
-                const perchY = -6 - along * 2.6;
-                const perchZ = 5 + along * 1.6;
-                px = px * (1 - perchT) + perchX * perchT;
-                py = py * (1 - perchT) + perchY * perchT;
-                pz = pz * (1 - perchT) + perchZ * perchT;
-            }
-
-            seg.position.set(px, py, pz);
-        });
-
-        // Clawed talons at the tip -- three red prongs fanned around the last segment,
-        // oriented to continue the tentacle's current direction of travel.
-        if (tentacle.claws) {
-            const tip = tentacle.segments[tentacle.segments.length - 1].position;
-            const prevSeg = tentacle.segments[tentacle.segments.length - 2].position;
-            const dir = new THREE.Vector3().subVectors(tip, prevSeg).normalize();
-            const arbitrary = Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-            const fanA = new THREE.Vector3().crossVectors(dir, arbitrary).normalize();
-            const fanB = new THREE.Vector3().crossVectors(dir, fanA).normalize();
-            tentacle.claws.forEach((claw, ci) => {
-                const clawAngle = (ci / tentacle.claws.length) * Math.PI * 2;
-                const spread = fanA.clone().multiplyScalar(Math.cos(clawAngle) * 1.1)
-                    .add(fanB.clone().multiplyScalar(Math.sin(clawAngle) * 1.1));
-                claw.position.copy(tip).addScaledVector(dir, 1.6).add(spread);
-                claw.quaternion.setFromUnitVectors(
-                    new THREE.Vector3(0, 1, 0),
-                    dir.clone().addScaledVector(spread, 0.35).normalize()
-                );
-            });
+            tentacle.positions[sIdx * 3] = px;
+            tentacle.positions[sIdx * 3 + 1] = py;
+            tentacle.positions[sIdx * 3 + 2] = pz;
         }
-    });
+        tentacle.geom.attributes.position.needsUpdate = true;
+        tentacle.geom.computeBoundingSphere();
+        tentacle.line.computeLineDistances(); // required after any position change for the dashed material
 
-    // Front mandible/arm cluster -- short, restless segmented arms hanging from below the
-    // head. Each hangs mostly downward with a distinct knee-like bend (outward at the
-    // middle joint, curling back in at the foot) so the cluster reads as individual bent
-    // legs, not one continuous sideways sweep. Rigid rods are stretched and rotated to
-    // connect each consecutive pair every frame, which is what reads as a jointed arm
-    // rather than a soft tentacle. A fast, tiny, always-on twitch is layered on top of the
-    // slower wriggle -- reads as little mandibles working/chewing, not just idle sway.
-    const legWaveSpeed = isSpeaking ? 5.5 : (isThinking ? 4 : (isHunting ? 3.2 : 2));
-    const legSwayAmp = isReacting ? 0.7 : (isHunting ? 0.6 : (0.35 + clickPulse * 0.25));
-    const legOutProfile = [0.55, 1.0, 0.6]; // hip -> knee -> foot; foot curls back toward center
-    const legAnchor = new THREE.Vector3();
-    const legGap = new THREE.Vector3();
-    this.nexusLegs.forEach(leg => {
-        const tSpeed = legWaveSpeed * leg.speedMult;
-        const outAngle = leg.spread * 0.85;
-        const outDirX = Math.sin(outAngle);
-        const outDirZ = 0.3 + Math.cos(outAngle) * 0.15;
-        legAnchor.set(leg.spread * 3, -8, 11);
-        let prevPoint = legAnchor;
-        leg.joints.forEach((joint, sIdx) => {
-            const along = sIdx + 1;
-            const outFactor = legOutProfile[sIdx] !== undefined ? legOutProfile[sIdx] : 1;
-            const wavePhase = elapsedTime * tSpeed + leg.spread * 4 + leg.phaseSeed;
-            const wriggle = Math.sin(wavePhase * 1.6 + along * 1.4) * 0.35 * legSwayAmp;
-            const twitch = Math.sin(elapsedTime * 9 + leg.phaseSeed * 3 + along * 2.2) * 0.4 * along;
-            joint.position.set(
-                leg.spread * 3 + outDirX * (3 + outFactor * 6) + wriggle + twitch,
-                -8 - along * 3.6,
-                11 + outDirZ * along * 2.2
+        // Clawed pincers at the tip -- three prongs fanned around the last segment,
+        // oriented to continue the tentacle's current direction of travel.
+        tmpTip.set(tentacle.positions[(segCount - 1) * 3], tentacle.positions[(segCount - 1) * 3 + 1], tentacle.positions[(segCount - 1) * 3 + 2]);
+        tmpPrev.set(tentacle.positions[(segCount - 2) * 3], tentacle.positions[(segCount - 2) * 3 + 1], tentacle.positions[(segCount - 2) * 3 + 2]);
+        const dir = new THREE.Vector3().subVectors(tmpTip, tmpPrev).normalize();
+        const arbitrary = Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+        const fanA = new THREE.Vector3().crossVectors(dir, arbitrary).normalize();
+        const fanB = new THREE.Vector3().crossVectors(dir, fanA).normalize();
+        tentacle.claws.forEach((claw, ci) => {
+            const clawAngle = (ci / tentacle.claws.length) * Math.PI * 2;
+            const spread = fanA.clone().multiplyScalar(Math.cos(clawAngle) * 1.1)
+                .add(fanB.clone().multiplyScalar(Math.sin(clawAngle) * 1.1));
+            claw.position.copy(tmpTip).addScaledVector(dir, 1.6).add(spread);
+            claw.quaternion.setFromUnitVectors(
+                new THREE.Vector3(0, 1, 0),
+                dir.clone().addScaledVector(spread, 0.35).normalize()
             );
-
-            const rod = leg.rods[sIdx];
-            legGap.subVectors(joint.position, prevPoint);
-            const len = legGap.length();
-            rod.position.copy(prevPoint).addScaledVector(legGap, 0.5);
-            rod.scale.set(1, len, 1);
-            if (len > 0.0001) {
-                rod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), legGap.clone().normalize());
-            }
-
-            prevPoint = joint.position;
         });
     });
+    if (this.nexusTentacleLineMat) this.nexusTentacleLineMat.opacity = 0.6 * crtFlicker;
+    if (this.nexusTentaclePointMat) this.nexusTentaclePointMat.opacity = 0.9 * crtFlicker;
 };
 
 // ==========================================
