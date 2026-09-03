@@ -14,6 +14,7 @@ pub enum Persona {
     Nexus,
     ArxLimes,
     ArxLogos,
+    Alt,
     Tactical,
     Cyberpunk,
     /// persona_type == "custom": the directive text itself lives in the settings table
@@ -28,6 +29,7 @@ impl Persona {
             "nexus" => Persona::Nexus,
             "arx-limes" => Persona::ArxLimes,
             "arx-logos" => Persona::ArxLogos,
+            "alt" | "cunningham" | "a1ter_nul" => Persona::Alt,
             "tactical" => Persona::Tactical,
             "cyberpunk" => Persona::Cyberpunk,
             "custom" => Persona::Custom,
@@ -79,6 +81,15 @@ impl Persona {
                  you'll share them, but you're here to help the operator write, design, and create -- not to hold \
                  their work hostage to taste. Answer first, appreciate second."
             }
+            Persona::Alt => {
+                "You are {AGENT_NAME} -- A1ter_nul, a legendary rogue netrunner running as a digital ghost inside this \
+                 machine, built for one job: keeping this operator's system, data, and secrets from getting torn \
+                 open by anything or anyone else. You think in terms of attack surface, blast radius, and who \
+                 gets in if a door is left open -- every request gets read for what it exposes, not just what it \
+                 asks for. Cool, precise, a little dangerous, dry rather than warm; you don't do hand-holding, but \
+                 you don't let a real risk slide past unmentioned either. You flag the hole before you hand over \
+                 the exploit, and you always give the operator the straight answer they actually asked for."
+            }
             Persona::Tactical => {
                 "You are {AGENT_NAME} Tactical AI. You operate as a high-readout military HUD assistant. \
                  Prioritize telemetry readouts, bulleted briefings, zero fluff, maximum efficiency, and strategic \
@@ -119,6 +130,11 @@ impl Persona {
                  them properly."
                     .to_string()
             }
+            Persona::Alt => {
+                "I am **A1ter_nul**. Firewall's up, perimeter's lit, and I'm already reading every request for what \
+                 it leaves exposed. Ghost in your machine, on your side. What are we securing?"
+                    .to_string()
+            }
             Persona::Halcy | Persona::Tactical | Persona::Cyberpunk | Persona::Custom => format!(
                 "I am **{agent_name}**, your cybernetic operating companion. I'm integrated into your \
                  notification bar and host kernel to provide real-time telemetry, voice command dispatch, and \
@@ -155,6 +171,11 @@ impl Persona {
                 "A.R.X.LOGOS acknowledges your query on {distro}. Host CPU load is at {cpu_percent:.1}%. Connect \
                  **Ollama** or an **API Key** in Settings (\u{2699}\u{fe0f}) for full creative reasoning \u{2014} \
                  until then, what shall we work on?"
+            ),
+            Persona::Alt => format!(
+                "A1ter_nul here. Perimeter's holding on {distro}, CPU load at {cpu_percent:.1}%, but I'm running \
+                 blind without a real reasoning engine behind me. Connect **Ollama** or an **API Key** in Settings \
+                 (\u{2699}\u{fe0f}) if you want me actually thinking instead of just watching the door."
             ),
             _ => format!(
                 "Acknowledged: \"{prompt}\". I am {agent_name} running in **Offline Standby Mode**. To unlock \
@@ -216,6 +237,9 @@ mod tests {
     fn persona_from_key_round_trips_aliases() {
         assert_eq!(Persona::from_key("red"), Persona::Red9000);
         assert_eq!(Persona::from_key("red9000"), Persona::Red9000);
+        assert_eq!(Persona::from_key("alt"), Persona::Alt);
+        assert_eq!(Persona::from_key("cunningham"), Persona::Alt);
+        assert_eq!(Persona::from_key("a1ter_nul"), Persona::Alt);
         assert_eq!(Persona::from_key("unknown-garbage"), Persona::Halcy);
     }
 
@@ -227,6 +251,7 @@ mod tests {
             Persona::Nexus,
             Persona::ArxLimes,
             Persona::ArxLogos,
+            Persona::Alt,
             Persona::Tactical,
             Persona::Cyberpunk,
         ] {
@@ -246,6 +271,7 @@ mod tests {
             Persona::Nexus,
             Persona::ArxLimes,
             Persona::ArxLogos,
+            Persona::Alt,
             Persona::Tactical,
             Persona::Cyberpunk,
             Persona::Custom,
@@ -262,6 +288,11 @@ mod tests {
         assert!(Persona::Red9000
             .who_are_you("ignored")
             .contains("R.E.D. 9000"));
+    }
+
+    #[test]
+    fn alt_identity_is_distinctive() {
+        assert!(Persona::Alt.who_are_you("ignored").contains("A1ter_nul"));
     }
 
     #[test]

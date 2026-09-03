@@ -163,6 +163,7 @@ impl LlmEngine {
                 "arx-logos" => "A.R.X.LOGOS".to_string(),
                 "nexus" => "THE NEXUS".to_string(),
                 "red9000" | "red" => "R.E.D. 9000".to_string(),
+                "alt" | "cunningham" | "a1ter_nul" => "A1ter_nul".to_string(),
                 _ => agent_name,
             };
         }
