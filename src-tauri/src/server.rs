@@ -142,15 +142,16 @@ async fn chat(
             .map(str::to_owned)
         {
             let engine = state.engine.clone();
-            audio_url =
-                tokio::task::spawn_blocking(move || commands::synthesize_speech(&engine, &reply, None))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .and_then(|p| {
-                        p.file_name()
-                            .map(|f| format!("/api/audio/{}", f.to_string_lossy()))
-                    });
+            audio_url = tokio::task::spawn_blocking(move || {
+                commands::synthesize_speech(&engine, &reply, None)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|p| {
+                p.file_name()
+                    .map(|f| format!("/api/audio/{}", f.to_string_lossy()))
+            });
         }
     }
 
@@ -514,15 +515,16 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
             .map(str::to_owned)
         {
             let engine = state.engine.clone();
-            audio_url =
-                tokio::task::spawn_blocking(move || commands::synthesize_speech(&engine, &reply, None))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .and_then(|p| {
-                        p.file_name()
-                            .map(|f| format!("/api/audio/{}", f.to_string_lossy()))
-                    });
+            audio_url = tokio::task::spawn_blocking(move || {
+                commands::synthesize_speech(&engine, &reply, None)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|p| {
+                p.file_name()
+                    .map(|f| format!("/api/audio/{}", f.to_string_lossy()))
+            });
         }
     }
     result["type"] = serde_json::json!("done");

@@ -34,29 +34,18 @@ const ALWAYS_LOADED: &[&str] = &["INDEX.md", "profile.md", "machine.md"];
 /// should have been split, and truncating is better than crowding out the conversation.
 const MAX_PRIMED_BYTES: usize = 16 * 1024;
 
-fn expand_home(path: &str) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => match std::env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(rest),
-            None => PathBuf::from(path),
-        },
-        None => PathBuf::from(path),
-    }
-}
-
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 /// The configured vault location.
 pub fn vault_path(db: &MemoryDb) -> PathBuf {
     let configured = db.get_setting_string(VAULT_PATH_SETTING, "");
     if configured.trim().is_empty() {
-        home().join(DEFAULT_VAULT_DIR)
+        // No home found (neither HOME nor USERPROFILE) is rare but real; putting the vault
+        // beside the working directory at least keeps it findable rather than scattering
+        // notes at the filesystem root.
+        crate::paths::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(DEFAULT_VAULT_DIR)
     } else {
-        expand_home(configured.trim())
+        crate::paths::expand_home(configured.trim())
     }
 }
 
@@ -111,7 +100,11 @@ const STARTER_MACHINE: &str = "# Machine\n\n\
 pub fn ensure(db: &MemoryDb) -> Result<PathBuf, String> {
     let root = vault_path(db);
     for dir in ["", "projects", "daily", "archive"] {
-        let path = if dir.is_empty() { root.clone() } else { root.join(dir) };
+        let path = if dir.is_empty() {
+            root.clone()
+        } else {
+            root.join(dir)
+        };
         std::fs::create_dir_all(&path)
             .map_err(|e| format!("could not create {}: {e}", path.display()))?;
     }
@@ -210,7 +203,10 @@ pub fn prime(db: &MemoryDb) -> String {
             continue;
         };
         let contents = if contents.len() > MAX_PRIMED_BYTES {
-            format!("{}\n[note truncated -- it has grown too large to load every turn]", &contents[..MAX_PRIMED_BYTES])
+            format!(
+                "{}\n[note truncated -- it has grown too large to load every turn]",
+                &contents[..MAX_PRIMED_BYTES]
+            )
         } else {
             contents
         };
@@ -244,7 +240,11 @@ pub fn remember(db: &MemoryDb, fact: &str) -> Result<String, String> {
     // A note the index doesn't mention is a note nothing will ever go looking for. Older
     // vaults were created before memories.md was listed, so link it in rather than
     // leaving them quietly broken.
-    link_from_index(&root, "memories", "things the operator asked to be remembered");
+    link_from_index(
+        &root,
+        "memories",
+        "things the operator asked to be remembered",
+    );
 
     Ok(relative_name(db, &path))
 }
@@ -362,7 +362,10 @@ mod tests {
         }
 
         let index = std::fs::read_to_string(root.join("INDEX.md")).unwrap();
-        assert!(index.contains("[[profile]]"), "the index links notes together");
+        assert!(
+            index.contains("[[profile]]"),
+            "the index links notes together"
+        );
     }
 
     #[test]
@@ -382,7 +385,8 @@ mod tests {
     #[test]
     fn old_key_value_memories_are_copied_in_once() {
         let (db, root) = fixture("import");
-        db.set_memory("favorite_editor", "helix", "general").unwrap();
+        db.set_memory("favorite_editor", "helix", "general")
+            .unwrap();
         ensure(&db).unwrap();
 
         let imported = std::fs::read_to_string(root.join("imported-memories.md")).unwrap();
@@ -409,14 +413,21 @@ mod tests {
 
         let block = prime(&db);
         assert!(block.contains("MEMORY VAULT"));
-        assert!(block.contains("Prefers helix."), "the profile is loaded every turn");
+        assert!(
+            block.contains("Prefers helix."),
+            "the profile is loaded every turn"
+        );
         assert!(block.contains("--- INDEX.md ---"));
     }
 
     #[test]
     fn priming_an_absent_vault_says_nothing_at_all() {
         let (db, _root) = fixture("no_vault");
-        assert_eq!(prime(&db), "", "no vault means no vault section in the prompt");
+        assert_eq!(
+            prime(&db),
+            "",
+            "no vault means no vault section in the prompt"
+        );
     }
 
     #[test]
@@ -426,7 +437,10 @@ mod tests {
         std::fs::write(root.join("profile.md"), "x".repeat(MAX_PRIMED_BYTES * 2)).unwrap();
 
         let block = prime(&db);
-        assert!(block.contains("note truncated"), "an enormous note must not be pasted whole");
+        assert!(
+            block.contains("note truncated"),
+            "an enormous note must not be pasted whole"
+        );
         assert!(block.len() < MAX_PRIMED_BYTES * 2);
     }
 
@@ -461,7 +475,10 @@ mod tests {
 
         remember(&db, "and it runs arch").unwrap();
         let contents = std::fs::read_to_string(root.join("memories.md")).unwrap();
-        assert!(contents.contains("tycho"), "the earlier fact is still there");
+        assert!(
+            contents.contains("tycho"),
+            "the earlier fact is still there"
+        );
         assert!(contents.contains("arch"));
     }
 

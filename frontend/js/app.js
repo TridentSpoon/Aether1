@@ -632,13 +632,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const status = document.createElement('div');
         status.className = 'text-xs font-mono text-slate-400 mt-2';
 
+        // "Stop asking" is a promise about a tool, so it is only offered by tools whose
+        // name is enough to know what you are agreeing to. run_command's isn't: allowing
+        // it once would allow every allowlisted program, with any arguments, from then
+        // on. Those tools get a line saying so instead of a checkbox that would be
+        // refused on the way back.
+        const alwaysAllowable = action.always_allowable !== false;
         const always = document.createElement('label');
         always.className = 'flex items-center gap-2 text-[10px] font-mono text-slate-400 mt-2 cursor-pointer';
         const alwaysBox = document.createElement('input');
         alwaysBox.type = 'checkbox';
         alwaysBox.className = 'rounded bg-slate-900 border-amber-500 text-amber-400 focus:ring-0';
-        always.appendChild(alwaysBox);
-        always.appendChild(document.createTextNode(`Stop asking about ${action.tool}`));
+        if (alwaysAllowable) {
+            always.appendChild(alwaysBox);
+            always.appendChild(document.createTextNode(`Stop asking about ${action.tool}`));
+        } else {
+            always.className = 'block text-[10px] font-mono text-slate-500 mt-2';
+            always.textContent = `${action.tool} is asked about every time — approving it once would approve every command.`;
+        }
 
         const buttons = document.createElement('div');
         buttons.className = 'flex gap-2 mt-2';
@@ -663,7 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
             rejectBtn.disabled = true;
             status.textContent = 'Running…';
             try {
-                if (alwaysBox.checked) await setAlwaysAllowed(action.tool, true);
+                if (alwaysAllowable && alwaysBox.checked) await setAlwaysAllowed(action.tool, true);
                 const data = IS_TAURI
                     ? await tauriInvoke('approve_action_rust', { id: action.id })
                     : await toolsApi(`/api/actions/${action.id}/approve`, { method: 'POST' });

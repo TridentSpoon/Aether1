@@ -20,8 +20,8 @@ pub use genesis::Identity;
 use persona::{Persona, Provider};
 use providers::ChatContext;
 pub use providers::Sink;
-pub use telemetry::Telemetry;
 pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
+pub use telemetry::Telemetry;
 pub use tts::{
     generate_speech_with, local_status as tts_local_status, Engine as TtsEngine, DEFAULT_VOICE,
 };
@@ -744,13 +744,20 @@ mod tests {
         let _guard = env_guard();
         let engine = temp_engine("remember");
 
-        let ack = generate(&engine, "remember that the laptop is called tycho", "test-session");
+        let ack = generate(
+            &engine,
+            "remember that the laptop is called tycho",
+            "test-session",
+        );
         assert!(ack.contains("memories.md"), "ack was: {ack}");
 
         // The point of the vault: what was remembered is a file, readable without us.
         let note = crate::vault::vault_path(engine.db()).join("memories.md");
         let contents = std::fs::read_to_string(&note).expect("the note should exist");
-        assert!(contents.contains("the laptop is called tycho"), "{contents}");
+        assert!(
+            contents.contains("the laptop is called tycho"),
+            "{contents}"
+        );
     }
 
     #[test]
