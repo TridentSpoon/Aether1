@@ -49,28 +49,33 @@ class HologramAvatar {
         this.arxLimesMainFillMat = null;
         this.arxLimesWingFillMat = null;
 
-        // 3. The Nexus: Sentinel-esque ribbed head with a clustered eye-lens array, a front
-        // mandible cluster, and trailing claw-tipped tentacles, hunting the cursor against a
-        // falling NEXUS letter rain.
+        // 3. The Nexus Crew (v3): an elongated, bulbous lathe-hull rendered as a wireframe/
+        // point-cloud "live sensor feed" (not a solid mesh), the previous build's eye-lens
+        // cluster carried over onto the nose, and 10 chain-link tentacles that drift
+        // jellyfish-style when idle and spread/sharpen forward toward the cursor when alert
+        // -- set against a falling NEXUS letter rain and a faint radar-grid backdrop.
         this.nexusGroup = null;
-        this.nexusCreatureGroup = null; // head + tentacles; rotates to face the cursor
-        this.nexusHeadMesh = null;
-        this.nexusHeadOutline = null;
-        this.nexusTentacleMat = null; // dark sphere fill
-        this.nexusGlowMat = null; // shared subtle inner-glow sprite -- tentacles, arms, and head all use it
-        this.nexusTentacles = []; // { segments, baseAngle, spreadRadius, claws }
-        this.nexusLegMat = null; // front mandible/arm joints — dark fill, like the tentacles
-        this.nexusLegRodMat = null; // front mandible/arm rigid links — dark fill, like the tentacles
-        this.nexusLegOutlineMat = null; // dark edge outline shared by every joint/rod
-        this.nexusMandibleTipMat = null; // fixed lime core, the tip "globe" of each mandible
-        this.nexusMandibleTipGlowMat = null; // fixed lime, faint glow sprite on that same tip
-        this.nexusLegs = []; // { joints, rods, spread, speedMult, phaseSeed }
-        this.nexusEyes = []; // { mesh, glow, ring, highlight } — fixed red, blink together in idle
+        this.nexusCreatureGroup = null; // hull + tentacles; rotates to face the cursor
+        this.nexusHeadMesh = null; // near-invisible fill (vertex-colored gradient), just enough for the point cloud to sit "on"
+        this.nexusHullFillMat = null;
+        this.nexusHeadInnerWire = null; // dense inner wireframe (every triangle edge) -- dimmer, "inner structural lines"
+        this.nexusHullInnerWireMat = null;
+        this.nexusHeadOutline = null; // sparser structural/silhouette edges -- brighter, additive
+        this.nexusHeadOutlineMat = null;
+        this.nexusHeadPoints = null; // sparse point cloud at every hull vertex -- brightest of the three, the "nodes" depth cue
+        this.nexusHullPointsMat = null;
+        this.nexusHeadHeightScale = 1; // head-on Y squash (0.6 -- same width, 60% height); animateNexus's pulse multiplies on top of this
+        this.nexusRibMat = null; // shared material for the three carapace ribs
+        this.nexusGridMat = null; // faint rotating radar-grid backdrop sprite
+        this.nexusTentacleLinkMat = null; // shared tapered-cylinder chain-link material
+        this.nexusTentaclePointMat = null; // shared glowing joint-marker material, brighter than the links
+        this.nexusTentacles = []; // { geom, positions, points, links, claws, baseAngle, speedMult, phaseSeed, aggroT }
+        this.nexusEyes = []; // { mesh, glow, ring, highlight } — fixed phosphor red/orange, blink together in idle
         this.nexusEyeRingMat = null; // shared bezel-outline sprite material, slowly spins
         this.nexusEyeHighlightMat = null; // shared anime/cartoon eye-shine sprite material
         this.nexusRainDrops = []; // sprites, fall straight down and wrap top-to-bottom
         this.nexusRainMaterials = []; // one shared material per NEXUS letter
-        this.nexusFacing = { yaw: 0, pitch: 0, roll: 0 }; // eased hunting orientation
+        this.nexusFacing = { yaw: 0, pitch: 0, roll: 0 }; // eased head orientation
 
         // 4. R.E.D. 9000 / HAL 9000 structures -- obsidian eye with lens shell + eyelid arcs
         this.redGroup = null;
@@ -220,6 +225,11 @@ class HologramAvatar {
         if (this.arxLogosGroup) this.arxLogosGroup.visible = isArxLogos;
         if (this.altGroup) this.altGroup.visible = isAlt;
 
+        // CRT scanline/flicker overlay (see #hologram-viewport.crt-active::after in
+        // A1theme.css / sprite.css) -- only The Nexus Crew's wireframe "live sensor feed"
+        // look asks for it.
+        if (this.container) this.container.classList.toggle('crt-active', isNexus);
+
         // Chromatic-glitch scanline overlay (see #hologram-viewport.glitch-active::after in
         // A1theme.css / sprite.css) -- only A1ter_nul's digital-ghost look asks for it.
         if (this.container) this.container.classList.toggle('glitch-active', isAlt);
@@ -247,17 +257,20 @@ class HologramAvatar {
             this.particleSystem.geometry.attributes.color.needsUpdate = true;
         }
 
-        // The Nexus: squid/brain creature + letter rain. Head, arms, and tentacles all now
-        // share the same treatment: a heavily darkened fill plus the shared subtle low-opacity
-        // inner-glow sprite (nexusGlowMat, see buildNexusAvatar) rather than a bright fill.
-        // The outline/rib "lattice" stays brightened for contrast against the darker head.
-        if (this.nexusHeadMesh) this.nexusHeadMesh.material.color.setHex(p.hex2).multiplyScalar(0.22);
-        if (this.nexusHeadOutline) this.nexusHeadOutline.material.color.setHex(p.hex3).multiplyScalar(1.4);
-        if (this.nexusTentacleMat) this.nexusTentacleMat.color.setHex(p.hex2).multiplyScalar(0.22);
-        if (this.nexusGlowMat) this.nexusGlowMat.color.setHex(p.hex2);
-        if (this.nexusLegMat) this.nexusLegMat.color.setHex(p.hex2).multiplyScalar(0.22);
-        if (this.nexusLegRodMat) this.nexusLegRodMat.color.setHex(p.hex2).multiplyScalar(0.22);
-        if (this.nexusLegOutlineMat) this.nexusLegOutlineMat.color.setHex(p.hex2).multiplyScalar(0.15);
+        // The Nexus Crew: wireframe hull + chain tentacles + letter rain. The near-invisible
+        // fill and dense inner wireframe pick up the base hue; the sparser structural
+        // outline, points, and ribs pick up hex3 so they read distinctly brighter -- the
+        // "inner lines dimmer than outer edges/nodes" depth cue. The eye-lens cluster and
+        // pincer tips are a fixed red regardless of theme (see buildNexusAvatar), like every
+        // avatar's always-lit accent.
+        if (this.nexusHullFillMat) this.nexusHullFillMat.color.setHex(p.hex);
+        if (this.nexusHullInnerWireMat) this.nexusHullInnerWireMat.color.setHex(p.hex);
+        if (this.nexusHeadOutlineMat) this.nexusHeadOutlineMat.color.setHex(p.hex3);
+        if (this.nexusHullPointsMat) this.nexusHullPointsMat.color.setHex(p.hex3);
+        if (this.nexusRibMat) this.nexusRibMat.color.setHex(p.hex3);
+        if (this.nexusGridMat) this.nexusGridMat.color.setHex(p.hex);
+        if (this.nexusTentacleLinkMat) this.nexusTentacleLinkMat.color.setHex(p.hex);
+        if (this.nexusTentaclePointMat) this.nexusTentaclePointMat.color.setHex(p.hex3);
         this.nexusRainMaterials.forEach(mat => mat.color.setHex(p.hex));
 
         // A.R.X.LIMES fractured dome

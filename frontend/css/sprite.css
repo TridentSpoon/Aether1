@@ -58,6 +58,37 @@ html, body {
   background: transparent;
 }
 
+/* The Nexus Crew's CRT "live sensor feed" dressing (see HologramAvatar.setAvatar in
+   core.js, which toggles this class only while the Nexus avatar is selected) -- kept in
+   sync with the same overlay in A1theme.css so the sprite window matches the main HUD. */
+#hologram-viewport.crt-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 1px,
+    rgba(0, 0, 0, 0.35) 2px,
+    rgba(0, 0, 0, 0.35) 3px
+  );
+  mix-blend-mode: overlay;
+  animation: crtFlicker 3.2s infinite steps(24);
+}
+
+@keyframes crtFlicker {
+  0%, 100% { opacity: 0.85; }
+  8% { opacity: 0.6; }
+  9% { opacity: 0.9; }
+  33% { opacity: 0.8; }
+  47% { opacity: 0.55; }
+  48% { opacity: 0.9; }
+  70% { opacity: 0.75; }
+  91% { opacity: 0.85; }
+}
+
 /* A1ter_nul's chromatic-glitch "unstable data-construct" overlay -- see A1theme.css for the
    full comment; duplicated here since the sprite window loads this stylesheet instead. */
 #hologram-viewport.glitch-active::after {
