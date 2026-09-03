@@ -118,6 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
             else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
             else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
+            else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
             else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
         }
 
@@ -171,6 +172,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage("A.R.X.LOGOS", "🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let's make something worth cataloguing.");
             }
         }
+        // A1ter_nul (Cunningham) Preset
+        else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') {
+            updateAgentNameDisplay("A1ter_nul");
+            if (updatePersona) {
+                document.getElementById('setting-persona').value = 'alt';
+                document.getElementById('setting-voice').value = 'en-US-JennyNeural';
+                saveSettings(false);
+                appendMessage("A1ter_nul", "⚠️ **A1ter_nul online.** Firewall's up, perimeter's lit. Show me what you're worried got in.");
+            }
+        }
     }
 
     // Color Theme Handler — purely cosmetic, independent of the selected avatar shape
@@ -205,6 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (currentColorTheme === 'arx-limes') strokeColor = '#ffaa00';
         else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') strokeColor = '#00ff66';
         else if (currentColorTheme === 'arx-logos') strokeColor = '#e024c3';
+        else if (currentColorTheme === 'night-city') strokeColor = '#fcee0a';
 
         canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         canvasCtx.lineWidth = 1;
@@ -272,6 +284,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (currentColorTheme === 'arx-logos') {
             lineColor = '#e024c3';
             fillColor = 'rgba(224, 36, 195, 0.15)';
+        } else if (currentColorTheme === 'night-city') {
+            lineColor = '#fcee0a';
+            fillColor = 'rgba(252, 238, 10, 0.15)';
         }
 
         tokensCanvasCtx.beginPath();
@@ -617,13 +632,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const status = document.createElement('div');
         status.className = 'text-xs font-mono text-slate-400 mt-2';
 
+        // "Stop asking" is a promise about a tool, so it is only offered by tools whose
+        // name is enough to know what you are agreeing to. run_command's isn't: allowing
+        // it once would allow every allowlisted program, with any arguments, from then
+        // on. Those tools get a line saying so instead of a checkbox that would be
+        // refused on the way back.
+        const alwaysAllowable = action.always_allowable !== false;
         const always = document.createElement('label');
         always.className = 'flex items-center gap-2 text-[10px] font-mono text-slate-400 mt-2 cursor-pointer';
         const alwaysBox = document.createElement('input');
         alwaysBox.type = 'checkbox';
         alwaysBox.className = 'rounded bg-slate-900 border-amber-500 text-amber-400 focus:ring-0';
-        always.appendChild(alwaysBox);
-        always.appendChild(document.createTextNode(`Stop asking about ${action.tool}`));
+        if (alwaysAllowable) {
+            always.appendChild(alwaysBox);
+            always.appendChild(document.createTextNode(`Stop asking about ${action.tool}`));
+        } else {
+            always.className = 'block text-[10px] font-mono text-slate-500 mt-2';
+            always.textContent = `${action.tool} is asked about every time — approving it once would approve every command.`;
+        }
 
         const buttons = document.createElement('div');
         buttons.className = 'flex gap-2 mt-2';
@@ -648,7 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
             rejectBtn.disabled = true;
             status.textContent = 'Running…';
             try {
-                if (alwaysBox.checked) await setAlwaysAllowed(action.tool, true);
+                if (alwaysAllowable && alwaysBox.checked) await setAlwaysAllowed(action.tool, true);
                 const data = IS_TAURI
                     ? await tauriInvoke('approve_action_rust', { id: action.id })
                     : await toolsApi(`/api/actions/${action.id}/approve`, { method: 'POST' });

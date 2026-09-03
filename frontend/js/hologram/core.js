@@ -8,7 +8,8 @@
  *    Set Against Falling NEXUS Letter Rain
  * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Static Eyelid Arcs
  * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
- * 6. Real-time Audio Frequency and State deformation.
+ * 6. A1ter_nul: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
+ * 7. Real-time Audio Frequency and State deformation.
  *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).
  * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,
@@ -20,8 +21,8 @@ class HologramAvatar {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.state = 'IDLE'; // IDLE, LISTENING, THINKING, SPEAKING
-        this.currentAvatar = 'halcy'; // halcy, arx-limes, nexus, red, arx-logos
-        this.currentColorTheme = 'halcy'; // halcy, nexus, arx-limes, arx-logos, red
+        this.currentAvatar = 'halcy'; // halcy, arx-limes, nexus, red, arx-logos, alt
+        this.currentColorTheme = 'halcy'; // halcy, nexus, arx-limes, arx-logos, red, night-city
         this.activePalette = THEME_PALETTES.halcy;
         this.audioData = new Uint8Array(64);
 
@@ -94,6 +95,29 @@ class HologramAvatar {
         this.arxLogosArmMatFar = null;
         this.arxLogosOuterDotMat = null;
 
+        // 6. A1ter_nul (Cunningham) -- a faceted, semi-transparent "digital ghost" bust (a rogue
+        // netrunner engram, not a solid body) behind a rotating firewall/ICE perimeter ring.
+        // The chromatic cyan/red split silhouette is a fixed accent, independent of color
+        // theme, like The Nexus's fixed-red eyes -- see buildAltAvatar.
+        this.altGroup = null;
+        this.altBustGroup = null; // holds the oval head-and-shoulders squash; scaled uniformly for the breathing pulse
+        this.altBustMesh = null;
+        this.altBustFillMat = null;
+        this.altBustInnerWire = null;
+        this.altBustWireMat = null;
+        this.altGlitchCyanOutline = null;
+        this.altGlitchMagentaOutline = null;
+        this.altGlitchCyanMat = null;
+        this.altGlitchMagentaMat = null;
+        this.altBustPoints = null;
+        this.altBustPointsMat = null;
+        this.altFirewallRing = null;
+        this.altFirewallRingMat = null;
+        this.altShieldGroup = null;
+        this.altShieldTiles = []; // { fill, outline, baseAngle, phase }
+        this.altShieldFillMat = null;
+        this.altShieldOutlineMat = null;
+
         this.clock = null;
         this.lastClickTime = -999; // seconds on this.clock; drives the click-reaction pulse
 
@@ -141,6 +165,7 @@ class HologramAvatar {
         this.buildNexusAvatar();
         this.buildRed9000Avatar();
         this.buildArxLogosAvatar();
+        this.buildAltAvatar();
 
         // Initial avatar shape + color theme setup (independent of each other)
         this.setAvatar(this.currentAvatar);
@@ -186,7 +211,8 @@ class HologramAvatar {
         const isNexus = avatar === 'nexus' || avatar === 'matrix';
         const isRed = avatar === 'red' || avatar === 'crimson';
         const isArxLogos = avatar === 'arx-logos';
-        const isHalcy = !isArxLimes && !isNexus && !isRed && !isArxLogos;
+        const isAlt = avatar === 'alt' || avatar === 'cunningham' || avatar === 'a1ter_nul';
+        const isHalcy = !isArxLimes && !isNexus && !isRed && !isArxLogos && !isAlt;
 
         if (this.particleSystem) this.particleSystem.visible = isHalcy;
         if (this.halcyOuterRing) this.halcyOuterRing.visible = isHalcy;
@@ -197,11 +223,16 @@ class HologramAvatar {
         if (this.nexusGroup) this.nexusGroup.visible = isNexus;
         if (this.redGroup) this.redGroup.visible = isRed;
         if (this.arxLogosGroup) this.arxLogosGroup.visible = isArxLogos;
+        if (this.altGroup) this.altGroup.visible = isAlt;
 
         // CRT scanline/flicker overlay (see #hologram-viewport.crt-active::after in
         // A1theme.css / sprite.css) -- only The Nexus Crew's wireframe "live sensor feed"
         // look asks for it.
         if (this.container) this.container.classList.toggle('crt-active', isNexus);
+
+        // Chromatic-glitch scanline overlay (see #hologram-viewport.glitch-active::after in
+        // A1theme.css / sprite.css) -- only A1ter_nul's digital-ghost look asks for it.
+        if (this.container) this.container.classList.toggle('glitch-active', isAlt);
     }
 
     // Which color palette tints the currently active (and future) avatar shapes.
@@ -260,6 +291,15 @@ class HologramAvatar {
         if (this.redLensOuter) this.redLensOuter.material.color.setHex(p.hex);
         if (this.redBlueCircle) this.redBlueCircle.material.color.setHex(p.hex2);
         if (this.redCyanCircle) this.redCyanCircle.material.color.setHex(p.hex3);
+
+        // A1ter_nul (Cunningham): bust fill/inner-wire and the firewall ring/shield tiles pick up
+        // the theme hue; the chromatic cyan/red split silhouette stays fixed regardless of
+        // theme (see buildAltAvatar), like every avatar's always-lit accent.
+        if (this.altBustFillMat) this.altBustFillMat.color.setHex(p.hex);
+        if (this.altBustWireMat) this.altBustWireMat.color.setHex(p.hex);
+        if (this.altFirewallRingMat) this.altFirewallRingMat.color.setHex(p.hex);
+        if (this.altShieldFillMat) this.altShieldFillMat.color.setHex(p.hex);
+        if (this.altShieldOutlineMat) this.altShieldOutlineMat.color.setHex(p.hex3);
     }
 
     setState(newState) {

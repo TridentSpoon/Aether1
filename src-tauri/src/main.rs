@@ -22,6 +22,7 @@ mod commands;
 mod hotkey;
 mod llm;
 mod model_scanner;
+mod paths;
 mod server;
 mod tools;
 mod vault;
@@ -448,10 +449,7 @@ fn approve_action_rust(
 }
 
 #[tauri::command]
-fn undo_action_rust(
-    engine: tauri::State<LlmEngine>,
-    id: i64,
-) -> Result<serde_json::Value, String> {
+fn undo_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<serde_json::Value, String> {
     commands::undo_action(&engine, id)
 }
 
@@ -525,7 +523,11 @@ fn voice_status_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 }
 
 #[tauri::command]
-fn generate_speech_rust(engine: tauri::State<LlmEngine>, text: String, voice: Option<String>) -> Result<String, String> {
+fn generate_speech_rust(
+    engine: tauri::State<LlmEngine>,
+    text: String,
+    voice: Option<String>,
+) -> Result<String, String> {
     let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
     Ok(path.to_string_lossy().to_string())
 }
@@ -573,7 +575,9 @@ fn toggle_sprite_window_rust(app: tauri::AppHandle, enabled: bool) -> Result<(),
     if enabled {
         match app.get_webview_window(SPRITE_LABEL) {
             Some(window) => window.show().map_err(|e| e.to_string()),
-            None => build_sprite_window(&app).map(|_| ()).map_err(|e| e.to_string()),
+            None => build_sprite_window(&app)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
         }
     } else if let Some(window) = app.get_webview_window(SPRITE_LABEL) {
         window.close().map_err(|e| e.to_string())
@@ -731,7 +735,11 @@ fn main() {
             // the same close-quits-the-app behavior as before.
             if window.label() == MAIN_LABEL {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if window.app_handle().get_webview_window(SPRITE_LABEL).is_some() {
+                    if window
+                        .app_handle()
+                        .get_webview_window(SPRITE_LABEL)
+                        .is_some()
+                    {
                         api.prevent_close();
                         let _ = window.hide();
                     }

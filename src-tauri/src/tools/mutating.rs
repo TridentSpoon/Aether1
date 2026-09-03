@@ -116,7 +116,11 @@ impl Tool for WriteFile {
         Ok(Outcome::reversible(
             format!(
                 "{} {} ({} bytes)",
-                if previous.is_some() { "Replaced" } else { "Created" },
+                if previous.is_some() {
+                    "Replaced"
+                } else {
+                    "Created"
+                },
                 path.display(),
                 content.len()
             ),
@@ -211,7 +215,9 @@ impl Tool for SetSetting {
                 SETTABLE.join(", ")
             ));
         }
-        let value = args.get("value").ok_or("missing required argument \"value\"")?;
+        let value = args
+            .get("value")
+            .ok_or("missing required argument \"value\"")?;
 
         let previous = ctx.db.get_setting(key).ok().flatten();
         ctx.db
@@ -290,6 +296,14 @@ impl Tool for RunCommand {
         true
     }
 
+    /// Never pre-approvable. "Always allow run_command" reads like a decision about one
+    /// tool and is really a decision about every program on the allowlist, with any
+    /// arguments, from then on -- which is the whole of the permission the allowlist was
+    /// there to hand out one call at a time.
+    fn always_allowable(&self) -> bool {
+        false
+    }
+
     fn preview(&self, args: &Value) -> String {
         let program = args.get("program").and_then(Value::as_str).unwrap_or("?");
         let argv: Vec<String> = args
@@ -301,7 +315,9 @@ impl Tool for RunCommand {
                     .collect()
             })
             .unwrap_or_default();
-        format!("Run: {program} {}", argv.join(" ")).trim_end().to_string()
+        format!("Run: {program} {}", argv.join(" "))
+            .trim_end()
+            .to_string()
     }
 
     fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
@@ -407,12 +423,18 @@ mod tests {
     fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let previous = std::env::var_os("HOME");
+        let previous_home = std::env::var_os("HOME");
+        let previous_profile = std::env::var_os("USERPROFILE");
         std::env::set_var("HOME", home);
+        std::env::remove_var("USERPROFILE");
         let out = body();
-        match previous {
+        match previous_home {
             Some(p) => std::env::set_var("HOME", p),
             None => std::env::remove_var("HOME"),
+        }
+        match previous_profile {
+            Some(p) => std::env::set_var("USERPROFILE", p),
+            None => std::env::remove_var("USERPROFILE"),
         }
         out
     }
@@ -470,7 +492,10 @@ mod tests {
                 )
                 .unwrap_err();
             assert!(err.contains("cannot be restored"), "{err}");
-            assert_eq!(std::fs::read(&target).unwrap(), vec![0xff, 0xfe, 0x00, 0x01]);
+            assert_eq!(
+                std::fs::read(&target).unwrap(),
+                vec![0xff, 0xfe, 0x00, 0x01]
+            );
         });
     }
 
@@ -505,11 +530,19 @@ mod tests {
     fn the_companion_cannot_widen_its_own_permissions() {
         let (db, _dir) = fixture("permissions");
         let ctx = ToolContext { db: &db };
-        for key in ["tools_enabled", "tool_always_allow", "command_allowlist", "llm_api_key"] {
+        for key in [
+            "tools_enabled",
+            "tool_always_allow",
+            "command_allowlist",
+            "llm_api_key",
+        ] {
             let err = SetSetting
                 .call(&json!({"key": key, "value": true}), &ctx)
                 .unwrap_err();
-            assert!(err.contains("not a setting"), "{key} must be unreachable: {err}");
+            assert!(
+                err.contains("not a setting"),
+                "{key} must be unreachable: {err}"
+            );
         }
     }
 
@@ -543,9 +576,16 @@ mod tests {
         db.set_setting(ALLOWLIST_SETTING, &json!(["echo"])).unwrap();
 
         let outcome = RunCommand
-            .call(&json!({"program": "echo", "args": ["systems", "nominal"]}), &ctx)
+            .call(
+                &json!({"program": "echo", "args": ["systems", "nominal"]}),
+                &ctx,
+            )
             .unwrap();
-        assert!(outcome.result.contains("systems nominal"), "{}", outcome.result);
+        assert!(
+            outcome.result.contains("systems nominal"),
+            "{}",
+            outcome.result
+        );
         assert!(outcome.result.contains("exited 0"), "{}", outcome.result);
         assert!(
             outcome.undo.is_none(),
@@ -566,7 +606,10 @@ mod tests {
                 &ctx,
             )
             .unwrap();
-        assert!(outcome.result.contains('>'), "the > was passed through as text");
+        assert!(
+            outcome.result.contains('>'),
+            "the > was passed through as text"
+        );
         assert!(!std::path::Path::new("/tmp/aether1_should_not_exist").exists());
     }
 }

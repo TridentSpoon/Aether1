@@ -45,6 +45,8 @@ HologramAvatar.prototype.animate = function() {
         this.animateNexus(elapsedTime, audioIntensity, clickPulse);
     } else if (this.currentAvatar === 'arx-limes') {
         this.animateArxLimes(elapsedTime, audioIntensity, clickPulse);
+    } else if (this.currentAvatar === 'alt' || this.currentAvatar === 'cunningham' || this.currentAvatar === 'a1ter_nul') {
+        this.animateAlt(elapsedTime, audioIntensity, clickPulse);
     } else {
         this.animateHalcy(elapsedTime, audioIntensity, clickPulse);
     }
@@ -582,4 +584,73 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
         const orbSpin = isThinking ? 0.05 : (isSpeaking ? 0.03 : clickPulse * 0.03);
         this.coreOrb.rotation.y -= orbSpin;
     }
+};
+
+// ==============================================================
+// A1TER_NUL (CUNNINGHAM): CHROMATIC-GLITCH GHOST BUST + FIREWALL/ICE RING
+// ==============================================================
+HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clickPulse) {
+    const isThinking = this.state === 'THINKING';
+    const isSpeaking = this.state === 'SPEAKING';
+    const isAlert = isThinking || isSpeaking;
+
+    if (this.altGroup) {
+        if (isAlert) {
+            this.altGroup.rotation.y = Math.sin(elapsedTime * 0.5) * 0.12;
+            this.altGroup.rotation.x = Math.sin(elapsedTime * 0.35) * 0.08;
+        } else {
+            // Front-facing and still at rest -- only a faint click-triggered nod.
+            this.altGroup.rotation.y += (clickPulse * 0.1 - this.altGroup.rotation.y) * 0.15;
+            this.altGroup.rotation.x += (clickPulse * 0.06 - this.altGroup.rotation.x) * 0.15;
+        }
+    }
+
+    // Bust breathing pulse -- an unstable data-construct never sits perfectly still.
+    // altBustGroup already carries the fixed oval (0.82/1.28/0.82) squash, so this pulse
+    // multiplies a uniform factor on top of it rather than overwriting that proportion.
+    let bustPulse = 1.0;
+    if (isSpeaking) {
+        bustPulse = 1.0 + audioIntensity * 0.22;
+    } else if (isThinking) {
+        bustPulse = 1.0 + Math.sin(elapsedTime * 9) * 0.06;
+    } else {
+        bustPulse = 1.0 + Math.sin(elapsedTime * 1.4) * 0.015 + clickPulse * 0.1;
+    }
+    if (this.altBustGroup) {
+        this.altBustGroup.scale.set(0.82 * bustPulse, 1.28 * bustPulse, 0.82 * bustPulse);
+    }
+
+    // Chromatic-split glitch offset: a small constant drift plus intermittent sharp
+    // "desync" spikes -- more frequent and further apart while alert, like active ICE
+    // fighting off an intrusion instead of an idle ghost signal.
+    const glitchBase = isAlert ? 1.6 : 0.5;
+    const spikeFreq = isAlert ? 9.0 : 3.0;
+    const spikeThreshold = isAlert ? 0.75 : 0.94;
+    const spikeRaw = Math.sin(elapsedTime * spikeFreq + 12.3);
+    const spike = spikeRaw > spikeThreshold ? (spikeRaw - spikeThreshold) / (1 - spikeThreshold) : 0;
+    const glitchOffset = glitchBase + spike * (isAlert ? 5.5 : 2.5) + clickPulse * 2.0;
+
+    if (this.altGlitchCyanOutline) this.altGlitchCyanOutline.position.set(glitchOffset * 0.5, glitchOffset * 0.2, 0.5);
+    if (this.altGlitchMagentaOutline) this.altGlitchMagentaOutline.position.set(-glitchOffset * 0.5, -glitchOffset * 0.2, -0.5);
+
+    // Firewall perimeter ring -- a slow idle scan that snaps into a fast active sweep.
+    if (this.altFirewallRing) {
+        const spinSpeed = isThinking ? 0.03 : (isSpeaking ? 0.02 : 0.004 + clickPulse * 0.01);
+        this.altFirewallRing.rotation.z += spinSpeed;
+        const ringOpacity = isSpeaking ? 0.5 + audioIntensity * 0.4 : (isThinking ? 0.5 + Math.sin(elapsedTime * 10) * 0.25 : 0.4 + clickPulse * 0.3);
+        this.altFirewallRingMat.opacity = ringOpacity;
+    }
+
+    // Shield/ICE tiles -- a sequential scan sweep around the perimeter, sped up while alert.
+    if (this.altShieldGroup) {
+        const groupSpin = isAlert ? 0.012 : 0.0025;
+        this.altShieldGroup.rotation.z -= groupSpin;
+    }
+    const scanSpeed = isAlert ? 6.0 : 2.0;
+    this.altShieldTiles.forEach(tile => {
+        const sweep = 0.5 + 0.5 * Math.sin(elapsedTime * scanSpeed - tile.userData.phase);
+        const litFactor = isAlert ? sweep : sweep * 0.5;
+        const tileScale = 0.85 + litFactor * 0.45 + clickPulse * 0.15;
+        tile.scale.set(tileScale, tileScale, tileScale);
+    });
 };

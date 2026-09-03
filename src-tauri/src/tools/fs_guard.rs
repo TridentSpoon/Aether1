@@ -16,16 +16,24 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::paths;
+
 /// Roots the companion may read from. Everything else on the disk is invisible to it --
 /// no /root, no other users' home directories, no arbitrary system paths.
+///
+/// The system roots are Unix-only on purpose. Their Windows counterparts (C:\Windows,
+/// the registry hives, ProgramData) are not the sort of thing a companion needs to read to
+/// answer a question, and the equivalent of "/etc tells you how this machine is
+/// configured" simply is not a directory over there.
 fn allowed_roots() -> Vec<PathBuf> {
-    let mut roots = vec![
-        PathBuf::from("/etc"),
-        PathBuf::from("/proc"),
-        PathBuf::from("/var/log"),
-    ];
-    if let Some(home) = home_dir() {
+    let mut roots = Vec::new();
+    if let Some(home) = paths::home_dir() {
         roots.push(home);
+    }
+    if cfg!(unix) {
+        roots.push(PathBuf::from("/etc"));
+        roots.push(PathBuf::from("/proc"));
+        roots.push(PathBuf::from("/var/log"));
     }
     roots
 }
@@ -33,10 +41,14 @@ fn allowed_roots() -> Vec<PathBuf> {
 /// Path fragments that are refused wherever they appear, allowed root or not. Secrets the
 /// operator would not expect a chat message to be able to extract, plus Aether1's own
 /// database -- the companion reading its own memory file byte by byte is not a feature.
+///
+/// Matched against a lowercased, forward-slashed rendering of the path (see
+/// paths::comparable), so these entries hold on Windows too.
 const DENIED_FRAGMENTS: &[&str] = &[
     "/.ssh/",
     "/.gnupg/",
     "/.aws/",
+    "/.azure/",
     "/.config/gh/",
     "/.docker/config.json",
     "/.netrc",
@@ -44,34 +56,27 @@ const DENIED_FRAGMENTS: &[&str] = &[
     "/etc/gshadow",
     "/etc/sudoers",
     "/aether1_memory.db",
+    // Windows: the DPAPI master keys that protect saved credentials, and the user's
+    // registry hive, which holds a great deal more than it looks like it does.
+    "/appdata/roaming/microsoft/protect/",
+    "/appdata/roaming/microsoft/credentials/",
+    "/appdata/local/microsoft/credentials/",
+    "/ntuser.dat",
 ];
 
 /// File names that are refused outright, anywhere.
-const DENIED_NAMES: &[&str] = &[".env", "id_rsa", "id_ed25519", ".netrc", ".pgpass"];
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-}
-
-/// Expands a leading `~` and makes the path absolute, without touching the disk.
-fn expand(path: &str) -> PathBuf {
-    let trimmed = path.trim();
-    if trimmed == "~" {
-        return home_dir().unwrap_or_else(|| PathBuf::from("/"));
-    }
-    if let Some(rest) = trimmed.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(trimmed)
-}
+const DENIED_NAMES: &[&str] = &[
+    ".env",
+    "id_rsa",
+    "id_ed25519",
+    ".netrc",
+    ".pgpass",
+    "ntuser.dat",
+];
 
 fn denied(path: &Path) -> bool {
     // A trailing slash so "/.ssh/" matches the directory itself as well as its contents.
-    let as_text = format!("{}/", path.to_string_lossy());
+    let as_text = format!("{}/", paths::comparable(path));
     if DENIED_FRAGMENTS
         .iter()
         .any(|fragment| as_text.contains(fragment))
@@ -80,7 +85,8 @@ fn denied(path: &Path) -> bool {
     }
     path.file_name()
         .map(|name| {
-            let name = name.to_string_lossy();
+            // Case-insensitively: Windows filesystems are, and "ID_RSA" is the same key.
+            let name = name.to_string_lossy().to_lowercase();
             DENIED_NAMES.iter().any(|denied| name == *denied)
         })
         .unwrap_or(false)
@@ -90,7 +96,7 @@ fn denied(path: &Path) -> bool {
 /// the model (and the operator's action log), so it says which rule was hit rather than a
 /// bare refusal -- a model told only "denied" tends to try again with a variation.
 pub fn resolve_readable(path: &str) -> Result<PathBuf, String> {
-    let expanded = expand(path);
+    let expanded = paths::expand_home(path);
 
     // canonicalize resolves symlinks and `..`, and requires the path to exist -- both are
     // what make the containment check below meaningful.
@@ -126,7 +132,7 @@ pub fn resolve_readable(path: &str) -> Result<PathBuf, String> {
 /// the file itself may not exist yet, and a resolver that required it to exist could not
 /// create anything.
 pub fn resolve_writable(path: &str) -> Result<PathBuf, String> {
-    let expanded = expand(path);
+    let expanded = paths::expand_home(path);
 
     let Some(parent) = expanded.parent() else {
         return Err(format!("{} has no parent directory", expanded.display()));
@@ -149,8 +155,10 @@ pub fn resolve_writable(path: &str) -> Result<PathBuf, String> {
         ));
     }
 
-    let Some(home) = home_dir() else {
-        return Err("no home directory to write into".to_string());
+    let Some(home) = paths::home_dir() else {
+        return Err(
+            "no home directory could be found (neither HOME nor USERPROFILE is set)".to_string(),
+        );
     };
     if !resolved.starts_with(&home) {
         return Err(format!(
@@ -196,14 +204,22 @@ mod tests {
 
         let home = std::env::temp_dir().join(format!("aether1_guard_{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
-        let previous = std::env::var_os("HOME");
+        let previous_home = std::env::var_os("HOME");
+        let previous_profile = std::env::var_os("USERPROFILE");
         std::env::set_var("HOME", &home);
+        // Cleared as well: on a Windows runner it would otherwise be the answer, and these
+        // tests would quietly be describing the developer's real home directory.
+        std::env::remove_var("USERPROFILE");
 
         let result = body(&home);
 
-        match previous {
+        match previous_home {
             Some(p) => std::env::set_var("HOME", p),
             None => std::env::remove_var("HOME"),
+        }
+        match previous_profile {
+            Some(p) => std::env::set_var("USERPROFILE", p),
+            None => std::env::remove_var("USERPROFILE"),
         }
         result
     }
@@ -341,10 +357,59 @@ mod tests {
     fn secrets_are_not_writable_either() {
         with_home(|home| {
             std::fs::create_dir_all(home.join(".ssh")).unwrap();
-            let err = resolve_writable(home.join(".ssh/authorized_keys").to_str().unwrap())
-                .unwrap_err();
+            let err =
+                resolve_writable(home.join(".ssh/authorized_keys").to_str().unwrap()).unwrap_err();
             assert!(err.contains("off limits"), "{err}");
         });
+    }
+
+    #[test]
+    fn a_windows_home_is_found_through_userprofile() {
+        // The bug this guards: on Windows HOME is usually unset, so a guard that reads
+        // only HOME concludes there is no home directory, refuses every file the operator
+        // asks about, and cannot write a note anywhere.
+        let home = std::env::temp_dir().join(format!("aether1_winhome_{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let note = home.join("notes.txt");
+        write(&note, "hello");
+
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous_home = std::env::var_os("HOME");
+        let previous_profile = std::env::var_os("USERPROFILE");
+        std::env::remove_var("HOME");
+        std::env::set_var("USERPROFILE", &home);
+
+        let readable = resolve_readable(note.to_str().unwrap());
+        let writable = resolve_writable(home.join("new.md").to_str().unwrap());
+
+        match previous_home {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_profile {
+            Some(p) => std::env::set_var("USERPROFILE", p),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+
+        assert!(
+            readable.is_ok(),
+            "USERPROFILE should locate home: {readable:?}"
+        );
+        assert!(writable.is_ok(), "and be writable: {writable:?}");
+    }
+
+    #[test]
+    fn denied_paths_are_matched_with_windows_separators_and_case() {
+        // A Windows path never contains "/.ssh/", and "ID_RSA" is the same private key.
+        assert!(denied(Path::new(r"C:\Users\Trident\.ssh\id_rsa")));
+        assert!(denied(Path::new(r"C:\Users\Trident\.aws\credentials")));
+        assert!(denied(Path::new(r"C:\Users\Trident\NTUSER.DAT")));
+        assert!(denied(Path::new(
+            r"C:\Users\T\AppData\Roaming\Microsoft\Protect\key"
+        )));
+        assert!(denied(Path::new("/home/operator/.ssh/ID_RSA")));
+        assert!(!denied(Path::new(r"C:\Users\Trident\notes.md")));
     }
 
     #[test]

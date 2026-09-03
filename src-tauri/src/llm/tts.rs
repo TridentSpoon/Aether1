@@ -80,20 +80,11 @@ impl Engine {
     }
 }
 
-/// Expands a leading `~`.
-fn expand_home(path: &str) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => match std::env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(rest),
-            None => PathBuf::from(path),
-        },
-        None => PathBuf::from(path),
-    }
-}
-
 /// The Piper binary, if one is installed.
 pub fn piper_binary() -> Option<PathBuf> {
-    PIPER_BINARIES.iter().find_map(|name| which::which(name).ok())
+    PIPER_BINARIES
+        .iter()
+        .find_map(|name| which::which(name).ok())
 }
 
 /// The voice model to speak with: the configured path if there is one, otherwise the first
@@ -102,11 +93,11 @@ pub fn piper_binary() -> Option<PathBuf> {
 /// such.
 pub fn piper_voice(configured: Option<&str>) -> Option<PathBuf> {
     if let Some(path) = configured.filter(|p| !p.trim().is_empty()) {
-        let path = expand_home(path);
+        let path = crate::paths::expand_home(path);
         return path.exists().then_some(path);
     }
     for dir in PIPER_VOICE_DIRS {
-        let dir = expand_home(dir);
+        let dir = crate::paths::expand_home(dir);
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };

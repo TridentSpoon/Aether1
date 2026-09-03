@@ -299,7 +299,11 @@ mod tests {
     #[test]
     fn a_trace_line_is_always_one_line() {
         let trace = trace_of("Create ~/notes.md\nwith two lines");
-        assert_eq!(trace.matches('\n').count(), 2, "only the wrapping newlines: {trace:?}");
+        assert_eq!(
+            trace.matches('\n').count(),
+            2,
+            "only the wrapping newlines: {trace:?}"
+        );
     }
 
     #[test]
