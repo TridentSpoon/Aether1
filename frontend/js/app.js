@@ -1483,11 +1483,15 @@ document.addEventListener('DOMContentLoaded', () => {
     applyAvatar(currentAvatar, false);
     applyColorTheme(currentColorTheme);
     loadStaticInfo();
-    loadChatHistory();
     loadSettings();
     // A proposal outlives the conversation that made it, so anything still waiting from a
     // previous session is put back on screen rather than quietly expiring unseen.
-    refreshPendingApprovals();
+    //
+    // Strictly after the history, never alongside it: loadChatHistory clears the container
+    // when its own fetch returns, so starting both at once is a race the cards lose about
+    // as often as they win -- and losing it means an approval waiting on the operator is
+    // erased from the screen while the action stays pending in the database.
+    loadChatHistory().then(refreshPendingApprovals);
     connectTelemetry();
     initVersionAndUpdates();
     initSpriteMode();
