@@ -129,6 +129,23 @@ system-wide, bind your compositor to `aether1 toggle` instead; for Hyprland:
 bind = SUPER SHIFT, A, exec, aether1 toggle
 ```
 
+On **Windows**, `setup.bat` creates shortcuts but does not put anything on `PATH`, so
+`aether1` is not a command there — call the executable by path from the checkout:
+
+```powershell
+.\src-tauri\target\release\aether1.exe prompt "what is eating my RAM"
+```
+
+To type `aether1` instead, add that folder to your own `PATH` once (no administrator
+rights needed, and it takes effect in new terminals):
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+    'PATH',
+    [Environment]::GetEnvironmentVariable('PATH', 'User') + ';' + (Resolve-Path .\src-tauri\target\release),
+    'User')
+```
+
 `prompt` shares one conversation history and one memory store with the HUD, so anything
 you tell it from a script is there next time you open the window.
 
