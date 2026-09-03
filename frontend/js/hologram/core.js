@@ -49,10 +49,10 @@ class HologramAvatar {
         this.arxLimesWingFillMat = null;
 
         // 3. The Nexus Crew (v3): an elongated, bulbous lathe-hull rendered as a wireframe/
-        // point-cloud "live sensor feed" (not a solid mesh), a forward sensor-node cluster
-        // at the nose, and 10 chain-link tentacles that drift jellyfish-style when idle and
-        // spread/sharpen forward toward the cursor when alert -- set against a falling
-        // NEXUS letter rain and a faint radar-grid backdrop.
+        // point-cloud "live sensor feed" (not a solid mesh), the previous build's eye-lens
+        // cluster carried over onto the nose, and 10 chain-link tentacles that drift
+        // jellyfish-style when idle and spread/sharpen forward toward the cursor when alert
+        // -- set against a falling NEXUS letter rain and a faint radar-grid backdrop.
         this.nexusGroup = null;
         this.nexusCreatureGroup = null; // hull + tentacles; rotates to face the cursor
         this.nexusHeadMesh = null; // near-invisible fill (vertex-colored gradient), just enough for the point cloud to sit "on"
@@ -228,9 +228,9 @@ class HologramAvatar {
         // The Nexus Crew: wireframe hull + chain tentacles + letter rain. The near-invisible
         // fill and dense inner wireframe pick up the base hue; the sparser structural
         // outline, points, and ribs pick up hex3 so they read distinctly brighter -- the
-        // "inner lines dimmer than outer edges/nodes" depth cue. The sensor-node cluster and
-        // pincer tips are a fixed phosphor red/orange regardless of theme (see
-        // buildNexusAvatar), like every avatar's always-lit accent.
+        // "inner lines dimmer than outer edges/nodes" depth cue. The eye-lens cluster and
+        // pincer tips are a fixed red regardless of theme (see buildNexusAvatar), like every
+        // avatar's always-lit accent.
         if (this.nexusHullFillMat) this.nexusHullFillMat.color.setHex(p.hex);
         if (this.nexusHullInnerWireMat) this.nexusHullInnerWireMat.color.setHex(p.hex);
         if (this.nexusHeadOutlineMat) this.nexusHeadOutlineMat.color.setHex(p.hex3);

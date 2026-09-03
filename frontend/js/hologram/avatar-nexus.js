@@ -1,6 +1,7 @@
 // Avatar 3: The Nexus Crew (v3) -- an elongated, bulbous cephalopod hull tapering into a
-// forward sensor-node cluster, rendered as a semi-transparent wireframe/point-cloud "live
-// sensor feed" (not a solid textured mesh), with 10 long chain-link tentacles trailing
+// forward eye-lens cluster (carried over from the previous build), rendered as a
+// semi-transparent wireframe/point-cloud "live sensor feed" (not a solid textured mesh),
+// with 10 long chain-link tentacles trailing
 // behind. Idle, the tentacles drift in slow jellyfish-like waves; alert (thinking, speaking,
 // or actively tracking the cursor) they spread outward with sharp angular bends, pointing
 // forward toward whatever they're locked onto. Set against a falling NEXUS letter rain and
@@ -150,47 +151,51 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
         this.nexusHeadMesh.add(rib); // child of the hull so it pulses/scales along with it
     });
 
-    // Forward sensor-node array -- the hull's nose narrows into this tight cluster of
-    // small glowing nodes instead of a single "face". Fixed phosphor red/orange
-    // regardless of color theme, like every avatar's always-red accent (hAlcy's core,
-    // R.E.D.'s eye, etc.) -- reused eye-ring/highlight sprite pattern from the previous
-    // build, just relocated to the new hull's nose.
-    const sensorMat = new THREE.MeshBasicMaterial({
-        color: 0xff5522, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending
+    // Forward eye-lens cluster -- the same hand-placed, irregular scatter of 8 lenses
+    // (varied size, asymmetric spread) carried over from the previous build, just rescaled
+    // onto this hull's narrower nose so they still sit close to its surface. Fixed phosphor
+    // red regardless of color theme, like every avatar's always-lit accent (hAlcy's core,
+    // R.E.D.'s eye, etc.).
+    const eyeMat = new THREE.MeshBasicMaterial({
+        color: 0xff2418, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending
     });
-    const sensorGlowMat = new THREE.SpriteMaterial({
-        map: this.createGlowSpriteTexture(32), color: 0xff5522, transparent: true, opacity: 0.55,
+    const eyeGlowMat = new THREE.SpriteMaterial({
+        map: this.createGlowSpriteTexture(32), color: 0xff2418, transparent: true, opacity: 0.55,
         blending: THREE.AdditiveBlending, depthWrite: false
     });
     this.nexusEyeRingMat = new THREE.SpriteMaterial({
-        map: this.createRingSpriteTexture(64, 0.16), color: 0xffcda0, transparent: true, opacity: 0.8,
+        map: this.createRingSpriteTexture(64, 0.16), color: 0xffdca0, transparent: true, opacity: 0.8,
         blending: THREE.AdditiveBlending, depthWrite: false
     });
     this.nexusEyeHighlightMat = new THREE.SpriteMaterial({
         map: this.createGlowSpriteTexture(32), color: 0xffffff, transparent: true, opacity: 0.95,
         depthWrite: false
     });
-    const sensorCount = 6;
-    const sensorRingZ = 17.5;
-    const sensorRingR = 5;
-    for (let i = 0; i < sensorCount; i++) {
-        const angle = (i / sensorCount) * Math.PI * 2;
-        const ex = Math.cos(angle) * sensorRingR;
-        const ey = Math.sin(angle) * sensorRingR * 0.75;
-        const ez = sensorRingZ + Math.sin(angle * 2) * 0.6;
-        const er = 1.3;
+    // [rawEx, rawEy, rawEz, er] -- the original layout, verbatim; only the xy scale (0.75,
+    // fitted to this hull's ~4-8 unit nose radius instead of the old icosahedron's ~14-18)
+    // and a +1 nose-ward nudge on z are new.
+    const eyeLayout = [
+        [-7.5, -4, 15.5, 2.2], [-4.5, -6.5, 17, 1.8], [-1, -3.5, 18.5, 2.6],
+        [2.5, -6, 17.5, 1.9], [6, -3.5, 16, 2.3], [8, -6.5, 14, 1.5],
+        [0, -8, 15.5, 1.6], [-2.5, -1.5, 18.8, 1.4]
+    ];
+    const eyeXyScale = 0.75;
+    eyeLayout.forEach(([rawEx, rawEy, rawEz, er]) => {
+        const ex = rawEx * eyeXyScale;
+        const ey = rawEy * eyeXyScale;
+        const ez = rawEz + 1;
 
-        const node = new THREE.Mesh(new THREE.SphereGeometry(er, 8, 8), sensorMat);
-        node.position.set(ex, ey, ez);
-        this.nexusHeadMesh.add(node); // child of the hull so the cluster pulses/scales with it
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(er, 8, 8), eyeMat);
+        eye.position.set(ex, ey, ez);
+        this.nexusHeadMesh.add(eye); // child of the hull so the cluster pulses/scales with it
 
-        const glow = new THREE.Sprite(sensorGlowMat);
-        glow.scale.setScalar(er * 3.4);
+        const glow = new THREE.Sprite(eyeGlowMat);
+        glow.scale.setScalar(er * 3.2);
         glow.position.set(ex, ey, ez);
         this.nexusHeadMesh.add(glow);
 
         const ring = new THREE.Sprite(this.nexusEyeRingMat);
-        ring.scale.setScalar(er * 2.8);
+        ring.scale.setScalar(er * 2.6);
         ring.position.set(ex, ey, ez + 0.3);
         this.nexusHeadMesh.add(ring);
 
@@ -199,17 +204,8 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
         highlight.position.set(ex - er * 0.35, ey + er * 0.35, ez + 0.6);
         this.nexusHeadMesh.add(highlight);
 
-        this.nexusEyes.push({ mesh: node, glow, ring, highlight });
-    }
-    // A single forward-facing sensor right at the tip, anchoring the cluster.
-    const noseNode = new THREE.Mesh(new THREE.SphereGeometry(1.6, 8, 8), sensorMat);
-    noseNode.position.set(0, 0, 21.5);
-    this.nexusHeadMesh.add(noseNode);
-    const noseGlow = new THREE.Sprite(sensorGlowMat);
-    noseGlow.scale.setScalar(6);
-    noseGlow.position.set(0, 0, 21.5);
-    this.nexusHeadMesh.add(noseGlow);
-    this.nexusEyes.push({ mesh: noseNode, glow: noseGlow, ring: null, highlight: null });
+        this.nexusEyes.push({ mesh: eye, glow, ring, highlight });
+    });
 
     // --- Tentacles: 10 long, segmented, chain-like tendrils trailing from the hull's
     // tail. Each is a shared BufferGeometry (its positions rewritten every frame by
@@ -226,13 +222,13 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
         transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
         depthWrite: false, sizeAttenuation: true
     });
-    // Pincer tips -- three wireframe prongs per tentacle, fixed phosphor accent like the
-    // sensor cluster, so every "always lit" part of the Crew reads as one accent color.
+    // Pincer tips -- three wireframe prongs per tentacle, the same fixed red as the eye
+    // cluster, so every "always lit" part of the Crew reads as one accent color.
     const clawMat = new THREE.LineBasicMaterial({
-        color: 0xff5522, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending
+        color: 0xff2418, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending
     });
     const clawGlowMat = new THREE.SpriteMaterial({
-        map: this.createGlowSpriteTexture(24), color: 0xff5522, transparent: true, opacity: 0.4,
+        map: this.createGlowSpriteTexture(24), color: 0xff2418, transparent: true, opacity: 0.4,
         blending: THREE.AdditiveBlending, depthWrite: false
     });
     for (let t = 0; t < tentacleCount; t++) {
