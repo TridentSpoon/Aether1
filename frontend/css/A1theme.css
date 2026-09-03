@@ -202,8 +202,8 @@ body {
   transition: background-image 0.4s ease;
 }
 
-/* ALT's chromatic-glitch "unstable data-construct" overlay (toggled in core.js's
-   setAvatar, which adds this class only while ALT is the active avatar): a red/cyan
+/* A1ter_nul's chromatic-glitch "unstable data-construct" overlay (toggled in core.js's
+   setAvatar, which adds this class only while A1ter_nul is the active avatar): a red/cyan
    channel-split double-image plus an irregular scanline flicker, layered over the WebGL
    canvas without touching its rendering. */
 #hologram-viewport.glitch-active::after {

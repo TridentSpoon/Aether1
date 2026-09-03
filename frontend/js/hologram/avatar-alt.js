@@ -1,4 +1,4 @@
-// Avatar 6: ALT -- a security-focused netrunner ghost (Alt Cunningham), rendered as a
+// Avatar 6: A1ter_nul -- a security-focused netrunner ghost (Alt Cunningham), rendered as a
 // faceted, semi-transparent "digital ghost" bust behind a rotating firewall/ICE perimeter.
 // Colour-theme-neutral by design (see core.js) so the classic Cyberpunk 2077 palette
 // (night-city: phosphor yellow + cyan + red) is one applyColorPalette() call away, same

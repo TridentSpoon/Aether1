@@ -118,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
             else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
             else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
-            else if (avatarName === 'alt' || avatarName === 'cunningham') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
+            else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
             else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
         }
 
@@ -172,14 +172,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage("A.R.X.LOGOS", "🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let's make something worth cataloguing.");
             }
         }
-        // ALT (Cunningham) Preset
-        else if (avatarName === 'alt' || avatarName === 'cunningham') {
-            updateAgentNameDisplay("ALT");
+        // A1ter_nul (Cunningham) Preset
+        else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') {
+            updateAgentNameDisplay("A1ter_nul");
             if (updatePersona) {
                 document.getElementById('setting-persona').value = 'alt';
                 document.getElementById('setting-voice').value = 'en-US-JennyNeural';
                 saveSettings(false);
-                appendMessage("ALT", "⚠️ **ALT online.** Firewall's up, perimeter's lit. Show me what you're worried got in.");
+                appendMessage("A1ter_nul", "⚠️ **A1ter_nul online.** Firewall's up, perimeter's lit. Show me what you're worried got in.");
             }
         }
     }

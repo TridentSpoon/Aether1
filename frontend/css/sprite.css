@@ -58,7 +58,7 @@ html, body {
   background: transparent;
 }
 
-/* ALT's chromatic-glitch "unstable data-construct" overlay -- see A1theme.css for the
+/* A1ter_nul's chromatic-glitch "unstable data-construct" overlay -- see A1theme.css for the
    full comment; duplicated here since the sprite window loads this stylesheet instead. */
 #hologram-viewport.glitch-active::after {
   content: '';

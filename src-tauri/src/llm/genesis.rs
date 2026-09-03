@@ -66,13 +66,13 @@ fn rules() -> &'static [IdentityRule] {
             greeting: "IDENTITY FORGED: A.R.X.LIMES online. All archival synthesis arrays are active and ready to preserve your data.",
         },
         IdentityRule {
-            keywords: &["alt", "cunningham", "netrunner", "firewall", "ice breaker", "intrusion"],
-            name: "ALT",
+            keywords: &["alt", "a1ter_nul", "cunningham", "netrunner", "firewall", "ice breaker", "intrusion"],
+            name: "A1ter_nul",
             callsign: "Cunningham \u{2014} Security & Intrusion Countermeasures",
             persona_type: "alt",
             persona: |name| Persona::Alt.template(name),
             voice: "en-US-JennyNeural",
-            greeting: "Identity forged: ALT online. Firewall's up, perimeter's lit. Show me what you're worried got in.",
+            greeting: "Identity forged: A1ter_nul online. Firewall's up, perimeter's lit. Show me what you're worried got in.",
         },
         IdentityRule {
             keywords: &["security", "hack", "cyber", "terminal", "arch", "cachyos", "kernel"],
@@ -184,7 +184,7 @@ mod tests {
             ),
             ("help me write a poem and some creative art", "A.R.X.LOGOS"),
             ("an archival synthesis specimen sanctuary", "A.R.X.LIMES"),
-            ("I want a netrunner to run my firewall", "ALT"),
+            ("I want a netrunner to run my firewall", "A1ter_nul"),
             (
                 "I need help with cyber security and hacking the kernel",
                 "NEXUS-09",

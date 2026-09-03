@@ -8,7 +8,7 @@
  *    Set Against Falling NEXUS Letter Rain
  * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with Two Static Eyelid Arcs
  * 5. A.R.X.LOGOS: Central Hexagon with Six Clockwise Spiraling Hexagon Arms & Dotted Hex Frame
- * 6. ALT: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
+ * 6. A1ter_nul: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
  * 7. Real-time Audio Frequency and State deformation.
  *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).
@@ -90,7 +90,7 @@ class HologramAvatar {
         this.arxLogosArmMatFar = null;
         this.arxLogosOuterDotMat = null;
 
-        // 6. ALT (Cunningham) -- a faceted, semi-transparent "digital ghost" bust (a rogue
+        // 6. A1ter_nul (Cunningham) -- a faceted, semi-transparent "digital ghost" bust (a rogue
         // netrunner engram, not a solid body) behind a rotating firewall/ICE perimeter ring.
         // The chromatic cyan/red split silhouette is a fixed accent, independent of color
         // theme, like The Nexus's fixed-red eyes -- see buildAltAvatar.
@@ -206,7 +206,7 @@ class HologramAvatar {
         const isNexus = avatar === 'nexus' || avatar === 'matrix';
         const isRed = avatar === 'red' || avatar === 'crimson';
         const isArxLogos = avatar === 'arx-logos';
-        const isAlt = avatar === 'alt' || avatar === 'cunningham';
+        const isAlt = avatar === 'alt' || avatar === 'cunningham' || avatar === 'a1ter_nul';
         const isHalcy = !isArxLimes && !isNexus && !isRed && !isArxLogos && !isAlt;
 
         if (this.particleSystem) this.particleSystem.visible = isHalcy;
@@ -221,7 +221,7 @@ class HologramAvatar {
         if (this.altGroup) this.altGroup.visible = isAlt;
 
         // Chromatic-glitch scanline overlay (see #hologram-viewport.glitch-active::after in
-        // A1theme.css / sprite.css) -- only ALT's digital-ghost look asks for it.
+        // A1theme.css / sprite.css) -- only A1ter_nul's digital-ghost look asks for it.
         if (this.container) this.container.classList.toggle('glitch-active', isAlt);
     }
 
@@ -279,7 +279,7 @@ class HologramAvatar {
         if (this.redBlueCircle) this.redBlueCircle.material.color.setHex(p.hex2);
         if (this.redCyanCircle) this.redCyanCircle.material.color.setHex(p.hex3);
 
-        // ALT (Cunningham): bust fill/inner-wire and the firewall ring/shield tiles pick up
+        // A1ter_nul (Cunningham): bust fill/inner-wire and the firewall ring/shield tiles pick up
         // the theme hue; the chromatic cyan/red split silhouette stays fixed regardless of
         // theme (see buildAltAvatar), like every avatar's always-lit accent.
         if (this.altBustFillMat) this.altBustFillMat.color.setHex(p.hex);

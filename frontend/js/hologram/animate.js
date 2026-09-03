@@ -45,7 +45,7 @@ HologramAvatar.prototype.animate = function() {
         this.animateNexus(elapsedTime, audioIntensity, clickPulse);
     } else if (this.currentAvatar === 'arx-limes') {
         this.animateArxLimes(elapsedTime, audioIntensity, clickPulse);
-    } else if (this.currentAvatar === 'alt' || this.currentAvatar === 'cunningham') {
+    } else if (this.currentAvatar === 'alt' || this.currentAvatar === 'cunningham' || this.currentAvatar === 'a1ter_nul') {
         this.animateAlt(elapsedTime, audioIntensity, clickPulse);
     } else {
         this.animateHalcy(elapsedTime, audioIntensity, clickPulse);
@@ -651,7 +651,7 @@ HologramAvatar.prototype.animateHalcy = function(elapsedTime, audioIntensity, cl
 };
 
 // ==============================================================
-// ALT (CUNNINGHAM): CHROMATIC-GLITCH GHOST BUST + FIREWALL/ICE RING
+// A1TER_NUL (CUNNINGHAM): CHROMATIC-GLITCH GHOST BUST + FIREWALL/ICE RING
 // ==============================================================
 HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clickPulse) {
     const isThinking = this.state === 'THINKING';
