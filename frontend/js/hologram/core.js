@@ -114,6 +114,18 @@ class HologramAvatar {
         this.clock = null;
         this.lastClickTime = -999; // seconds on this.clock; drives the click-reaction pulse
 
+        // Drag-to-spin -- lets you grab the whole hologram and turn it, like the reference
+        // Cortana build's OrbitControls, but scoped to yaw only (no pitch) since none of
+        // these avatars are built with a proper backside/underside. Applied to this.scene's
+        // own rotation.y, which nothing else here touches, so it composes for free with every
+        // avatar's existing local spins and tilts instead of fighting them. A short drag under
+        // DRAG_CLICK_THRESHOLD still counts as a click (see the pointerup handler below), so
+        // the existing click-reaction pulse keeps working on a tap.
+        this.isDraggingView = false;
+        this.dragLastX = 0;
+        this.dragDistance = 0;
+        this.viewSpinVelocity = 0; // radians/frame, decays via damping once released
+
         // Pointer tracking -- only The Nexus consumes these (mouse-manipulated head that
         // autonomously "hunts" when the pointer isn't actively directing it); other avatars
         // stay front-facing/static and simply don't read them.
@@ -164,12 +176,40 @@ class HologramAvatar {
         this.setAvatar(this.currentAvatar);
         this.setColorTheme(this.currentColorTheme);
 
-        // Avatars sit front-facing and static at rest; a click is the only pointer
-        // interaction that wakes them up (see animate.js for the resulting pulse).
-        this.renderer.domElement.style.cursor = 'pointer';
-        this.renderer.domElement.addEventListener('click', () => {
-            this.lastClickTime = this.clock.getElapsedTime();
+        // Avatars sit front-facing and static at rest; a click wakes them up with a reaction
+        // pulse, and a drag spins the whole hologram on its Y axis (with inertia -- see
+        // animate.js) so you can turn it to look from another angle.
+        const DRAG_CLICK_THRESHOLD = 6; // px; drags shorter than this still count as a click
+        const YAW_PER_PIXEL = 0.006; // radians of scene.rotation.y per pixel dragged
+        this.renderer.domElement.style.cursor = 'grab';
+        this.renderer.domElement.addEventListener('pointerdown', (e) => {
+            this.isDraggingView = true;
+            this.dragLastX = e.clientX;
+            this.dragDistance = 0;
+            this.viewSpinVelocity = 0;
+            this.renderer.domElement.setPointerCapture(e.pointerId);
+            this.renderer.domElement.style.cursor = 'grabbing';
         });
+        this.renderer.domElement.addEventListener('pointermove', (e) => {
+            if (!this.isDraggingView) return;
+            const dx = e.clientX - this.dragLastX;
+            this.dragLastX = e.clientX;
+            this.dragDistance += Math.abs(dx);
+            const delta = dx * YAW_PER_PIXEL;
+            this.scene.rotation.y += delta;
+            this.viewSpinVelocity = delta; // carried into animate.js as release inertia
+        });
+        const endDrag = (e) => {
+            if (!this.isDraggingView) return;
+            this.isDraggingView = false;
+            this.renderer.domElement.style.cursor = 'grab';
+            if (this.dragDistance < DRAG_CLICK_THRESHOLD) {
+                this.viewSpinVelocity = 0; // a tap shouldn't also fling the view
+                this.lastClickTime = this.clock.getElapsedTime();
+            }
+        };
+        this.renderer.domElement.addEventListener('pointerup', endDrag);
+        this.renderer.domElement.addEventListener('pointercancel', endDrag);
 
         // The Nexus's head can be steered by the pointer while it's active over the
         // viewport; animateNexus falls back to an autonomous "hunting" scan the moment it
