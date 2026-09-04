@@ -241,6 +241,28 @@ HologramAvatar.prototype.animateRed9000 = function(elapsedTime, audioIntensity, 
         this.redCyanCircle.scale.y = lidScaleY;
         this.redCyanCircle.material.opacity = lidOpacity;
     }
+
+    // Lens glow + eye light -- pulse together with the same state-driven signal used
+    // elsewhere on this avatar, plus a bright pop at the peak of a blink (a glint off the
+    // lens as the eyelids sweep past it).
+    let glowIntensity;
+    if (isSpeaking) {
+        glowIntensity = 0.6 + audioIntensity * 1.3 + Math.sin(elapsedTime * 14) * 0.08;
+    } else if (isThinking) {
+        glowIntensity = 0.6 + Math.sin(elapsedTime * 16) * 0.35;
+    } else {
+        glowIntensity = 0.5 + clickPulse * 0.4;
+    }
+    glowIntensity += blinkCloseness * 0.5;
+
+    if (this.redLensGlow) {
+        const glowScale = 30 * (1 + glowIntensity * 0.18);
+        this.redLensGlow.scale.set(glowScale, glowScale, 1);
+        this.redLensGlow.material.opacity = Math.min(1, 0.35 + glowIntensity * 0.4);
+    }
+    if (this.redEyeLight) {
+        this.redEyeLight.intensity = 2 + glowIntensity * 5;
+    }
 };
 
 // ==============================================================
