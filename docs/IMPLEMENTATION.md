@@ -28,6 +28,25 @@ These constrain every step, so they're worth stating once:
 6. **Providers are blocking `ureq` calls** inside a synchronous `generate_response`.
    Streaming and tool loops change that shape — step 3 is where that gets confronted.
 
+### What "local" means here
+
+Settled vocabulary, because these three get used interchangeably everywhere else and the
+difference decides what the code is allowed to reach:
+
+| Term | Means |
+| --- | --- |
+| **Local host** | This system. The machine Aether1 is running on, and nothing else. |
+| **Local network** | The LAN. Machines reachable without crossing the internet. |
+| **Local LLM** | An edge or offline model, running on the local host **or** within the local network. No further. |
+
+"No further" is the operative half. A model behind someone else's API is not a local LLM
+however it is billed, and the local-only paths must never reach one. The boundary is the
+LAN, and it is deliberately drawn there for now rather than at the host: models on other
+machines you own are in scope, models anywhere else are not.
+
+Use these words in code, comments, settings labels and documentation, and say which one you
+mean. "Local" on its own is the ambiguity this table exists to remove.
+
 ---
 
 ## Phase 1 — Reachability and flow
@@ -481,9 +500,10 @@ What already exists and points this way:
 
 The open questions, in the order they will bite:
 
-1. **Where the models live.** Several servers on *this* machine is the loopback case, and
-   needs no network exposure at all. Several *Aether1 machines* sharing models across a LAN
-   is a different feature with a different threat model -- see below.
+1. ~~**Where the models live.**~~ **Settled: the local host and the local network, no
+   further** (see "What 'local' means here" in the ground rules). Both are in scope, which
+   makes this two features rather than one -- the host case needs no network exposure at
+   all, the LAN case needs authentication before it needs anything else. See below.
 2. **What "better suited" means.** A hand-written rule ("code goes to the code model") is
    knowable and debuggable. Learned routing needs a signal for what "worked", and the honest
    answer today is that we do not have one -- a reply the operator did not complain about is
@@ -494,12 +514,26 @@ The open questions, in the order they will bite:
    character changes for no visible reason. Which model answered has to be visible, and
    overridable, or the companion stops feeling like one thing.
 
-**On network exposure.** Same machine needs nothing beyond the current loopback bind. Models
-on *other* machines is what would reopen that question, and it is a bigger ask than pointing
-at an address: the HTTP server has no authentication of any kind (see `bind_address` in
-`server.rs`), so reaching across a LAN needs a real answer to who may connect -- a shared
-secret at minimum -- before it needs a routing algorithm. If this feature ever means more
-than one machine, that authentication is its first step, not a later hardening pass.
+**On network exposure.** Now that the LAN is confirmed in scope, this is no longer a
+question but an ordering constraint.
+
+Models on the **local host** need nothing beyond the current loopback bind: the scanner
+already finds them, and `--serve` stays closed to the outside.
+
+Models on the **local network** are a different feature with a different threat model, and
+it is a bigger ask than pointing at an address. Two distinct problems, and the second is the
+one people forget:
+
+- *Aether1 reaching out* to a model server on another machine is an outbound call, and needs
+  little more than an address plus a way to say which addresses are allowed.
+- *Aether1 being reachable* is the dangerous half. The HTTP server has no authentication of
+  any kind (see `bind_address` in `server.rs`), so anything that opens it to the LAN opens
+  the conversation, the action log and the approval endpoints to everyone on it.
+
+**Authentication is therefore step one of the LAN half, not a hardening pass afterwards.**
+A shared secret the operator sets, checked on every route, is the minimum. Build the routing
+on top of that, never before it -- and keep the two halves separable, so the host-only case
+ships without waiting for the network one.
 
 ## Where this stands
 
