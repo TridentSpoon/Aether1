@@ -267,6 +267,8 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') strokeColor = '#00ff66';
         else if (currentColorTheme === 'arx-logos') strokeColor = '#e024c3';
         else if (currentColorTheme === 'night-city') strokeColor = '#fcee0a';
+        else if (currentColorTheme === 'corporate-light') strokeColor = '#2563eb';
+        else if (currentColorTheme === 'corporate-dark') strokeColor = '#60a5fa';
 
         canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         canvasCtx.lineWidth = 1;
@@ -337,6 +339,12 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (currentColorTheme === 'night-city') {
             lineColor = '#fcee0a';
             fillColor = 'rgba(252, 238, 10, 0.15)';
+        } else if (currentColorTheme === 'corporate-light') {
+            lineColor = '#2563eb';
+            fillColor = 'rgba(37, 99, 235, 0.15)';
+        } else if (currentColorTheme === 'corporate-dark') {
+            lineColor = '#60a5fa';
+            fillColor = 'rgba(96, 165, 250, 0.15)';
         }
 
         tokensCanvasCtx.beginPath();

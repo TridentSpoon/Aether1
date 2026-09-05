@@ -119,6 +119,96 @@
   --bg-grid-color: rgba(252, 238, 10, 0.035);
 }
 
+/* CORPORATE LIGHT (professional daylight theme -- a clean blue-on-white palette meant to
+   look like ordinary business software, not a HUD; see the suppression rules below that
+   strip the cyberpunk chrome -- scanlines, vignette, corner brackets, grid backdrop --
+   whenever either corporate theme is active). */
+[data-theme="corporate-light"] {
+  --bg-core: #f1f5f9;
+  --bg-panel: rgba(255, 255, 255, 0.92);
+  --bg-panel-hover: rgba(255, 255, 255, 1);
+  --border-neon: rgba(37, 99, 235, 0.25);
+  --border-neon-bright: #2563eb;
+  --neon-cyan: #2563eb; /* primary accent */
+  --neon-blue: #1d4ed8;
+  --neon-purple: #4f46e5;
+  --neon-green: #16a34a;
+  --neon-amber: #d97706;
+  --neon-red: #dc2626;
+  --text-main: #0f172a;
+  --text-dim: #64748b;
+  --glow-cyan: 0 1px 3px rgba(37, 99, 235, 0.25);
+  --glow-purple: 0 1px 3px rgba(79, 70, 229, 0.25);
+  --glow-green: 0 1px 3px rgba(22, 163, 74, 0.25);
+  --viewport-glow: rgba(37, 99, 235, 0.10);
+  --scanline-color: transparent;
+  --bg-grid-color: transparent;
+}
+
+/* CORPORATE DARK (professional dark-mode counterpart -- muted slate instead of near-black,
+   and the same restrained blue accent as corporate-light rather than neon.) */
+[data-theme="corporate-dark"] {
+  --bg-core: #0f172a;
+  --bg-panel: rgba(30, 41, 59, 0.88);
+  --bg-panel-hover: rgba(51, 65, 85, 0.94);
+  --border-neon: rgba(96, 165, 250, 0.3);
+  --border-neon-bright: #60a5fa;
+  --neon-cyan: #60a5fa; /* primary accent */
+  --neon-blue: #3b82f6;
+  --neon-purple: #818cf8;
+  --neon-green: #4ade80;
+  --neon-amber: #fbbf24;
+  --neon-red: #f87171;
+  --text-main: #f1f5f9;
+  --text-dim: #94a3b8;
+  --glow-cyan: 0 1px 4px rgba(96, 165, 250, 0.35);
+  --glow-purple: 0 1px 4px rgba(129, 140, 248, 0.35);
+  --glow-green: 0 1px 4px rgba(74, 222, 128, 0.35);
+  --viewport-glow: rgba(96, 165, 250, 0.18);
+  --scanline-color: transparent;
+  --bg-grid-color: transparent;
+}
+
+/* Both corporate themes drop the cyberpunk chrome entirely: no CRT scanline overlay, no
+   vignette darkening the edges, no HUD corner brackets, no neon grid backdrop, and
+   headings fall back to a plain sans-serif instead of the sci-fi display font. */
+[data-theme^="corporate"] .scanlines,
+[data-theme^="corporate"] .vignette {
+  display: none;
+}
+
+[data-theme^="corporate"] body {
+  background-image: none;
+}
+
+[data-theme^="corporate"] .hud-panel::before,
+[data-theme^="corporate"] .hud-panel::after {
+  display: none;
+}
+
+[data-theme^="corporate"] .font-orbitron {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  letter-spacing: normal;
+}
+
+/* Chat bubbles: .msg-user is a near-invisible white-on-white fill by design for the dark
+   cyberpunk themes (it reads as a bright highlight against their near-black backgrounds).
+   Corporate Light is the first theme with a light --bg-core, so it needs its own ink-on-
+   paper version instead of inheriting the white-on-white one. */
+[data-theme="corporate-light"] .msg-user {
+  background: rgba(15, 23, 42, 0.05);
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-left: 3px solid #0f172a;
+}
+
+/* #hologram-viewport is a solid #000 stage by design for the cyberpunk themes -- it reads
+   as a dark projection bay. On corporate-light that box turns into a jarring black hole
+   in the middle of an otherwise white page, so both corporate themes get the avatar
+   sitting directly on --bg-core instead, blending into the rest of the page. */
+[data-theme^="corporate"] #hologram-viewport {
+  background-color: var(--bg-core);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
