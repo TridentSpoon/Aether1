@@ -1542,7 +1542,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnGenesisQuick.addEventListener('click', () => {
         voiceEngine.playSFX('click');
         loadSettings();
-        showSettingsTab('system');
+        showSettingsTab('customisation'); // Genesis Forge lives in the Customisation tab
         settingsModal.classList.remove('hidden');
         if (genesisPurposeInput) genesisPurposeInput.focus();
     });

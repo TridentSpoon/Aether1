@@ -282,11 +282,11 @@
                  class moves, so nothing else here (loadSettings/saveSettings et al.) needs to
                  change to find its fields. -->
             <div class="flex gap-2 border-b border-slate-700/50 pb-3">
-                <button id="settings-tab-btn-customisation" data-settings-tab="customisation" class="settings-tab-btn cyber-btn cyber-btn-active text-xs py-1.5 px-3">
-                    🎨 Customisation
-                </button>
                 <button id="settings-tab-btn-system" data-settings-tab="system" class="settings-tab-btn cyber-btn text-xs py-1.5 px-3">
                     ⚙️ Agent & System
+                </button>
+                <button id="settings-tab-btn-customisation" data-settings-tab="customisation" class="settings-tab-btn cyber-btn cyber-btn-active text-xs py-1.5 px-3">
+                    🎨 Customisation
                 </button>
             </div>
 
@@ -357,11 +357,8 @@
                 <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. Toggle applies once you click Save Changes below.</span>
             </div>
 
-            </div><!-- /#settings-panel-customisation -->
-
-            <div id="settings-panel-system" class="settings-tab-panel hidden space-y-5">
-
-            <!-- SECTION: AGENT IDENTITY & GENESIS -->
+            <!-- SECTION: AGENT IDENTITY & GENESIS (identity is as much "customisation" as the
+                 avatar/theme/persona above, so it lives in this tab rather than System) -->
             <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
                 <div class="flex items-center justify-between">
                     <h3 class="font-orbitron text-xs font-bold text-purple-300 tracking-wider flex items-center gap-1.5">
@@ -387,6 +384,10 @@
                     </div>
                 </div>
             </div>
+
+            </div><!-- /#settings-panel-customisation -->
+
+            <div id="settings-panel-system" class="settings-tab-panel hidden space-y-5">
 
             <!-- SECTION: AUTO-DISCOVERY & LOCAL SCANNER -->
             <div class="bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
@@ -598,6 +599,6 @@
     <script src="js/hologram/avatar-alt.js?v=2"></script>
     <script src="js/hologram/animate.js?v=35"></script>
     <script src="js/voice.js?v=16"></script>
-    <script src="js/app.js?v=19"></script>
+    <script src="js/app.js?v=20"></script>
 </body>
 </html>
