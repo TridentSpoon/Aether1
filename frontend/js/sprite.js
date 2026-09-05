@@ -122,11 +122,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // Matches whatever avatar/theme/voice-preference the main HUD is currently using --
     // aether_avatar/aether_color_theme are plain localStorage keys the main window already
     // writes (see app.js), shared here because both windows load from the same Tauri origin.
+    // That only covers the sprite's own startup, though: if the HUD switches avatar/theme
+    // while the sprite is already open, localStorage alone won't tell this window that
+    // happened. Rather than have the sprite sit there polling localStorage for a change, the
+    // HUD pushes it directly the moment it happens, over a Tauri event both windows share.
     const savedAvatar = localStorage.getItem('aether_avatar') || 'halcy';
     const savedTheme = localStorage.getItem('aether_color_theme') || 'halcy';
     hologram.setAvatar(savedAvatar);
     hologram.setColorTheme(savedTheme);
     document.documentElement.setAttribute('data-theme', savedTheme);
+
+    if (window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('avatar-changed', (event) => {
+            hologram.setAvatar(event.payload.avatar);
+        }).catch((e) => console.warn('Could not listen for avatar changes', e));
+
+        window.__TAURI__.event.listen('color-theme-changed', (event) => {
+            hologram.setColorTheme(event.payload.theme);
+            document.documentElement.setAttribute('data-theme', event.payload.theme);
+        }).catch((e) => console.warn('Could not listen for color theme changes', e));
+    }
 
     tauriInvoke('get_settings_rust').then((data) => {
         autoSpeak = data.settings.auto_speak !== false;

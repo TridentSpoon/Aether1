@@ -112,6 +112,11 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('aether_avatar', avatarName);
         hologram.setAvatar(avatarName);
         updateAvatarBadge(avatarName);
+        // Push the change straight to the desktop sprite window (if open) instead of making
+        // it discover this by polling localStorage -- see sprite.js's 'avatar-changed' listener.
+        if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+            window.__TAURI__.event.emit('avatar-changed', { avatar: avatarName }).catch(() => {});
+        }
 
         if (avatarStructureLabel) {
             if (avatarName === 'red' || avatarName === 'crimson') avatarStructureLabel.textContent = 'OPTICAL EYE // DUAL ORBITS';
@@ -190,6 +195,11 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('aether_color_theme', themeName);
         document.documentElement.setAttribute('data-theme', themeName);
         hologram.setColorTheme(themeName);
+        // Push the change straight to the desktop sprite window (if open) instead of making
+        // it discover this by polling localStorage -- see sprite.js's 'color-theme-changed' listener.
+        if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+            window.__TAURI__.event.emit('color-theme-changed', { theme: themeName }).catch(() => {});
+        }
 
         if (colorThemeSelect && colorThemeSelect.value !== themeName) colorThemeSelect.value = themeName;
 
@@ -910,12 +920,21 @@ document.addEventListener('DOMContentLoaded', () => {
         let spoken = '';        // text already handed to TTS
         let pending = '';       // text waiting for a sentence boundary
         let firstDelta = true;
+        // Only enqueueTTS's own drain loop ever sets the hologram back to IDLE once speech
+        // starts (see voice.js). If synthesis fails for every chunk -- e.g. no network for
+        // edge-tts in offline mode -- nothing ever queues, so nothing ever fires that IDLE,
+        // and the hologram is left stuck in THINKING forever. Track whether anything actually
+        // made it into the queue so the code below can reset state itself when nothing did.
+        let audioQueued = false;
 
         const speakChunk = async (chunk) => {
             if (!autoSpeak || !chunk.trim()) return;
             try {
                 const url = await synthesizeSpeechUrl(chunk);
-                if (url) voiceEngine.enqueueTTS(url);
+                if (url) {
+                    voiceEngine.enqueueTTS(url);
+                    audioQueued = true;
+                }
             } catch (e) {
                 console.warn('sentence TTS failed', e);
             }
@@ -961,7 +980,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (autoSpeak) {
                 attachLazyReplay(replyDiv, reply);
-            } else {
+            }
+            // If speech never actually got queued (autoSpeak off, or every synthesis attempt
+            // failed) nothing else is going to bring the hologram out of THINKING -- do it here.
+            if (!audioQueued) {
                 hologram.setState('IDLE');
                 if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
             }
