@@ -25,7 +25,13 @@ fn main() {
     // version number, since PR merges already happen on every release and a human would
     // inevitably forget to bump a separate counter.
     let pr_rev = Command::new("git")
-        .args(["log", "-1", "--grep=^Merge pull request #", "--format=%s", "HEAD"])
+        .args([
+            "log",
+            "-1",
+            "--grep=^Merge pull request #",
+            "--format=%s",
+            "HEAD",
+        ])
         .output()
         .ok()
         .filter(|output| output.status.success())

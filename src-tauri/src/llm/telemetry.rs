@@ -51,13 +51,14 @@ impl Telemetry {
         // over that interval, the same way psutil-based system_monitor.py diffs two
         // net_io_counters() readings itself.
         networks.refresh();
-        let interval_secs = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.as_secs_f64().max(0.001);
-        let (rx_bytes, tx_bytes) = networks
-            .iter()
-            .fold((0u64, 0u64), |(rx, tx), (_, data)| {
-                (rx + data.received(), tx + data.transmitted())
-            });
-        let network_download_kbps = (rx_bytes as f64 / interval_secs / 1024.0 * 10.0).round() / 10.0;
+        let interval_secs = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL
+            .as_secs_f64()
+            .max(0.001);
+        let (rx_bytes, tx_bytes) = networks.iter().fold((0u64, 0u64), |(rx, tx), (_, data)| {
+            (rx + data.received(), tx + data.transmitted())
+        });
+        let network_download_kbps =
+            (rx_bytes as f64 / interval_secs / 1024.0 * 10.0).round() / 10.0;
         let network_upload_kbps = (tx_bytes as f64 / interval_secs / 1024.0 * 10.0).round() / 10.0;
         // Per-process CPU usage needs the same two-samples-apart treatment as the global
         // number above -- without this second call, every process's cpu_usage() stays 0.0

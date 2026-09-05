@@ -36,7 +36,26 @@ struct AppState {
     telemetry_tx: broadcast::Sender<Value>,
 }
 
-pub async fn run(engine: LlmEngine) {
+/// The address the HTTP server listens on.
+///
+/// Loopback is the default because this server has no authentication of any kind: every
+/// route -- the conversation, the action log, approving a pending action -- is open to
+/// whoever can reach the port. On 0.0.0.0 that is everyone on the network, which for a
+/// laptop means every cafe, hotel and office it is ever carried into. Binding 127.0.0.1
+/// makes the operating system itself refuse those connections, so the guarantee does not
+/// depend on this code being careful.
+///
+/// `--serve --lan` opts back in, for the person who genuinely wants the HUD on their
+/// phone and knows what they are trading.
+fn bind_address(lan: bool) -> &'static str {
+    if lan {
+        "0.0.0.0:8378"
+    } else {
+        "127.0.0.1:8378"
+    }
+}
+
+pub async fn run(engine: LlmEngine, lan: bool) {
     let engine = Arc::new(engine);
     let (telemetry_tx, _rx) = broadcast::channel::<Value>(8);
 
@@ -89,10 +108,21 @@ pub async fn run(engine: LlmEngine) {
         .with_state(state)
         .fallback_service(static_service);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8378")
+    let listener = tokio::net::TcpListener::bind(bind_address(lan))
         .await
         .expect("failed to bind :8378 -- is another AETHER1 instance already running?");
     println!("[AETHER1] serving http://localhost:8378 (Ctrl+C to stop)");
+    if lan {
+        // Said plainly and every time. Someone who typed --lan once in a script should
+        // still be told what it means on the day they run it somewhere unfamiliar.
+        println!(
+            "[AETHER1] --lan: anyone on this network can open the HUD. There is no password: \
+             they can read your conversation, see what the companion has done, and approve \
+             actions waiting for you. Use it on a network you trust."
+        );
+    } else {
+        println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
+    }
     axum::serve(listener, app).await.expect("axum server error");
 }
 
@@ -553,6 +583,32 @@ async fn telemetry_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<Val
             }
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::bind_address;
+
+    /// The default is the whole point of the flag, so it is asserted rather than assumed.
+    /// Someone changing this line should have to change a test that says why.
+    #[test]
+    fn serving_without_lan_listens_only_on_the_loopback_address() {
+        assert_eq!(bind_address(false), "127.0.0.1:8378");
+    }
+
+    #[test]
+    fn lan_opts_in_to_every_interface() {
+        assert_eq!(bind_address(true), "0.0.0.0:8378");
+    }
+
+    /// Whatever else changes, the port is the one thing start.sh, start.bat and the
+    /// README all hard-code.
+    #[test]
+    fn both_modes_use_the_documented_port() {
+        for address in [bind_address(false), bind_address(true)] {
+            assert!(address.ends_with(":8378"), "unexpected port in {address}");
         }
     }
 }

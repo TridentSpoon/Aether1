@@ -36,7 +36,8 @@ USAGE:
     aether1 status                 Print a system diagnostic report
     aether1 say [TEXT]             Speak text in the companion's voice
     aether1 show | toggle          Summon (or dismiss) the HUD of a running instance
-    aether1 --serve                Run headless as an HTTP/WebSocket server
+    aether1 --serve                Run headless as an HTTP/WebSocket server, reachable
+                                   from this machine only
 
 OPTIONS:
     prompt --session <ID>          Conversation to continue (default: \"default\",
@@ -44,6 +45,9 @@ OPTIONS:
     status --json                  Emit the raw telemetry JSON instead of a report
     say --voice <NAME>             Override the configured voice
     say --no-play                  Synthesize only; print the audio file path
+    --serve --lan                  Also accept connections from your network. There is no
+                                   password: anyone who can reach this machine can read
+                                   your conversation and approve pending actions.
     -h, --help                     Show this help
     -V, --version                  Show the version
 
@@ -65,7 +69,11 @@ pub enum Invocation {
     Window {
         toggle: bool,
     },
-    Serve,
+    /// `lan` is the opt-in from `--serve --lan`: bind every interface instead of
+    /// the loopback address, so other machines can reach the HUD.
+    Serve {
+        lan: bool,
+    },
     Prompt {
         text: Option<String>,
         session: Option<String>,
@@ -131,7 +139,9 @@ pub fn parse(argv: &[String]) -> Invocation {
     // Checked before anything else so the existing `--serve` behavior is unchanged: it
     // wins wherever it appears in argv.
     if args.iter().any(|a| a == "--serve") {
-        return Invocation::Serve;
+        return Invocation::Serve {
+            lan: args.iter().any(|a| a == "--lan"),
+        };
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return Invocation::Help;
@@ -270,7 +280,7 @@ fn run_say(text: Option<String>, voice: Option<String>, play: bool) -> Result<St
 /// handled by main() and are a no-op here.
 pub fn run(invocation: Invocation) -> i32 {
     let result = match invocation {
-        Invocation::App | Invocation::Serve | Invocation::Window { .. } => Ok(String::new()),
+        Invocation::App | Invocation::Serve { .. } | Invocation::Window { .. } => Ok(String::new()),
         Invocation::Help => Ok(USAGE.trim_end().to_string()),
         Invocation::Version => Ok(format!(
             "{} ({})",
@@ -326,8 +336,22 @@ mod tests {
 
     #[test]
     fn serve_wins_wherever_it_appears() {
-        assert_eq!(parse_args(&["--serve"]), Invocation::Serve);
-        assert_eq!(parse_args(&["prompt", "hi", "--serve"]), Invocation::Serve);
+        assert_eq!(parse_args(&["--serve"]), Invocation::Serve { lan: false });
+        assert_eq!(
+            parse_args(&["--serve", "--lan"]),
+            Invocation::Serve { lan: true }
+        );
+        assert_eq!(
+            parse_args(&["--lan", "--serve"]),
+            Invocation::Serve { lan: true }
+        );
+        // --lan is meaningless on its own, and must not be what turns a plain launch
+        // into a server: opening a port is never a side effect of an unrelated flag.
+        assert_eq!(parse_args(&["--lan"]), Invocation::App);
+        assert_eq!(
+            parse_args(&["prompt", "hi", "--serve"]),
+            Invocation::Serve { lan: false }
+        );
     }
 
     #[test]
