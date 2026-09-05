@@ -783,3 +783,8 @@ HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clic
         tile.scale.set(tileScale, tileScale, tileScale);
     });
 };
+
+// A1 (the monogram placeholder) is not a built-in avatar dispatched from here -- it is
+// registered through HologramAvatar.registerAvatar() like any other avatar file (see
+// avatar-a1.js and js/hologram/README.md), so its own animate() runs via the plugin path
+// at the top of animate() above instead of an animateX() branch in this list.

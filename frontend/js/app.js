@@ -1,7 +1,8 @@
 /**
  * Main Frontend Application Logic for Project AETHER1.
- * Handles independently-selectable 3D Avatars (R.E.D. 9000, The Nexus, A.R.X.LIMES, hAlcy, A.R.X.LOGOS)
- * and Color Themes, Token Telemetry Graph, Agent Genesis, and Model Scanner.
+ * Handles independently-selectable 3D Avatars (A1 monogram placeholder, R.E.D. 9000, The Nexus,
+ * A.R.X.LIMES, hAlcy, A.R.X.LOGOS, A1ter_nul) and Color Themes, Token Telemetry Graph, Agent
+ * Genesis, and Model Scanner.
  */
 
 const AVATAR_DISPLAY_NAMES = {
@@ -116,7 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isWaitingForResponse = false;
     let autoSpeak = true;
     let currentAgentName = "HALCY";
-    let currentAvatar = localStorage.getItem('aether_avatar') || 'halcy';
+    let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
     let currentColorTheme = localStorage.getItem('aether_color_theme') || 'halcy';
 
     // Clock
@@ -147,6 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
             else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
             else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
+            else if (avatarName === 'a1') avatarStructureLabel.textContent = 'MONOGRAM WORDMARK';
             // A registered avatar names itself, rather than borrowing hAlcy's label from
             // the fallback below -- see js/hologram/README.md.
             else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
