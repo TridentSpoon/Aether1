@@ -146,6 +146,31 @@ Both are remembered on this machine and survive a restart. Settings has a
 **Reset panels to their default places** button when you want the original layout
 back.
 
+## Making your own avatar
+
+The avatar is a module of its own -- everything that draws it lives in
+`frontend/js/hologram/`, and the rest of Aether1 talks to it through five function calls.
+`frontend/js/hologram/README.md` is the guide; the short version:
+
+**Build one without writing code.** Open `frontend/avatar-lab.html` -- the avatar
+workbench. Pick a core, a body and a voice equaliser, set the sizes and the motion, and
+press *Use this in Aether1*. Then choose **Your own** in the HUD's avatar row. What gets
+saved is a *recipe*: a few lines of settings you can paste to someone else safely,
+because settings cannot run.
+
+**Or write one.** Copy `frontend/js/hologram/avatar-template.js` -- a working avatar with
+every line explained. An avatar is an id and three functions: build it, animate it, and
+recolour it when the theme changes.
+
+The workbench loads the avatar and nothing else -- no backend, no model server, no
+network -- and fakes what the HUD would normally supply: the four states as buttons, and
+a voice simulator that feeds the same 64 frequency bins a real voice would, so an
+equaliser can be built in silence. It also loads someone else's avatar file, for trying
+one before installing it.
+
+An avatar file is a program and runs with the same access as the page, so load files you
+wrote or trust. A recipe carries no code.
+
 ## Command line
 
 Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that

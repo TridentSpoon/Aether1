@@ -10,6 +10,10 @@
 // three reactions requested.
 
 HologramAvatar.prototype.animate = function() {
+    // A disposed engine stops here rather than queueing another frame. Without this,
+    // anything that replaces one engine with another -- the avatar workbench does it
+    // on every slider nudge -- leaves the old loop running forever behind the new one.
+    if (this.disposed) return;
     requestAnimationFrame(() => this.animate());
 
     const elapsedTime = this.clock.getElapsedTime();
@@ -37,7 +41,28 @@ HologramAvatar.prototype.animate = function() {
         clickPulse = decay * rise;
     }
 
-    if (this.currentAvatar === 'arx-logos') {
+    // A registered avatar animates itself and nothing built-in runs -- see core.js.
+    // A throw here would kill the whole render loop for every avatar, so the failing
+    // one is reported once and left standing still rather than taking the HUD with it.
+    const plugin = this.plugins.get(this.currentAvatar);
+    if (plugin) {
+        if (typeof plugin.def.animate === 'function' && !plugin.broken) {
+            try {
+                plugin.def.animate(plugin.model, {
+                    time: elapsedTime,
+                    audio: audioIntensity,
+                    audioData: this.audioData,
+                    click: clickPulse,
+                    state: this.state,
+                    palette: this.activePalette,
+                    THREE,
+                });
+            } catch (err) {
+                plugin.broken = true;
+                console.error(`Avatar "${this.currentAvatar}" threw while animating and was stopped:`, err);
+            }
+        }
+    } else if (this.currentAvatar === 'arx-logos') {
         this.animateArxLogos(elapsedTime, audioIntensity, clickPulse);
     } else if (this.currentAvatar === 'red' || this.currentAvatar === 'crimson') {
         this.animateRed9000(elapsedTime, audioIntensity, clickPulse);

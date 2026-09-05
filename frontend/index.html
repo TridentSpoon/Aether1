@@ -41,6 +41,7 @@
                 <button class="avatar-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-avatar-val="red">🔴 R.E.D. 9000</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-yellow-300 hover:bg-yellow-950/60 font-bold" data-avatar-val="alt">⚠️ A1ter_nul</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-slate-300 hover:bg-slate-800/60" data-avatar-val="custom" title="Built in the avatar workbench -- frontend/avatar-lab.html">✨ Your own</button>
             </div>
 
             <!-- COLOR THEME QUICK PICKER -->
@@ -612,7 +613,7 @@
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
     <script src="js/hologram/palettes.js?v=17"></script>
-    <script src="js/hologram/core.js?v=35"></script>
+    <script src="js/hologram/core.js?v=36"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
@@ -620,9 +621,14 @@
     <script src="js/hologram/avatar-red9000.js?v=18"></script>
     <script src="js/hologram/avatar-arx-logos.js?v=17"></script>
     <script src="js/hologram/avatar-alt.js?v=2"></script>
-    <script src="js/hologram/animate.js?v=35"></script>
+    <!-- The parts kit and the avatar assembled from a saved recipe (see
+         frontend/avatar-lab.html). Any hand-written avatar file goes here too:
+         after core.js, before app.js. -->
+    <script src="js/hologram/parts.js?v=1"></script>
+    <script src="js/hologram/avatar-custom.js?v=1"></script>
+    <script src="js/hologram/animate.js?v=36"></script>
     <script src="js/voice.js?v=16"></script>
-    <script src="js/app.js?v=20"></script>
+    <script src="js/app.js?v=21"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

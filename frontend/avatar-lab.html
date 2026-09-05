@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="halcy">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aether1 // AVATAR WORKBENCH</title>
+    <!-- Local copies, same as the HUD. The point of this page is working on the avatar
+         with nothing else running -- no backend, no model server, no network. -->
+    <link rel="stylesheet" href="vendor/fonts.css?v=1">
+    <link rel="stylesheet" href="vendor/tailwind.css?v=1">
+    <link rel="stylesheet" href="css/A1theme.css?v=18">
+    <script src="vendor/three.min.js?v=1"></script>
+    <style>
+        /* The workbench is its own thing: two columns, avatar on the left, controls on
+           the right, and nothing that has to match the HUD's layout. */
+        body { margin: 0; height: 100vh; overflow: hidden; }
+        .lab-grid { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
+        @media (max-width: 900px) { .lab-grid { grid-template-columns: 1fr; grid-template-rows: 50vh 50vh; } }
+        .lab-controls { overflow-y: auto; }
+        .lab-field { display: flex; flex-direction: column; gap: 0.25rem; }
+        .lab-field label { font-size: 10px; letter-spacing: 0.1em; }
+        select, input[type="range"] { width: 100%; }
+        select {
+            background: #0b1220; border: 1px solid var(--border-neon); border-radius: 3px;
+            color: var(--neon-cyan); font-family: 'Share Tech Mono', monospace; font-size: 12px; padding: 4px 6px;
+        }
+        .lab-readout { font-variant-numeric: tabular-nums; }
+        textarea {
+            width: 100%; background: #05080f; border: 1px solid var(--border-neon); border-radius: 3px;
+            color: var(--neon-cyan); font-family: 'Share Tech Mono', monospace; font-size: 11px; padding: 6px;
+        }
+        .state-btn.is-on { background: rgba(0, 240, 255, 0.18); border-color: var(--neon-cyan); }
+
+        /* Range inputs are the one control browsers refuse to inherit anything from,
+           so they arrive as a blue bar in the middle of a cyan HUD unless dressed. */
+        input[type="range"] {
+            -webkit-appearance: none; appearance: none;
+            height: 4px; border-radius: 2px; background: rgba(0, 240, 255, 0.2);
+            border: 1px solid var(--border-neon); outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 12px; height: 16px; border-radius: 2px; cursor: grab;
+            background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 12px; height: 16px; border: 0; border-radius: 2px; cursor: grab;
+            background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
+        }
+    </style>
+</head>
+<body class="bg-cyber-dark text-slate-100">
+    <div class="scanlines"></div>
+
+    <div class="lab-grid">
+        <!-- THE AVATAR, and nothing else -->
+        <section class="relative hud-panel m-3 rounded overflow-hidden flex flex-col">
+            <div class="px-4 py-2 border-b border-cyan-500/20 flex items-center justify-between">
+                <span class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">AVATAR WORKBENCH</span>
+                <span id="lab-status" class="text-[10px] font-mono text-slate-400">idle</span>
+            </div>
+            <div id="hologram-viewport" class="flex-1 min-h-[280px] cursor-grab active:cursor-grabbing"></div>
+            <div class="px-4 py-2 border-t border-cyan-500/20 text-[10px] font-mono text-slate-500">
+                Drag to spin. Click to trigger the click reaction. Nothing here talks to the backend.
+            </div>
+        </section>
+
+        <!-- THE CONTROLS -->
+        <section class="lab-controls p-3 space-y-3">
+
+            <!-- What is on screen -->
+            <div class="hud-panel p-3 rounded space-y-2">
+                <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">WHAT IS ON SCREEN</h2>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">AVATAR</label>
+                    <select id="lab-avatar"></select>
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">COLOUR THEME</label>
+                    <select id="lab-theme"></select>
+                </div>
+            </div>
+
+            <!-- What the companion is pretending to do -->
+            <div class="hud-panel p-3 rounded space-y-2">
+                <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">STATE</h2>
+                <div class="grid grid-cols-2 gap-2">
+                    <button class="state-btn cyber-btn text-[11px] py-1.5 justify-center" data-state="IDLE">IDLE</button>
+                    <button class="state-btn cyber-btn text-[11px] py-1.5 justify-center" data-state="LISTENING">LISTENING</button>
+                    <button class="state-btn cyber-btn text-[11px] py-1.5 justify-center" data-state="THINKING">THINKING</button>
+                    <button class="state-btn cyber-btn text-[11px] py-1.5 justify-center" data-state="SPEAKING">SPEAKING</button>
+                </div>
+            </div>
+
+            <!-- Fake sound, so the equaliser can be worked on in silence -->
+            <div class="hud-panel p-3 rounded space-y-2">
+                <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">VOICE SIMULATOR</h2>
+                <span class="text-[10px] font-mono text-slate-500 block">
+                    Feeds the avatar the same 64 frequency bins a real voice would, so the equaliser
+                    can be built without a microphone, a model or a spoken word.
+                </span>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">SOURCE</label>
+                    <select id="lab-audio-source">
+                        <option value="silence">Silence</option>
+                        <option value="speech" selected>Speech</option>
+                        <option value="music">Music</option>
+                        <option value="sweep">Rising tone</option>
+                        <option value="manual">Manual level only</option>
+                    </select>
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">LEVEL <span id="lab-level-readout" class="lab-readout text-slate-400">60%</span></label>
+                    <input id="lab-level" type="range" min="0" max="100" value="60">
+                </div>
+                <canvas id="lab-spectrum" width="340" height="46" class="w-full bg-black/60 rounded border border-cyan-500/30"></canvas>
+            </div>
+
+            <!-- The builder -->
+            <div class="hud-panel p-3 rounded space-y-2">
+                <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">BUILD YOUR OWN</h2>
+                <span class="text-[10px] font-mono text-slate-500 block">
+                    Changes here show immediately on the avatar called <strong class="text-cyan-300">Your own avatar</strong>.
+                </span>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">CORE — the thing at the middle</label>
+                    <select id="build-core"></select>
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">BODY — the structure around it</label>
+                    <select id="build-body"></select>
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">VOICE EQUALISER — the part that answers you</label>
+                    <select id="build-equaliser"></select>
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">CORE SIZE <span id="build-size-readout" class="lab-readout text-slate-400"></span></label>
+                    <input id="build-size" type="range" min="4" max="70" value="26">
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">OVERALL SIZE <span id="build-radius-readout" class="lab-readout text-slate-400"></span></label>
+                    <input id="build-radius" type="range" min="20" max="110" value="62">
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">SPIN <span id="build-spin-readout" class="lab-readout text-slate-400"></span></label>
+                    <input id="build-spin" type="range" min="-150" max="150" value="15">
+                </div>
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">FLOAT <span id="build-bob-readout" class="lab-readout text-slate-400"></span></label>
+                    <input id="build-bob" type="range" min="0" max="25" value="4">
+                </div>
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button id="build-save" class="cyber-btn text-[11px] py-1.5 justify-center">Use this in Aether1</button>
+                    <button id="build-reset" class="cyber-btn text-[11px] py-1.5 justify-center">Start over</button>
+                </div>
+                <span id="build-saved-note" class="text-[10px] font-mono text-green-400 hidden block">
+                    Saved. Pick "Your own avatar" in the HUD to see it there.
+                </span>
+            </div>
+
+            <!-- Sharing, and bringing someone else's in -->
+            <div class="hud-panel p-3 rounded space-y-2">
+                <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">SHARE AND IMPORT</h2>
+
+                <div class="lab-field">
+                    <label class="font-mono text-cyan-300">YOUR RECIPE — copy this to share it</label>
+                    <textarea id="share-recipe" rows="4" spellcheck="false"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="share-apply" class="cyber-btn text-[11px] py-1.5 justify-center">Use a pasted recipe</button>
+                    <button id="share-export" class="cyber-btn text-[11px] py-1.5 justify-center">Export as .js</button>
+                </div>
+
+                <div class="pt-2 border-t border-cyan-500/20 space-y-1">
+                    <label class="font-mono text-cyan-300 text-[10px]">LOAD SOMEONE'S AVATAR FILE</label>
+                    <input id="import-file" type="file" accept=".js"
+                           class="w-full text-[10px] font-mono text-slate-300 file:cyber-btn file:text-[10px] file:mr-2">
+                    <span class="text-[10px] font-mono text-amber-400 block">
+                        An avatar file is a program, not a picture: it can do anything this page can.
+                        Load files you wrote or trust. A recipe above is just settings and cannot run.
+                    </span>
+                </div>
+                <span id="import-note" class="text-[10px] font-mono text-slate-400 block"></span>
+            </div>
+
+        </section>
+    </div>
+
+    <!-- The avatar engine, in the order it needs. core.js first (it defines the class
+         the rest attach to), then the shapes, then the animation loop. -->
+    <script src="js/hologram/palettes.js?v=17"></script>
+    <script src="js/hologram/core.js?v=36"></script>
+    <script src="js/hologram/geometry-helpers.js?v=19"></script>
+    <script src="js/hologram/avatar-halcy.js?v=16"></script>
+    <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
+    <script src="js/hologram/avatar-nexus.js?v=28"></script>
+    <script src="js/hologram/avatar-red9000.js?v=16"></script>
+    <script src="js/hologram/avatar-arx-logos.js?v=16"></script>
+    <script src="js/hologram/avatar-alt.js?v=2"></script>
+    <script src="js/hologram/parts.js?v=1"></script>
+    <script src="js/hologram/avatar-custom.js?v=1"></script>
+    <script src="js/hologram/animate.js?v=36"></script>
+    <script src="js/avatar-lab.js?v=1"></script>
+</body>
+</html>

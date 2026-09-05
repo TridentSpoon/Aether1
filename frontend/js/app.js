@@ -147,6 +147,12 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
             else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
             else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
+            // A registered avatar names itself, rather than borrowing hAlcy's label from
+            // the fallback below -- see js/hologram/README.md.
+            else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
+                const def = HologramAvatar.avatarPlugins.get(avatarName);
+                avatarStructureLabel.textContent = (def.label || avatarName).toUpperCase();
+            }
             else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
         }
 
