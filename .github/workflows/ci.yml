@@ -1,0 +1,105 @@
+# Every pull request gets the same checks a careful contributor would run before pushing:
+# the code compiles on a clean machine, the tests pass, clippy is quiet and the formatting
+# is what rustfmt produces.
+#
+# The point is the *clean machine*. Everything here can be run locally, and should be --
+# but a working copy accumulates build artifacts, installed libraries and half-finished
+# edits, so "it passes here" and "it passes anywhere" are different claims. This makes the
+# second one.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push to the same branch makes the first run's answer worthless, so it is
+# cancelled rather than left to finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust -- build, test, clippy, format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Aether1 links against the system webview and GTK stack on Linux; without these
+      # the build fails at link time with an error that names a .pc file rather than a
+      # package. This list matches the Debian/Ubuntu row in the README's build table.
+      - name: Install the Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libnotify-bin
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # Keyed on the lockfile so a dependency change gets a fresh cache and everything
+      # else reuses one -- the compile is by far the longest step here.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      # --all-targets so the tests are linted too: a warning in a test is still a warning,
+      # and test code is where sloppiness hides.
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test
+
+  frontend:
+    name: Frontend -- syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The HUD's JavaScript is plain files loaded by <script> tags -- no bundler, no
+      # compiler, nothing that would notice a syntax error before the page goes blank in
+      # front of someone. This is the cheapest possible guard against that, and it covers
+      # avatar files, which are exactly the code most likely to arrive half-written.
+      - name: Check every script parses
+        run: |
+          status=0
+          while IFS= read -r file; do
+            if ! node --check "$file"; then
+              echo "::error file=$file::this file does not parse"
+              status=1
+            fi
+          done < <(find frontend -name '*.js' -not -path 'frontend/vendor/*')
+          exit $status
+
+      # The vendored stylesheet is a static build: it only contains the utility classes
+      # that were in the HTML when it last ran. Markup merged afterwards renders unstyled,
+      # silently, and the only way to notice is to look. Rebuilding it here and comparing
+      # turns that into a failed check with an instruction attached.
+      - name: Check the vendored stylesheet is up to date
+        run: |
+          ./scripts/build_vendor_css.sh
+          if ! git diff --quiet -- frontend/vendor/tailwind.css; then
+            echo "::error::frontend/vendor/tailwind.css is out of date."
+            echo "::error::Run ./scripts/build_vendor_css.sh and commit the result."
+            git diff --stat -- frontend/vendor/tailwind.css
+            exit 1
+          fi
