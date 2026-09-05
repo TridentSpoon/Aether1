@@ -156,6 +156,15 @@ document.addEventListener('DOMContentLoaded', () => {
             else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
         }
 
+        // The Customise button belongs to the custom avatar and nothing else -- it would
+        // be a lie next to hAlcy, whose shape is fixed in code.
+        const customiseBtn = document.getElementById('btn-customise-avatar');
+        if (customiseBtn) customiseBtn.classList.toggle('hidden', avatarName !== 'custom');
+
+        // Selecting the custom avatar is the moment to check whether the design saved in
+        // the workbench has moved on from the one currently on screen.
+        if (avatarName === 'custom') refreshCustomAvatarIfStale();
+
         // Highlight active avatar pills/buttons
         document.querySelectorAll('.avatar-pill, .avatar-btn').forEach(btn => {
             const val = btn.getAttribute('data-avatar-val') || btn.getAttribute('data-avatar');
@@ -1226,6 +1235,45 @@ document.addEventListener('DOMContentLoaded', () => {
     // "Update Available" flow, but in the HUD itself. Real self-updating (git pull +
     // rebuild) only makes sense for the native desktop app, so this whole feature is
     // Tauri-only; see IS_TAURI gating in initVersionAndUpdates() below.
+    /* ---- The avatar workbench ------------------------------------------------
+     * A separate page (frontend/avatar-lab.html) that stands up its own copy of the
+     * avatar engine. In the desktop app it gets its own window; in a browser, a tab.
+     */
+    async function openAvatarLab() {
+        if (IS_TAURI) {
+            try {
+                await tauriInvoke('open_avatar_lab_rust');
+                return;
+            } catch (err) {
+                /* Fall through rather than leaving the button dead: the page itself works
+                   in a plain webview even if the window command is unavailable. */
+                console.warn('Could not open the workbench window; falling back:', err);
+            }
+        }
+        window.open('avatar-lab.html', 'aether1-avatar-lab');
+    }
+
+    /* Rebuild the custom avatar when the saved design has moved on from what is on
+       screen. Without this, pressing Save in the workbench looks like it did nothing:
+       the recipe is read once, when the avatar is built. */
+    function refreshCustomAvatarIfStale() {
+        if (!window.CustomAvatarRecipe || !window.CustomAvatarRecipe.isStale()) return;
+        hologram.rebuildRegisteredAvatar('custom');
+    }
+
+    document.getElementById('btn-open-avatar-lab')?.addEventListener('click', openAvatarLab);
+    document.getElementById('btn-customise-avatar')?.addEventListener('click', openAvatarLab);
+
+    /* localStorage fires this in *other* windows of the same origin, so the HUD follows
+       along live while the workbench is open beside it -- press Save there and the avatar
+       here changes, with no reload and nothing to click. */
+    window.addEventListener('storage', (event) => {
+        if (!window.CustomAvatarRecipe) return;
+        if (event.key !== window.CustomAvatarRecipe.key) return;
+        if (currentAvatar !== 'custom') return;
+        refreshCustomAvatarIfStale();
+    });
+
     async function tauriInvoke(cmd, args) {
         if (!window.__TAURI__ || !window.__TAURI__.core) {
             throw new Error('Tauri bridge unavailable');

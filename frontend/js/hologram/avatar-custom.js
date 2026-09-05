@@ -18,6 +18,9 @@
 
     const RECIPE_KEY = 'aether_custom_avatar';
 
+    /* The recipe the avatar currently on screen was built from. */
+    let builtRecipe = null;
+
     const DEFAULT_RECIPE = {
         core: 'crystal',
         body: 'rings',
@@ -64,6 +67,9 @@
 
         build(api) {
             const recipe = loadRecipe();
+            /* Remembered so anything holding this engine can tell whether what is on
+               screen still matches what is saved -- see isStale() below. */
+            builtRecipe = recipe;
             const parts = window.AvatarParts;
             const group = new THREE.Group();
 
@@ -101,6 +107,14 @@
         },
         clear() {
             localStorage.removeItem(RECIPE_KEY);
+        },
+        /* True when the saved recipe has moved on from the one that was built -- which is
+           what happens the moment someone presses Save in the workbench while the HUD is
+           open. The HUD watches for this; without it, saving appears to do nothing until
+           the whole app is restarted. */
+        isStale() {
+            if (!builtRecipe) return true;
+            return JSON.stringify(loadRecipe()) !== JSON.stringify(builtRecipe);
         },
     };
 })();

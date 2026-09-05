@@ -48,9 +48,14 @@ else attaches to it, and `app.js` runs last.
 
 ### 1. Build one from parts, no code
 
-Open `frontend/avatar-lab.html` in a browser. Choose a core, a body and a voice
-equaliser, set the sizes and the motion, and press **Use this in Aether1**. Pick
-**✨ Your own** in the HUD's avatar row to see it there.
+From the HUD: pick **✨ Your own** in the avatar row and press **✎ Customise** next to
+it, or open Settings and use **Design your own avatar**. Either opens the workbench in
+its own window. (You can also open `frontend/avatar-lab.html` directly in a browser --
+it needs nothing else running.)
+
+Choose a core, a body and a voice equaliser, set the sizes and the motion, and press
+**Use this in Aether1**. The HUD picks it up immediately: the two windows share the saved
+recipe, so an open HUD updates the moment you save, with no reload.
 
 What is saved is a *recipe* — a few lines of settings, not code. A recipe can be pasted
 to someone else safely, because settings cannot do anything.
