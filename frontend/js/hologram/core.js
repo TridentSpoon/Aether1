@@ -174,6 +174,21 @@ class HologramAvatar {
         this.nexusMouseNY = 0;
         this.lastMouseMoveTime = -999; // seconds on this.clock
 
+        // Auto-fit: keeps the active avatar's edges (and its idle bounce/pulse/float) clear
+        // of the viewport frame, at any container size or aspect ratio, by widening the
+        // camera's field of view rather than assuming a fixed distance ever suited every
+        // shape and every panel size. this.baseFov is the floor -- the tuned, "normal"
+        // zoom every avatar was designed to be seen at -- widened only as far as the
+        // container's current shape demands. contentHalfWidth/Height are the active
+        // avatar's own measured half-extents (see updateContentFit), read afresh on every
+        // avatar switch and reapplied on every resize.
+        this.baseFov = 45;
+        this.maxFov = 100; // guards against fisheye distortion in a pathologically thin panel
+        this.fitMargin = 1.3; // 30% breathing room beyond the avatar's resting bounding box
+        this.fitBounceAllowance = 35; // world units -- covers bounce/pulse/click motion a resting bounding box doesn't capture
+        this.contentHalfWidth = null;
+        this.contentHalfHeight = null;
+
         this.init();
     }
 
@@ -187,7 +202,7 @@ class HologramAvatar {
         const height = this.container.clientHeight || 400;
 
         this.scene = new THREE.Scene();
-        this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+        this.camera = new THREE.PerspectiveCamera(this.baseFov, width / height, 0.1, 1000);
         this.camera.position.z = 240;
 
         // Lights only affect the hAlcy obsidian core (MeshPhongMaterial) — every other avatar
@@ -314,6 +329,66 @@ class HologramAvatar {
         // Chromatic-glitch scanline overlay (see #hologram-viewport.glitch-active::after in
         // A1theme.css / sprite.css) -- only A1ter_nul's digital-ghost look asks for it.
         if (this.container) this.container.classList.toggle('glitch-active', isAlt);
+
+        // A different avatar can be a very different size (a hand-modelled built-in vs. a
+        // custom recipe dialled up to its largest settings) -- measure the one now on
+        // screen and refit the camera to it.
+        const activeObjects = plugin && plugin.model && plugin.model.group
+            ? [plugin.model.group]
+            : [
+                isHalcy && this.particleSystem, isHalcy && this.halcyOuterRing,
+                isHalcy && this.halcyInnerRingGroup, isHalcy && this.coreOrb,
+                isArxLimes && this.arxLimesGroup, isNexus && this.nexusGroup,
+                isRed && this.redGroup, isArxLogos && this.arxLogosGroup, isAlt && this.altGroup
+            ].filter(Boolean);
+        this.updateContentFit(activeObjects);
+    }
+
+    // Measures the given objects' combined world-space bounding box and refits the camera
+    // to it (see updateContentFit below) -- called whenever the active avatar changes shape:
+    // on avatar selection (setAvatar above) and after a registered avatar rebuilds itself
+    // from a changed recipe (rebuildRegisteredAvatar below), since that can resize it while
+    // it's already the one on screen.
+    updateContentFit(objects) {
+        if (!objects || !objects.length) return;
+        const box = new THREE.Box3();
+        objects.forEach(obj => box.expandByObject(obj));
+        if (box.isEmpty()) return;
+
+        // Half-extent in each axis, not assuming the group is centred on the origin -- a1's
+        // solid 'A' and point-cloud '1' sit either side of it, for instance.
+        this.contentHalfWidth = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
+        this.contentHalfHeight = Math.max(Math.abs(box.min.y), Math.abs(box.max.y));
+        this.applyContentFit();
+    }
+
+    // Widens the camera's (vertical) field of view just far enough that the active avatar's
+    // measured half-extents -- padded for bounce/pulse motion a resting bounding box can't
+    // see -- stay clear of both the left/right edges and the top/bottom edges, at whatever
+    // aspect ratio the container currently has. Never narrower than baseFov, so a normally
+    // proportioned panel keeps every avatar's tuned "resting" zoom exactly as designed.
+    applyContentFit() {
+        if (!this.camera || !this.container) return;
+        if (this.contentHalfWidth == null || this.contentHalfHeight == null) return;
+        const width = this.container.clientWidth;
+        const height = this.container.clientHeight;
+        if (!width || !height) return;
+
+        const aspect = width / height;
+        const distance = this.camera.position.z;
+        const halfW = this.contentHalfWidth * this.fitMargin + this.fitBounceAllowance;
+        const halfH = this.contentHalfHeight * this.fitMargin + this.fitBounceAllowance;
+
+        // Visible half-height at this distance is distance*tan(fov/2); visible half-width is
+        // that times aspect. Solving each for the fov that makes it exactly halfH/halfW gives
+        // the field of view each axis would need on its own -- taking the wider of the two
+        // satisfies both at once, whichever axis is currently the tighter fit.
+        const neededForHeight = 2 * Math.atan(halfH / distance);
+        const neededForWidth = 2 * Math.atan(halfW / (distance * aspect));
+        const neededFovDeg = THREE.MathUtils.radToDeg(Math.max(neededForHeight, neededForWidth));
+
+        this.camera.fov = Math.min(this.maxFov, Math.max(this.baseFov, neededFovDeg));
+        this.camera.updateProjectionMatrix();
     }
 
     // Which color palette tints the currently active (and future) avatar shapes.
@@ -458,6 +533,11 @@ class HologramAvatar {
         }
 
         this.applyColorPalette();
+        // The rebuilt shape can be a different size than the one it replaced (the recipe
+        // may have changed its radius/size settings) -- if it's the one currently on
+        // screen, the camera's fit needs to be measured against the new geometry, not the
+        // old one it was computed from.
+        if (wasVisible) this.updateContentFit([this.plugins.get(id).model.group]);
         return true;
     }
 
@@ -504,7 +584,8 @@ class HologramAvatar {
         const width = this.container.clientWidth;
         const height = this.container.clientHeight;
         this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
+        this.applyContentFit(); // reapplies fov for the new aspect
+        this.camera.updateProjectionMatrix(); // belt-and-suspenders: still needed if applyContentFit bailed out (no content measured yet)
         this.renderer.setSize(width, height);
     }
 }
