@@ -714,13 +714,13 @@ fn main() {
         // launch becomes it.
         cli::Invocation::App | cli::Invocation::Window { .. } => {}
         // Headless HTTP mode.
-        cli::Invocation::Serve => {
+        cli::Invocation::Serve { lan } => {
             let engine = build_llm_engine();
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .expect("failed to build tokio runtime for --serve");
-            runtime.block_on(server::run(engine));
+            runtime.block_on(server::run(engine, lan));
             return;
         }
         // One-shot CLI: prompt/status/say/help/version.

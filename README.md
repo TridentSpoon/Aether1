@@ -213,6 +213,21 @@ rights needed, and it takes effect in new terminals):
 `prompt` shares one conversation history and one memory store with the HUD, so anything
 you tell it from a script is there next time you open the window.
 
+### Serving the HUD to a browser
+
+`aether1 --serve` runs the app headless and serves the HUD at
+<http://localhost:8378> — the development flow, and the fallback if the native
+webview misbehaves. It listens on this machine only.
+
+That default matters, because the server has **no password of any kind**. Every part of it
+is open to whoever can reach the port: your conversation, the log of everything the
+companion has done, and the buttons that approve actions waiting for your permission.
+
+`aether1 --serve --lan` opens it to your whole network, for the case where you genuinely
+want the HUD on your phone. On a network you do not control — a cafe, a hotel, a shared
+office — that means anyone there can do all of the above. The app says so, every time you
+start it that way.
+
 ## Project goals
 
 Where this is headed, and why: [docs/GOALS.md](docs/GOALS.md).
