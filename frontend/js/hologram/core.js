@@ -11,7 +11,9 @@
  * 5. A.R.X.LOGOS: Hexagonal Core Eye with Six Spiraling Aperture-Blade Arms, Two Tumbling
  *    Hex-Frame Rings, and an Orbiting Hex Swarm
  * 6. A1ter_nul: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
- * 7. Real-time Audio Frequency and State deformation.
+ * 7. A1: Monogram Placeholder -- Extruded Solid 'A' beside a Point-Cloud '1', shown before
+ *    an operator has actually picked a persona/avatar
+ * 8. Real-time Audio Frequency and State deformation.
  *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).
  * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,
@@ -23,7 +25,7 @@ class HologramAvatar {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.state = 'IDLE'; // IDLE, LISTENING, THINKING, SPEAKING
-        this.currentAvatar = 'halcy'; // halcy, arx-limes, nexus, red, arx-logos, alt
+        this.currentAvatar = 'a1'; // a1, halcy, arx-limes, nexus, red, arx-logos, alt
         this.currentColorTheme = 'halcy'; // halcy, nexus, arx-limes, arx-logos, red, night-city
         this.activePalette = THEME_PALETTES.halcy;
         this.audioData = new Uint8Array(64);
@@ -145,7 +147,9 @@ class HologramAvatar {
 
         // Avatars registered from outside this engine -- see registerAvatar below and
         // js/hologram/README.md. Each entry is { def, model }: the definition someone
-        // handed us, and whatever their build() returned.
+        // handed us, and whatever their build() returned. A1 (the default placeholder
+        // shown before an operator has picked a persona/avatar) is one of these -- see
+        // avatar-a1.js -- rather than a hand-modelled built-in like the six below.
         this.plugins = new Map();
 
         this.clock = null;
