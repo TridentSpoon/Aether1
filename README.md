@@ -128,6 +128,24 @@ Cloud providers — Gemini, Groq, OpenAI, Anthropic — need a key in the **API 
 model name typed in. If a call fails, the HUD says why: a rejected key, a model name that
 doesn't exist, a proxy in the way and an unreachable server each say so in those words.
 
+## Rearranging the HUD
+
+The main window is three columns of panels, and both what is in them and how wide
+they are is yours to change.
+
+- **Move a panel:** drag it by the dotted strip along its top edge. Drop it above or
+  below another panel, or in a different column -- a glowing line shows where it will
+  land. If you empty a column completely it shrinks to a narrow strip labelled
+  DROP A PANEL HERE, so you can always put something back.
+- **Resize the columns:** drag the divider between two of them. Only those two
+  change; the third stays where it is. Double-click a divider to put the widths back.
+- **Keyboard:** tab to a panel's grip and use the arrow keys to move it, or to a
+  divider and use left/right to resize.
+
+Both are remembered on this machine and survive a restart. Settings has a
+**Reset panels to their default places** button when you want the original layout
+back.
+
 ## Command line
 
 Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that
