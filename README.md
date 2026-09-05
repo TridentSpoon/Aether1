@@ -128,6 +128,49 @@ Cloud providers — Gemini, Groq, OpenAI, Anthropic — need a key in the **API 
 model name typed in. If a call fails, the HUD says why: a rejected key, a model name that
 doesn't exist, a proxy in the way and an unreachable server each say so in those words.
 
+## Rearranging the HUD
+
+The main window is three columns of panels, and both what is in them and how wide
+they are is yours to change.
+
+- **Move a panel:** drag it by the dotted strip along its top edge. Drop it above or
+  below another panel, or in a different column -- a glowing line shows where it will
+  land. If you empty a column completely it shrinks to a narrow strip labelled
+  DROP A PANEL HERE, so you can always put something back.
+- **Resize the columns:** drag the divider between two of them. Only those two
+  change; the third stays where it is. Double-click a divider to put the widths back.
+- **Keyboard:** tab to a panel's grip and use the arrow keys to move it, or to a
+  divider and use left/right to resize.
+
+Both are remembered on this machine and survive a restart. Settings has a
+**Reset panels to their default places** button when you want the original layout
+back.
+
+## Making your own avatar
+
+The avatar is a module of its own -- everything that draws it lives in
+`frontend/js/hologram/`, and the rest of Aether1 talks to it through five function calls.
+`frontend/js/hologram/README.md` is the guide; the short version:
+
+**Build one without writing code.** Open `frontend/avatar-lab.html` -- the avatar
+workbench. Pick a core, a body and a voice equaliser, set the sizes and the motion, and
+press *Use this in Aether1*. Then choose **Your own** in the HUD's avatar row. What gets
+saved is a *recipe*: a few lines of settings you can paste to someone else safely,
+because settings cannot run.
+
+**Or write one.** Copy `frontend/js/hologram/avatar-template.js` -- a working avatar with
+every line explained. An avatar is an id and three functions: build it, animate it, and
+recolour it when the theme changes.
+
+The workbench loads the avatar and nothing else -- no backend, no model server, no
+network -- and fakes what the HUD would normally supply: the four states as buttons, and
+a voice simulator that feeds the same 64 frequency bins a real voice would, so an
+equaliser can be built in silence. It also loads someone else's avatar file, for trying
+one before installing it.
+
+An avatar file is a program and runs with the same access as the page, so load files you
+wrote or trust. A recipe carries no code.
+
 ## Command line
 
 Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that

@@ -143,6 +143,11 @@ class HologramAvatar {
         this.altShieldFillMat = null;
         this.altShieldOutlineMat = null;
 
+        // Avatars registered from outside this engine -- see registerAvatar below and
+        // js/hologram/README.md. Each entry is { def, model }: the definition someone
+        // handed us, and whatever their build() returned.
+        this.plugins = new Map();
+
         this.clock = null;
         this.lastClickTime = -999; // seconds on this.clock; drives the click-reaction pulse
 
@@ -203,6 +208,7 @@ class HologramAvatar {
         this.buildRed9000Avatar();
         this.buildArxLogosAvatar();
         this.buildAltAvatar();
+        this.buildRegisteredAvatars();
 
         // Initial avatar shape + color theme setup (independent of each other)
         this.setAvatar(this.currentAvatar);
@@ -272,12 +278,18 @@ class HologramAvatar {
     // Which 3D shape is visible / animated. Independent of color theme.
     setAvatar(avatar) {
         this.currentAvatar = avatar;
+        // A registered avatar wins over every built-in, including the hAlcy fallback
+        // below -- otherwise an unrecognised name would show hAlcy *and* the plug-in.
+        const plugin = this.plugins.get(avatar);
+        this.plugins.forEach((entry, id) => {
+            if (entry.model && entry.model.group) entry.model.group.visible = (id === avatar);
+        });
         const isArxLimes = avatar === 'arx-limes';
         const isNexus = avatar === 'nexus' || avatar === 'matrix';
         const isRed = avatar === 'red' || avatar === 'crimson';
         const isArxLogos = avatar === 'arx-logos';
         const isAlt = avatar === 'alt' || avatar === 'cunningham' || avatar === 'a1ter_nul';
-        const isHalcy = !isArxLimes && !isNexus && !isRed && !isArxLogos && !isAlt;
+        const isHalcy = !plugin && !isArxLimes && !isNexus && !isRed && !isArxLogos && !isAlt;
 
         if (this.particleSystem) this.particleSystem.visible = isHalcy;
         if (this.halcyOuterRing) this.halcyOuterRing.visible = isHalcy;
@@ -376,6 +388,55 @@ class HologramAvatar {
         if (this.altFirewallRingMat) this.altFirewallRingMat.color.setHex(p.hex);
         if (this.altShieldFillMat) this.altShieldFillMat.color.setHex(p.hex);
         if (this.altShieldOutlineMat) this.altShieldOutlineMat.color.setHex(p.hex3);
+
+        // Registered avatars retint too -- all of them, not just the visible one, so
+        // switching to one later shows it already in the right colours.
+        this.plugins.forEach((entry) => {
+            if (typeof entry.def.applyPalette !== 'function') return;
+            try {
+                entry.def.applyPalette(entry.model, p, THREE);
+            } catch (err) {
+                console.error(`Avatar "${entry.def.id}" failed to apply the colour palette:`, err);
+            }
+        });
+    }
+
+    /* Build every avatar that registered itself before this engine started. A broken
+       one is reported and dropped rather than taking the HUD down with it: someone
+       else's avatar file is exactly the code most likely to have a mistake in it, and
+       the cost of that must not be a blank window. */
+    buildRegisteredAvatars() {
+        HologramAvatar.avatarPlugins.forEach((def, id) => {
+            try {
+                const model = def.build(this.avatarApi());
+                if (!model || !model.group) {
+                    console.error(`Avatar "${id}": build() must return an object with a .group`);
+                    return;
+                }
+                model.group.visible = false;
+                this.scene.add(model.group);
+                this.plugins.set(id, { def, model });
+            } catch (err) {
+                console.error(`Avatar "${id}" failed to build and was skipped:`, err);
+            }
+        });
+    }
+
+    /* What an avatar file is handed. Deliberately small: the three.js module, the
+       palette, the helper textures this engine already has, and read-only facts about
+       what the companion is doing. An avatar cannot reach the chat, the database or
+       the tools from here, and should not need to. */
+    avatarApi() {
+        return {
+            THREE,
+            palette: this.activePalette,
+            helpers: {
+                glowTexture: (size) => this.createGlowSpriteTexture(size),
+                radialGlowTexture: (size, center, edge) => this.createRadialGlowTexture(size, center, edge),
+                ringTexture: (size, thickness) => this.createRingSpriteTexture(size, thickness),
+                hexVertices: (r, rot, cx, cy) => this.hexVertices(r, rot, cx, cy),
+            },
+        };
     }
 
     setState(newState) {
@@ -384,6 +445,19 @@ class HologramAvatar {
 
     updateAudioData(dataArray) {
         this.audioData = dataArray;
+    }
+
+    /* Stop this engine and give back what it holds. Only something that builds an
+       engine more than once needs this -- the HUD builds exactly one and keeps it. */
+    dispose() {
+        this.disposed = true;
+        if (this.resizeObserver) this.resizeObserver.disconnect();
+        if (this.renderer) {
+            this.renderer.dispose();
+            if (this.renderer.domElement && this.renderer.domElement.parentElement) {
+                this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
+            }
+        }
     }
 
     onResize() {
@@ -395,5 +469,45 @@ class HologramAvatar {
         this.renderer.setSize(width, height);
     }
 }
+
+/* ---- Bringing your own avatar -------------------------------------------------
+ *
+ * An avatar is a plain object with an id, a build() that returns something to show,
+ * and an animate() called once a frame. Registering has to happen before an engine
+ * is constructed -- that is, load your file after core.js and before app.js -- which
+ * is the same load-order rule the built-in avatars already follow.
+ *
+ * See js/hologram/README.md for the full contract and avatar-template.js for a
+ * working file to copy.
+ */
+HologramAvatar.avatarPlugins = new Map();
+
+HologramAvatar.registerAvatar = function (def) {
+    if (!def || typeof def !== 'object') {
+        console.error('registerAvatar needs an object describing the avatar');
+        return false;
+    }
+    if (typeof def.id !== 'string' || !def.id.trim()) {
+        console.error('registerAvatar needs an id, e.g. { id: "my-avatar" }');
+        return false;
+    }
+    if (typeof def.build !== 'function') {
+        console.error(`Avatar "${def.id}" has no build() function`);
+        return false;
+    }
+    if (HologramAvatar.avatarPlugins.has(def.id)) {
+        /* Replacing rather than refusing: the workbench reloads the same avatar file
+           over and over while you work on it. */
+        console.warn(`Avatar "${def.id}" was already registered -- replacing it`);
+    }
+    HologramAvatar.avatarPlugins.set(def.id, def);
+    return true;
+};
+
+/* What is on offer, for anything drawing an avatar picker. */
+HologramAvatar.registeredAvatars = function () {
+    return Array.from(HologramAvatar.avatarPlugins.values())
+        .map((def) => ({ id: def.id, label: def.label || def.id }));
+};
 
 window.HologramAvatar = HologramAvatar;

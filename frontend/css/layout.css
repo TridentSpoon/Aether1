@@ -1,0 +1,208 @@
+/* Movable HUD panels.
+ *
+ * The main window is three columns of panels. Both the column widths and which
+ * panel sits where are the operator's to change, and both are remembered.
+ *
+ * The deliberate constraint is that panels stay *in* the grid -- they can be
+ * reordered and moved between columns, but never dragged to a free x/y position.
+ * A free-floating panel can be dropped off-screen, buried under another one, or
+ * left overlapping the avatar, and then the only way back is a reset. Everything
+ * here is reversible by dropping the panel somewhere else. */
+
+#hud-layout {
+  /* Column widths are fractions, so the three of them always add up to the
+     window whatever its size -- resizing the window keeps the proportions. */
+  --col-0: 3fr;
+  --col-1: 4fr;
+  --col-2: 5fr;
+  display: grid;
+  /* The two 'auto' tracks are the resizers between the columns. */
+  grid-template-columns: var(--col-0) auto var(--col-1) auto var(--col-2);
+  gap: 0;
+}
+
+.hud-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Without this a wide panel (a long chat line) can push a grid column past
+     its assigned fraction, which makes the resizer appear to lie. */
+  min-width: 0;
+  padding: 0 0.375rem;
+}
+
+/* An empty column would collapse to nothing and could never be dropped into
+   again, so it keeps enough width to aim at and says what it is. The class is
+   set from JS rather than using :empty, which whitespace in the markup defeats. */
+.hud-column.is-empty {
+  min-width: 3.5rem;
+  border: 1px dashed var(--border-neon);
+  border-radius: 0.25rem;
+  opacity: 0.4;
+}
+
+.hud-column.is-empty::after {
+  content: 'DROP A PANEL HERE';
+  writing-mode: vertical-rl;
+  margin: auto;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--neon-cyan);
+}
+
+/* A panel that should eat the leftover height of its column (the avatar and the
+   dialogue stream); the telemetry cards stay their natural height. */
+.panel-grow {
+  flex: 1 1 auto;
+  min-height: 12rem;
+}
+
+/* ---- The grip -------------------------------------------------------------
+   A strip along the top of every panel. Always visible rather than
+   hover-revealed: a control you cannot see is a control nobody finds. */
+
+.panel-grip {
+  /* Absolute rather than a row in the flow, so a panel keeps the layout it
+     already had: on the padded telemetry cards the grip sits in padding that was
+     empty anyway. Inset from the corners so the hud-panel corner brackets --
+     the signature of the whole theme -- stay visible underneath it. */
+  position: absolute;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-neon);
+  background: rgba(0, 0, 0, 0.35);
+  cursor: grab;
+  opacity: 0.4;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  z-index: 3;
+  touch-action: none;
+}
+
+.panel-grip:hover,
+.panel-grip:focus-visible {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.6);
+  outline: none;
+}
+
+.panel-grip::before {
+  content: '\2831\2831\2831';
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.2em;
+  color: var(--neon-cyan);
+}
+
+.panel-grip:active {
+  cursor: grabbing;
+}
+
+/* Panels whose content starts at the very top (the avatar, the dialogue stream)
+   need to make room for the grip; the padded ones already have room. */
+.grip-inset {
+  padding-top: 14px;
+}
+
+/* ---- Drag states ---------------------------------------------------------- */
+
+.movable-panel {
+  /* hud-panel is already position: relative; this states the dependency the
+     absolutely positioned grip has on it. */
+  position: relative;
+}
+
+/* The panel being dragged stays in place but recedes, so the layout underneath
+   is readable while you aim. */
+.movable-panel.is-dragging {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+}
+
+/* Where it would land. */
+.drop-marker {
+  flex: 0 0 auto;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 10px var(--neon-cyan);
+  animation: drop-marker-pulse 1s ease-in-out infinite;
+}
+
+@keyframes drop-marker-pulse {
+  50% { opacity: 0.45; }
+}
+
+body.layout-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* During a drag the pointer must reach the columns, not the panel contents --
+   otherwise an iframe, a canvas or a text input swallows the pointermove. */
+body.layout-dragging .movable-panel > *:not(.panel-grip) {
+  pointer-events: none;
+}
+
+/* ---- Column resizers ------------------------------------------------------ */
+
+.col-resizer {
+  flex: 0 0 auto;
+  width: 10px;
+  cursor: col-resize;
+  position: relative;
+  align-self: stretch;
+  touch-action: none;
+}
+
+.col-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 12px 4px;
+  border-radius: 1px;
+  background: var(--border-neon);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.col-resizer:hover::after,
+.col-resizer:focus-visible::after,
+.col-resizer.is-resizing::after {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 8px var(--neon-cyan);
+}
+
+.col-resizer:focus-visible {
+  outline: none;
+}
+
+/* ---- Narrow windows -------------------------------------------------------
+   Below the point where three columns fit, the HUD stacks in one column, the
+   way it always did. Dragging still reorders; resizing has nothing to resize,
+   so the handles go away rather than sitting there doing nothing. */
+
+@media (max-width: 1023px) {
+  #hud-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .col-resizer {
+    display: none;
+  }
+
+  .hud-column {
+    overflow-y: visible;
+  }
+
+  .hud-column.is-empty {
+    display: none;
+  }
+}
