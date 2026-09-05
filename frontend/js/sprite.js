@@ -132,9 +132,20 @@ document.addEventListener('DOMContentLoaded', () => {
     hologram.setColorTheme(savedTheme);
     document.documentElement.setAttribute('data-theme', savedTheme);
 
+    // Rebuild the custom avatar when the saved design has moved on from what is on screen
+    // here -- same staleness check app.js runs. build() only ever reads the recipe once
+    // (when the plugin is first constructed), so without this the sprite keeps showing
+    // whatever "Your own" looked like when this window was opened, even after the HUD
+    // (or the workbench) saves a new design.
+    function refreshCustomAvatarIfStale() {
+        if (!window.CustomAvatarRecipe || !window.CustomAvatarRecipe.isStale()) return;
+        hologram.rebuildRegisteredAvatar('custom');
+    }
+
     if (window.__TAURI__ && window.__TAURI__.event) {
         window.__TAURI__.event.listen('avatar-changed', (event) => {
             hologram.setAvatar(event.payload.avatar);
+            if (event.payload.avatar === 'custom') refreshCustomAvatarIfStale();
         }).catch((e) => console.warn('Could not listen for avatar changes', e));
 
         window.__TAURI__.event.listen('color-theme-changed', (event) => {
@@ -142,6 +153,16 @@ document.addEventListener('DOMContentLoaded', () => {
             document.documentElement.setAttribute('data-theme', event.payload.theme);
         }).catch((e) => console.warn('Could not listen for color theme changes', e));
     }
+
+    // localStorage fires this in *other* windows of the same origin -- same live-update
+    // path app.js uses, so a design saved in the workbench while the sprite is already
+    // showing "Your own" updates immediately, with no reload and nothing to click.
+    window.addEventListener('storage', (event) => {
+        if (!window.CustomAvatarRecipe) return;
+        if (event.key !== window.CustomAvatarRecipe.key) return;
+        if (hologram.currentAvatar !== 'custom') return;
+        refreshCustomAvatarIfStale();
+    });
 
     tauriInvoke('get_settings_rust').then((data) => {
         autoSpeak = data.settings.auto_speak !== false;
