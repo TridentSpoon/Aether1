@@ -459,6 +459,48 @@ tool, the visualizer runnable on its own, the voice stack callable from a script
 that means the vault format is documented and stable, `aether1 face` and `aether1 say`
 work without the HUD running, and nothing in the vault depends on Aether1 to be readable.
 
+### Step 19: several local models, and choosing between them
+
+**A stated core requirement, deliberately not built yet.** Recorded here so the shape of it
+is known while earlier steps are designed, not so it gets started early.
+
+The intent: the backend draws on more than one local model at a time, and sends a task to
+whichever suits it -- a small fast one for a summary or a routine reply, a larger one for
+reasoning, a code-specialised one for code -- with the choice improving over time from what
+actually worked rather than from a table someone wrote once. **Local only.** No cloud
+provider in this path at all; that is the point of it.
+
+What already exists and points this way:
+
+- `model_scanner.rs` finds local servers by probing loopback ports and identifies them by
+  the API they speak, so *discovering* several at once is already solved.
+- Providers are already an enum with one call shape, so *talking* to several is a matter of
+  holding more than one configured at a time rather than new protocol work.
+- `action_log` already records what the companion did and how it turned out, which is the
+  raw material a routing decision would have to learn from.
+
+The open questions, in the order they will bite:
+
+1. **Where the models live.** Several servers on *this* machine is the loopback case, and
+   needs no network exposure at all. Several *Aether1 machines* sharing models across a LAN
+   is a different feature with a different threat model -- see below.
+2. **What "better suited" means.** A hand-written rule ("code goes to the code model") is
+   knowable and debuggable. Learned routing needs a signal for what "worked", and the honest
+   answer today is that we do not have one -- a reply the operator did not complain about is
+   not the same as a good reply. This probably starts as declared strengths per model plus
+   the operator's own corrections, and only becomes learned once there is something real to
+   learn from.
+3. **What the operator sees.** If a task silently goes to a different model, the reply's
+   character changes for no visible reason. Which model answered has to be visible, and
+   overridable, or the companion stops feeling like one thing.
+
+**On network exposure.** Same machine needs nothing beyond the current loopback bind. Models
+on *other* machines is what would reopen that question, and it is a bigger ask than pointing
+at an address: the HTTP server has no authentication of any kind (see `bind_address` in
+`server.rs`), so reaching across a LAN needs a real answer to who may connect -- a shared
+secret at minimum -- before it needs a routing algorithm. If this feature ever means more
+than one machine, that authentication is its first step, not a later hardening pass.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies
