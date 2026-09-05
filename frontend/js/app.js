@@ -97,6 +97,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const elDiskVal = document.getElementById('disk-percent-val');
     const elNetDown = document.getElementById('net-download-val');
     const elNetUp = document.getElementById('net-upload-val');
+    const elBatterySection = document.getElementById('battery-section');
+    const elBatteryGauge = document.getElementById('battery-gauge-fill');
+    const elBatteryVal = document.getElementById('battery-percent-val');
+    const elBatteryWarning = document.getElementById('battery-warning');
     const elDistroBadge = document.getElementById('distro-badge');
     const elStatusBadge = document.getElementById('status-badge');
     const elClock = document.getElementById('live-clock');
@@ -476,6 +480,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (elNetDown) elNetDown.textContent = `${data.network ? data.network.download_kbps : 0} KB/s`;
         if (elNetUp) elNetUp.textContent = `${data.network ? data.network.upload_kbps : 0} KB/s`;
+
+        // data.battery is null on a desktop (see Telemetry::to_wire_json) -- the section
+        // stays hidden for the life of the app in that case rather than showing a
+        // permanent, meaningless 0%. On a laptop it appears the first reading in and stays
+        // shown, since a battery doesn't unplug itself from the machine mid-session.
+        if (data.battery) {
+            if (elBatterySection) elBatterySection.classList.remove('hidden');
+            const pct = Math.round(data.battery.percent);
+            if (elBatteryVal) elBatteryVal.textContent = `${pct}% (${data.battery.state})`;
+            if (elBatteryGauge) {
+                elBatteryGauge.style.width = `${pct}%`;
+                elBatteryGauge.className = `gauge-bar-fill ${data.battery.on_battery && pct < 25 ? 'crit' : (data.battery.on_battery ? 'warn' : '')}`;
+            }
+            // on_battery (state === Discharging) rather than state !== 'charging': "full"
+            // and "unknown" are both still plugged in, and a warning that never clears on
+            // a battery that reports "unknown" while on AC would just be noise.
+            if (elBatteryWarning) elBatteryWarning.classList.toggle('hidden', !data.battery.on_battery);
+        }
     }
 
     function updateTokenTelemetry(tokens) {
@@ -639,7 +661,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 })();
             if (text && text.trim()) handleSendMessage(text.trim());
         } catch (e) {
-            appendMessage(currentAgentName, `⚠️ Could not make that out: ${e.message}`);
+            appendMessage(currentAgentName, `⚠️ Could not make that out: ${e.message || e}`);
         }
     }
 
@@ -738,7 +760,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     : await toolsApi(`/api/actions/${action.id}/approve`, { method: 'POST' });
                 settle(`✔ Done — ${data && data.result ? data.result : 'no output'}`, 'text-emerald-300');
             } catch (e) {
-                settle(`✖ Failed: ${e.message}`, 'text-rose-300');
+                settle(`✖ Failed: ${e.message || e}`, 'text-rose-300');
             }
         };
 
@@ -750,7 +772,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 else await toolsApi(`/api/actions/${action.id}/reject`, { method: 'POST' });
                 settle('✖ Declined', 'text-slate-400');
             } catch (e) {
-                settle(`✖ Failed: ${e.message}`, 'text-rose-300');
+                settle(`✖ Failed: ${e.message || e}`, 'text-rose-300');
             }
         };
 
@@ -809,7 +831,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }));
                 } catch (e) {
                     undoBtn.disabled = false;
-                    undoBtn.textContent = `↩ Undo failed: ${e.message}`;
+                    undoBtn.textContent = `↩ Undo failed: ${e.message || e}`;
                 }
             };
             row.appendChild(undoBtn);
@@ -837,7 +859,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             for (const action of actions) list.appendChild(renderActivityRow(action));
         } catch (e) {
-            list.innerHTML = `<div class="text-rose-300">Could not load the activity log: ${e.message}</div>`;
+            list.innerHTML = `<div class="text-rose-300">Could not load the activity log: ${e.message || e}</div>`;
         }
     }
 
@@ -862,7 +884,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     : '<span class="text-amber-400">Needs the network for the parts marked above.</span>'
             ].join('<br/>');
         } catch (e) {
-            el.textContent = `Could not check the voice engines: ${e.message}`;
+            el.textContent = `Could not check the voice engines: ${e.message || e}`;
         }
     }
 
@@ -1039,7 +1061,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error("Chat error", e);
             replyDiv.classList.remove('typing-cursor');
             replyDiv.bodyDiv.innerHTML = formatMarkdown(
-                rendered ? `${rendered}\n\n⚠️ System Error: ${e.message}` : `⚠️ System Error: ${e.message}`
+                rendered ? `${rendered}\n\n⚠️ System Error: ${e.message || e}` : `⚠️ System Error: ${e.message || e}`
             );
             hologram.setState('IDLE');
             if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
@@ -1090,7 +1112,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 hologram.setState('IDLE');
             }
         } catch (e) {
-            alert(`Genesis Error: ${e.message}`);
+            alert(`Genesis Error: ${e.message || e}`);
             hologram.setState('IDLE');
         }
     }
@@ -1213,7 +1235,7 @@ document.addEventListener('DOMContentLoaded', () => {
             populateLocalServers(servers);
             if (scannerResultsBox) scannerResultsBox.innerHTML = html;
         } catch (e) {
-            if (scannerResultsBox) scannerResultsBox.innerHTML = `<div class="text-red-400">Scan failed: ${e.message}</div>`;
+            if (scannerResultsBox) scannerResultsBox.innerHTML = `<div class="text-red-400">Scan failed: ${e.message || e}</div>`;
         }
     }
 
@@ -1237,7 +1259,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 scannerResultsBox.innerHTML = `<div class="${data.status === 'error' ? 'text-red-400' : 'text-green-400'}">${data.message}</div>`;
             }
         } catch (e) {
-            alert(`Install error: ${e.message}`);
+            alert(`Install error: ${e.message || e}`);
         }
     }
 
@@ -1527,7 +1549,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 appendMessage(currentAgentName, '⚙️ Cognitive Core & Identity configurations updated.');
             }
         } catch (e) {
-            if (notify) alert(`Error saving settings: ${e.message}`);
+            // Tauri's invoke() rejects with whatever string the Rust command's Err
+            // variant carried, not an Error object, so e.message is undefined for every
+            // native-app failure -- e itself is the actual message.
+            const reason = e.message || e;
+            if (!notify) return;
+            // save_settings_rust saves everything first and only then re-registers the
+            // hotkey (see hotkey::reregister_from_settings), so a chord that fails to
+            // register still means every other field made it to disk -- this is not the
+            // same failure as the save itself rejecting, and shouldn't read as one.
+            if (reason.startsWith('settings saved, but the hotkey was not')) {
+                voiceEngine.playSFX('click');
+                settingsModal.classList.add('hidden');
+                appendMessage(currentAgentName, `⚙️ Cognitive Core & Identity configurations updated. ⚠ ${reason}`);
+                return;
+            }
+            alert(`Error saving settings: ${reason}`);
         }
     }
 
