@@ -44,6 +44,7 @@ const UPDATE_REPO: &str = "TridentSpoon/Aether1";
 const TRAY_ID: &str = "main-tray";
 const MAIN_LABEL: &str = "main";
 const SPRITE_LABEL: &str = "sprite";
+const AVATAR_LAB_LABEL: &str = "avatar-lab";
 
 /// Set by build.rs from `git rev-parse HEAD` at compile time; "unknown" if this wasn't
 /// built from a git checkout (e.g. a source tarball without a .git directory).
@@ -631,6 +632,36 @@ fn toggle_sprite_window_rust(app: tauri::AppHandle, enabled: bool) -> Result<(),
     }
 }
 
+/// Opens the avatar workbench (frontend/avatar-lab.html) in its own window: the avatar
+/// engine with nothing else running, plus the builder that writes the custom avatar's
+/// recipe. A separate window rather than a route inside the HUD, because the workbench
+/// stands up its own engine and rebuilds it on every change -- doing that inside the HUD
+/// would mean tearing down the avatar the operator is talking to.
+///
+/// Re-shows an existing one rather than building a second: two workbenches writing the
+/// same recipe would each overwrite the other's work.
+#[tauri::command]
+fn open_avatar_lab_rust(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(AVATAR_LAB_LABEL) {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        AVATAR_LAB_LABEL,
+        tauri::WebviewUrl::App("avatar-lab.html".into()),
+    )
+    .title("AETHER1 -- Avatar Workbench")
+    .inner_size(1180.0, 820.0)
+    .min_inner_size(720.0, 520.0)
+    .resizable(true)
+    .build()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 /// Re-shows and focuses the main HUD window -- used by the sprite's "open main HUD" button,
 /// since closing to tray (see the CloseRequested handler in main()) hides rather than
 /// destroys it.
@@ -768,6 +799,7 @@ fn main() {
             check_for_update_rust,
             apply_update_rust,
             toggle_sprite_window_rust,
+            open_avatar_lab_rust,
             show_main_window_rust,
             start_window_drag_rust
         ])

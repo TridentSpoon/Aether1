@@ -422,6 +422,41 @@ class HologramAvatar {
         });
     }
 
+    /* Throw away a registered avatar's model and build it again from its definition.
+       build() runs once per engine, which is the right contract for an avatar whose shape
+       is fixed in code -- but the custom avatar's shape comes from a recipe that can change
+       while the HUD is open. Without this, a design saved in the workbench would not appear
+       until the whole app was restarted, which reads exactly like the save not working. */
+    rebuildRegisteredAvatar(id) {
+        const entry = this.plugins.get(id);
+        if (!entry) return false;
+
+        const wasVisible = entry.model.group ? entry.model.group.visible : false;
+        if (entry.model.group) {
+            this.scene.remove(entry.model.group);
+            disposeObject3D(entry.model.group);
+        }
+
+        try {
+            const model = entry.def.build(this.avatarApi());
+            if (!model || !model.group) {
+                console.error(`Avatar "${id}": build() must return an object with a .group`);
+                return false;
+            }
+            model.group.visible = wasVisible;
+            this.scene.add(model.group);
+            /* broken is cleared: the rebuild may be the very fix for whatever threw. */
+            this.plugins.set(id, { def: entry.def, model });
+        } catch (err) {
+            console.error(`Avatar "${id}" failed to rebuild:`, err);
+            this.plugins.delete(id);
+            return false;
+        }
+
+        this.applyColorPalette();
+        return true;
+    }
+
     /* What an avatar file is handed. Deliberately small: the three.js module, the
        palette, the helper textures this engine already has, and read-only facts about
        what the companion is doing. An avatar cannot reach the chat, the database or
@@ -509,5 +544,21 @@ HologramAvatar.registeredAvatars = function () {
     return Array.from(HologramAvatar.avatarPlugins.values())
         .map((def) => ({ id: def.id, label: def.label || def.id }));
 };
+
+/* Geometry and materials live on the GPU and are not reclaimed by dropping the last
+   JavaScript reference to them -- they have to be handed back explicitly. Anything that
+   rebuilds repeatedly (the workbench, on every slider nudge) leaks the whole scene
+   otherwise. */
+function disposeObject3D(root) {
+    root.traverse((node) => {
+        if (node.geometry) node.geometry.dispose();
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => {
+            if (!material) return;
+            if (material.map) material.map.dispose();
+            material.dispose();
+        });
+    });
+}
 
 window.HologramAvatar = HologramAvatar;

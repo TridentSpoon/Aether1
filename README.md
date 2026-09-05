@@ -152,11 +152,12 @@ The avatar is a module of its own -- everything that draws it lives in
 `frontend/js/hologram/`, and the rest of Aether1 talks to it through five function calls.
 `frontend/js/hologram/README.md` is the guide; the short version:
 
-**Build one without writing code.** Open `frontend/avatar-lab.html` -- the avatar
-workbench. Pick a core, a body and a voice equaliser, set the sizes and the motion, and
-press *Use this in Aether1*. Then choose **Your own** in the HUD's avatar row. What gets
-saved is a *recipe*: a few lines of settings you can paste to someone else safely,
-because settings cannot run.
+**Build one without writing code.** In the HUD, pick **Your own** in the avatar row and
+press **Customise** beside it -- or open Settings and use *Design your own avatar*. Either
+opens the avatar workbench. Pick a core, a body and a voice equaliser, set the sizes and
+the motion, and press *Use this in Aether1*; the HUD updates as soon as you save, with no
+reload. What gets saved is a *recipe*: a few lines of settings you can paste to someone
+else safely, because settings cannot run.
 
 **Or write one.** Copy `frontend/js/hologram/avatar-template.js` -- a working avatar with
 every line explained. An avatar is an id and three functions: build it, animate it, and

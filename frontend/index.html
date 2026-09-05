@@ -41,7 +41,10 @@
                 <button class="avatar-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-avatar-val="red">🔴 R.E.D. 9000</button>
                 <button class="avatar-pill px-2 py-0.5 rounded text-yellow-300 hover:bg-yellow-950/60 font-bold" data-avatar-val="alt">⚠️ A1ter_nul</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-slate-300 hover:bg-slate-800/60" data-avatar-val="custom" title="Built in the avatar workbench -- frontend/avatar-lab.html">✨ Your own</button>
+                <button class="avatar-pill px-2 py-0.5 rounded text-slate-300 hover:bg-slate-800/60" data-avatar-val="custom" title="An avatar you design yourself">✨ Your own</button>
+                <!-- Only shown while "Your own" is the selected avatar: the way to change it
+                     has to be where you looked for it, not buried in Settings. -->
+                <button id="btn-customise-avatar" class="hidden px-2 py-0.5 rounded text-cyan-300 border border-cyan-500/50 hover:bg-cyan-950/60" title="Open the avatar workbench">✎ Customise</button>
             </div>
 
             <!-- COLOR THEME QUICK PICKER -->
@@ -324,6 +327,16 @@
                         <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-pink-400 border-pink-400" data-avatar="arx-logos">🟣 LOGOS</button>
                         <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-red-400 border-red-400" data-avatar="red">🔴 R.E.D.</button>
                         <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-yellow-300 border-yellow-300" data-avatar="alt">⚠️ A1ter</button>
+                    </div>
+
+                    <!-- The avatar you design yourself sits on its own row rather than as a
+                         seventh column: the six presets line up with the six themes below, and
+                         this one is a different kind of thing anyway -- it comes with the button
+                         that opens the workbench. -->
+                    <div class="grid grid-cols-2 gap-1">
+                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-200" data-avatar="custom">✨ Your own</button>
+                        <button id="btn-open-avatar-lab" type="button" class="cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-cyan-300">🛠️ Design your own</button>
+                    </div>
                     </div>
 
                     <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider mt-1.5">🎨 THEME</label>
