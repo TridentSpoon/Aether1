@@ -41,6 +41,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnCloseSettings = document.getElementById('btn-close-settings');
     const btnSaveSettings = document.getElementById('btn-save-settings');
 
+    // Settings modal tabs -- Customisation (avatar/theme/persona/sprite) vs. Agent & System
+    // (connection, voice, memory, keys). Both panels always stay in the DOM; this only ever
+    // toggles which one is visible, so nothing that reads/writes settings fields needs to care.
+    const settingsTabButtons = document.querySelectorAll('.settings-tab-btn');
+    const settingsTabPanels = {
+        customisation: document.getElementById('settings-panel-customisation'),
+        system: document.getElementById('settings-panel-system')
+    };
+    function showSettingsTab(tabName) {
+        settingsTabButtons.forEach(btn => {
+            btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-settings-tab') === tabName);
+        });
+        Object.entries(settingsTabPanels).forEach(([name, panel]) => {
+            if (panel) panel.classList.toggle('hidden', name !== tabName);
+        });
+    }
+    settingsTabButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showSettingsTab(btn.getAttribute('data-settings-tab'));
+        });
+    });
+
     // Agent Genesis & Theme Elements
     const btnGenesisQuick = document.getElementById('btn-genesis-quick');
     const btnForgeIdentity = document.getElementById('btn-forge-identity');
@@ -1512,12 +1535,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // The scan waits for the settings: it preselects whichever found server matches
         // the configured endpoint, and that field has to be filled in before it looks.
         loadSettings().then(handleScanSystem);
+        showSettingsTab('customisation');
         settingsModal.classList.remove('hidden');
     });
 
     btnGenesisQuick.addEventListener('click', () => {
         voiceEngine.playSFX('click');
         loadSettings();
+        showSettingsTab('system');
         settingsModal.classList.remove('hidden');
         if (genesisPurposeInput) genesisPurposeInput.focus();
     });
