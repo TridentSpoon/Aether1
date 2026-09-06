@@ -1,13 +1,15 @@
 /* Avatar: A1 -- Monogram Placeholder.
  *
- * A point-cloud 'A' with the '1' carved out of its own right leg -- subtracted from the
- * 'A's point cloud as a void, then refilled with its own sparser, contrasting-colour point
- * cloud exactly in that void -- rather than a separate glyph floating beside it. This is
- * the avatar shown before an operator has actually picked a persona/avatar (see the
- * currentAvatar default in core.js), so it deliberately reads as a blank slate: no eyes, no
- * face, just the wordmark rendered as scattered light, ASCII-art style, in three
- * dimensions. Embedding the '1' inside the 'A' (instead of setting it beside it) is what
- * makes "A1" read as one mark rather than two unrelated shapes sharing a frame.
+ * A point-cloud 'A' beside a point-cloud '1', modelled on Aether1's own name-mark rather
+ * than a character or creature -- this is the avatar shown before an operator has
+ * actually picked a persona/avatar (see the currentAvatar default in core.js), so it
+ * deliberately reads as a blank slate: no eyes, no face, just the wordmark rendered as
+ * scattered light, ASCII-art style, in three dimensions. The 'A' is denser than the '1'
+ * so it still reads as the mark's more solid half without needing an actual solid mesh.
+ * The '1's flag naturally reaches back far enough to overlap the 'A's right leg at the
+ * top -- rather than let the two clouds mix there, the 'A' is sampled with that overlap
+ * subtracted out, so the '1's own points show through cleanly where its top point cuts
+ * through the 'A' instead of both colours crowding the same spot.
  *
  * Registered through the same HologramAvatar.registerAvatar() contract any avatar file
  * uses -- see js/hologram/README.md and avatar-template.js -- rather than hand-attached
@@ -27,30 +29,34 @@
 // zero forward crossings and read as outside. DoubleSide counts both, so parity means
 // what it should.
 //
-// `excludeShape`, when given, is subtracted from the result: a point otherwise inside
-// `shape` is rejected if it also lands inside `excludeShape` (tested the same
-// odd/even-parity way, extruded with the same settings). Positions are returned in
-// `shape`'s own raw coordinate space -- uncentred, so callers that need scale/rotation to
-// pivot about a shape's own centroid must recentre the result themselves (see build()
-// below, where the 'A' and the embedded '1' each need a *different* pivot).
-function sampleVolumePoints(shape, extrudeSettings, pointCount, excludeShape) {
+// `exclude`, when given ({ shape, offset }), subtracts a second shape from the result: a
+// point otherwise inside `shape` is rejected if it also falls inside `exclude.shape`.
+// Both shapes are sampled/tested in their own centred-on-their-own-centroid space (same
+// as the geometry each ends up rendered from), so `exclude.offset` carries a candidate
+// point from `shape`'s centred space into `exclude.shape`'s centred space -- in practice
+// the difference between the two Points objects' final positions in the group, i.e.
+// where each actually ends up once placed side by side in the scene.
+function sampleVolumePoints(shape, extrudeSettings, pointCount, exclude) {
     const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    geo.center();
     geo.computeBoundingBox();
     const bbox = geo.boundingBox;
 
     const positions = new Float32Array(pointCount * 3);
     const raycaster = new THREE.Raycaster();
     const dummyMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-    const excludeMesh = excludeShape
-        ? new THREE.Mesh(
-              new THREE.ExtrudeGeometry(excludeShape, extrudeSettings),
-              new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })
-          )
-        : null;
+
+    let excludeMesh = null;
+    if (exclude) {
+        const excludeGeo = new THREE.ExtrudeGeometry(exclude.shape, extrudeSettings);
+        excludeGeo.center();
+        excludeMesh = new THREE.Mesh(excludeGeo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    }
 
     let validPoints = 0;
     let attempts = 0;
     const maxAttempts = pointCount * 300; // guards a degenerate shape from ever hanging the build
+    const shiftedPt = new THREE.Vector3();
     while (validPoints < pointCount && attempts < maxAttempts) {
         attempts++;
         const testPt = new THREE.Vector3(
@@ -64,7 +70,8 @@ function sampleVolumePoints(shape, extrudeSettings, pointCount, excludeShape) {
         if (raycaster.intersectObject(dummyMesh, false).length % 2 !== 1) continue;
 
         if (excludeMesh) {
-            raycaster.set(testPt, new THREE.Vector3(0, 0, 1));
+            shiftedPt.copy(testPt).add(exclude.offset);
+            raycaster.set(shiftedPt, new THREE.Vector3(0, 0, 1));
             if (raycaster.intersectObject(excludeMesh, false).length % 2 === 1) continue;
         }
 
@@ -74,16 +81,6 @@ function sampleVolumePoints(shape, extrudeSettings, pointCount, excludeShape) {
         validPoints++;
     }
     return positions;
-}
-
-// Bounding-box centre of a shape's extrusion, in its own raw coordinate space -- used to
-// recentre a point cloud onto its own centroid (so scale/rotation pivot correctly) and to
-// work out how far that centroid sits from another shape's, when one is embedded inside
-// the other.
-function centerOf(shape, extrudeSettings) {
-    const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    geo.computeBoundingBox();
-    return geo.boundingBox.getCenter(new THREE.Vector3());
 }
 
 HologramAvatar.registerAvatar({
@@ -126,55 +123,50 @@ HologramAvatar.registerAvatar({
         holeA.closePath();
         shapeA.holes.push(holeA);
 
-        // --- '1': placed to sit entirely inside the 'A's straight right leg (a full-height
-        // solid strip, x from -2.6 to 15.6, untouched by the counter hole), inset a couple
-        // of units from the leg's edges on every side. It's subtracted out of the 'A's
-        // point cloud below, so this same shape doubles as the boundary of that cutout --
-        // the leg's own dot density forms the numeral's silhouette, with a border of the
-        // 'A's points always separating it from the leg's own edges. ---
+        // --- '1': the same technique, sparser -- the "digital" half sitting beside the
+        // 'A's denser half, same contrast the reference monogram this was built from drew
+        // between its two halves. Its flag (the top-left corner, the numeral's "top
+        // point") reaches back far enough that it geometrically overlaps the 'A's right
+        // leg once both are placed -- see aPointsOffset/onePointsOffset below, and the
+        // exclusion passed into the 'A's own sampling. ---
         const shapeOne = new THREE.Shape();
-        shapeOne.moveTo(9.0, 35.0);   // stem top-right
-        shapeOne.lineTo(4.0, 35.0);   // stem top-left
-        shapeOne.lineTo(4.0, 23.0);   // down to flag notch
-        shapeOne.lineTo(-0.6, 28.5);  // flag outer tip
-        shapeOne.lineTo(-0.6, 22.5);  // flag underside outer
-        shapeOne.lineTo(4.0, 17.0);   // flag underside back to stem
-        shapeOne.lineTo(4.0, -25.0);  // down the stem
-        shapeOne.lineTo(-0.6, -25.0); // base left extension top
-        shapeOne.lineTo(-0.6, -35.0); // base bottom-left
-        shapeOne.lineTo(13.6, -35.0); // base bottom-right
-        shapeOne.lineTo(13.6, -25.0); // base right extension top
-        shapeOne.lineTo(9.0, -25.0);  // back to stem right
+        shapeOne.moveTo(15.6, 39.0);
+        shapeOne.lineTo(0.0, 27.3);   // top-left beak notch
+        shapeOne.lineTo(0.0, 16.9);   // beak thickness
+        shapeOne.lineTo(15.6, 27.3);  // beak inner corner
+        shapeOne.lineTo(15.6, -27.3); // main vertical stem left
+        shapeOne.lineTo(2.6, -27.3);  // base left extension
+        shapeOne.lineTo(2.6, -39.0);  // bottom left base
+        shapeOne.lineTo(41.6, -39.0); // bottom right base
+        shapeOne.lineTo(41.6, -27.3); // base right extension
+        shapeOne.lineTo(31.2, -27.3); // main vertical stem right
+        shapeOne.lineTo(31.2, 39.0);  // top right corner
         shapeOne.closePath();
 
-        // Both shapes are written in one shared raw coordinate frame (that's how shapeOne
-        // above was placed inside the leg in the first place). The 'A' and the embedded
-        // '1' each need to pivot on scale/rotation about their *own* centroid, though --
-        // not each other's, or a scale pulse would visibly drag the '1' sideways as it
-        // grows -- so each point cloud is recentred on its own centroid, and the '1's
-        // cloud gets an explicit position offset (its own centroid minus the 'A's) to land
-        // back in the leg once both are placed in the shared frame the 'A' is centred in.
-        const aCenter = centerOf(shapeA, extrudeSettings);
-        const oneCenter = centerOf(shapeOne, extrudeSettings);
+        // Where each point cloud's own centred geometry ends up once placed in the group
+        // -- kept as named vectors (rather than inlined into position.set() calls below)
+        // since the 'A's sampling also needs this same pair of offsets to know where the
+        // '1' actually lands, to subtract it out correctly.
+        const aPointsOffset = new THREE.Vector3(-13, 0, 0);
+        const onePointsOffset = new THREE.Vector3(28.6, 0, 0);
 
-        const aPositions = sampleVolumePoints(shapeA, extrudeSettings, 4500, shapeOne);
+        const aPositions = sampleVolumePoints(shapeA, extrudeSettings, 4500, {
+            shape: shapeOne,
+            offset: new THREE.Vector3().subVectors(aPointsOffset, onePointsOffset)
+        });
         const aPointCloudGeo = new THREE.BufferGeometry();
         aPointCloudGeo.setAttribute('position', new THREE.BufferAttribute(aPositions, 3));
-        aPointCloudGeo.translate(-aCenter.x, -aCenter.y, -aCenter.z);
         const aPointsMaterial = new THREE.PointsMaterial({ color: api.palette.hex, size: 2.1 });
         const aPoints = new THREE.Points(aPointCloudGeo, aPointsMaterial);
+        aPoints.position.copy(aPointsOffset);
         group.add(aPoints);
 
-        // --- '1': the same sampling technique, sparser -- the "digital" accent sitting
-        // inside the 'A's own leg rather than beside it, contrast kept via colour (hex3)
-        // and density rather than separation now that it shares the leg's footprint. ---
-        const onePositions = sampleVolumePoints(shapeOne, extrudeSettings, 700);
+        const onePositions = sampleVolumePoints(shapeOne, extrudeSettings, 1800);
         const onePointCloudGeo = new THREE.BufferGeometry();
         onePointCloudGeo.setAttribute('position', new THREE.BufferAttribute(onePositions, 3));
-        onePointCloudGeo.translate(-oneCenter.x, -oneCenter.y, -oneCenter.z);
         const onePointsMaterial = new THREE.PointsMaterial({ color: api.palette.hex3, size: 1.6 });
         const onePoints = new THREE.Points(onePointCloudGeo, onePointsMaterial);
-        onePoints.position.set(oneCenter.x - aCenter.x, oneCenter.y - aCenter.y, oneCenter.z - aCenter.z);
+        onePoints.position.copy(onePointsOffset);
         group.add(onePoints);
 
         // Soft backing glow so the monogram doesn't read as flat/empty at rest -- every
@@ -212,25 +204,24 @@ HologramAvatar.registerAvatar({
         }
 
         // The 'A' breathes gently as the mark's "body" -- a smaller, slower pulse than
-        // the '1' embedded in its leg, so it reads as the steadier, denser half.
+        // the '1' below, so it reads as the steadier, denser half.
         const aScale = isSpeaking ? 1.0 + ctx.audio * 0.12 : 1.0 + ctx.click * 0.06;
         model.aPoints.scale.setScalar(aScale);
         model.aPointsMaterial.size = 2.1 + (isSpeaking ? ctx.audio * 0.8 : 0);
 
-        // The point-cloud '1' breathes independently, but only gently -- it sits inset in
-        // the 'A's leg with just a couple of units of clearance on every side, so its pulse
-        // stays small enough that it never grows out past the border of 'A' points that
-        // keeps it readable as its own carved-out shape.
+        // The point-cloud '1' breathes independently -- a faint drift while idle, a
+        // livelier shimmer while speaking (driven by audio) or thinking (a fixed fast
+        // pulse), same "state tells you what it's doing" convention as every other avatar.
         let oneScale;
         if (isSpeaking) {
-            oneScale = 1.0 + ctx.audio * 0.15;
+            oneScale = 1.0 + ctx.audio * 0.5;
         } else if (isThinking) {
-            oneScale = 1.0 + Math.sin(ctx.time * 12) * 0.06;
+            oneScale = 1.0 + Math.sin(ctx.time * 12) * 0.15;
         } else {
             oneScale = 1.0 + Math.sin(ctx.time * 0.8) * 0.04;
         }
         model.onePoints.scale.setScalar(oneScale);
-        model.onePointsMaterial.size = 1.6 + (isSpeaking ? ctx.audio * 0.5 : 0);
+        model.onePointsMaterial.size = 1.6 + (isSpeaking ? ctx.audio * 1.2 : 0);
 
         let glowIntensity;
         if (isSpeaking) {
