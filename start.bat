@@ -103,7 +103,29 @@ exit /b 0
 echo Starting AETHER1 server on http://localhost:8378...
 start "AETHER1 Server" "%BIN%" --serve
 
-timeout /t 2 >nul
+REM --- Wait for the server to actually accept connections instead of a fixed sleep --
+REM     a flat 2-second pause was fine on a fast machine but could open the browser
+REM     tab before a slower first run had finished binding its socket, landing on a
+REM     "can't reach this page" instead of the HUD. Reuses the same PORT_OPEN probe as
+REM     the already-running check above, polling briefly instead of trusting a fixed
+REM     delay; if PowerShell isn't available to probe with, falls back to the old fixed
+REM     wait rather than opening the tab with no delay at all.
+where powershell >nul 2>&1
+if errorlevel 1 (
+    timeout /t 2 >nul
+) else (
+    set "SERVER_UP=0"
+    for /l %%i in (1,1,20) do (
+        if "!SERVER_UP!"=="0" (
+            set "PORT_CHECK_FILE=%TEMP%\aether1_wait_%RANDOM%.txt"
+            powershell -NoProfile -Command "try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8378); $c.Close(); Write-Output 'AETHER1_PORT_OPEN' } catch { Write-Output 'AETHER1_PORT_CLOSED' }" > "!PORT_CHECK_FILE!" 2>nul
+            findstr /C:"AETHER1_PORT_OPEN" "!PORT_CHECK_FILE!" >nul 2>&1
+            if not errorlevel 1 set "SERVER_UP=1"
+            del "!PORT_CHECK_FILE!" >nul 2>&1
+            if "!SERVER_UP!"=="0" timeout /t 1 >nul
+        )
+    )
+)
 
 echo Opening Holographic Cyberpunk HUD...
 start http://localhost:8378
