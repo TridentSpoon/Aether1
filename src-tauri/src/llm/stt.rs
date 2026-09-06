@@ -24,9 +24,7 @@ const MODEL_DIRS: &[&str] = &[
 ];
 
 pub fn whisper_binary() -> Option<PathBuf> {
-    WHISPER_BINARIES
-        .iter()
-        .find_map(|name| which::which(name).ok())
+    crate::paths::find_installed_binary(WHISPER_BINARIES)
 }
 
 /// The model file: the configured path, or the first `.bin` in the usual places.

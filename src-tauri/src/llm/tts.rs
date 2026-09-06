@@ -206,9 +206,7 @@ fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
 
 /// The Piper binary, if one is installed.
 pub fn piper_binary() -> Option<PathBuf> {
-    PIPER_BINARIES
-        .iter()
-        .find_map(|name| which::which(name).ok())
+    crate::paths::find_installed_binary(PIPER_BINARIES)
 }
 
 /// The voice model to speak with: the configured path if there is one, otherwise the first
