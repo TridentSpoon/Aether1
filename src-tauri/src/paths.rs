@@ -53,6 +53,40 @@ pub fn expand_home(path: &str) -> PathBuf {
     }
 }
 
+/// Finds one of `names` as an executable: first on PATH (`which`), then directly inside
+/// this platform's offline-installer bin directory (`%LOCALAPPDATA%\Aether1\bin` on
+/// Windows, `~/.local/bin` on Linux/macOS -- exactly where aether1.iss / setup.sh's
+/// scripts/offline_install_linux.sh put Piper and whisper-cli).
+///
+/// The second step exists because a per-user Windows install adds that directory to
+/// `HKCU\Environment\Path` and broadcasts `WM_SETTINGCHANGE`, but an already-running
+/// Explorer session does not reliably pick that up for processes it launches until the
+/// next logon -- so a binary that is right there in the install directory can still be
+/// invisible to a plain PATH lookup for as long as the operator has not logged out and
+/// back in (or rebooted) since installing. Checking the well-known directory directly
+/// means speech works immediately after install, not "after your next reboot".
+pub fn find_installed_binary(names: &[&str]) -> Option<PathBuf> {
+    for name in names {
+        if let Ok(found) = which::which(name) {
+            return Some(found);
+        }
+    }
+    let bin_dir = if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Aether1").join("bin"))
+    } else {
+        home_dir().map(|home| home.join(".local").join("bin"))
+    }?;
+    let exe_suffix = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    names
+        .iter()
+        .map(|name| bin_dir.join(format!("{name}{exe_suffix}")))
+        .find(|candidate| candidate.is_file())
+}
+
 /// A path as a lowercase, forward-slashed string, for comparing against the deny lists.
 ///
 /// Windows paths arrive with backslashes and arbitrary case, so `"/.ssh/"` would never
