@@ -60,11 +60,13 @@ Source: "{#StageDir}\piper\*"; DestDir: "{app}\bin"; Flags: ignoreversion recurs
 Source: "{#StageDir}\whisper\whisper-cli.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
 ; Straight into the same ~/.local/share layout the app already searches on every platform
-; (see src-tauri\src\llm\tts.rs / stt.rs) -- {%USERPROFILE%} is what home_dir() resolves to
+; (see src-tauri\src\llm\tts.rs / stt.rs) -- {%USERPROFILE} is what home_dir() resolves to
 ; on Windows (paths.rs), so no code on the app side needs to know this installer exists.
-Source: "{#StageDir}\models\{#PiperVoice}.onnx"; DestDir: "{%USERPROFILE%}\.local\share\piper\voices"; Flags: ignoreversion
-Source: "{#StageDir}\models\{#PiperVoice}.onnx.json"; DestDir: "{%USERPROFILE%}\.local\share\piper\voices"; Flags: ignoreversion
-Source: "{#StageDir}\models\ggml-{#WhisperModel}.bin"; DestDir: "{%USERPROFILE%}\.local\share\whisper"; Flags: ignoreversion
+; Note: Inno's env-var constant syntax is {%NAME}, not {%NAME%} -- the brace already
+; supplies the delimiter that Windows' own %NAME% notation would otherwise need.
+Source: "{#StageDir}\models\{#PiperVoice}.onnx"; DestDir: "{%USERPROFILE}\.local\share\piper\voices"; Flags: ignoreversion
+Source: "{#StageDir}\models\{#PiperVoice}.onnx.json"; DestDir: "{%USERPROFILE}\.local\share\piper\voices"; Flags: ignoreversion
+Source: "{#StageDir}\models\ggml-{#WhisperModel}.bin"; DestDir: "{%USERPROFILE}\.local\share\whisper"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Aether1 Platform"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"
