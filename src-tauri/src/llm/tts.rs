@@ -61,13 +61,20 @@ fn cache_key(text: &str, voice: &str, rate: i32, pitch: i32) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Which engine to use. `Auto` prefers the local one and falls back to the cloud, which is
-/// what makes "install Piper" the whole of the setup story.
+/// Which engine to use. `Auto` tries Piper, then the cloud, then the OS's own built-in
+/// voice, in that order, and only moves to the next one when the previous is either not
+/// installed or actually fails -- see generate_speech_with. That third rung is what makes
+/// "install Piper" optional rather than mandatory: Piper needs a manual binary + voice
+/// install and the cloud engine needs a reachable network, but the OS engine needs neither
+/// (SAPI ships with every copy of Windows; espeak-ng is one setup.sh package away on
+/// Linux), so Auto always has *something* to speak with, on a machine that has done
+/// nothing but run setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
     Auto,
     Local,
     Cloud,
+    Os,
 }
 
 impl Engine {
@@ -75,9 +82,111 @@ impl Engine {
         match key {
             "local" | "piper" => Engine::Local,
             "cloud" | "msedge" | "edge" => Engine::Cloud,
+            "os" | "system" | "sapi" | "espeak" => Engine::Os,
             _ => Engine::Auto,
         }
     }
+}
+
+/// Name of the OS engine `Os`/`Auto` would actually use, for the settings panel -- distinct
+/// strings because the fix for "not installed" differs (nothing to install on Windows).
+pub fn os_engine_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Windows Speech (SAPI)"
+    } else {
+        "espeak-ng"
+    }
+}
+
+/// Whether the OS engine is actually available: always true on Windows (SAPI ships with
+/// the OS -- there's nothing to check), conditional on Linux where espeak-ng is a package
+/// setup.sh installs but an existing checkout may predate.
+pub fn os_status() -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        return Ok(());
+    }
+    if which::which("espeak-ng").is_ok() || which::which("espeak").is_ok() {
+        Ok(())
+    } else {
+        Err(
+            "espeak-ng is not installed -- re-run ./setup.sh, or install your \
+             distribution's espeak-ng package by hand"
+                .to_string(),
+        )
+    }
+}
+
+/// Speaks through whatever the OS provides on its own: SAPI via PowerShell on Windows
+/// (`System.Speech` has shipped with every edition since Vista, so this needs no install
+/// and cannot be missing the way Piper or espeak-ng can), espeak-ng elsewhere. This is the
+/// engine of last resort -- lowest audio quality of the three, but the one Auto can always
+/// fall back to, which is the whole point of it existing.
+#[cfg(target_os = "windows")]
+fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
+    // Single-quoted PowerShell string: the only character that needs escaping is the
+    // quote itself, doubled. Building the whole SpeechSynthesizer pipeline in one
+    // -Command string (rather than a temp .ps1 script) keeps this to one process spawn.
+    let escaped_text = text.replace('\'', "''");
+    let escaped_path = output_path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "Add-Type -AssemblyName System.Speech; \
+         $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+         $s.SetOutputToWaveFile('{escaped_path}'); \
+         $s.Speak('{escaped_text}'); \
+         $s.Dispose();"
+    );
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|e| format!("could not start powershell: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Windows Speech failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if !output_path.exists() {
+        return Err("Windows Speech produced no audio".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
+    let binary = which::which("espeak-ng")
+        .or_else(|_| which::which("espeak"))
+        .map_err(|_| os_status().unwrap_err())?;
+
+    let mut child = Command::new(&binary)
+        .arg("-w")
+        .arg(output_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start {}: {e}", binary.display()))?;
+
+    child
+        .stdin
+        .as_mut()
+        .ok_or("no stdin on the speech process")?
+        .write_all(text.as_bytes())
+        .map_err(|e| format!("could not send text to {}: {e}", binary.display()))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("could not wait for {}: {e}", binary.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{} failed: {}",
+            binary.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if !output_path.exists() {
+        return Err(format!("{} produced no audio", binary.display()));
+    }
+    Ok(())
 }
 
 /// The Piper binary, if one is installed.
@@ -214,18 +323,9 @@ pub fn generate_speech_with(
         .map_err(|e| format!("could not create {}: {e}", cache_dir.display()))?;
 
     let voice_name = voice.filter(|v| !v.is_empty()).unwrap_or(DEFAULT_VOICE);
-    let local = local_status(local_voice);
 
-    // Auto is the whole point: local when it is there, cloud when it isn't, without the
-    // operator having to know which.
-    let use_local = match engine {
-        Engine::Local => true,
-        Engine::Cloud => false,
-        Engine::Auto => local.is_ok(),
-    };
-
-    if use_local {
-        let (binary, voice_model) = local?;
+    let try_local = || -> Result<PathBuf, String> {
+        let (binary, voice_model) = local_status(local_voice)?;
         let key = cache_key(
             &clean_text,
             &format!("piper:{}", voice_model.display()),
@@ -233,24 +333,51 @@ pub fn generate_speech_with(
             0,
         );
         let output_path = cache_dir.join(format!("{key}.wav"));
-        if let Ok(metadata) = std::fs::metadata(&output_path) {
-            if metadata.len() > 0 {
-                return Ok(output_path);
-            }
-        }
-        synthesize_local(&binary, &voice_model, &clean_text, &output_path)?;
-        return Ok(output_path);
-    }
-
-    let key = cache_key(&clean_text, voice_name, DEFAULT_RATE, DEFAULT_PITCH);
-    let output_path = cache_dir.join(format!("{key}.mp3"));
-    if let Ok(metadata) = std::fs::metadata(&output_path) {
-        if metadata.len() > 0 {
+        if matches!(std::fs::metadata(&output_path), Ok(m) if m.len() > 0) {
             return Ok(output_path);
         }
+        synthesize_local(&binary, &voice_model, &clean_text, &output_path)?;
+        Ok(output_path)
+    };
+
+    let try_cloud = || -> Result<PathBuf, String> {
+        let key = cache_key(&clean_text, voice_name, DEFAULT_RATE, DEFAULT_PITCH);
+        let output_path = cache_dir.join(format!("{key}.mp3"));
+        if matches!(std::fs::metadata(&output_path), Ok(m) if m.len() > 0) {
+            return Ok(output_path);
+        }
+        synthesize_cloud(voice_name, &clean_text, &output_path)?;
+        Ok(output_path)
+    };
+
+    let try_os = || -> Result<PathBuf, String> {
+        os_status()?;
+        // Not part of the cache key with anything voice-specific -- there is exactly one
+        // OS voice as far as this function is concerned (whatever SAPI/espeak-ng defaults
+        // to), so "os-native" alone is enough to keep this out of the other engines' cache
+        // entries for the same text.
+        let key = cache_key(&clean_text, "os-native", 0, 0);
+        let output_path = cache_dir.join(format!("{key}.wav"));
+        if matches!(std::fs::metadata(&output_path), Ok(m) if m.len() > 0) {
+            return Ok(output_path);
+        }
+        synthesize_os(&clean_text, &output_path)?;
+        Ok(output_path)
+    };
+
+    match engine {
+        Engine::Local => try_local(),
+        Engine::Cloud => try_cloud(),
+        Engine::Os => try_os(),
+        // Auto is the whole point: try each in turn and fall through on failure, not just
+        // on "not installed" -- a Piper binary that crashes or a cloud call that times out
+        // gets the same treatment as not having them at all, because either way the
+        // operator still needs to hear something. This is guaranteed to end in Ok on
+        // Windows (SAPI can't be "not installed"); on Linux it still needs espeak-ng,
+        // which is the one thing among all three engines setup.sh actually installs by
+        // default, but an existing checkout that predates that change could still lack it.
+        Engine::Auto => try_local().or_else(|_| try_cloud()).or_else(|_| try_os()),
     }
-    synthesize_cloud(voice_name, &clean_text, &output_path)?;
-    Ok(output_path)
 }
 
 #[cfg(test)]
@@ -275,8 +402,40 @@ mod tests {
         assert_eq!(Engine::from_key("local"), Engine::Local);
         assert_eq!(Engine::from_key("piper"), Engine::Local);
         assert_eq!(Engine::from_key("cloud"), Engine::Cloud);
+        assert_eq!(Engine::from_key("os"), Engine::Os);
+        assert_eq!(Engine::from_key("system"), Engine::Os);
+        assert_eq!(Engine::from_key("sapi"), Engine::Os);
+        assert_eq!(Engine::from_key("espeak"), Engine::Os);
         assert_eq!(Engine::from_key(""), Engine::Auto);
         assert_eq!(Engine::from_key("something else"), Engine::Auto);
+    }
+
+    #[test]
+    fn os_engine_is_never_missing_on_windows_and_says_why_when_it_is_elsewhere() {
+        if cfg!(target_os = "windows") {
+            // SAPI ships with the OS -- os_status() has nothing to check and cannot fail.
+            assert!(os_status().is_ok());
+            return;
+        }
+        if which::which("espeak-ng").is_err() && which::which("espeak").is_err() {
+            let err = os_status().unwrap_err();
+            assert!(err.contains("espeak-ng"), "{err}");
+        }
+    }
+
+    #[test]
+    fn auto_falls_all_the_way_through_to_the_os_engine_when_nothing_else_is_available() {
+        // Can't control whether Piper/espeak-ng are actually installed on the machine
+        // running this test, or whether the cloud endpoint is reachable -- but Auto must
+        // never itself be the reason all three fail when at least the OS engine can speak,
+        // which on this OS it either always can (Windows) or can be asserted about
+        // directly via os_status() (see the test above).
+        if cfg!(target_os = "windows") || os_status().is_ok() {
+            let dir = std::env::temp_dir().join(format!("aether1_tts_auto_{}", std::process::id()));
+            let result = generate_speech_with(&dir, "hello", Engine::Auto, None, None);
+            assert!(result.is_ok(), "{result:?}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

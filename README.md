@@ -91,26 +91,40 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 | Distribution | Packages |
 | --- | --- |
-| Arch, CachyOS, Manjaro, EndeavourOS | `base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify` |
-| Fedora, Nobara, RHEL | `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel curl wget file xdotool libnotify` plus the `c-development` group |
-| Debian, Ubuntu, Pop!\_OS, Mint | `build-essential pkg-config curl wget file libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libnotify-bin` |
-| openSUSE | `webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel libopenssl-devel curl wget file xdotool libnotify-tools` |
+| Arch, CachyOS, Manjaro, EndeavourOS | `base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify espeak-ng` |
+| Fedora, Nobara, RHEL | `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel curl wget file xdotool libnotify espeak-ng` plus the `c-development` group |
+| Debian, Ubuntu, Pop!\_OS, Mint | `build-essential pkg-config curl wget file libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libnotify-bin espeak-ng` |
+| openSUSE | `webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel libopenssl-devel curl wget file xdotool libnotify-tools espeak-ng` |
 
 If the build fails, the error names the missing piece: look for a package ending in `-dev`
 or `-devel`, install it, and re-run `./setup.sh`.
 
-### Optional: a voice that works offline
+### Speech: what's local, what isn't, and what always works
 
-Speech works out of the box using a cloud service, which means the text of everything the
-AI says leaves your machine. To keep it local, install either or both:
+Speaking (TTS) has three tiers, tried in that order by the default **Auto** engine so there
+is always something to speak with, on a machine that has done nothing but run setup:
 
-- **[Piper](https://github.com/rhasspy/piper)** for speech, plus a `.onnx` voice in
-  `~/.local/share/piper/voices`.
-- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for listening, plus a `.bin`
-  model in `~/.local/share/whisper`.
+1. **[Piper](https://github.com/rhasspy/piper)** -- the best-sounding local voice, if you
+   install its binary plus a `.onnx` voice in `~/.local/share/piper/voices`.
+2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
+   says leaves your machine, and it needs a network.
+3. **This OS's own voice** -- SAPI on Windows (ships with every edition, nothing to
+   install) or `espeak-ng` on Linux (installed by `./setup.sh`). Lower audio quality than
+   the other two, but it cannot be "not installed" the way Piper can or offline the way the
+   cloud engine is, which is what makes it the guaranteed fallback rather than an optional
+   extra.
 
-Aether1 finds them on its own and prefers them. Settings → Speech Engine says which of the
-two are local and what is missing.
+Listening (STT) only has the first two of those -- there is no universal OS-level
+equivalent to fall back to yet:
+
+- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for local listening, plus a
+  `.bin` model in `~/.local/share/whisper`.
+- Cloud, otherwise.
+
+Settings → Speech Engine reports which of these are actually available on this machine and
+what's missing for the rest, and lets you pin a specific tier instead of Auto (e.g. "Local
+only" to guarantee nothing ever leaves the machine, refusing to speak rather than silently
+falling back to the cloud).
 
 ## Choosing a model
 

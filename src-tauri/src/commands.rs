@@ -243,7 +243,15 @@ pub fn voice_status(engine: &LlmEngine) -> Value {
                 "binary": binary.display().to_string(),
                 "voice": voice.display().to_string(),
             }),
-            Err(why) => serde_json::json!({ "local": false, "why": why }),
+            // Piper isn't installed/configured, but Auto (and the OS-only choice) can
+            // still speak through the OS's own voice -- SAPI on Windows always, espeak-ng
+            // on Linux if setup.sh's package got installed. That is what "always works"
+            // means for speech out, so it counts as local here too rather than reporting
+            // the operator as one step further from offline than they actually are.
+            Err(why) => match llm::tts_os_status() {
+                Ok(()) => serde_json::json!({ "local": true, "binary": llm::tts_os_engine_name() }),
+                Err(_) => serde_json::json!({ "local": false, "why": why }),
+            },
         },
         "speech_in": match &speech_in {
             Ok((binary, model)) => serde_json::json!({
