@@ -23,8 +23,9 @@ Intended features
   - Persistent database storing chat sessions, user preferences, and memories across system reboots.
   - Type `remember that [fact]` or `save memory [key]: [value]` to store data permanently and locally.
 - **1-Click Packaging & Portability**:
-  - Auto-installer for Linux and Windows.
-  - Easy installation from GitHub via script or via packaging the entire system into a single `.tar.gz` bundle to transfer to a separate system.
+  - Auto-installer for Linux and Windows (`setup.sh` / `setup.bat`).
+  - Offline installers for both platforms with speech (Piper + whisper.cpp) already bundled
+    -- see "Offline install" below.
 
 ## Installing
 
@@ -74,6 +75,33 @@ closing the window leaves it running there rather than quitting.
 That is the development flow, and the fallback if the webview misbehaves; there is no tray
 icon on that path, because the tray belongs to the native app.
 
+### Offline install (no internet needed on the target machine)
+
+`setup.sh`/`setup.bat` both need a network the whole way through -- system packages, Rust
+itself if it's missing, and this repo. For a machine with none (an air-gapped box, a slow
+or metered connection, a fresh install before Wi-Fi is configured), each platform has an
+offline bundle instead, built by whoever cuts a release (see `.github/workflows/release.yml`,
+which does this for every tagged release) and requiring nothing but itself once built:
+
+- **Linux**: download `aether1-offline-linux-x86_64.tar.gz` from
+  [Releases](../../releases), then:
+  ```sh
+  tar -xzf aether1-offline-linux-x86_64.tar.gz
+  cd aether1-offline-linux-x86_64
+  ./install-offline.sh
+  ```
+- **Windows**: download `Aether1-Setup.exe` from [Releases](../../releases) and run it --
+  a normal installer, no PowerShell required.
+
+Both bundle Piper (TTS) and whisper.cpp (STT) with a voice and a model already inside, so
+speech works fully offline immediately, not just once you separately track those down --
+see the "Speech" section below for what that buys you either way. `THIRD_PARTY_NOTICES.md`
+in each bundle credits what's inside.
+
+This is a different distribution from cloning the repo: it installs a fixed version rather
+than a live checkout, so `git pull` isn't how you update it -- download a newer release
+instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` above instead.
+
 ### Building from source
 
 On Linux, Aether1 links against your system's webview and GTK stack. `setup.sh` installs
@@ -105,7 +133,8 @@ Speaking (TTS) has three tiers, tried in that order by the default **Auto** engi
 is always something to speak with, on a machine that has done nothing but run setup:
 
 1. **[Piper](https://github.com/rhasspy/piper)** -- the best-sounding local voice, if you
-   install its binary plus a `.onnx` voice in `~/.local/share/piper/voices`.
+   install its binary plus a `.onnx` voice in `~/.local/share/piper/voices` (the offline
+   installer above does this for you).
 2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
    says leaves your machine, and it needs a network.
 3. **This OS's own voice** -- SAPI on Windows (ships with every edition, nothing to
@@ -118,7 +147,7 @@ Listening (STT) only has the first two of those -- there is no universal OS-leve
 equivalent to fall back to yet:
 
 - **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for local listening, plus a
-  `.bin` model in `~/.local/share/whisper`.
+  `.bin` model in `~/.local/share/whisper` (also handled by the offline installer).
 - Cloud, otherwise.
 
 Settings → Speech Engine reports which of these are actually available on this machine and
