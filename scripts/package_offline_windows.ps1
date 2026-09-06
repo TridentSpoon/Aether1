@@ -9,11 +9,16 @@
 #
 # Usage: powershell -File scripts\package_offline_windows.ps1 [-OutDir dist]
 
+# WhisperCppRef must be new enough that the CLI example is named `whisper-cli`
+# (examples/cli/) rather than the older `main` (examples/main/) -- confirmed present at
+# v1.9.3, confirmed absent at v1.7.2 (the --target whisper-cli build below fails there with
+# MSB1009 "Project file does not exist: whisper-cli.vcxproj"). If bumping this ever breaks
+# the same way, check examples/cli/CMakeLists.txt exists at the new ref first.
 param(
     [string]$OutDir = "dist",
     [string]$PiperVersion = "2023.11.14-2",
     [string]$PiperVoice = "en_US-lessac-medium",
-    [string]$WhisperCppRef = "v1.7.2",
+    [string]$WhisperCppRef = "v1.9.3",
     [string]$WhisperModel = "small"
 )
 
