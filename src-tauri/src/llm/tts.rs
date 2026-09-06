@@ -71,6 +71,21 @@ pub enum Engine {
 }
 
 impl Engine {
+    /// What this engine means once local-only mode has had its say.
+    ///
+    /// With the mode on, `Auto` stops being "local if installed, cloud otherwise" and
+    /// becomes plain `Local`, and an explicit `Cloud` choice is overruled rather than
+    /// honoured. Overruling looks rude, but the alternative is a settings row quietly
+    /// beating the switch whose entire job is to say nothing leaves this machine -- and
+    /// the operator is told, both in Settings and in the error if Piper is missing.
+    pub fn resolve(self, local_only: bool) -> Engine {
+        if local_only {
+            Engine::Local
+        } else {
+            self
+        }
+    }
+
     pub fn from_key(key: &str) -> Engine {
         match key {
             "local" | "piper" => Engine::Local,
@@ -288,6 +303,22 @@ mod tests {
         if piper_binary().is_none() {
             let err = generate_speech_with(&dir, "hello", Engine::Local, None, None).unwrap_err();
             assert!(err.contains("no local speech engine"), "{err}");
+        }
+    }
+
+    #[test]
+    fn local_only_mode_overrules_every_engine_choice() {
+        // Including an explicit Cloud: a switch that says nothing leaves this machine
+        // cannot be outvoted by the dropdown above it.
+        for chosen in [Engine::Auto, Engine::Local, Engine::Cloud] {
+            assert_eq!(chosen.resolve(true), Engine::Local, "{chosen:?}");
+        }
+    }
+
+    #[test]
+    fn with_the_mode_off_the_engine_choice_stands() {
+        for chosen in [Engine::Auto, Engine::Local, Engine::Cloud] {
+            assert_eq!(chosen.resolve(false), chosen, "{chosen:?}");
         }
     }
 

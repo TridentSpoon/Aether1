@@ -407,13 +407,6 @@ document.addEventListener('DOMContentLoaded', () => {
         drawWaveform(data);
     };
 
-    voiceEngine.onSpeechResult = (transcript, isFinal) => {
-        chatInput.value = transcript;
-        if (isFinal && transcript.trim()) {
-            handleSendMessage();
-        }
-    };
-
     // Live Telemetry -- a Tauri event in the native app (see the background thread in
     // src-tauri/src/main.rs that emits "telemetry-update"), a WebSocket to the Python
     // backend in the browser flow. Same payload shape either way, so one handler covers both.
@@ -851,16 +844,53 @@ document.addEventListener('DOMContentLoaded', () => {
             const status = IS_TAURI
                 ? await tauriInvoke('voice_status_rust')
                 : await toolsApi('/api/voice/status');
-            const line = (label, part) => part.local
-                ? `<span class="text-emerald-400">✔</span> ${label}: local (${part.binary.split('/').pop()})`
-                : `<span class="text-amber-400">•</span> ${label}: cloud — ${part.why}`;
+            // Only speaking has ever had a cloud fallback. Listening is local or it does
+            // not happen -- saying "cloud" there told the operator a missing whisper.cpp
+            // still worked over the network, which was never true. And with local-only
+            // mode on, speaking has no fallback either.
+            const line = (label, part, hasCloudFallback) => {
+                if (part.local) {
+                    return `<span class="text-emerald-400">✔</span> ${label}: local (${part.binary.split('/').pop()})`;
+                }
+                const state = hasCloudFallback && !status.local_only ? 'cloud' : 'unavailable';
+                return `<span class="text-amber-400">•</span> ${label}: ${state} — ${part.why}`;
+            };
+            const missingLocally = !status.speech_out.local || !status.speech_in.local;
             el.innerHTML = [
-                line('Speaking', status.speech_out),
-                line('Listening', status.speech_in),
+                line('Speaking', status.speech_out, true),
+                line('Listening', status.speech_in, false),
                 status.offline_capable
                     ? '<span class="text-emerald-400">Works with the network unplugged.</span>'
-                    : '<span class="text-amber-400">Needs the network for the parts marked above.</span>'
-            ].join('<br/>');
+                    : status.local_only
+                        ? '<span class="text-amber-400">Local only is on, so the parts marked above stay silent until they are installed.</span>'
+                        : missingLocally
+                            ? '<span class="text-amber-400">The parts marked above are not installed.</span>'
+                            : ''
+            ].filter(Boolean).join('<br/>');
+
+            // The environment can nail the mode on (AETHER1_LOCAL_ONLY). Where it has, the
+            // checkbox is shown for what it is rather than left looking like a live control.
+            const localOnlyToggle = document.getElementById('setting-local-only');
+            const forcedNote = document.getElementById('local-only-forced');
+            if (localOnlyToggle && status.local_only_forced) {
+                localOnlyToggle.checked = true;
+                localOnlyToggle.disabled = true;
+            }
+            if (forcedNote) forcedNote.classList.toggle('hidden', !status.local_only_forced);
+
+            // The engine dropdown above describes a cloud fallback the mode has closed, so
+            // it is reworded rather than left advertising something that cannot happen.
+            const engineSelect = document.getElementById('setting-tts-engine');
+            if (engineSelect) {
+                const cloud = engineSelect.querySelector('option[value="cloud"]');
+                if (cloud) cloud.disabled = !!status.local_only;
+                const auto = engineSelect.querySelector('option[value="auto"]');
+                if (auto) {
+                    auto.textContent = status.local_only
+                        ? 'Auto — Piper only while Local only is on'
+                        : 'Auto — local if installed, otherwise cloud';
+                }
+            }
         } catch (e) {
             el.textContent = `Could not check the voice engines: ${e.message}`;
         }
@@ -1461,6 +1491,9 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
             document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
             document.getElementById('setting-vault-path').value = s.vault_path || '';
+            document.getElementById('setting-local-only').checked = s.local_only === true;
+            // After the checkbox is set, not before: loadVoiceStatus is what discovers an
+            // environment-forced mode and overrides the saved value on screen.
             loadVoiceStatus();
             document.getElementById('setting-tools').checked = s.tools_enabled === true;
             document.getElementById('setting-command-allowlist').value =
@@ -1494,6 +1527,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
                 tts_engine: document.getElementById('setting-tts-engine').value,
+                local_only: document.getElementById('setting-local-only').checked,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 // Sent only from the native app: the browser fallback has no window for the
                 // OS to summon, and saving a chord there would promise something that can't
@@ -1521,6 +1555,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 if (!resp.ok) throw new Error(`settings save failed: ${resp.status}`);
             }
+            // The mode changes what the two speech engines mean, so the readout under them
+            // is re-asked rather than left describing the settings as they were.
+            loadVoiceStatus();
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');

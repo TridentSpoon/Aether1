@@ -565,6 +565,26 @@
                     </p>
                 </div>
 
+                <div class="space-y-1 pt-1">
+                    <label class="text-xs font-mono text-cyan-300 block">NETWORK</label>
+                    <div class="flex items-center gap-2">
+                        <input id="setting-local-only" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                        <label for="setting-local-only" class="text-xs font-mono text-slate-300">Local only &mdash; never reach the internet</label>
+                    </div>
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                        Nothing leaves this machine or your local network. Cloud providers are
+                        refused, speech uses Piper or stays silent rather than sending your words
+                        to Microsoft, and update checks and model downloads stop. A model server
+                        on your own LAN still works &mdash; that is the point. Turning this on
+                        does not delete anything; switch it off and your cloud settings are still
+                        there.
+                    </p>
+                    <p id="local-only-forced" class="text-[10px] font-mono text-amber-400 leading-snug pl-6 hidden">
+                        Forced on by <span class="text-cyan-300">AETHER1_LOCAL_ONLY</span> in this
+                        environment &mdash; the checkbox cannot switch it off.
+                    </p>
+                </div>
+
                 <div class="space-y-1">
                     <label class="text-xs font-mono text-cyan-300 block">SPEECH ENGINE</label>
                     <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
@@ -645,8 +665,8 @@
     <script src="js/hologram/avatar-custom.js?v=1"></script>
     <script src="js/hologram/avatar-a1.js?v=1"></script>
     <script src="js/hologram/animate.js?v=36"></script>
-    <script src="js/voice.js?v=16"></script>
-    <script src="js/app.js?v=21"></script>
+    <script src="js/voice.js?v=17"></script>
+    <script src="js/app.js?v=24"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

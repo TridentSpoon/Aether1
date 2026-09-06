@@ -26,6 +26,10 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "f
 tower-http = { version = "0.7.0", features = ["fs"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+# Already in the tree via tauri; taken as a direct dependency so local_only.rs can decide
+# whether a configured endpoint is on this machine or the local network by parsing its
+# host properly, rather than by string-matching a URL.
+url = "2"
 
 [profile.release]
 panic = "abort"

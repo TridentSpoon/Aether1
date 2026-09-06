@@ -219,6 +219,17 @@ impl Tool for SetSetting {
             .get("value")
             .ok_or("missing required argument \"value\"")?;
 
+        // With local-only mode on, "switch yourself to OpenAI" is not a settings change,
+        // it is a way out of the mode -- so it is refused here rather than left to be
+        // caught later by the provider call that would have made the request.
+        if crate::local_only::enabled(ctx.db) {
+            if let Some(why) = crate::local_only::setting_reaches_the_internet(key, value) {
+                return Err(crate::local_only::refusal(&format!(
+                    "{key} was not changed ({why})"
+                )));
+            }
+        }
+
         let previous = ctx.db.get_setting(key).ok().flatten();
         ctx.db
             .set_setting(key, value)
