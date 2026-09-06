@@ -298,7 +298,21 @@ fn synthesize_local(
     Ok(())
 }
 
+/// rustls needs exactly one process-wide `CryptoProvider` installed before any TLS
+/// connection can be built. With both the `ring` and `aws-lc-rs` backends pulled in
+/// transitively (ureq wants one, msedge-tts's platform-verifier wants the other), rustls
+/// can no longer pick one automatically from crate features and instead panics --
+/// `install_default()` makes the choice explicit. `LazyLock` runs this exactly once no
+/// matter how many times `synthesize_cloud` is called; the install itself can still race
+/// with some other part of the process installing a provider first, so the result is
+/// discarded rather than unwrapped -- either way, by the time this returns, a provider is
+/// installed.
+static CRYPTO_PROVIDER: LazyLock<()> = LazyLock::new(|| {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+});
+
 fn synthesize_cloud(voice_name: &str, text: &str, output_path: &Path) -> Result<(), String> {
+    LazyLock::force(&CRYPTO_PROVIDER);
     let config = SpeechConfig {
         voice_name: voice_name.to_string(),
         audio_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
