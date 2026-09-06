@@ -1,0 +1,117 @@
+# Builds the offline-install bundles (see scripts/package_offline_linux.sh and
+# scripts/package_offline_windows.ps1) and attaches them to a GitHub Release. This is the
+# only place either packaging script normally runs -- they need internet access to fetch
+# Piper/whisper.cpp/their models, which is exactly what the *installers they produce* don't
+# need, so doing that fetching here rather than on someone's machine is the point.
+#
+# Triggered by pushing a version tag (v1.2.3) or manually via workflow_dispatch for a test
+# run without cutting a real release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-offline-bundle:
+    name: Linux offline bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same list as ci.yml's build-dependency step -- kept separate rather than shared
+      # because this workflow's whole job is different (produces a release asset, not a
+      # pass/fail check), and duplicating six package names is cheaper than the indirection
+      # needed to share them.
+      - name: Install the Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libnotify-bin cmake
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Package the offline bundle
+        run: ./scripts/package_offline_linux.sh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether1-offline-linux-x86_64
+          path: dist/aether1-offline-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows-installer:
+    name: Windows offline installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # windows-latest ships Inno Setup preinstalled; this is a defensive fallback in case
+      # that ever changes, not the expected path on a normal run.
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+
+      # Strips the leading "v" (v1.2.3 -> 1.2.3) for Inno Setup's AppVersion, which the
+      # tag itself isn't in the right shape for. Falls back to the .iss's own "0.0.0-dev"
+      # default on a workflow_dispatch run with no tag.
+      - name: Compute the version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ("${{ github.ref_type }}" -ne "tag") { $version = "" }
+          echo "AETHER1_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Package the offline installer
+        shell: pwsh
+        run: .\scripts\package_offline_windows.ps1 -OutDir dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether1-offline-windows-installer
+          path: dist/Aether1-Setup.exe
+          if-no-files-found: error
+
+  publish-release:
+    name: Attach to the GitHub Release
+    # Only for a real tag push -- workflow_dispatch is for testing the packaging itself
+    # without also needing a release to exist to attach to.
+    if: github.ref_type == 'tag'
+    needs: [linux-offline-bundle, windows-installer]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/aether1-offline-linux-x86_64.tar.gz
+            dist/Aether1-Setup.exe
+          generate_release_notes: true

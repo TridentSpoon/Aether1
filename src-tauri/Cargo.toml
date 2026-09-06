@@ -17,6 +17,9 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json"] 
 # needed for this to build on Windows without extra setup.
 rusqlite = { version = "0.32", features = ["bundled"] }
 sysinfo = "0.32"
+# Battery info was dropped from sysinfo itself a few releases back; this is its
+# successor for that one piece (cross-platform: sysfs on Linux, SetupAPI on Windows).
+starship-battery = "0.11.1"
 which = "8"
 msedge-tts = { version = "0.4.0", default-features = false, features = ["blocking", "rustls"] }
 regex = "1.13.1"

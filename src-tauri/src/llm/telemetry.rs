@@ -4,7 +4,37 @@
 // way -- the same code path here runs on Linux and Windows.
 
 use std::thread;
+// Aliased: this crate already has a local `percent` variable (the disk-usage calculation
+// below), and uom's unit marker types double as values, so the bare name collides with it.
+use starship_battery::units::ratio::percent as ratio_percent;
 use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
+
+/// A laptop's battery, when one is present -- desktops report no batteries at all, which
+/// `battery_status` below treats as `None` rather than an error.
+pub struct BatteryInfo {
+    pub percent: f32,
+    /// "charging" | "discharging" | "full" | "empty" | "unknown", matching
+    /// starship_battery::State's Display impl (kept as a string so the frontend doesn't
+    /// need to know about the Rust enum).
+    pub state: String,
+    /// True while running on battery power (i.e. actually discharging) -- what the HUD
+    /// needs to decide whether to warn the operator the machine has gone unplugged.
+    pub on_battery: bool,
+}
+
+/// Reads the first battery this machine reports, if any. A desktop with no battery at all
+/// is the common case, not an error, so this returns `None` for it the same as it does for
+/// a genuine read failure (no OS API most laptops need is going to be flaky in a way that's
+/// worth surfacing as distinct from "no battery" -- either way there's nothing to show).
+fn battery_status() -> Option<BatteryInfo> {
+    let manager = starship_battery::Manager::new().ok()?;
+    let battery = manager.batteries().ok()?.next()?.ok()?;
+    Some(BatteryInfo {
+        percent: battery.state_of_charge().get::<ratio_percent>(),
+        state: battery.state().to_string(),
+        on_battery: battery.state() == starship_battery::State::Discharging,
+    })
+}
 
 pub struct Telemetry {
     pub os_name: String,
@@ -21,6 +51,9 @@ pub struct Telemetry {
     pub network_upload_kbps: f64,
     pub uptime: String,
     pub status: &'static str,
+    /// None on a desktop (or anywhere the OS reports no battery) rather than an error --
+    /// see battery_status.
+    pub battery: Option<BatteryInfo>,
     pub top_processes: Vec<(String, f32)>,
 }
 
@@ -126,6 +159,7 @@ impl Telemetry {
             network_upload_kbps,
             uptime: format_uptime(System::uptime()),
             status,
+            battery: battery_status(),
             top_processes,
         }
     }
@@ -150,6 +184,13 @@ impl Telemetry {
                 "download_kbps": self.network_download_kbps,
                 "upload_kbps": self.network_upload_kbps,
             },
+            // null on a desktop -- the frontend hides the battery row entirely for that,
+            // rather than showing a permanent, meaningless 0%.
+            "battery": self.battery.as_ref().map(|b| serde_json::json!({
+                "percent": b.percent,
+                "state": b.state,
+                "on_battery": b.on_battery,
+            })),
         })
     }
 
@@ -177,6 +218,13 @@ impl Telemetry {
             self.network_download_kbps,
             self.network_upload_kbps,
         );
+
+        if let Some(battery) = &self.battery {
+            report.push_str(&format!(
+                "Battery: {:.0}% ({})\n",
+                battery.percent, battery.state
+            ));
+        }
 
         let processes = self
             .top_processes

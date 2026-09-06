@@ -117,11 +117,26 @@ fn fetch_latest_main_sha() -> Result<String, String> {
         .header("User-Agent", "AETHER1-desktop-app")
         .header("Accept", "application/vnd.github+json");
 
-    if let Some(token) = github_token() {
+    let token = github_token();
+    let have_token = token.is_some();
+    if let Some(token) = token {
         request = request.header("Authorization", format!("Bearer {token}"));
     }
 
-    let response = request.call().map_err(|e| e.to_string())?;
+    let response = request.call().map_err(|e| {
+        // A private repo 404s on an unauthenticated request -- indistinguishable from a
+        // genuinely missing repo, but far more likely given how this project is set up
+        // (see github_token's docs), and "http status: 404" on its own reads as a bug
+        // report waiting to happen rather than the expected result of not being logged
+        // into `gh` on this machine.
+        if !have_token && matches!(e, ureq::Error::StatusCode(404)) {
+            "this repo is private and no GitHub credentials were found on this machine -- \
+             install the `gh` CLI and run `gh auth login`, then try again"
+                .to_string()
+        } else {
+            e.to_string()
+        }
+    })?;
 
     response
         .into_body()

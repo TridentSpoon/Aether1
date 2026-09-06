@@ -407,6 +407,19 @@ body {
   box-shadow: var(--glow-cyan);
 }
 
+/* CPU/RAM/battery gauges add these once past a warning/critical threshold (see
+   updateHardwareTelemetry in app.js) -- previously dead classes with no matching rule, so
+   every gauge stayed cyan no matter how loaded the machine was. */
+.gauge-bar-fill.warn {
+  background: linear-gradient(90deg, var(--neon-amber), var(--neon-amber));
+  box-shadow: 0 0 10px rgba(255, 170, 0, 0.6);
+}
+
+.gauge-bar-fill.crit {
+  background: linear-gradient(90deg, var(--neon-red), var(--neon-red));
+  box-shadow: 0 0 10px rgba(255, 51, 102, 0.6);
+}
+
 .msg-user {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.2);

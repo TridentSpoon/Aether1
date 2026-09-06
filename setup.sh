@@ -45,21 +45,24 @@ fi
 # via a README section that did not exist, which is how "setup completed" and "nothing
 # installed" managed to be true at the same time.
 #
-# The list is Tauri's own Linux prerequisites plus libnotify for desktop notifications.
+# The list is Tauri's own Linux prerequisites, libnotify for desktop notifications, and
+# espeak-ng -- the always-works speech fallback (see llm/tts.rs's Engine::Auto) that needs
+# no separate voice download the way Piper does, so it's the one TTS engine this script can
+# actually guarantee rather than just document.
 echo "📦 Installing build dependencies ($DISTRO)..."
 DEPS_OK=1
 case "$DISTRO" in
     cachyos|arch|manjaro|endeavouros|garuda)
         $SUDO pacman -Sy --needed --noconfirm \
             git base-devel curl wget file openssl \
-            webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify \
+            webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify espeak-ng \
             || DEPS_OK=0
         ;;
     fedora|nobara|rhel|centos|bazzite)
         $SUDO dnf install -y \
             git curl wget file openssl-devel \
             webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel \
-            xdotool libnotify \
+            xdotool libnotify espeak-ng \
             && $SUDO dnf group install -y "c-development" \
             || DEPS_OK=0
         ;;
@@ -67,14 +70,14 @@ case "$DISTRO" in
         $SUDO apt-get update && $SUDO apt-get install -y \
             git build-essential pkg-config curl wget file libssl-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
-            libxdo-dev libnotify-bin \
+            libxdo-dev libnotify-bin espeak-ng \
             || DEPS_OK=0
         ;;
     opensuse*|suse|sles)
         $SUDO zypper install -y \
             git curl wget file libopenssl-devel \
             webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel \
-            xdotool libnotify-tools \
+            xdotool libnotify-tools espeak-ng \
             || DEPS_OK=0
         ;;
     *)
@@ -88,7 +91,7 @@ if [ "$DEPS_OK" -ne 1 ]; then
     echo "⚠ Could not install the build dependencies automatically."
     echo "  Aether1 needs your distribution's equivalents of:"
     echo "    webkit2gtk 4.1, gtk3, libappindicator-gtk3, librsvg, openssl, xdotool,"
-    echo "    a C toolchain (gcc/make/pkg-config), and libnotify."
+    echo "    a C toolchain (gcc/make/pkg-config), libnotify, and espeak-ng."
     echo "  Install those, then re-run ./setup.sh. Continuing anyway in case they are"
     echo "  already present."
     echo ""

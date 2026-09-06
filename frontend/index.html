@@ -180,6 +180,24 @@
                     </div>
                 </div>
 
+                <!-- Battery -- hidden entirely on a desktop (no battery to report); see
+                     updateHardwareTelemetry, which un-hides this the first time telemetry
+                     carries a non-null battery reading. -->
+                <div id="battery-section" class="space-y-1 hidden">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">BATTERY</span>
+                        <span id="battery-percent-val" class="text-cyan-400 font-bold">-- (--)</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="battery-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
+                    </div>
+                    <!-- Only shown while actually running unplugged -- see the docstring on
+                         updateHardwareTelemetry for why this checks on_battery specifically. -->
+                    <div id="battery-warning" class="hidden text-[10px] font-mono text-amber-400 flex items-center gap-1">
+                        ⚠ RUNNING ON BATTERY POWER
+                    </div>
+                </div>
+
                 <!-- Network Speeds -->
                 <div class="grid grid-cols-2 gap-2 pt-1 border-t border-cyan-500/20 text-xs font-mono">
                     <div class="bg-slate-900/60 p-2 rounded border border-cyan-500/20">
@@ -588,9 +606,10 @@
                 <div class="space-y-1">
                     <label class="text-xs font-mono text-cyan-300 block">SPEECH ENGINE</label>
                     <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <option value="auto">Auto — local if installed, otherwise cloud</option>
+                        <option value="auto">Auto — Piper, then cloud, then this OS's built-in voice</option>
                         <option value="local">Local only (Piper) — never leaves this machine</option>
                         <option value="cloud">Cloud (Microsoft) — better voices, text is sent away</option>
+                        <option value="os">This OS's built-in voice only — always available, never leaves this machine</option>
                     </select>
                     <div id="voice-status" class="text-[10px] font-mono text-slate-400 leading-snug"></div>
                 </div>

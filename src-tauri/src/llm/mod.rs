@@ -23,7 +23,8 @@ pub use providers::Sink;
 pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
 pub use telemetry::Telemetry;
 pub use tts::{
-    generate_speech_with, local_status as tts_local_status, Engine as TtsEngine, DEFAULT_VOICE,
+    generate_speech_with, local_status as tts_local_status, os_engine_name as tts_os_engine_name,
+    os_status as tts_os_status, Engine as TtsEngine, DEFAULT_VOICE,
 };
 
 /// How many times the model may call tools before it has to answer. High enough for a
