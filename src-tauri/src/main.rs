@@ -63,12 +63,32 @@ const BUILT_PR_REV: &str = env!("AETHER1_PR_REV");
 const APP_VERSION: &str = concat!("Aether1 0.3.Rev", env!("AETHER1_PR_REV"));
 
 /// CARGO_MANIFEST_DIR is src-tauri/ at build time; frontend/ and the backend/ data
-/// directory (aether1_memory.db, audio_cache/) all live one level up, at the repo root.
+/// directory (aether1_memory.db, audio_cache/) all live one level up, at the repo root --
+/// for a dev build compiled on this same machine, that is exactly right.
+///
+/// It is baked in at *compile* time, though, so a binary built by CI (the offline
+/// installer's release.yml) carries the runner's own checkout path (e.g.
+/// `D:\a\Aether1\Aether1` on the Windows runner) -- a path that cannot exist on whichever
+/// machine later installs it. Every caller of this function reaches it via `.join("backend")
+/// .join(...)`, and `create_dir_all` fails silently there (caught, and for TTS/STT
+/// swallowed all the way up to a console.warn the operator never sees) rather than
+/// panicking, so the symptom is "speech does nothing" with no error, not a crash.
+///
+/// Detecting the two cases at runtime -- does frontend/ actually exist next to the baked-in
+/// path on *this* machine? -- and falling back to the same ~/.local/share convention
+/// already used for Piper's and whisper.cpp's own data (see llm/tts.rs, llm/stt.rs) keeps
+/// every existing caller unchanged; only where "backend" ends up living differs.
 fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let baked_in = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("src-tauri should have a parent directory")
-        .to_path_buf()
+        .to_path_buf();
+    if baked_in.join("frontend").is_dir() {
+        return baked_in;
+    }
+    paths::home_dir()
+        .map(|home| home.join(".local").join("share").join("aether1"))
+        .unwrap_or(baked_in)
 }
 
 #[derive(Deserialize)]
