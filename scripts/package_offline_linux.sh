@@ -30,9 +30,15 @@ trap 'rm -rf "$STAGE"' EXIT
 
 # Pinned rather than "latest" so a release built today and one built in six months bundle
 # the same thing -- bump these deliberately, not by surprise on the next run.
+#
+# WHISPER_CPP_REF must be new enough that the CLI example is named `whisper-cli`
+# (examples/cli/) rather than the older `main` (examples/main/) -- confirmed present at
+# v1.9.3, confirmed absent at v1.7.2 (the --target whisper-cli build below fails there with
+# "No rule to make target"). If bumping this ever breaks the same way, check
+# examples/cli/CMakeLists.txt exists at the new ref before assuming something else broke.
 PIPER_VERSION="${PIPER_VERSION:-2023.11.14-2}"
 PIPER_VOICE="${PIPER_VOICE:-en_US-lessac-medium}"
-WHISPER_CPP_REF="${WHISPER_CPP_REF:-v1.7.2}"
+WHISPER_CPP_REF="${WHISPER_CPP_REF:-v1.9.3}"
 WHISPER_MODEL="${WHISPER_MODEL:-small}"
 
 echo "======================================================================"
