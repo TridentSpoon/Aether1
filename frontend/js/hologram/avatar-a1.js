@@ -6,6 +6,10 @@
  * deliberately reads as a blank slate: no eyes, no face, just the wordmark rendered as
  * scattered light, ASCII-art style, in three dimensions. The 'A' is denser than the '1'
  * so it still reads as the mark's more solid half without needing an actual solid mesh.
+ * The '1's flag naturally reaches back far enough to overlap the 'A's right leg at the
+ * top -- rather than let the two clouds mix there, the 'A' is sampled with that overlap
+ * subtracted out, so the '1's own points show through cleanly where its top point cuts
+ * through the 'A' instead of both colours crowding the same spot.
  *
  * Registered through the same HologramAvatar.registerAvatar() contract any avatar file
  * uses -- see js/hologram/README.md and avatar-template.js -- rather than hand-attached
@@ -24,7 +28,15 @@
 // the odd/even parity this test depends on -- a point actually inside the shape would see
 // zero forward crossings and read as outside. DoubleSide counts both, so parity means
 // what it should.
-function sampleVolumePoints(shape, extrudeSettings, pointCount) {
+//
+// `exclude`, when given ({ shape, offset }), subtracts a second shape from the result: a
+// point otherwise inside `shape` is rejected if it also falls inside `exclude.shape`.
+// Both shapes are sampled/tested in their own centred-on-their-own-centroid space (same
+// as the geometry each ends up rendered from), so `exclude.offset` carries a candidate
+// point from `shape`'s centred space into `exclude.shape`'s centred space -- in practice
+// the difference between the two Points objects' final positions in the group, i.e.
+// where each actually ends up once placed side by side in the scene.
+function sampleVolumePoints(shape, extrudeSettings, pointCount, exclude) {
     const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
     geo.center();
     geo.computeBoundingBox();
@@ -34,9 +46,17 @@ function sampleVolumePoints(shape, extrudeSettings, pointCount) {
     const raycaster = new THREE.Raycaster();
     const dummyMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
 
+    let excludeMesh = null;
+    if (exclude) {
+        const excludeGeo = new THREE.ExtrudeGeometry(exclude.shape, extrudeSettings);
+        excludeGeo.center();
+        excludeMesh = new THREE.Mesh(excludeGeo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    }
+
     let validPoints = 0;
     let attempts = 0;
-    const maxAttempts = pointCount * 200; // guards a degenerate shape from ever hanging the build
+    const maxAttempts = pointCount * 300; // guards a degenerate shape from ever hanging the build
+    const shiftedPt = new THREE.Vector3();
     while (validPoints < pointCount && attempts < maxAttempts) {
         attempts++;
         const testPt = new THREE.Vector3(
@@ -47,13 +67,18 @@ function sampleVolumePoints(shape, extrudeSettings, pointCount) {
 
         // Odd number of raycast intersections = point is inside the volume.
         raycaster.set(testPt, new THREE.Vector3(0, 0, 1));
-        const hits = raycaster.intersectObject(dummyMesh, false);
-        if (hits.length % 2 === 1) {
-            positions[validPoints * 3] = testPt.x;
-            positions[validPoints * 3 + 1] = testPt.y;
-            positions[validPoints * 3 + 2] = testPt.z;
-            validPoints++;
+        if (raycaster.intersectObject(dummyMesh, false).length % 2 !== 1) continue;
+
+        if (excludeMesh) {
+            shiftedPt.copy(testPt).add(exclude.offset);
+            raycaster.set(shiftedPt, new THREE.Vector3(0, 0, 1));
+            if (raycaster.intersectObject(excludeMesh, false).length % 2 === 1) continue;
         }
+
+        positions[validPoints * 3] = testPt.x;
+        positions[validPoints * 3 + 1] = testPt.y;
+        positions[validPoints * 3 + 2] = testPt.z;
+        validPoints++;
     }
     return positions;
 }
@@ -98,17 +123,12 @@ HologramAvatar.registerAvatar({
         holeA.closePath();
         shapeA.holes.push(holeA);
 
-        const aPositions = sampleVolumePoints(shapeA, extrudeSettings, 4500);
-        const aPointCloudGeo = new THREE.BufferGeometry();
-        aPointCloudGeo.setAttribute('position', new THREE.BufferAttribute(aPositions, 3));
-        const aPointsMaterial = new THREE.PointsMaterial({ color: api.palette.hex, size: 2.1 });
-        const aPoints = new THREE.Points(aPointCloudGeo, aPointsMaterial);
-        aPoints.position.set(-13, 0, 0);
-        group.add(aPoints);
-
         // --- '1': the same technique, sparser -- the "digital" half sitting beside the
         // 'A's denser half, same contrast the reference monogram this was built from drew
-        // between its two halves. ---
+        // between its two halves. Its flag (the top-left corner, the numeral's "top
+        // point") reaches back far enough that it geometrically overlaps the 'A's right
+        // leg once both are placed -- see aPointsOffset/onePointsOffset below, and the
+        // exclusion passed into the 'A's own sampling. ---
         const shapeOne = new THREE.Shape();
         shapeOne.moveTo(15.6, 39.0);
         shapeOne.lineTo(0.0, 27.3);   // top-left beak notch
@@ -123,12 +143,30 @@ HologramAvatar.registerAvatar({
         shapeOne.lineTo(31.2, 39.0);  // top right corner
         shapeOne.closePath();
 
+        // Where each point cloud's own centred geometry ends up once placed in the group
+        // -- kept as named vectors (rather than inlined into position.set() calls below)
+        // since the 'A's sampling also needs this same pair of offsets to know where the
+        // '1' actually lands, to subtract it out correctly.
+        const aPointsOffset = new THREE.Vector3(-13, 0, 0);
+        const onePointsOffset = new THREE.Vector3(28.6, 0, 0);
+
+        const aPositions = sampleVolumePoints(shapeA, extrudeSettings, 4500, {
+            shape: shapeOne,
+            offset: new THREE.Vector3().subVectors(aPointsOffset, onePointsOffset)
+        });
+        const aPointCloudGeo = new THREE.BufferGeometry();
+        aPointCloudGeo.setAttribute('position', new THREE.BufferAttribute(aPositions, 3));
+        const aPointsMaterial = new THREE.PointsMaterial({ color: api.palette.hex, size: 2.1 });
+        const aPoints = new THREE.Points(aPointCloudGeo, aPointsMaterial);
+        aPoints.position.copy(aPointsOffset);
+        group.add(aPoints);
+
         const onePositions = sampleVolumePoints(shapeOne, extrudeSettings, 1800);
         const onePointCloudGeo = new THREE.BufferGeometry();
         onePointCloudGeo.setAttribute('position', new THREE.BufferAttribute(onePositions, 3));
         const onePointsMaterial = new THREE.PointsMaterial({ color: api.palette.hex3, size: 1.6 });
         const onePoints = new THREE.Points(onePointCloudGeo, onePointsMaterial);
-        onePoints.position.set(28.6, 0, 0);
+        onePoints.position.copy(onePointsOffset);
         group.add(onePoints);
 
         // Soft backing glow so the monogram doesn't read as flat/empty at rest -- every
