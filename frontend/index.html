@@ -180,6 +180,24 @@
                     </div>
                 </div>
 
+                <!-- Battery -- hidden entirely on a desktop (no battery to report); see
+                     updateHardwareTelemetry, which un-hides this the first time telemetry
+                     carries a non-null battery reading. -->
+                <div id="battery-section" class="space-y-1 hidden">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">BATTERY</span>
+                        <span id="battery-percent-val" class="text-cyan-400 font-bold">-- (--)</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="battery-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
+                    </div>
+                    <!-- Only shown while actually running unplugged -- see the docstring on
+                         updateHardwareTelemetry for why this checks on_battery specifically. -->
+                    <div id="battery-warning" class="hidden text-[10px] font-mono text-amber-400 flex items-center gap-1">
+                        ⚠ RUNNING ON BATTERY POWER
+                    </div>
+                </div>
+
                 <!-- Network Speeds -->
                 <div class="grid grid-cols-2 gap-2 pt-1 border-t border-cyan-500/20 text-xs font-mono">
                     <div class="bg-slate-900/60 p-2 rounded border border-cyan-500/20">
