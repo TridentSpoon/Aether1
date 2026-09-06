@@ -58,7 +58,17 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
     }))
 }
 
-pub fn pull_model(model_name: String) -> model_scanner::PullResult {
+/// Downloads a model through the local Ollama, which fetches it from Ollama's registry --
+/// the one deliberate internet round trip left in the app, and the reason local-only mode
+/// has to have an opinion about it. Refusing is the honest answer: the mode says nothing
+/// leaves this machine, and a model pull is a download.
+pub fn pull_model(engine: &LlmEngine, model_name: String) -> model_scanner::PullResult {
+    if crate::local_only::enabled(engine.db()) {
+        return model_scanner::PullResult {
+            status: model_scanner::PullStatus::Error,
+            message: crate::local_only::refusal("no model was downloaded"),
+        };
+    }
     let model_name = if model_name.trim().is_empty() {
         "llama3.2:1b".to_string()
     } else {
@@ -116,6 +126,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "vault_path": "",
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
         "desktop_sprite_enabled": false,
+        "local_only": false,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())
@@ -198,13 +209,32 @@ pub fn synthesize_speech(
     let cache_dir = project_root().join("backend").join("audio_cache");
     let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);
     let local_voice = db.get_setting_string("tts_local_voice", "");
+
+    // The cloud voice is the one path that used to leave the machine without anyone
+    // choosing it: with Piper absent, `auto` quietly sent the text of everything the
+    // companion said to Microsoft. Local-only mode collapses that choice to Piper, and
+    // when Piper is not installed it says so instead of reaching out.
+    let local_only = crate::local_only::enabled(db);
+    let tts_engine =
+        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
+
     llm::generate_speech_with(
         &cache_dir,
         text,
-        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")),
+        tts_engine,
         Some(voice.unwrap_or(&configured_voice)),
         Some(&local_voice),
     )
+    .map_err(|why| {
+        if local_only {
+            format!(
+                "{} ({why})",
+                crate::local_only::refusal("the cloud voice was not used")
+            )
+        } else {
+            why
+        }
+    })
 }
 
 /// Transcribes a recording made in the page. The audio is written to the same cache
@@ -237,6 +267,11 @@ pub fn voice_status(engine: &LlmEngine) -> Value {
 
     serde_json::json!({
         "tts_engine": tts_engine,
+        // Reported next to the two engines because it changes what they mean: with the
+        // mode on, "auto" is Piper or nothing, and a missing Piper is now silence rather
+        // than an unannounced trip to a third party.
+        "local_only": crate::local_only::enabled(db),
+        "local_only_forced": crate::local_only::env_forced(),
         "speech_out": match &speech_out {
             Ok((binary, voice)) => serde_json::json!({
                 "local": true,

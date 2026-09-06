@@ -535,6 +535,53 @@ A shared secret the operator sets, checked on every route, is the minimum. Build
 on top of that, never before it -- and keep the two halves separable, so the host-only case
 ships without waiting for the network one.
 
+### Step 20: local-only mode — **shipped**
+
+The second stated goal was Aether1 running on local systems without needing the internet.
+Most of it was already true, but by accident rather than by decision: the HUD's assets are
+vendored, the scanner probes loopback, whisper.cpp listens locally and the vault is a
+folder of files -- so an install with Piper present and no cloud key configured never
+touched the network, and an install without Piper narrated everything it said to Microsoft.
+Both were the same build with the same settings. "Offline" was an emergent property of what
+happened to be installed, which means it could not be checked and could change underneath
+the operator when a dependency went missing.
+
+`local_only.rs` makes it a stated mode instead. One setting, read fresh at every decision
+(`local_only::enabled`), with `AETHER1_LOCAL_ONLY` in the environment able to force it on
+where the setting alone is not enough. With it on:
+
+| Path | Before | With the mode on |
+| --- | --- | --- |
+| Speech | `auto` fell back to Microsoft's Read Aloud when Piper was absent | Piper or nothing, and the error says which is missing |
+| Update check | GitHub API call on every launch | Skipped, and the tray says so rather than looking broken |
+| Applying an update | `git pull` | Refused |
+| Cloud providers | Called if configured | Refused; a local answer plus a line naming who was not contacted |
+| A cloud key in the environment | Silently promoted an "offline" install to a cloud one | Not scanned for |
+| Model pulls | Downloaded through Ollama | Refused |
+| `set_aether_setting` | Could set `llm_provider` to a cloud one | Refused, so the mode has no one-approval exit |
+
+Two decisions worth keeping in mind:
+
+**The boundary is the endpoint, not the provider name.** `llm_provider = "ollama"` is
+allowed -- a model server on the LAN is the point of the platform -- but `llm_endpoint`
+pointed at a rented box on the internet is a cloud call wearing a local provider's name.
+`is_local_endpoint` decides it by parsing the host: loopback, the private ranges,
+link-local, `localhost` and `.local` are in, everything else is out, and anything
+unparseable fails closed. Names are judged as written rather than resolved, because asking
+DNS where a host is, in order to decide whether we may talk to the internet, is not a
+question worth asking.
+
+**Refusing still answers.** Every refusal produces the local reply plus one line saying
+what was not contacted. A companion that goes mute the moment the mode is switched on
+teaches the operator to switch it back off.
+
+It is off by default: turning it on for everyone would break every operator who chose a
+cloud provider deliberately. It is absent from `SETTABLE` in `tools/mutating.rs`, so the
+companion cannot switch it off about itself -- the same rule `tools_enabled` follows.
+
+This does not close step 19, and is not meant to. It draws the line step 19 has to stay
+inside.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies

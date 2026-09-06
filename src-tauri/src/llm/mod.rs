@@ -118,6 +118,39 @@ struct Config {
     persona: Persona,
     persona_key: String,
     custom_directive: String,
+    /// Whether this turn may leave the machine. Resolved once per turn in load_config so
+    /// every decision below reads the same answer, even if the operator flips the setting
+    /// while a reply is being generated.
+    local_only: bool,
+}
+
+impl Config {
+    /// Whether answering this turn would send the prompt off the local host or the local
+    /// network. The provider alone does not settle it: Ollama and LM Studio are addressed
+    /// by endpoint, so "ollama" pointed at a rented box on the internet is a cloud call
+    /// wearing a local provider's name.
+    fn reaches_the_internet(&self) -> bool {
+        match self.provider {
+            // Never leaves the process -- the reply is generated from the persona.
+            Provider::Offline => false,
+            Provider::Ollama | Provider::LmStudio => {
+                !crate::local_only::is_local_endpoint(&self.endpoint)
+            }
+            Provider::OpenAi | Provider::Groq | Provider::Gemini | Provider::Anthropic => true,
+        }
+    }
+
+    /// How the refusal names what it declined to talk to. The endpoint is included only
+    /// for the providers that are addressed by one -- naming `llm_endpoint` while
+    /// refusing OpenAI would send the operator to fix the wrong setting.
+    fn what_was_not_contacted(&self) -> String {
+        match self.provider {
+            Provider::Ollama | Provider::LmStudio => {
+                format!("{} at {} was not contacted", self.provider, self.endpoint)
+            }
+            _ => format!("{} was not contacted", self.provider),
+        }
+    }
 }
 
 /// Scans the environment for a usable cloud API key via crate::model_scanner (the same
@@ -168,7 +201,14 @@ impl LlmEngine {
             };
         }
 
-        if api_key.is_empty() {
+        let local_only = crate::local_only::enabled(&self.db);
+
+        // A cloud key lying around in the environment is a convenience: it saves an
+        // operator who already has one from typing it in again. It is also the one place
+        // Aether1 promotes itself from offline to cloud without being asked, which is
+        // precisely what local-only mode exists to stop -- so with the mode on, the scan
+        // does not happen and the operator's actual choice stands.
+        if api_key.is_empty() && !local_only {
             if let Some((key, detected_provider)) = detect_cloud_api_key() {
                 api_key = key;
                 if provider_key == "offline" {
@@ -186,6 +226,7 @@ impl LlmEngine {
             persona: Persona::from_key(&persona_key),
             persona_key,
             custom_directive,
+            local_only,
         }
     }
 
@@ -563,7 +604,24 @@ impl LlmEngine {
             ));
         }
 
-        let reply = if config.provider == Provider::Offline {
+        // Local-only mode refuses the cloud rather than quietly routing around it. The
+        // operator still gets an answer -- going mute would be its own kind of failure --
+        // but they are told which provider was not contacted, so "it still worked" can
+        // never hide "it went out to the internet".
+        let reply = if config.local_only && config.reaches_the_internet() {
+            let fallback = config.persona.offline_reply(
+                prompt,
+                &telem.os_name,
+                telem.cpu_percent,
+                &config.agent_name,
+            );
+            let reply = format!(
+                "[HUD Alert: {} Answering locally instead.]\n\n{fallback}",
+                crate::local_only::refusal(&config.what_was_not_contacted()),
+            );
+            sink(&reply);
+            reply
+        } else if config.provider == Provider::Offline {
             let reply = config.persona.offline_reply(
                 prompt,
                 &telem.os_name,
@@ -692,6 +750,79 @@ mod tests {
             &serde_json::Value::String(vault.to_string_lossy().to_string()),
         );
         LlmEngine::new(db)
+    }
+
+    /// The end the operator actually experiences: with the mode on, a configured cloud
+    /// provider produces a local answer and a line saying who was not contacted -- not a
+    /// silent cloud call, and not silence.
+    #[test]
+    fn local_only_answers_locally_instead_of_calling_a_cloud_provider() {
+        let engine = temp_engine("local_only_cloud");
+        let _ = engine
+            .db
+            .set_setting("llm_provider", &serde_json::Value::String("openai".into()));
+        let _ = engine
+            .db
+            .set_setting("llm_api_key", &serde_json::Value::String("sk-test".into()));
+        let _ = engine
+            .db
+            .set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true));
+
+        let mut streamed = String::new();
+        let reply =
+            engine.generate_response_streamed("what is the weather", "default", &mut |delta| {
+                streamed.push_str(delta)
+            });
+
+        assert!(reply.contains("local-only mode is on"), "{reply}");
+        assert!(reply.contains("openai was not contacted"), "{reply}");
+        // Still an answer, and the sink saw exactly what was returned.
+        assert!(reply.len() > 80, "{reply}");
+        assert_eq!(streamed, reply);
+    }
+
+    /// The hole a provider-name check alone would leave: "ollama" is allowed, so the
+    /// address it is pointed at has to be checked too.
+    #[test]
+    fn local_only_refuses_a_local_provider_pointed_at_the_internet() {
+        let engine = temp_engine("local_only_endpoint");
+        let _ = engine
+            .db
+            .set_setting("llm_provider", &serde_json::Value::String("ollama".into()));
+        let _ = engine.db.set_setting(
+            "llm_endpoint",
+            &serde_json::Value::String("https://ollama.example.com".into()),
+        );
+        let _ = engine
+            .db
+            .set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true));
+
+        let reply = engine.generate_response_streamed("hello", "default", &mut |_| {});
+        assert!(reply.contains("local-only mode is on"), "{reply}");
+        assert!(reply.contains("ollama.example.com"), "{reply}");
+    }
+
+    /// The same install with the mode off must still be free to use an Ollama on the LAN.
+    /// Local-only mode is about the internet, not about this one machine.
+    #[test]
+    fn a_model_server_on_the_lan_is_allowed_with_the_mode_on() {
+        let engine = temp_engine("local_only_lan");
+        let _ = engine
+            .db
+            .set_setting("llm_provider", &serde_json::Value::String("ollama".into()));
+        let _ = engine.db.set_setting(
+            "llm_endpoint",
+            &serde_json::Value::String("http://192.168.1.50:11434".into()),
+        );
+        let _ = engine
+            .db
+            .set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true));
+
+        // Nothing is listening at that address in a test run, so the turn ends in the
+        // normal provider-failure path -- what matters is that it was attempted at all
+        // rather than refused by the mode.
+        let reply = engine.generate_response_streamed("hello", "default", &mut |_| {});
+        assert!(!reply.contains("local-only mode is on"), "{reply}");
     }
 
     #[test]

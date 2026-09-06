@@ -335,10 +335,14 @@ struct PullQuery {
     model_name: Option<String>,
 }
 
-async fn pull_model(Query(q): Query<PullQuery>) -> Json<model_scanner::PullResult> {
+async fn pull_model(
+    State(state): State<AppState>,
+    Query(q): Query<PullQuery>,
+) -> Json<model_scanner::PullResult> {
     let name = q.model_name.unwrap_or_default();
+    let engine = state.engine.clone();
     Json(
-        tokio::task::spawn_blocking(move || commands::pull_model(name))
+        tokio::task::spawn_blocking(move || commands::pull_model(&engine, name))
             .await
             .expect("pull_model panicked"),
     )

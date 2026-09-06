@@ -112,6 +112,34 @@ AI says leaves your machine. To keep it local, install either or both:
 Aether1 finds them on its own and prefers them. Settings → Speech Engine says which of the
 two are local and what is missing.
 
+## Running with no internet at all
+
+Most of Aether1 already works with the cable out: it finds model servers by probing your
+own machine, remembers things in a folder of files, listens through whisper.cpp, and every
+font, stylesheet and script the HUD needs is stored in this repository rather than fetched
+from anywhere.
+
+Two things still reached out on their own, and **Settings → Network → Local only** stops
+them. With it ticked:
+
+- **Speech never falls back to the cloud.** Without it, a missing Piper means the text of
+  everything the AI says is sent to Microsoft to be spoken. With it, Piper speaks or
+  nothing does, and Settings says which.
+- **No update check.** Aether1 asks GitHub for the latest commit on every launch. That
+  stops, and so does installing an update.
+- **Cloud providers are refused.** Gemini, Groq, OpenAI and Anthropic are not contacted;
+  you get a local answer and a line saying who was not called. A cloud key sitting in your
+  environment no longer switches an offline install to a cloud one behind your back.
+- **No model downloads**, since pulling a model is a download.
+
+What it does **not** stop is your own network. A model server on another machine in your
+house is still fine — that is the whole idea. The line is drawn at the internet: this
+machine and your LAN, and no further.
+
+Nothing is deleted by turning it on. Untick it and your cloud settings are exactly as you
+left them. To nail it on for good — a shared machine, a locked-down install — set
+`AETHER1_LOCAL_ONLY=1` in the environment and the checkbox can no longer switch it off.
+
 ## Choosing a model
 
 Open **Settings** and Aether1 looks for model servers already running on this machine. Any
@@ -123,6 +151,9 @@ they speak, not by which program they are — so it finds the popular runners, m
 less popular ones, and anything else that has adopted a common port. A server on an
 unusual port isn't lost: type its address into the endpoint box and pick the matching API
 shape (**OpenAI-compatible** for most things, **native** for the `/api/tags` style).
+
+A server on another machine on your network works the same way: type its address in. That
+stays true with **Local only** on — it is the internet that is closed off, not your LAN.
 
 Cloud providers — Gemini, Groq, OpenAI, Anthropic — need a key in the **API KEY** box and a
 model name typed in. If a call fails, the HUD says why: a rejected key, a model name that

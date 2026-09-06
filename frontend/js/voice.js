@@ -2,8 +2,13 @@
  * Voice & Audio Synthesis Pipeline for Project AETHER1.
  * Features:
  * - Web Audio API Sci-Fi Sound Effects Synthesizer
- * - Speech-to-Text (STT) via Web Speech API
+ * - Microphone capture for push-to-talk, transcribed locally (see startCapture below)
  * - Neural TTS Audio Stream Player with Real-Time Frequency Analyser
+ *
+ * Listening does not use the browser's Web Speech API. In Chrome that is a cloud service:
+ * the audio is uploaded to Google and the transcript sent back. Aether1 records here and
+ * transcribes with whisper.cpp on this machine instead, so holding the mic key never puts
+ * the operator's voice on someone else's server.
  */
 
 class VoiceAudioEngine {
@@ -15,16 +20,12 @@ class VoiceAudioEngine {
         this.capture = null;
         this.ttsQueue = [];
         this.isDrainingQueue = false;
-        this.recognition = null;
-        this.isListening = false;
         this.sfxEnabled = true;
 
-        this.onSpeechResult = null;
         this.onStateChange = null;
         this.onAudioFrequency = null;
 
         this.initAudioContext();
-        this.initSpeechRecognition();
     }
 
     initAudioContext() {
@@ -38,75 +39,6 @@ class VoiceAudioEngine {
             }
         } catch (e) {
             console.warn("Web Audio API not supported", e);
-        }
-    }
-
-    initSpeechRecognition() {
-        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (SpeechRec) {
-            this.recognition = new SpeechRec();
-            this.recognition.continuous = false;
-            this.recognition.interimResults = true;
-            this.recognition.lang = 'en-US';
-
-            this.recognition.onstart = () => {
-                this.isListening = true;
-                this.playSFX('listen_start');
-                if (this.onStateChange) this.onStateChange('LISTENING');
-            };
-
-            this.recognition.onresult = (event) => {
-                let interim = '';
-                let finalTranscript = '';
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
-                    } else {
-                        interim += event.results[i][0].transcript;
-                    }
-                }
-                if (this.onSpeechResult) {
-                    this.onSpeechResult(finalTranscript || interim, !!finalTranscript);
-                }
-            };
-
-            this.recognition.onerror = (event) => {
-                console.warn("Speech recognition error:", event.error);
-                this.isListening = false;
-                if (this.onStateChange) this.onStateChange('IDLE');
-            };
-
-            this.recognition.onend = () => {
-                this.isListening = false;
-                this.playSFX('listen_end');
-                if (this.onStateChange) this.onStateChange('IDLE');
-            };
-        } else {
-            console.warn("Speech Recognition API not supported in this browser.");
-        }
-    }
-
-    toggleListening() {
-        if (!this.recognition) {
-            alert("Speech recognition is not supported in this browser. Please use Chrome/Edge or type your message.");
-            return false;
-        }
-
-        if (this.audioCtx && this.audioCtx.state === 'suspended') {
-            this.audioCtx.resume();
-        }
-
-        if (this.isListening) {
-            this.recognition.stop();
-            return false;
-        } else {
-            try {
-                this.recognition.start();
-                return true;
-            } catch (e) {
-                console.warn("Recognition start failed:", e);
-                return false;
-            }
         }
     }
 

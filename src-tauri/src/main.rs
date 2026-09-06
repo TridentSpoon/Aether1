@@ -21,6 +21,7 @@ mod cli;
 mod commands;
 mod hotkey;
 mod llm;
+mod local_only;
 mod model_scanner;
 mod paths;
 mod server;
@@ -144,10 +145,39 @@ struct UpdateStatus {
     error: Option<String>,
 }
 
+/// Whether this install is in local-only mode. Read through the managed engine so the
+/// answer is the operator's current setting rather than whatever it was at launch;
+/// `try_state` because this is also called from paths that run before/outside the managed
+/// state, where "not in local-only mode" is the honest answer unless the environment says
+/// otherwise.
+fn local_only_enabled<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    local_only::env_forced()
+        || app
+            .try_state::<LlmEngine>()
+            .map(|engine| local_only::enabled(engine.db()))
+            .unwrap_or(false)
+}
+
 /// Does the actual comparison: this build's baked-in commit (BUILT_COMMIT / build.rs)
 /// against the latest commit on `main` via the GitHub API. Safe to call from any thread;
 /// never panics or blocks the caller beyond the network timeout in fetch_latest_main_sha.
-fn compute_update_status() -> UpdateStatus {
+fn compute_update_status(local_only: bool) -> UpdateStatus {
+    // The update check was the last thing in Aether1 that reached the internet on its own,
+    // every single launch, whatever the operator had configured. It is a GitHub API call,
+    // so with local-only mode on it does not happen -- and says so, rather than reporting
+    // "up to date" from a comparison it never made.
+    if local_only {
+        return UpdateStatus {
+            checked: false,
+            up_to_date: false,
+            version: APP_VERSION.to_string(),
+            built_commit: BUILT_COMMIT.to_string(),
+            built_commit_short: short_hash(BUILT_COMMIT).to_string(),
+            latest_commit: None,
+            error: Some(local_only::refusal("GitHub was not contacted")),
+        };
+    }
+
     let base = UpdateStatus {
         checked: false,
         up_to_date: false,
@@ -184,8 +214,8 @@ fn compute_update_status() -> UpdateStatus {
 /// the taskbar icon. Does not itself update `update_available`/the tray UI; those stay
 /// tray-only state (see run_update_check).
 #[tauri::command]
-fn check_for_update_rust() -> UpdateStatus {
-    compute_update_status()
+fn check_for_update_rust(app: tauri::AppHandle) -> UpdateStatus {
+    compute_update_status(local_only_enabled(&app))
 }
 
 /// Rust-native equivalent for the frontend of get_version_info -- current version string
@@ -209,8 +239,18 @@ fn run_update_check<R: tauri::Runtime>(
     tray: &TrayIcon<R>,
     update_item: &MenuItem<R>,
     update_available: &AtomicBool,
+    local_only: bool,
 ) {
-    let status = compute_update_status();
+    // Said plainly in the tray rather than left as a check that quietly never runs: a
+    // switched-off update check should look switched off, not broken.
+    if local_only {
+        println!("[AETHER1] Local-only mode: update check skipped (GitHub not contacted).");
+        let _ = update_item.set_text("\u{1f512} Updates off (local-only)");
+        update_available.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    let status = compute_update_status(local_only);
 
     if !status.checked {
         if let Some(e) = &status.error {
@@ -277,6 +317,15 @@ enum UpdateStage {
 fn perform_update_core<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<(), (UpdateStage, String)> {
+    // `git pull` is a network fetch like any other, and it rewrites the running install.
+    // Local-only mode stops it here rather than only hiding the button that starts it.
+    if local_only_enabled(app) {
+        return Err((
+            UpdateStage::Pull,
+            local_only::refusal("no update was pulled"),
+        ));
+    }
+
     let root = project_root();
 
     println!("[AETHER1] Update: running `git pull --ff-only`...");
@@ -458,8 +507,11 @@ fn scan_models_rust() -> model_scanner::ScanResult {
 
 /// Rust-native equivalent of POST /api/scanner/pull-model (backend/main.py).
 #[tauri::command]
-fn pull_model_rust(model_name: String) -> model_scanner::PullResult {
-    commands::pull_model(model_name)
+fn pull_model_rust(
+    engine: tauri::State<LlmEngine>,
+    model_name: String,
+) -> model_scanner::PullResult {
+    commands::pull_model(&engine, model_name)
 }
 
 /// Rust-native equivalent of GET /api/static-info (backend/main.py) -- just the OS/arch
@@ -911,6 +963,7 @@ fn main() {
                                                 &tray,
                                                 &update_item,
                                                 &update_available,
+                                                local_only_enabled(&app),
                                             );
                                         }
                                         // Unreached if perform_update succeeded (it calls
@@ -931,9 +984,10 @@ fn main() {
             // delays showing the window.
             {
                 let tray = tray.clone();
+                let launch_local_only = local_only_enabled(&app.handle().clone());
                 update_in_progress.store(true, Ordering::Relaxed);
                 std::thread::spawn(move || {
-                    run_update_check(&tray, &update_item, &update_available);
+                    run_update_check(&tray, &update_item, &update_available, launch_local_only);
                     update_in_progress.store(false, Ordering::Relaxed);
                 });
             }
