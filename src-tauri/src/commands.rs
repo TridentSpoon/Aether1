@@ -101,6 +101,14 @@ pub fn clear_messages(engine: &LlmEngine) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The persona catalogue Settings renders its list from. Static -- it depends on nothing but
+/// the enum -- but it goes through the same two transports as everything else rather than
+/// being written out a second time in the HTML, which is how the list and the behaviour
+/// would come to disagree.
+pub fn list_personas() -> Value {
+    llm::Persona::catalogue()
+}
+
 pub fn get_settings(engine: &LlmEngine) -> Value {
     let mut settings = engine
         .db()
@@ -112,7 +120,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "llm_model": "halcy-core",
         "llm_endpoint": "http://localhost:11434",
         "llm_api_key": "",
-        "persona_type": "halcy",
+        "persona_type": "default",
         "custom_directive": "",
         "voice_name": llm::DEFAULT_VOICE,
         "enable_sfx": true,

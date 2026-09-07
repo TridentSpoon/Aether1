@@ -738,6 +738,37 @@ THEME landed on an avatar instead. Both chips and both panels now share one posi
 so a panel opens below the pair. Worth recording because the failure was invisible in the
 markup and only showed up when something was actually clicked.
 
+### Step 25: personas are jobs, not costumes — **shipped**
+
+The nine personas described voices. Read them side by side and they were the same assistant in
+different adjectives: warm, or composed, or booming. Nothing in any of them said what a good
+answer looked like, so picking one changed the tone of the reply and almost nothing else.
+
+Each directive now has a "What that means in practice" half — a test enforces that phrase is
+present in all seven speciality personas, which is a crude check for a real property. To the
+Point must put the answer in the first line and not restate the question. Coding must produce
+runnable code and name the failure mode. Cites Sources must say *which kind* of source a claim
+has — read this session, recalled from training and unverifiable, or inferred — and never
+invent one to fill the shape. Security must ask whether a target is the operator's to test.
+
+**The list changed shape.** Tactical and Cyberpunk went: one was System Diagnosis in different
+words, the other was Coding in different words. Two arrived — Default (system diagnosis and
+event-log checking) and Llm (no directive at all, whatever the model brings). Both retired
+keys still resolve, to the persona that absorbed them, with a test naming why.
+
+**Settings builds its list from the enum.** `Persona::catalogue()` is served through both
+transports and the `<select>` is rendered from it. The list was previously written out in the
+HTML, which would have drifted from the enum the first time either moved — and this change
+moved both. The unknown-key fallback moved from Conversational to System Diagnosis: an
+unrecognised key is usually a stale setting, and the safer default for a companion attached to
+a live machine is the one that reports on it plainly.
+
+**Every avatar now switches persona.** It was a seven-branch if/else covering five of eight, so
+A1 and hAlcy silently kept whatever was set and the pairing only half existed. It is a table
+now, carrying name, persona, voice and greeting. *Your own* is the deliberate omission: an
+avatar you designed has no persona of its own, and quietly selecting Custom would hand over the
+fallback directive without saying so.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies

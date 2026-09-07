@@ -449,17 +449,14 @@
                 <!-- Persona Selector -->
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
                     <label class="text-xs font-mono text-cyan-300 block font-bold">🧠 BASE PERSONA</label>
+                    <!-- Filled in from the persona catalogue the backend serves (see
+                         Persona::catalogue in persona.rs). Written out here it would have
+                         drifted from the enum the first time either moved; the placeholder
+                         below is only what shows if that request has not landed yet. -->
                     <select id="setting-persona" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <option value="halcy">hAlcy (Holographic Adaptive Companion)</option>
-                        <option value="red9000">R.E.D. 9000 (Reactive Engine Daemon)</option>
-                        <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
-                        <option value="arx-limes">A.R.X.LIMES (Archival, Reasoning, matriX — Limes)</option>
-                        <option value="arx-logos">A.R.X.LOGOS (Archival, Reasoning, matriX — Logos)</option>
-                        <option value="alt">A1ter_nul (Cunningham — Security & Intrusion Countermeasures)</option>
-                        <option value="tactical">Tactical Military HUD</option>
-                        <option value="cyberpunk">Cyberpunk Netrunner</option>
-                        <option value="custom">Custom Directive (write your own below)</option>
+                        <option value="default">System Diagnosis</option>
                     </select>
+                    <p id="persona-speciality" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
                     <div id="custom-persona-wrap" class="hidden space-y-1 pt-1">
                         <label class="text-xs font-mono text-cyan-300 block">CUSTOM PERSONA DIRECTIVE</label>
                         <textarea id="setting-custom-directive" rows="3" placeholder="e.g. 'You are {AGENT_NAME}, a dry-witted lab assistant who explains things through kitchen analogies.'" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono"></textarea>

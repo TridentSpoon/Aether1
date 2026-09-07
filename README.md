@@ -281,6 +281,31 @@ rather than a projection. That panel is the one part of the window that does not
 background colour.
 
 
+## Personas
+
+A persona is a **job**, not a character. The character is how the job sounds. Settings leads
+with what each one is for, and names the avatar it belongs to:
+
+| Persona | What it is for | Avatar |
+|---|---|---|
+| **System Diagnosis** | Logs, services and what this machine is doing. Starts from evidence, quotes the line that shows the problem, separates what it observed from what it inferred. | A1 |
+| **Conversational** | Thinking a problem through with you. Asks the one clarifying question that would change the answer instead of guessing. | hAlcy |
+| **To the Point** | The answer in the first line. No preamble, no restating the question, no padding. | R.E.D. 9000 |
+| **Coding** | Working code, complete enough to run, with the failure mode named -- what breaks it, what it does not handle, what it costs. | The Nexus |
+| **Cites Sources** | Where every claim came from, and how sure it is: read from a file this session, recalled from training and unverifiable, or inferred. Never invents a citation. | A.R.X.LIMES |
+| **Creative Work** | Writing, design, and the shape of a sentence. Produces the draft rather than describing it. | A.R.X.LOGOS |
+| **Security & White Hat** | Exposure, hardening and authorised testing -- attack surface, blast radius, and asking whether a target is yours to test. | A1ter_nul |
+| **Model's Own** | No directive at all. Whatever the model brings on its own. | -- |
+| **Custom** | Your own directive, written in the box below the field. | -- |
+
+Picking an avatar switches to its persona, its voice and its name -- one choice you can make
+from either end. *Your own* is the exception: an avatar you designed has no persona of its
+own, so it leaves yours alone.
+
+**These change how the companion works, not what it can do.** Every persona has the same
+tools, the same model and the same permissions. Security & White Hat is more likely to tell
+you about a risk you did not ask about; it has no access the others lack.
+
 ## Making your own avatar
 
 The avatar is a module of its own -- everything that draws it lives in

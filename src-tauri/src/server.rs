@@ -102,6 +102,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/tts", post(tts))
         .route("/api/stt", post(stt))
         .route("/api/voice/status", get(voice_status))
+        .route("/api/personas", get(list_personas))
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
@@ -223,6 +224,10 @@ async fn stt(
 
 async fn voice_status(State(state): State<AppState>) -> Json<Value> {
     Json(commands::voice_status(&state.engine))
+}
+
+async fn list_personas() -> Json<Value> {
+    Json(commands::list_personas())
 }
 
 async fn get_pending_actions(State(state): State<AppState>) -> Json<Vec<llm::ActionRecord>> {

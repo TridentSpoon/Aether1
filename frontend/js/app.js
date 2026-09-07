@@ -256,56 +256,63 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // R.E.D. 9000 Preset
-        if (avatarName === 'red' || avatarName === 'crimson') {
-            updateAgentNameDisplay("R.E.D. 9000");
-            if (updatePersona) {
-                document.getElementById('setting-persona').value = 'red9000';
-                document.getElementById('setting-voice').value = 'en-US-GuyNeural';
-                saveSettings(false);
-                appendMessage("R.E.D. 9000", "🔴 **I am R.E.D. 9000 (Reactive Engine Daemon).** All reactive engines and optical telemetry streams are fully operational.");
-            }
+        applyAvatarPreset(avatarName, updatePersona);
+    }
+
+    /* Each avatar comes with a persona, a voice and a greeting -- picking the face picks the
+       job it is there to do. This was a seven-branch if/else covering five of the eight
+       avatars, so A1 and hAlcy quietly kept whatever persona was already set and the pairing
+       only half existed.
+
+       "Your own" is the deliberate omission: an avatar you designed has no persona of its own
+       to switch to, and defaulting it to Custom would hand you the fallback directive without
+       saying so. It keeps whatever you had. */
+    const AVATAR_PRESETS = {
+        a1: {
+            name: 'AETHER1', persona: 'default', voice: 'en-GB-SoniaNeural',
+            greeting: '🅰️ **Aether1 online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
+        },
+        halcy: {
+            name: 'HALCY', persona: 'halcy', voice: 'en-US-JennyNeural',
+            greeting: '🔷 **hAlcy here.** Think out loud at me -- I would rather work it through with you than guess at what you meant.'
+        },
+        red: {
+            name: 'R.E.D. 9000', persona: 'red9000', voice: 'en-US-GuyNeural',
+            greeting: '🔴 **R.E.D. 9000 (Reactive Engine Daemon).** Fully operational. Ask, and you will have the answer in the first line.'
+        },
+        nexus: {
+            name: 'THE NEXUS', persona: 'nexus', voice: 'en-GB-SoniaNeural',
+            greeting: '🟢 **The Nexus is active.** Code cascades inward. Bring me something to write, read or break.'
+        },
+        'arx-limes': {
+            name: 'A.R.X.LIMES', persona: 'arx-limes', voice: 'en-US-GuyNeural',
+            greeting: '🔶 **Archival, Reasoning, matriX — Limes Node engaged.** Every claim I make will carry where it came from. The Archive demands nothing less.'
+        },
+        'arx-logos': {
+            name: 'A.R.X.LOGOS', persona: 'arx-logos', voice: 'en-GB-LibbyNeural',
+            greeting: '🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let us make something worth cataloguing.'
+        },
+        alt: {
+            name: 'A1ter_nul', persona: 'alt', voice: 'en-US-JennyNeural',
+            greeting: "⚠️ **A1ter_nul online.** Firewall's up, perimeter's lit. Show me what you are worried got in."
         }
-        // A.R.X.LIMES Preset
-        else if (avatarName === 'arx-limes') {
-            updateAgentNameDisplay("A.R.X.LIMES");
-            if (updatePersona) {
-                document.getElementById('setting-persona').value = 'arx-limes';
-                document.getElementById('setting-voice').value = 'en-US-GuyNeural';
-                saveSettings(false);
-                appendMessage("A.R.X.LIMES", "🔶 **Archival, Reasoning, matriX — Limes Node engaged.** All data synthesized from your system shall be preserved.");
-            }
-        }
-        // The Nexus Singularity Preset
-        else if (avatarName === 'nexus' || avatarName === 'matrix') {
-            updateAgentNameDisplay("THE NEXUS");
-            if (updatePersona) {
-                document.getElementById('setting-persona').value = 'nexus';
-                document.getElementById('setting-voice').value = 'en-GB-SoniaNeural';
-                saveSettings(false);
-                appendMessage("THE NEXUS", "🟢 **The Nexus singularity is active.** Digital code cascades inward toward the point of infinite convergence. All matrix streams are operational.");
-            }
-        }
-        // A.R.X.LOGOS Preset
-        else if (avatarName === 'arx-logos') {
-            updateAgentNameDisplay("A.R.X.LOGOS");
-            if (updatePersona) {
-                document.getElementById('setting-persona').value = 'arx-logos';
-                document.getElementById('setting-voice').value = 'en-GB-LibbyNeural';
-                saveSettings(false);
-                appendMessage("A.R.X.LOGOS", "🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let's make something worth cataloguing.");
-            }
-        }
-        // A1ter_nul (Cunningham) Preset
-        else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') {
-            updateAgentNameDisplay("A1ter_nul");
-            if (updatePersona) {
-                document.getElementById('setting-persona').value = 'alt';
-                document.getElementById('setting-voice').value = 'en-US-JennyNeural';
-                saveSettings(false);
-                appendMessage("A1ter_nul", "⚠️ **A1ter_nul online.** Firewall's up, perimeter's lit. Show me what you're worried got in.");
-            }
-        }
+    };
+
+    // Names the engine still answers to from older saved settings.
+    const AVATAR_ALIASES = { crimson: 'red', matrix: 'nexus', cunningham: 'alt', a1ter_nul: 'alt' };
+
+    function applyAvatarPreset(avatarName, updatePersona) {
+        const preset = AVATAR_PRESETS[AVATAR_ALIASES[avatarName] || avatarName];
+        if (!preset) return;
+
+        updateAgentNameDisplay(preset.name);
+        if (!updatePersona) return;
+
+        document.getElementById('setting-persona').value = preset.persona;
+        document.getElementById('setting-voice').value = preset.voice;
+        toggleCustomPersonaField();
+        saveSettings(false);
+        appendMessage(preset.name, preset.greeting);
     }
 
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
@@ -1567,8 +1574,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* Fetched once and reused: the catalogue depends on nothing but the build, so re-fetching
+       it every time Settings opens would be a round trip to learn the same nine rows. */
+    let personaCataloguePromise = null;
+    function ensurePersonaCatalogue() {
+        if (!personaCataloguePromise) personaCataloguePromise = loadPersonaCatalogue();
+        return personaCataloguePromise;
+    }
+
     async function loadSettings() {
         try {
+            // Before any saved value is applied to the field: setting .value to a persona
+            // whose <option> has not been added yet silently selects nothing.
+            await ensurePersonaCatalogue();
             const data = IS_TAURI
                 ? await tauriInvoke('get_settings_rust')
                 : await (async () => {
@@ -1584,9 +1602,10 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-model').value = s.llm_model || 'halcy-core';
             document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
             document.getElementById('setting-apikey').value = s.llm_api_key || '';
-            document.getElementById('setting-persona').value = s.persona_type || 'halcy';
+            document.getElementById('setting-persona').value = s.persona_type || 'default';
             document.getElementById('setting-custom-directive').value = s.custom_directive || '';
             toggleCustomPersonaField();
+            showPersonaSpeciality();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
             document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
@@ -1609,6 +1628,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Shows the custom persona directive textarea only when "Custom Directive" is
     // selected as the base persona -- the preset personas don't need it.
+    /* The persona list, built from what the backend says exists rather than from a list in
+       the markup. Each entry leads with what it is *for* -- "Coding", "Cites Sources" -- with
+       the avatar it belongs to bookended after it, because the persona and the avatar are one
+       choice you can make from either end. */
+    async function loadPersonaCatalogue() {
+        const select = document.getElementById('setting-persona');
+        if (!select) return;
+        let personas;
+        try {
+            personas = IS_TAURI
+                ? await tauriInvoke('list_personas_rust')
+                : await (await apiFetch('/api/personas')).json();
+        } catch (e) {
+            // The placeholder option in the markup stays, so the field is still usable.
+            console.warn('Could not load the persona list', e);
+            return;
+        }
+        if (!Array.isArray(personas) || personas.length === 0) return;
+
+        const chosen = select.value;
+        select.innerHTML = '';
+        personas.forEach((persona) => {
+            const option = document.createElement('option');
+            option.value = persona.key;
+            option.dataset.speciality = persona.speciality || '';
+            // "the The Nexus avatar" -- an avatar whose name already carries its article
+            // does not want another one.
+            const avatarPhrase = /^the\s/i.test(persona.avatar || '')
+                ? persona.avatar
+                : `the ${persona.avatar}`;
+            option.textContent = persona.avatar
+                ? `${persona.short_name} (default for ${avatarPhrase} avatar)`
+                : persona.short_name;
+            select.appendChild(option);
+        });
+        if (personas.some((p) => p.key === chosen)) select.value = chosen;
+        showPersonaSpeciality();
+    }
+
+    /* The one-line description of the selected persona, under the field. It does not fit in
+       an <option> at a readable length, and a list where every row is a sentence is a list
+       nobody scans. */
+    function showPersonaSpeciality() {
+        const select = document.getElementById('setting-persona');
+        const line = document.getElementById('persona-speciality');
+        if (!select || !line) return;
+        line.textContent = select.selectedOptions[0]?.dataset.speciality || '';
+    }
+
     function toggleCustomPersonaField() {
         const wrap = document.getElementById('custom-persona-wrap');
         if (wrap) wrap.classList.toggle('hidden', document.getElementById('setting-persona').value !== 'custom');
@@ -1743,7 +1811,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Base Persona Dropdown -- reveal the custom directive textarea only when needed
     const settingPersonaSelect = document.getElementById('setting-persona');
     if (settingPersonaSelect) {
-        settingPersonaSelect.addEventListener('change', toggleCustomPersonaField);
+        settingPersonaSelect.addEventListener('change', () => {
+            toggleCustomPersonaField();
+            showPersonaSpeciality();
+        });
     }
 
     btnSend.addEventListener('click', () => handleSendMessage());
