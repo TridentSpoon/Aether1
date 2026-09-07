@@ -769,6 +769,29 @@ now, carrying name, persona, voice and greeting. *Your own* is the deliberate om
 avatar you designed has no persona of its own, and quietly selecting Custom would hand over the
 fallback directive without saying so.
 
+### Step 26: per-persona access, elevated one request at a time
+
+**Designed, not built.** The design is written out in full in
+[PERSONA_ACCESS.md](PERSONA_ACCESS.md); this is the summary and why it is a document before it
+is code.
+
+Read-only tools currently run automatically for every persona, so Creative Work can read your
+firewall rules and Conversational can read your source tree. Nothing connects what the
+companion is *for* to what it reaches for without asking. The design gives each persona a
+domain — a set of read-only tools and path roots — that runs without a prompt, and makes
+everything else take the proposal path mutating tools already use. Elevation lasts exactly one
+call: no mode, no session flag, no timed grant, because a grant that stays on is the current
+behaviour wearing a restriction's clothes.
+
+It is a document first because of the second-order effect. The moment a persona carries
+permissions, **switching persona becomes privilege escalation** — and `set_aether_setting` can
+currently change `persona_type` with a single approval that does not read like a permission
+grant. So `persona_type` and `avatar` have to leave `SETTABLE`, joining the rule the entries
+there already follow: the companion may not change the thing that decides what the companion
+may do. That is the kind of consequence worth finding on paper.
+
+Worth stating plainly: this makes Aether1 **stricter** than it is today, not looser.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies
