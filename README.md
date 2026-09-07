@@ -255,6 +255,12 @@ you opt out -- from then on it stays where you put it, across restarts.
 
 Any theme can be worn by any avatar; the two are independent choices.
 
+The avatar itself always sits on a dark stage -- black under Cyberpunk, a dark grey under
+Solar and Eclipse -- because a hologram projected onto a white page reads as a picture of one
+rather than a projection. That panel is the one part of the window that does not follow the
+background colour.
+
+
 ## Making your own avatar
 
 The avatar is a module of its own -- everything that draws it lives in
@@ -271,6 +277,12 @@ else safely, because settings cannot run.
 **Or write one.** Copy `frontend/js/hologram/avatar-template.js` -- a working avatar with
 every line explained. An avatar is an id and three functions: build it, animate it, and
 recolour it when the theme changes.
+
+The workbench opens wearing whatever theme the HUD is wearing, and follows along if you
+change it while both are open -- an avatar previewed in a theme you do not use tells you less
+than one previewed in the theme you will actually see it in. Its COLOUR THEME dropdown is for
+checking a design against a colour you might switch to; picking one there changes only that
+window, and **Your theme (as set in the HUD)** puts it back.
 
 The workbench loads the avatar and nothing else -- no backend, no model server, no
 network -- and fakes what the HUD would normally supply: the four states as buttons, and
