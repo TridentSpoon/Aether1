@@ -27,19 +27,47 @@ jobs:
   rust:
     name: Rust -- build, test, clippy, format
     runs-on: ubuntu-latest
+    # A normal run of this job is about five and a half minutes. Twice it has hung for
+    # hours instead -- not compiling, just stopped, waiting on a GitHub service that never
+    # answered. Without a limit the default is six hours, so a hung run holds a pull request
+    # open for most of a day and looks exactly like a slow one. This turns that into a
+    # failure you can see and re-run inside half an hour.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       # Aether1 links against the system webview and GTK stack on Linux; without these
       # the build fails at link time with an error that names a .pc file rather than a
       # package. This list matches the Debian/Ubuntu row in the README's build table.
+      #
+      # The .deb files are cached between runs. apt normally deletes them once they are
+      # installed, so it is told to keep them and they are copied to somewhere the cache
+      # action can actually reach: /var/cache/apt/archives is root-owned, and restoring
+      # into it fails on permissions. The key covers this file, so editing the package list
+      # gets a fresh cache rather than a stale one missing whatever was added.
+      - name: Cache the apt downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/aether1-apt
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+
       - name: Install the Linux build dependencies
         run: |
+          set -euo pipefail
+          echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99keep-debs
+          mkdir -p ~/.cache/aether1-apt
+          # Anything kept from a previous run goes back where apt looks first, so these are
+          # installed from disk rather than downloaded again.
+          sudo cp -n ~/.cache/aether1-apt/*.deb /var/cache/apt/archives/ 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config curl wget file libssl-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libnotify-bin
+          # Keep them for next time. cp of a root-owned file lands root-owned, and the cache
+          # action runs as the runner user, so it has to be able to read them back.
+          sudo cp /var/cache/apt/archives/*.deb ~/.cache/aether1-apt/ 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" ~/.cache/aether1-apt
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,6 +96,9 @@ jobs:
   frontend:
     name: Frontend -- syntax
     runs-on: ubuntu-latest
+    # This job runs in about fifteen seconds. Anything approaching ten minutes is stuck, not
+    # slow, and should say so rather than sitting there.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
