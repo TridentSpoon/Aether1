@@ -689,6 +689,43 @@ painted once in the fallback palette first, which on a light theme is a dark fla
 and `theme.js` are pure data and pure computation, touching no DOM beyond `<html>`'s own
 attribute, so they moved to the head and the theme is applied before anything renders.
 
+### Step 24: the top bar says what is on screen, not every choice at once — **shipped**
+
+The bar laid every option out flat: eight avatar pills, a theme picker, the state, and five
+buttons, all in one row. Most of its width went on telling you about the seven avatars you had
+not picked, and at a narrow window the right-hand buttons were simply pushed off the edge —
+Settings among them.
+
+Four changes, and each is a different kind of the same mistake.
+
+**Only the selection is shown.** Avatar collapses to a chip carrying the current one; the
+others slide out on click, positioned rather than in flow so opening one never reflows the bar
+under the pointer. Theme sits beneath it. Both are the same shape, so there is one thing to
+learn.
+
+**The controls are behind one control.** SFX, Activity, Clear and Settings moved into a `☰`
+menu. "Adjusts dynamically" and "never overflows" are the same requirement, and one menu
+satisfies it at every width without measuring anything. Only one slide-out is open at a time;
+a click elsewhere, Escape, or opening the other closes it.
+
+**Genesis left the bar.** It opened the same Forge that Settings already shows, one tab away —
+a second door onto one room, which is the kind of duplication that makes a bar look full of
+features and be hard to read.
+
+**State moved to a chin bar.** A slim strip along the bottom, always present. What the
+companion is doing right now is the one thing that should never lose a fight for space, and in
+the top bar it was competing with everything above.
+
+The wordmark now carries the companion's own name once one is set, turning over to AETHER1
+PLATFORM on a timer so the product underneath stays visible without spending a permanent line
+on saying so. The avatar badge that used to sit beside it is gone: it is the avatar chip now,
+and the same value in two places is the Genesis problem in miniature.
+
+One pre-existing bug surfaced: the version badge was `hidden sm:inline-flex`, so the `sm:`
+half overrode the `hidden` half at any normal width and the browser — which has no version to
+report — showed an empty `--` forever. It now starts hidden and `initVersionAndUpdates`
+reveals it, which is what that function always intended.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies

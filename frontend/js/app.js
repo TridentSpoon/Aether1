@@ -66,7 +66,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Agent Genesis & Theme Elements
-    const btnGenesisQuick = document.getElementById('btn-genesis-quick');
     const btnForgeIdentity = document.getElementById('btn-forge-identity');
     const genesisPurposeInput = document.getElementById('genesis-purpose-input');
     const hudAgentName = document.getElementById('hud-agent-name');
@@ -129,6 +128,75 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
     let currentTheme = Aether1Theme.current();
+
+    /* The wordmark. Once the companion has a name of its own, that is what the top-left of
+       the window should say -- it is the thing you are talking to. Turning over to
+       AETHER1 PLATFORM every so often is how the product it runs on stays visible without
+       taking a permanent second line to say so. A name that already is Aether1 has nothing
+       to alternate with, so it just sits there. */
+    const PLATFORM_WORDMARK = 'AETHER1 PLATFORM';
+    const WORDMARK_TURNOVER_MS = 14000;
+    const elWordmark = document.getElementById('hud-wordmark');
+    let wordmarkShowingPlatform = false;
+
+    function wordmarkName() {
+        const name = (currentAgentName || '').trim().toUpperCase();
+        return name && name !== 'AETHER1' ? name : PLATFORM_WORDMARK;
+    }
+
+    function refreshWordmark() {
+        if (!elWordmark) return;
+        const name = wordmarkName();
+        const next = wordmarkShowingPlatform && name !== PLATFORM_WORDMARK ? PLATFORM_WORDMARK : name;
+        if (elWordmark.textContent === next) return;
+        elWordmark.textContent = next;
+        elWordmark.title = name === PLATFORM_WORDMARK ? 'Aether1' : `${name} — running on Aether1`;
+    }
+
+    setInterval(() => {
+        wordmarkShowingPlatform = !wordmarkShowingPlatform;
+        refreshWordmark();
+    }, WORDMARK_TURNOVER_MS);
+
+    /* The bar's two slide-outs. Only one is ever open, and anything that is not a deliberate
+       interaction with the open one closes it -- a click elsewhere, Escape, or opening the
+       other. Without that a menu left open sits over the HUD until it happens to be clicked
+       again. */
+    const hudMenus = [
+        { button: document.getElementById('btn-avatar-menu'), panel: document.getElementById('avatar-menu') },
+        { button: document.getElementById('btn-hud-menu'), panel: document.getElementById('hud-menu') }
+    ].filter((m) => m.button && m.panel);
+
+    function closeHudMenus(except) {
+        hudMenus.forEach(({ button, panel }) => {
+            if (panel === except) return;
+            panel.classList.add('hidden');
+            button.setAttribute('aria-expanded', 'false');
+        });
+    }
+
+    hudMenus.forEach(({ button, panel }) => {
+        button.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const opening = panel.classList.contains('hidden');
+            closeHudMenus();
+            panel.classList.toggle('hidden', !opening);
+            button.setAttribute('aria-expanded', String(opening));
+            if (opening) voiceEngine.playSFX('click');
+        });
+        /* Choosing something is the end of choosing, so the panel closes -- except for the
+           SFX toggle, which is the one item you might want to hear the effect of and flip
+           straight back. */
+        panel.addEventListener('click', (e) => {
+            if (e.target.closest('#btn-sfx')) return;
+            if (e.target.closest('button')) closeHudMenus();
+        });
+    });
+
+    document.addEventListener('click', () => closeHudMenus());
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeHudMenus();
+    });
 
     // Clock
     function updateClock() {
@@ -519,10 +587,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (terminalAgentLabel) terminalAgentLabel.textContent = `AGENT: ${name.toUpperCase()}`;
         const inputName = document.getElementById('setting-agent-name');
         if (inputName) inputName.value = name;
+        refreshWordmark();
     }
 
-    // Updates the header badge (next to "AETHER1", before the AVATAR: pills) to show
-    // whichever 3D avatar shape is currently active.
+    // The avatar chip's value: the one avatar that is selected, which is all the top bar
+    // shows of the eight until the slide-out is opened.
     function updateAvatarBadge(avatarName) {
         if (hudAgentName) hudAgentName.textContent = AVATAR_DISPLAY_NAMES[avatarName] || avatarName.toUpperCase();
     }
@@ -1461,7 +1530,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-hotkey-wrap')?.classList.add('hidden');
             return;
         }
-        if (versionBadge) versionBadge.classList.remove('hidden');
+        if (versionBadge) versionBadge.classList.replace('hidden', 'inline-flex');
         if (updateSection) updateSection.classList.remove('hidden');
         loadVersionInfo();
         handleCheckForUpdate();
@@ -1716,14 +1785,6 @@ document.addEventListener('DOMContentLoaded', () => {
         loadSettings().then(handleScanSystem);
         showSettingsTab('customisation');
         settingsModal.classList.remove('hidden');
-    });
-
-    btnGenesisQuick.addEventListener('click', () => {
-        voiceEngine.playSFX('click');
-        loadSettings();
-        showSettingsTab('customisation'); // Genesis Forge lives in the Customisation tab
-        settingsModal.classList.remove('hidden');
-        if (genesisPurposeInput) genesisPurposeInput.focus();
     });
 
     btnForgeIdentity.addEventListener('click', () => {
