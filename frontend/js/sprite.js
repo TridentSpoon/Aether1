@@ -120,14 +120,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Matches whatever avatar/theme/voice-preference the main HUD is currently using --
-    // aether_avatar/aether_color_theme are plain localStorage keys the main window already
-    // writes (see app.js), shared here because both windows load from the same Tauri origin.
+    // aether_avatar is a plain localStorage key the main window already writes (see app.js),
+    // shared here because both windows load from the same Tauri origin; the theme goes through
+    // Aether1Theme so this window falls back to the OS light/dark setting exactly as the HUD
+    // does, rather than to a hardcoded default the HUD is not using.
     // That only covers the sprite's own startup, though: if the HUD switches avatar/theme
     // while the sprite is already open, localStorage alone won't tell this window that
     // happened. Rather than have the sprite sit there polling localStorage for a change, the
     // HUD pushes it directly the moment it happens, over a Tauri event both windows share.
     const savedAvatar = localStorage.getItem('aether_avatar') || 'a1';
-    const savedTheme = localStorage.getItem('aether_color_theme') || 'halcy';
+    const savedTheme = Aether1Theme.resolve();
     hologram.setAvatar(savedAvatar);
     hologram.setColorTheme(savedTheme);
     document.documentElement.setAttribute('data-theme', savedTheme);

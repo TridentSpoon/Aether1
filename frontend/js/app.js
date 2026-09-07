@@ -122,7 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoSpeak = true;
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
-    let currentColorTheme = localStorage.getItem('aether_color_theme') || 'halcy';
+    let currentColorTheme = Aether1Theme.resolve();
 
     // Clock
     function updateClock() {
@@ -233,10 +233,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Color Theme Handler — purely cosmetic, independent of the selected avatar shape
-    function applyColorTheme(themeName) {
+    // Color Theme Handler — purely cosmetic, independent of the selected avatar shape.
+    // `chosen` separates a decision from a display: picking a theme saves it (and so ends the
+    // follow-the-OS behaviour below), while painting the startup theme or reacting to the OS
+    // flipping to dark must not, or the first paint would lock the choice in on its own.
+    function applyColorTheme(themeName, chosen = true) {
         currentColorTheme = themeName;
-        localStorage.setItem('aether_color_theme', themeName);
+        if (chosen) Aether1Theme.save(themeName);
         document.documentElement.setAttribute('data-theme', themeName);
         hologram.setColorTheme(themeName);
         // Push the change straight to the desktop sprite window (if open) instead of making
@@ -271,8 +274,8 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') strokeColor = '#00ff66';
         else if (currentColorTheme === 'arx-logos') strokeColor = '#e024c3';
         else if (currentColorTheme === 'night-city') strokeColor = '#fcee0a';
-        else if (currentColorTheme === 'corporate-light') strokeColor = '#2563eb';
-        else if (currentColorTheme === 'corporate-dark') strokeColor = '#60a5fa';
+        else if (currentColorTheme === 'solar') strokeColor = '#0067c0';
+        else if (currentColorTheme === 'eclipse') strokeColor = '#60cdff';
 
         canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         canvasCtx.lineWidth = 1;
@@ -343,12 +346,12 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (currentColorTheme === 'night-city') {
             lineColor = '#fcee0a';
             fillColor = 'rgba(252, 238, 10, 0.15)';
-        } else if (currentColorTheme === 'corporate-light') {
-            lineColor = '#2563eb';
-            fillColor = 'rgba(37, 99, 235, 0.15)';
-        } else if (currentColorTheme === 'corporate-dark') {
-            lineColor = '#60a5fa';
-            fillColor = 'rgba(96, 165, 250, 0.15)';
+        } else if (currentColorTheme === 'solar') {
+            lineColor = '#0067c0';
+            fillColor = 'rgba(0, 103, 192, 0.15)';
+        } else if (currentColorTheme === 'eclipse') {
+            lineColor = '#60cdff';
+            fillColor = 'rgba(96, 205, 255, 0.15)';
         }
 
         tokensCanvasCtx.beginPath();
@@ -1761,7 +1764,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial Startup
     applyAvatar(currentAvatar, false);
-    applyColorTheme(currentColorTheme);
+    applyColorTheme(currentColorTheme, false);
+
+    /* Nothing chosen yet means the OS is still the authority, so a switch to dark mode while
+       the window is open should be followed rather than waiting for a restart. Aether1Theme
+       stops calling this the moment a theme is picked. */
+    Aether1Theme.followSystem((theme) => applyColorTheme(theme, false));
     loadStaticInfo();
     loadSettings();
     // A proposal outlives the conversation that made it, so anything still waiting from a

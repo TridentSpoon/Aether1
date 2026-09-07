@@ -119,94 +119,294 @@
   --bg-grid-color: rgba(252, 238, 10, 0.035);
 }
 
-/* CORPORATE LIGHT (professional daylight theme -- a clean blue-on-white palette meant to
-   look like ordinary business software, not a HUD; see the suppression rules below that
-   strip the cyberpunk chrome -- scanlines, vignette, corner brackets, grid backdrop --
-   whenever either corporate theme is active). */
-[data-theme="corporate-light"] {
-  --bg-core: #f1f5f9;
-  --bg-panel: rgba(255, 255, 255, 0.92);
-  --bg-panel-hover: rgba(255, 255, 255, 1);
-  --border-neon: rgba(37, 99, 235, 0.25);
-  --border-neon-bright: #2563eb;
-  --neon-cyan: #2563eb; /* primary accent */
-  --neon-blue: #1d4ed8;
-  --neon-purple: #4f46e5;
-  --neon-green: #16a34a;
-  --neon-amber: #d97706;
-  --neon-red: #dc2626;
-  --text-main: #0f172a;
-  --text-dim: #64748b;
-  --glow-cyan: 0 1px 3px rgba(37, 99, 235, 0.25);
-  --glow-purple: 0 1px 3px rgba(79, 70, 229, 0.25);
-  --glow-green: 0 1px 3px rgba(22, 163, 74, 0.25);
-  --viewport-glow: rgba(37, 99, 235, 0.10);
+/* SOLAR (daylight desk theme, modelled on the Windows 11 light shell -- the Folder Options
+   dialog on the right of the reference screenshot: near-white page, a slightly whiter card
+   floating on it, hairline grey borders, one flat blue accent and no glow anywhere. See the
+   suppression rules further down that strip the cyberpunk chrome -- scanlines, vignette,
+   corner brackets, grid backdrop -- for both this theme and Eclipse.) */
+[data-theme="solar"] {
+  --bg-core: #f3f3f3;          /* the desktop/page behind everything */
+  --bg-panel: rgba(255, 255, 255, 0.90);
+  --bg-panel-hover: #ffffff;
+  --border-neon: rgba(0, 0, 0, 0.10);   /* hairline, not an accent -- Windows draws borders in grey */
+  --border-neon-bright: #0067c0;
+  --neon-cyan: #0067c0;        /* Windows 11 light-mode accent blue */
+  --neon-blue: #005a9e;
+  --neon-purple: #8764b8;
+  --neon-green: #0f7b0f;
+  --neon-amber: #9d5d00;
+  --neon-red: #c42b1c;
+  --text-main: #1b1b1b;
+  --text-dim: #616161;
+  /* Elevation, not glow: a shadow you would only notice if it were missing. */
+  --glow-cyan: 0 1px 2px rgba(0, 0, 0, 0.14);
+  --glow-purple: 0 1px 2px rgba(0, 0, 0, 0.14);
+  --glow-green: 0 1px 2px rgba(0, 0, 0, 0.14);
+  --viewport-glow: rgba(0, 103, 192, 0.08);
   --scanline-color: transparent;
   --bg-grid-color: transparent;
 }
 
-/* CORPORATE DARK (professional dark-mode counterpart -- muted slate instead of near-black,
-   and the same restrained blue accent as corporate-light rather than neon.) */
-[data-theme="corporate-dark"] {
-  --bg-core: #0f172a;
-  --bg-panel: rgba(30, 41, 59, 0.88);
-  --bg-panel-hover: rgba(51, 65, 85, 0.94);
-  --border-neon: rgba(96, 165, 250, 0.3);
-  --border-neon-bright: #60a5fa;
-  --neon-cyan: #60a5fa; /* primary accent */
-  --neon-blue: #3b82f6;
-  --neon-purple: #818cf8;
-  --neon-green: #4ade80;
-  --neon-amber: #fbbf24;
-  --neon-red: #f87171;
-  --text-main: #f1f5f9;
-  --text-dim: #94a3b8;
-  --glow-cyan: 0 1px 4px rgba(96, 165, 250, 0.35);
-  --glow-purple: 0 1px 4px rgba(129, 140, 248, 0.35);
-  --glow-green: 0 1px 4px rgba(74, 222, 128, 0.35);
-  --viewport-glow: rgba(96, 165, 250, 0.18);
+/* ECLIPSE (the same shell after dark -- the File Explorer window on the left of the reference
+   screenshot: #202020 ground, #2b2b2b cards, white borders at a tenth opacity, and the lighter
+   accent blue Windows swaps to in dark mode because #0067c0 is unreadable on it.) */
+[data-theme="eclipse"] {
+  --bg-core: #202020;
+  --bg-panel: rgba(43, 43, 43, 0.90);
+  --bg-panel-hover: #383838;
+  --border-neon: rgba(255, 255, 255, 0.09);
+  --border-neon-bright: #60cdff;
+  --neon-cyan: #60cdff;        /* Windows 11 dark-mode accent blue */
+  --neon-blue: #4cc2ff;
+  --neon-purple: #b4a0ff;
+  --neon-green: #6ccb5f;
+  --neon-amber: #fce100;
+  --neon-red: #ff99a4;
+  --text-main: #ffffff;
+  --text-dim: #a0a0a0;
+  --glow-cyan: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --glow-purple: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --glow-green: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --viewport-glow: rgba(96, 205, 255, 0.14);
   --scanline-color: transparent;
   --bg-grid-color: transparent;
 }
 
-/* Both corporate themes drop the cyberpunk chrome entirely: no CRT scanline overlay, no
-   vignette darkening the edges, no HUD corner brackets, no neon grid backdrop, and
-   headings fall back to a plain sans-serif instead of the sci-fi display font. */
-[data-theme^="corporate"] .scanlines,
-[data-theme^="corporate"] .vignette {
+/* Solar and Eclipse drop the cyberpunk chrome entirely: no CRT scanline overlay, no vignette
+   darkening the edges, no HUD corner brackets, no neon grid backdrop, and headings fall back
+   to a plain sans-serif instead of the sci-fi display font.
+   These two selectors have to be listed by hand. The previous names (corporate-light and
+   corporate-dark) shared a prefix, so one [data-theme^="corporate"] covered both; Solar and
+   Eclipse do not, and the shared-prefix trick would quietly match nothing. */
+[data-theme="solar"] .scanlines,
+[data-theme="solar"] .vignette,
+[data-theme="eclipse"] .scanlines,
+[data-theme="eclipse"] .vignette {
   display: none;
 }
 
-[data-theme^="corporate"] body {
+[data-theme="solar"] body,
+[data-theme="eclipse"] body {
   background-image: none;
 }
 
-[data-theme^="corporate"] .hud-panel::before,
-[data-theme^="corporate"] .hud-panel::after {
+[data-theme="solar"] .hud-panel::before,
+[data-theme="solar"] .hud-panel::after,
+[data-theme="eclipse"] .hud-panel::before,
+[data-theme="eclipse"] .hud-panel::after {
   display: none;
 }
 
-[data-theme^="corporate"] .font-orbitron {
+[data-theme="solar"] .font-orbitron,
+[data-theme="eclipse"] .font-orbitron {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   letter-spacing: normal;
 }
 
-/* Chat bubbles: .msg-user is a near-invisible white-on-white fill by design for the dark
-   cyberpunk themes (it reads as a bright highlight against their near-black backgrounds).
-   Corporate Light is the first theme with a light --bg-core, so it needs its own ink-on-
-   paper version instead of inheriting the white-on-white one. */
-[data-theme="corporate-light"] .msg-user {
-  background: rgba(15, 23, 42, 0.05);
-  border: 1px solid rgba(15, 23, 42, 0.18);
-  border-left: 3px solid #0f172a;
+/* Windows rounds its corners and keeps its shadows shallow; the HUD's default is a hard-edged
+   panel sitting under a deep 32px drop shadow, which reads as a floating card rather than a
+   window. */
+[data-theme="solar"] .hud-panel,
+[data-theme="eclipse"] .hud-panel {
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
 }
 
-/* #hologram-viewport is a solid #000 stage by design for the cyberpunk themes -- it reads
-   as a dark projection bay. On corporate-light that box turns into a jarring black hole
-   in the middle of an otherwise white page, so both corporate themes get the avatar
-   sitting directly on --bg-core instead, blending into the rest of the page. */
-[data-theme^="corporate"] #hologram-viewport {
+/* Nothing in the Windows shell is uppercase-with-letter-spacing. Buttons keep their labels
+   as written, get the same soft corner, and lose the lift-on-hover. */
+[data-theme="solar"] .cyber-btn,
+[data-theme="eclipse"] .cyber-btn {
+  text-transform: none;
+  letter-spacing: normal;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-main);
+  border-color: var(--border-neon);
+}
+
+/* The shared hover rule floods the button with the accent and forces black text -- correct
+   for a neon HUD, wrong for a window: hovering a Windows button lightens it slightly and
+   leaves the label alone. The !important on the colour is only there to beat the equally
+   !important black in the shared rule. */
+[data-theme="solar"] .cyber-btn:hover,
+[data-theme="eclipse"] .cyber-btn:hover {
+  transform: none;
+  background: var(--bg-panel-hover);
+  border-color: var(--border-neon-bright);
+  color: var(--text-main) !important;
+  box-shadow: none;
+}
+
+/* The selected button is the accent colour with the label reversed out of it. Which ink
+   reads depends on the accent: Solar's #0067c0 is dark and needs white on it, Eclipse's
+   #60cdff is pale and needs near-black -- the shared default of black text would leave
+   Solar's selected button unreadable. */
+[data-theme="solar"] .cyber-btn-active,
+[data-theme="eclipse"] .cyber-btn-active {
+  background: var(--neon-cyan) !important;
+  border-color: var(--neon-cyan) !important;
+}
+
+[data-theme="solar"] .cyber-btn-active {
+  color: #ffffff !important;
+}
+
+[data-theme="eclipse"] .cyber-btn-active {
+  color: #1b1b1b !important;
+}
+
+/* .gauge-bar-track is a near-black slot, which is invisible on Eclipse's dark ground and a
+   black bar on Solar's white one. Both want the track to read as a recess in the surface
+   it sits on. */
+[data-theme="solar"] .gauge-bar-track {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="eclipse"] .gauge-bar-track {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Chat bubbles: .msg-user is a near-invisible white-on-white fill by design for the dark
+   cyberpunk themes (it reads as a bright highlight against their near-black backgrounds).
+   Solar is the light one, so it needs its own ink-on-paper version instead of inheriting
+   a white fill on a white page. */
+[data-theme="solar"] .msg-user {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-left: 3px solid #1b1b1b;
+}
+
+/* #hologram-viewport is a solid #000 stage by design for the cyberpunk themes -- it reads as
+   a dark projection bay. On Solar that box turns into a jarring black hole in the middle of
+   an otherwise white page, so both of these themes get the avatar sitting directly on
+   --bg-core instead, blending into the rest of the window. */
+[data-theme="solar"] #hologram-viewport,
+[data-theme="eclipse"] #hologram-viewport {
   background-color: var(--bg-core);
+}
+
+/* ---------------------------------------------------------------------------------------
+   Bringing the hardcoded utility classes along.
+
+   The theme variables above only reach the elements that use them. Much of the markup names
+   its colours directly instead -- bg-slate-950/80 on the header, text-cyan-400 on every panel
+   heading, border-cyan-500/30 everywhere -- which is fine for six cyberpunk themes that all
+   sit on near-black, and wrong the moment the page turns white: cyan headings wash out, and
+   the header stays a near-black bar across the top of a light window.
+
+   So each family of hardcoded colours is mapped onto the theme's own variables. Grouped with
+   :is() to keep this readable, and single-class utilities lose to a [data-theme] ancestor on
+   specificity, so nothing here needs !important.
+
+   The avatar and theme pickers are excluded: their labels are coloured to preview the thing
+   they select, so a green "Nexus" and an amber "A.R.X.LIMES" are the point, not an oversight.
+   --------------------------------------------------------------------------------------- */
+
+/* Surfaces: every panel, bar and well collapses onto the two theme surfaces. */
+[data-theme="solar"] :is(.bg-black\/40, .bg-black\/60, .bg-black\/80,
+  .bg-slate-900, .bg-slate-900\/60, .bg-slate-900\/80,
+  .bg-slate-950\/60, .bg-slate-950\/80, .bg-slate-950\/90,
+  .bg-cyan-950\/20, .bg-cyan-950\/30, .bg-cyan-950\/40, .bg-cyan-950\/80,
+  .bg-purple-950\/30),
+[data-theme="eclipse"] :is(.bg-black\/40, .bg-black\/60, .bg-black\/80,
+  .bg-slate-900, .bg-slate-900\/60, .bg-slate-900\/80,
+  .bg-slate-950\/60, .bg-slate-950\/80, .bg-slate-950\/90,
+  .bg-cyan-950\/20, .bg-cyan-950\/30, .bg-cyan-950\/40, .bg-cyan-950\/80,
+  .bg-purple-950\/30) {
+  background-color: var(--bg-panel);
+}
+
+/* ...except a field, which reads as a recess you type into rather than another panel. */
+[data-theme="solar"] :is(input, select, textarea),
+[data-theme="eclipse"] :is(input, select, textarea) {
+  background-color: var(--bg-panel-hover);
+  border-color: var(--border-neon);
+  color: var(--text-main);
+}
+
+/* Borders are hairlines in this shell, not lit edges. */
+[data-theme="solar"] :is(.border-cyan-500, .border-cyan-500\/20, .border-cyan-500\/30,
+  .border-cyan-500\/40, .border-cyan-500\/50, .border-purple-500\/30, .border-purple-500\/40,
+  .border-purple-500\/50, .border-slate-600\/40, .border-slate-700, .border-slate-700\/50):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.border-cyan-500, .border-cyan-500\/20, .border-cyan-500\/30,
+  .border-cyan-500\/40, .border-cyan-500\/50, .border-purple-500\/30, .border-purple-500\/40,
+  .border-purple-500\/50, .border-slate-600\/40, .border-slate-700, .border-slate-700\/50):not(.color-theme-btn):not(.avatar-btn) {
+  border-color: var(--border-neon);
+}
+
+/* Headings and links: the accent blue. */
+[data-theme="solar"] :is(.text-cyan-300, .text-cyan-400, .text-cyan-500):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.text-cyan-300, .text-cyan-400, .text-cyan-500):not(.color-theme-btn):not(.avatar-btn) {
+  color: var(--neon-cyan);
+}
+
+/* Body copy. */
+[data-theme="solar"] :is(.text-cyan-100, .text-slate-100, .text-slate-200, .text-purple-100,
+  .text-purple-200):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.text-cyan-100, .text-slate-100, .text-slate-200, .text-purple-100,
+  .text-purple-200):not(.color-theme-btn):not(.avatar-btn) {
+  color: var(--text-main);
+}
+
+/* Labels, captions, units -- the quiet half of the text. */
+[data-theme="solar"] :is(.text-slate-300, .text-slate-400, .text-slate-500, .text-purple-300,
+  .text-cyan-300\/80, .text-cyan-400\/70, .text-cyan-400\/80):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.text-slate-300, .text-slate-400, .text-slate-500, .text-purple-300,
+  .text-cyan-300\/80, .text-cyan-400\/70, .text-cyan-400\/80):not(.color-theme-btn):not(.avatar-btn) {
+  color: var(--text-dim);
+}
+
+/* Status colours stay status colours, but the theme's readable version of them: Tailwind's
+   green-400 and yellow-300 are picked to glow on black and all but vanish on Solar's white. */
+[data-theme="solar"] :is(.text-green-400):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.text-green-400):not(.color-theme-btn):not(.avatar-btn) {
+  color: var(--neon-green);
+}
+
+[data-theme="solar"] :is(.text-amber-400, .text-yellow-300):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.text-amber-400, .text-yellow-300):not(.color-theme-btn):not(.avatar-btn) {
+  color: var(--neon-amber);
+}
+
+[data-theme="solar"] :is(.text-red-400):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.text-red-400):not(.color-theme-btn):not(.avatar-btn) {
+  color: var(--neon-red);
+}
+
+[data-theme="solar"] :is(.text-purple-400, .text-pink-400, .text-blue-300):not(.color-theme-btn):not(.avatar-btn),
+[data-theme="eclipse"] :is(.text-purple-400, .text-pink-400, .text-blue-300):not(.color-theme-btn):not(.avatar-btn) {
+  color: var(--neon-purple);
+}
+
+/* bg-cyan-400 marks live indicators -- a filled dot, not a surface, so it follows the accent
+   rather than collapsing into the panel with the other backgrounds above. */
+[data-theme="solar"] .bg-cyan-400,
+[data-theme="eclipse"] .bg-cyan-400 {
+  background-color: var(--neon-cyan);
+}
+
+/* The agent's chat bubble is a fixed cyan wash, which is a blue-green stain on Solar's white
+   page. Both themes get the panel surface with the accent kept as the left edge marker. */
+[data-theme="solar"] .msg-agent,
+[data-theme="eclipse"] .msg-agent {
+  background: var(--bg-panel-hover);
+  border: 1px solid var(--border-neon);
+  border-left: 3px solid var(--neon-cyan);
+}
+
+/* The strip under the avatar fades a near-black gradient upward to ground the projection.
+   That is a background-image, so the surface rule above does not reach it -- on Solar it
+   stayed a black smear across the bottom of a white panel, and on Eclipse it is a darker
+   smudge than the panel it sits on. Neither theme wants it. */
+[data-theme="solar"] .bg-gradient-to-t,
+[data-theme="eclipse"] .bg-gradient-to-t {
+  background-image: none;
+}
+
+/* Glow helpers: text-shadow is the one thing this shell never does. */
+[data-theme="solar"] .glow-cyan,
+[data-theme="eclipse"] .glow-cyan {
+  text-shadow: none;
 }
 
 * {

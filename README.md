@@ -220,6 +220,22 @@ Both are remembered on this machine and survive a restart. Settings has a
 **Reset panels to their default places** button when you want the original layout
 back.
 
+## Light and dark
+
+The first time the HUD opens it matches your operating system: **Solar** on a machine set
+to light, **Eclipse** on one set to dark. Both are modelled on the Windows 11 shell -- flat
+surfaces, hairline borders, one blue accent, no glow -- so the companion looks like a
+program on your desktop rather than a prop from a film.
+
+Pick any theme from the dropdown in the top bar (or the THEME row in Settings) and that
+choice is remembered from then on, including across restarts. Choosing is also how you opt
+out of following the system: until you pick one, flipping your OS between light and dark
+flips the HUD with it; afterwards it stays where you put it.
+
+The other six themes -- Cyan, Green, Amber, Magenta, Crimson and Night -- are the
+cyberpunk ones, and they keep the scanlines, the corner brackets and the neon. Any theme
+can be worn by any avatar; the two are independent choices.
+
 ## Making your own avatar
 
 The avatar is a module of its own -- everything that draws it lives in

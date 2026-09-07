@@ -58,8 +58,8 @@
                     <option value="arx-logos">🟣 A.R.X.LOGOS Magenta</option>
                     <option value="red">🔴 Crimson</option>
                     <option value="night-city">⚠️ Night City</option>
-                    <option value="corporate-light">☀️ Corporate Light</option>
-                    <option value="corporate-dark">🌙 Corporate Dark</option>
+                    <option value="solar">☀️ Solar (light)</option>
+                    <option value="eclipse">🌙 Eclipse (dark)</option>
                 </select>
             </div>
 
@@ -369,8 +369,8 @@
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 Magenta</button>
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-yellow-300 border-yellow-300" data-color-theme="night-city">⚠️ Night</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-300 border-slate-400" data-color-theme="corporate-light">☀️ Light</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-blue-300 border-blue-400" data-color-theme="corporate-dark">🌙 Dark</button>
+                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-300 border-slate-400" data-color-theme="solar">☀️ Solar</button>
+                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-blue-300 border-blue-400" data-color-theme="eclipse">🌙 Eclipse</button>
                     </div>
                 </div>
 
@@ -668,7 +668,8 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/palettes.js?v=17"></script>
+    <script src="js/theme.js?v=1"></script>
+    <script src="js/hologram/palettes.js?v=18"></script>
     <script src="js/hologram/core.js?v=36"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
@@ -685,7 +686,7 @@
     <script src="js/hologram/avatar-a1.js?v=1"></script>
     <script src="js/hologram/animate.js?v=36"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=24"></script>
+    <script src="js/app.js?v=25"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>
