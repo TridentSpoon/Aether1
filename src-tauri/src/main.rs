@@ -656,6 +656,11 @@ fn voice_status_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 }
 
 #[tauri::command]
+fn list_personas_rust() -> serde_json::Value {
+    commands::list_personas()
+}
+
+#[tauri::command]
 fn generate_speech_rust(
     engine: tauri::State<LlmEngine>,
     text: String,
@@ -882,6 +887,7 @@ fn main() {
             generate_speech_rust,
             transcribe_rust,
             voice_status_rust,
+            list_personas_rust,
             get_version_info,
             check_for_update_rust,
             apply_update_rust,

@@ -32,7 +32,63 @@
          avatar and theme, each collapsed to the one that is selected), and the controls.
          Everything that used to sit in a row here and fall off a narrow window is now
          either stacked or behind a menu, so nothing becomes unreachable at any width. -->
+    <!-- TOP HUD BAR
+         Three clusters: what is on screen (the current avatar and theme, each collapsed to
+         the one that is selected), the brand in the middle, and the controls. The two outer
+         clusters are equal-flex so the brand sits in the true centre of the window rather
+         than in the middle of whatever space is left over. -->
     <header class="w-full bg-slate-950/80 border-b border-cyan-500/30 px-4 py-2 flex items-center gap-4 z-30 backdrop-blur-md">
+        <!-- WHAT IS ON SCREEN. Only the current choice is shown; the alternatives slide out
+             when asked for. Eight avatar pills in a row was most of the bar's width spent
+             telling you about seven things you had not picked. -->
+        <!-- Both chips and both panels share one positioning box, so a panel opens below the
+             pair rather than below its own chip. Anchored to the chip, the avatar's panel
+             covered the theme chip sitting underneath it -- and a click aimed at THEME landed
+             on an avatar instead. -->
+        <div class="flex-1 min-w-0">
+            <div class="relative inline-flex flex-col items-start gap-1">
+                <button id="btn-avatar-menu" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="avatar-menu"
+                        class="hud-chip" title="Change the avatar">
+                    <span class="hud-chip-label">AVATAR</span>
+                    <span id="hud-agent-name" class="hud-chip-value">A1</span>
+                    <span class="hud-chip-caret" aria-hidden="true">▾</span>
+                </button>
+
+                <!-- The same shape as the avatar above it, so there is one thing to learn
+                     rather than a chip and a dropdown that behave differently. Mode only: the
+                     colours under it are a separate choice and live in Settings, where there
+                     is room for the three pickers. -->
+                <button id="btn-theme-menu" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="theme-menu"
+                        class="hud-chip" title="Change the theme">
+                    <span class="hud-chip-label">THEME</span>
+                    <span id="hud-theme-name" class="hud-chip-value">Cyberpunk</span>
+                    <span class="hud-chip-caret" aria-hidden="true">▾</span>
+                </button>
+
+                <div id="avatar-menu" class="hud-slideout hidden" role="menu" aria-labelledby="btn-avatar-menu">
+                    <div class="grid grid-cols-2 gap-1">
+                        <button class="avatar-pill" data-avatar-val="a1">🅰️ A1</button>
+                        <button class="avatar-pill" data-avatar-val="halcy">🔷 hAlcy</button>
+                        <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
+                        <button class="avatar-pill" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
+                        <button class="avatar-pill" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
+                        <button class="avatar-pill" data-avatar-val="red">🔴 R.E.D. 9000</button>
+                        <button class="avatar-pill" data-avatar-val="alt">⚠️ A1ter_nul</button>
+                        <button class="avatar-pill" data-avatar-val="custom" title="An avatar you design yourself">✨ Your own</button>
+                    </div>
+                    <!-- Only shown while "Your own" is the selected avatar: the way to change it
+                         has to be where you looked for it, not buried in Settings. -->
+                    <button id="btn-customise-avatar" class="hidden hud-slideout-action mt-1" title="Open the avatar workbench">✎ Customise this avatar</button>
+                </div>
+
+                <div id="theme-menu" class="hud-slideout hud-slideout-narrow hidden" role="menu" aria-labelledby="btn-theme-menu">
+                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="solar" role="menuitem">☀️ Solar</button>
+                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="eclipse" role="menuitem">🌙 Eclipse</button>
+                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="cyberpunk" role="menuitem">⚡ Cyberpunk</button>
+                </div>
+            </div>
+        </div>
+
         <div class="flex items-center gap-2.5 shrink-0">
             <div class="w-2.5 h-2.5 rounded-full bg-cyan-400 box-glow-cyan animate-pulse shrink-0"></div>
             <div class="flex flex-col items-start gap-0.5">
@@ -49,54 +105,14 @@
             </div>
         </div>
 
-        <!-- WHAT IS ON SCREEN. Only the current choice is shown; the alternatives slide out
-             when asked for. Eight avatar pills in a row was most of the bar's width spent
-             telling you about seven things you had not picked. -->
-        <div class="flex flex-col gap-1 min-w-0">
-            <div class="relative">
-                <button id="btn-avatar-menu" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="avatar-menu"
-                        class="hud-chip" title="Change the avatar">
-                    <span class="hud-chip-label">AVATAR</span>
-                    <span id="hud-agent-name" class="hud-chip-value">A1</span>
-                    <span class="hud-chip-caret" aria-hidden="true">▾</span>
-                </button>
-                <div id="avatar-menu" class="hud-slideout hidden" role="menu" aria-labelledby="btn-avatar-menu">
-                    <div class="grid grid-cols-2 gap-1">
-                        <button class="avatar-pill" data-avatar-val="a1">🅰️ A1</button>
-                        <button class="avatar-pill" data-avatar-val="halcy">🔷 hAlcy</button>
-                        <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
-                        <button class="avatar-pill" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
-                        <button class="avatar-pill" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
-                        <button class="avatar-pill" data-avatar-val="red">🔴 R.E.D. 9000</button>
-                        <button class="avatar-pill" data-avatar-val="alt">⚠️ A1ter_nul</button>
-                        <button class="avatar-pill" data-avatar-val="custom" title="An avatar you design yourself">✨ Your own</button>
-                    </div>
-                    <!-- Only shown while "Your own" is the selected avatar: the way to change it
-                         has to be where you looked for it, not buried in Settings. -->
-                    <button id="btn-customise-avatar" class="hidden hud-slideout-action mt-1" title="Open the avatar workbench">✎ Customise this avatar</button>
-                </div>
-            </div>
-
-            <div class="flex items-center gap-1.5">
-                <span class="hud-chip-label shrink-0">THEME</span>
-                <!-- Mode only. The colours under it are a separate choice and live in
-                     Settings, where there is room for the three pickers. -->
-                <select id="theme-mode-select" class="bg-slate-900 border border-cyan-500/40 rounded px-1.5 py-0.5 text-cyan-300 font-mono text-[11px] leading-none focus:outline-none focus:border-cyan-400">
-                    <option value="solar">☀️ Solar</option>
-                    <option value="eclipse">🌙 Eclipse</option>
-                    <option value="cyberpunk">⚡ Cyberpunk</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="flex items-center gap-3 ml-auto shrink-0">
+        <div class="flex-1 flex items-center justify-end gap-3 min-w-0">
             <div id="live-clock" class="hidden md:block font-mono text-xs text-cyan-300/80">
                 00:00:00 // 2026-08-24
             </div>
             <!-- Four buttons that used to be laid out in a row and were the first thing to be
                  pushed off a narrow window. Behind one control they are reachable at every
                  width, which is what "available" has to mean. -->
-            <div class="relative">
+            <div class="relative shrink-0">
                 <button id="btn-hud-menu" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="hud-menu"
                         class="cyber-btn text-xs py-1.5 px-3" title="Menu">
                     <span aria-hidden="true">☰</span><span class="sr-only">Menu</span>
@@ -433,17 +449,14 @@
                 <!-- Persona Selector -->
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
                     <label class="text-xs font-mono text-cyan-300 block font-bold">🧠 BASE PERSONA</label>
+                    <!-- Filled in from the persona catalogue the backend serves (see
+                         Persona::catalogue in persona.rs). Written out here it would have
+                         drifted from the enum the first time either moved; the placeholder
+                         below is only what shows if that request has not landed yet. -->
                     <select id="setting-persona" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <option value="halcy">hAlcy (Holographic Adaptive Companion)</option>
-                        <option value="red9000">R.E.D. 9000 (Reactive Engine Daemon)</option>
-                        <option value="nexus">The Nexus (Matrix Digital Singularity)</option>
-                        <option value="arx-limes">A.R.X.LIMES (Archival, Reasoning, matriX — Limes)</option>
-                        <option value="arx-logos">A.R.X.LOGOS (Archival, Reasoning, matriX — Logos)</option>
-                        <option value="alt">A1ter_nul (Cunningham — Security & Intrusion Countermeasures)</option>
-                        <option value="tactical">Tactical Military HUD</option>
-                        <option value="cyberpunk">Cyberpunk Netrunner</option>
-                        <option value="custom">Custom Directive (write your own below)</option>
+                        <option value="default">System Diagnosis</option>
                     </select>
+                    <p id="persona-speciality" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
                     <div id="custom-persona-wrap" class="hidden space-y-1 pt-1">
                         <label class="text-xs font-mono text-cyan-300 block">CUSTOM PERSONA DIRECTIVE</label>
                         <textarea id="setting-custom-directive" rows="3" placeholder="e.g. 'You are {AGENT_NAME}, a dry-witted lab assistant who explains things through kitchen analogies.'" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono"></textarea>

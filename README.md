@@ -204,14 +204,16 @@ doesn't exist, a proxy in the way and an unreachable server each say so in those
 
 ## The top bar and the chin bar
 
-The bar along the top carries what this is and what is on screen:
+The bar along the top carries what is on screen on the left, what this is in the middle, and
+the controls on the right:
 
-- **The wordmark** shows your companion's own name once you have given it one, turning over
-  to AETHER1 PLATFORM every so often so what it is running on stays visible. The version sits
-  directly under it in the desktop app.
 - **Avatar** shows the one that is selected. Click it and the other seven slide out, along
   with the way into the workbench when *Your own* is the one you are using.
-- **Theme** sits under the avatar and switches between Solar, Eclipse and Cyberpunk.
+- **Theme** sits under it and works the same way: the current mode, and Solar, Eclipse and
+  Cyberpunk sliding out when you click it.
+- **The wordmark** sits in the centre. It shows your companion's own name once you have given
+  it one, turning over to AETHER1 PLATFORM every so often so what it is running on stays
+  visible. The version sits directly under it in the desktop app.
 - **The menu** (☰) holds SFX, Activity, Clear conversation and Settings. They live behind one
   control so they are reachable at any window width rather than being the first thing pushed
   off the edge of a narrow one.
@@ -278,6 +280,31 @@ Solar and Eclipse -- because a hologram projected onto a white page reads as a p
 rather than a projection. That panel is the one part of the window that does not follow the
 background colour.
 
+
+## Personas
+
+A persona is a **job**, not a character. The character is how the job sounds. Settings leads
+with what each one is for, and names the avatar it belongs to:
+
+| Persona | What it is for | Avatar |
+|---|---|---|
+| **System Diagnosis** | Logs, services and what this machine is doing. Starts from evidence, quotes the line that shows the problem, separates what it observed from what it inferred. | A1 |
+| **Conversational** | Thinking a problem through with you. Asks the one clarifying question that would change the answer instead of guessing. | hAlcy |
+| **To the Point** | The answer in the first line. No preamble, no restating the question, no padding. | R.E.D. 9000 |
+| **Coding** | Working code, complete enough to run, with the failure mode named -- what breaks it, what it does not handle, what it costs. | The Nexus |
+| **Cites Sources** | Where every claim came from, and how sure it is: read from a file this session, recalled from training and unverifiable, or inferred. Never invents a citation. | A.R.X.LIMES |
+| **Creative Work** | Writing, design, and the shape of a sentence. Produces the draft rather than describing it. | A.R.X.LOGOS |
+| **Security & White Hat** | Exposure, hardening and authorised testing -- attack surface, blast radius, and asking whether a target is yours to test. | A1ter_nul |
+| **Model's Own** | No directive at all. Whatever the model brings on its own. | -- |
+| **Custom** | Your own directive, written in the box below the field. | -- |
+
+Picking an avatar switches to its persona, its voice and its name -- one choice you can make
+from either end. *Your own* is the exception: an avatar you designed has no persona of its
+own, so it leaves yours alone.
+
+**These change how the companion works, not what it can do.** Every persona has the same
+tools, the same model and the same permissions. Security & White Hat is more likely to tell
+you about a risk you did not ask about; it has no access the others lack.
 
 ## Making your own avatar
 

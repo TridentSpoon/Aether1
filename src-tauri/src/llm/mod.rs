@@ -17,7 +17,10 @@ use std::time::Instant;
 
 pub use db::{ActionRecord, ActionStatus, MemoryDb, Message};
 pub use genesis::Identity;
-use persona::{Persona, Provider};
+use persona::Provider;
+// Re-exported because commands.rs serves the persona catalogue to the HUD: the Settings list
+// is built from the enum rather than written out again in the markup.
+pub use persona::Persona;
 use providers::ChatContext;
 pub use providers::Sink;
 pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
@@ -250,8 +253,16 @@ impl LlmEngine {
         // it needs, so memory can outgrow any context window.
         let memory_context = crate::vault::prime(&self.db);
 
+        // The model's-own persona sends no directive at all, so the prompt must not open with
+        // two blank lines where a personality would have been.
+        let base_persona = if base_persona.trim().is_empty() {
+            String::new()
+        } else {
+            format!("{base_persona}\n\n")
+        };
+
         format!(
-            "{base_persona}\n\n\
+            "{base_persona}\
              [LIVE HOST TELEMETRY]\n\
              - Identity: {agent_name}\n\
              - OS: {os_name} ({architecture})\n\

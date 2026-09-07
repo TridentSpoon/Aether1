@@ -201,6 +201,11 @@
   min-width: 280px;
 }
 
+/* Three short words need no more room than three short words. */
+.hud-slideout-narrow {
+  min-width: 150px;
+}
+
 /* Anchored to the right edge instead, for the menu that sits at the end of the bar and
    would otherwise open off the side of the window. */
 .hud-slideout-right {

@@ -726,6 +726,72 @@ half overrode the `hidden` half at any normal width and the browser — which ha
 report — showed an empty `--` forever. It now starts hidden and `initVersionAndUpdates`
 reveals it, which is what that function always intended.
 
+**Refined after first use.** The avatar and theme chips moved to the left of the bar and the
+brand to the middle, with the two outer clusters equal-flex so the wordmark sits in the true
+centre of the window rather than the middle of whatever space is left over. Theme stopped
+being a native `<select>` and became a chip and a slide-out like the avatar — a bar with one
+of each taught two interactions for the same kind of choice.
+
+Stacking the two chips exposed a real bug in the first version: each panel was anchored to its
+own chip, so the avatar's panel opened *over* the theme chip beneath it, and a click aimed at
+THEME landed on an avatar instead. Both chips and both panels now share one positioning box,
+so a panel opens below the pair. Worth recording because the failure was invisible in the
+markup and only showed up when something was actually clicked.
+
+### Step 25: personas are jobs, not costumes — **shipped**
+
+The nine personas described voices. Read them side by side and they were the same assistant in
+different adjectives: warm, or composed, or booming. Nothing in any of them said what a good
+answer looked like, so picking one changed the tone of the reply and almost nothing else.
+
+Each directive now has a "What that means in practice" half — a test enforces that phrase is
+present in all seven speciality personas, which is a crude check for a real property. To the
+Point must put the answer in the first line and not restate the question. Coding must produce
+runnable code and name the failure mode. Cites Sources must say *which kind* of source a claim
+has — read this session, recalled from training and unverifiable, or inferred — and never
+invent one to fill the shape. Security must ask whether a target is the operator's to test.
+
+**The list changed shape.** Tactical and Cyberpunk went: one was System Diagnosis in different
+words, the other was Coding in different words. Two arrived — Default (system diagnosis and
+event-log checking) and Llm (no directive at all, whatever the model brings). Both retired
+keys still resolve, to the persona that absorbed them, with a test naming why.
+
+**Settings builds its list from the enum.** `Persona::catalogue()` is served through both
+transports and the `<select>` is rendered from it. The list was previously written out in the
+HTML, which would have drifted from the enum the first time either moved — and this change
+moved both. The unknown-key fallback moved from Conversational to System Diagnosis: an
+unrecognised key is usually a stale setting, and the safer default for a companion attached to
+a live machine is the one that reports on it plainly.
+
+**Every avatar now switches persona.** It was a seven-branch if/else covering five of eight, so
+A1 and hAlcy silently kept whatever was set and the pairing only half existed. It is a table
+now, carrying name, persona, voice and greeting. *Your own* is the deliberate omission: an
+avatar you designed has no persona of its own, and quietly selecting Custom would hand over the
+fallback directive without saying so.
+
+### Step 26: per-persona access, elevated one request at a time
+
+**Designed, not built.** The design is written out in full in
+[PERSONA_ACCESS.md](PERSONA_ACCESS.md); this is the summary and why it is a document before it
+is code.
+
+Read-only tools currently run automatically for every persona, so Creative Work can read your
+firewall rules and Conversational can read your source tree. Nothing connects what the
+companion is *for* to what it reaches for without asking. The design gives each persona a
+domain — a set of read-only tools and path roots — that runs without a prompt, and makes
+everything else take the proposal path mutating tools already use. Elevation lasts exactly one
+call: no mode, no session flag, no timed grant, because a grant that stays on is the current
+behaviour wearing a restriction's clothes.
+
+It is a document first because of the second-order effect. The moment a persona carries
+permissions, **switching persona becomes privilege escalation** — and `set_aether_setting` can
+currently change `persona_type` with a single approval that does not read like a permission
+grant. So `persona_type` and `avatar` have to leave `SETTABLE`, joining the rule the entries
+there already follow: the companion may not change the thing that decides what the companion
+may do. That is the kind of consequence worth finding on paper.
+
+Worth stating plainly: this makes Aether1 **stricter** than it is today, not looser.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies
