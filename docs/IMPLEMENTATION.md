@@ -660,6 +660,35 @@ Solar with Cyberpunk's near-black ground is not a light theme, it is a broken on
 single-word themes from before this — including `corporate-light` and `corporate-dark` from
 before step 21 — are translated to a mode and a colour set on read.
 
+### Step 23: the stage is always dark, and the workbench wears your theme — **shipped**
+
+Two things step 22 left wrong.
+
+**The avatar's panel followed the theme, and should not.** Under Solar the projection bay went
+white with the rest of the window, and a hologram on white reads as a picture of a hologram.
+`--viewport-bg` is now derived separately from the shell: black under Cyberpunk, a fixed dark
+grey under a light shell, and the shell's own ground taken down under a dark one, so a custom
+background still gets a bay that is recessed rather than one that fights it. The whole panel
+takes it, not just the canvas — the waveform strip sits below `#hologram-viewport` rather than
+inside it, so colouring only the viewport left a lit ledge under a dark bay. One surface reads
+as a screen; two read as a mistake. The labels laid over it get their own light ink, since
+`--text-dim` is derived for the shell's background and on Solar is a grey meant for white.
+
+**The workbench ignored the theme entirely**, opening on the Cyan preset because that was the
+hardcoded default from when it was written. It now opens on `Aether1Theme.current()` and
+listens for the storage event the HUD's own writes fire, so it follows a live change — unless
+something is being previewed, because a preview is a deliberate override and should not be
+yanked away mid-check. Its picker gained a **Your theme (as set in the HUD)** entry to get
+back. Its own controls had fixed near-blacks written when every theme was one; those follow the
+theme now too.
+
+While in there: `data-theme="halcy"` was still hardcoded on `<html>` in all three pages, naming
+a theme that no longer exists and a value that is now a *mode*. Removed — JavaScript is the
+only writer. That exposed a flash: with `theme.js` loaded at the foot of the body, the page
+painted once in the fallback palette first, which on a light theme is a dark flash. `palettes.js`
+and `theme.js` are pure data and pure computation, touching no DOM beyond `<html>`'s own
+attribute, so they moved to the head and the theme is applied before anything renders.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies

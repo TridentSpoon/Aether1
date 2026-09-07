@@ -168,6 +168,7 @@
                 '--glow-cyan': `0 0 15px ${rgba(main, 0.55)}, 0 0 30px ${rgba(main, 0.22)}`,
                 '--glow-purple': `0 0 15px ${rgba(highlight, 0.55)}, 0 0 30px ${rgba(highlight, 0.22)}`,
                 '--glow-green': `0 0 15px ${rgba(mid, 0.55)}, 0 0 30px ${rgba(mid, 0.22)}`,
+                '--viewport-bg': '#000000',
                 '--viewport-glow': rgba(main, 0.5),
                 '--scanline-color': rgba(main, 0.03),
                 '--bg-grid-color': rgba(main, 0.035),
@@ -191,7 +192,14 @@
                 '--glow-cyan': light ? '0 1px 2px rgba(0, 0, 0, 0.14)' : '0 1px 2px rgba(0, 0, 0, 0.35)',
                 '--glow-purple': light ? '0 1px 2px rgba(0, 0, 0, 0.14)' : '0 1px 2px rgba(0, 0, 0, 0.35)',
                 '--glow-green': light ? '0 1px 2px rgba(0, 0, 0, 0.14)' : '0 1px 2px rgba(0, 0, 0, 0.35)',
-                '--viewport-glow': rgba(main, light ? 0.08 : 0.14),
+                /* The avatar sits in a dark bay whatever the shell around it is doing: a
+                   hologram projected onto a white page reads as a picture of one. Not the
+                   Cyberpunk void either -- a grey, so it is a screen inset into the window
+                   rather than a hole cut in it. On a light shell that is a fixed dark grey;
+                   on a dark one it is the ground itself taken down, so a custom background
+                   still gets a bay that is recessed rather than one that fights it. */
+                '--viewport-bg': light ? '#202020' : raise(background, 0.6, 0),
+                '--viewport-glow': rgba(main, 0.22),
                 '--scanline-color': 'transparent',
                 '--bg-grid-color': 'transparent',
                 '--bg-wash-main': 'transparent',

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="halcy">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,7 +8,14 @@
          with nothing else running -- no backend, no model server, no network. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=18">
+    <link rel="stylesheet" href="css/A1theme.css?v=19">
+    <!-- The theme, before anything is painted. These two are pure data and pure computation
+         -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
+         head rather than with the engine at the foot of the body: loaded down there, the page
+         renders once in the fallback palette first, which on a light theme is a dark flash. -->
+    <script src="js/hologram/palettes.js?v=19"></script>
+    <script src="js/theme.js?v=3"></script>
+    <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
     <style>
         /* The workbench is its own thing: two columns, avatar on the left, controls on
@@ -20,22 +27,25 @@
         .lab-field { display: flex; flex-direction: column; gap: 0.25rem; }
         .lab-field label { font-size: 10px; letter-spacing: 0.1em; }
         select, input[type="range"] { width: 100%; }
+        /* These were fixed near-blacks, written when every theme was one. On a light shell
+           they are dark boxes on a white page, so they follow the theme like everything
+           else. */
         select {
-            background: #0b1220; border: 1px solid var(--border-neon); border-radius: 3px;
-            color: var(--neon-cyan); font-family: 'Share Tech Mono', monospace; font-size: 12px; padding: 4px 6px;
+            background: var(--bg-panel-hover); border: 1px solid var(--border-neon); border-radius: 3px;
+            color: var(--text-main); font-family: 'Share Tech Mono', monospace; font-size: 12px; padding: 4px 6px;
         }
         .lab-readout { font-variant-numeric: tabular-nums; }
         textarea {
-            width: 100%; background: #05080f; border: 1px solid var(--border-neon); border-radius: 3px;
-            color: var(--neon-cyan); font-family: 'Share Tech Mono', monospace; font-size: 11px; padding: 6px;
+            width: 100%; background: var(--bg-panel-hover); border: 1px solid var(--border-neon); border-radius: 3px;
+            color: var(--text-main); font-family: 'Share Tech Mono', monospace; font-size: 11px; padding: 6px;
         }
-        .state-btn.is-on { background: rgba(0, 240, 255, 0.18); border-color: var(--neon-cyan); }
+        .state-btn.is-on { background: var(--neon-cyan); color: var(--bg-core); border-color: var(--neon-cyan); }
 
         /* Range inputs are the one control browsers refuse to inherit anything from,
            so they arrive as a blue bar in the middle of a cyan HUD unless dressed. */
         input[type="range"] {
             -webkit-appearance: none; appearance: none;
-            height: 4px; border-radius: 2px; background: rgba(0, 240, 255, 0.2);
+            height: 4px; border-radius: 2px; background: var(--tint-main);
             border: 1px solid var(--border-neon); outline: none;
         }
         input[type="range"]::-webkit-slider-thumb {
@@ -189,8 +199,6 @@
 
     <!-- The avatar engine, in the order it needs. core.js first (it defines the class
          the rest attach to), then the shapes, then the animation loop. -->
-    <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=2"></script>
     <script src="js/hologram/core.js?v=37"></script>
     <script src="js/hologram/geometry-helpers.js?v=19"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
@@ -203,6 +211,6 @@
     <script src="js/hologram/avatar-custom.js?v=1"></script>
     <script src="js/hologram/avatar-a1.js?v=1"></script>
     <script src="js/hologram/animate.js?v=36"></script>
-    <script src="js/avatar-lab.js?v=2"></script>
+    <script src="js/avatar-lab.js?v=3"></script>
 </body>
 </html>

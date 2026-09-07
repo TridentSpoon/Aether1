@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="halcy">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,8 +11,15 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=18">
+    <link rel="stylesheet" href="css/A1theme.css?v=19">
     <link rel="stylesheet" href="css/layout.css?v=1">
+    <!-- The theme, before anything is painted. These two are pure data and pure computation
+         -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
+         head rather than with the engine at the foot of the body: loaded down there, the page
+         renders once in the fallback palette first, which on a light theme is a dark flash. -->
+    <script src="js/hologram/palettes.js?v=19"></script>
+    <script src="js/theme.js?v=3"></script>
+    <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
 </head>
 <body class="bg-cyber-dark text-slate-100 flex flex-col h-screen select-none">
@@ -239,10 +246,10 @@
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <div id="hologram-viewport" class="w-full h-full min-h-[300px] flex items-center justify-center relative cursor-grab active:cursor-grabbing"></div>
 
-            <div class="absolute top-3 left-3 text-[10px] font-mono text-cyan-400/70 pointer-events-none">
+            <div class="viewport-label absolute top-3 left-3 text-[10px] font-mono pointer-events-none">
                 STRUCTURE: <span id="avatar-structure-label">HARMONIC LATTICE</span>
             </div>
-            <div class="absolute top-3 right-3 text-[10px] font-mono text-cyan-400/70 pointer-events-none">
+            <div class="viewport-label absolute top-3 right-3 text-[10px] font-mono pointer-events-none">
                 HOLOGRAM: ACTIVE
             </div>
 
@@ -694,8 +701,6 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=2"></script>
     <script src="js/hologram/core.js?v=37"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
@@ -712,7 +717,7 @@
     <script src="js/hologram/avatar-a1.js?v=1"></script>
     <script src="js/hologram/animate.js?v=36"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=26"></script>
+    <script src="js/app.js?v=27"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

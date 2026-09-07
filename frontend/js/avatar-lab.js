@@ -21,7 +21,12 @@
 
     let engine = null;
     let currentAvatar = 'custom';
-    let currentTheme = 'halcy';
+    /* Empty means "whatever the HUD is wearing", which is where the workbench starts: you came
+       here from the HUD, and an avatar previewed in a theme you do not use tells you less than
+       one previewed in the theme you will actually see it in. The picker below then offers the
+       presets, because checking a design against a colour you might switch to is the other
+       thing this window is for. */
+    let currentTheme = '';
     let currentState = 'IDLE';
 
     // ---- The engine ---------------------------------------------------------
@@ -34,7 +39,7 @@
         if (engine) engine.dispose();
         engine = new HologramAvatar('hologram-viewport');
         engine.setAvatar(currentAvatar);
-        engine.setColorTheme(currentTheme);
+        engine.setColorPalette(Aether1Theme.paletteFor(activeColours()));
         engine.setState(currentState);
         say(`showing ${currentAvatar}`);
     }
@@ -56,12 +61,30 @@
         picker.value = currentAvatar;
     }
 
+    /* Which mode and which three colours are on screen: the HUD's own when nothing is being
+       previewed, otherwise the chosen preset. Presets carry a mode as well as colours, so
+       previewing Daylight puts the workbench in the flat shell too -- the same thing picking
+       it in the HUD would do. */
+    function activeTheme() {
+        const preset = Aether1Theme.preset(currentTheme);
+        if (preset) return { mode: preset.mode, colours: preset };
+        return Aether1Theme.current();
+    }
+
+    function activeColours() {
+        return activeTheme().colours;
+    }
+
     /* The presets rather than every key in THEME_PALETTES: that object also carries the
        aliases kept for old saved settings, and offering "crimson" and "red" as two entries
        that do the same thing is just confusing in a picker. */
     function fillThemePicker() {
         const picker = $('lab-theme');
         picker.innerHTML = '';
+        const asIs = document.createElement('option');
+        asIs.value = '';
+        asIs.textContent = 'Your theme (as set in the HUD)';
+        picker.appendChild(asIs);
         Aether1Theme.presets().forEach((preset) => {
             const option = document.createElement('option');
             option.value = preset.id;
@@ -72,12 +95,12 @@
         paintLabTheme();
     }
 
-    /* The workbench previews avatars, so it wears whichever theme is being previewed rather
-       than the one saved for the HUD -- and it paints it the same way the HUD does, since a
-       preset id in data-theme would name no mode and leave the page with no colours at all. */
+    /* Painted the same way the HUD paints itself. A preset id in data-theme would name no mode
+       and leave the page with no colours at all, since the modes are what the stylesheet keys
+       on now. */
     function paintLabTheme() {
-        const preset = Aether1Theme.preset(currentTheme);
-        if (preset) Aether1Theme.paint(document, preset.mode, preset);
+        const theme = activeTheme();
+        Aether1Theme.paint(document, theme.mode, theme.colours);
     }
 
     $('lab-avatar').addEventListener('change', (e) => {
@@ -86,9 +109,19 @@
         say(`showing ${currentAvatar}`);
     });
 
+    /* The HUD and this window are separate documents on one origin, so changing the theme over
+       there fires a storage event here. Only worth acting on while nothing is being previewed:
+       a preview is a deliberate override, and yanking it out from under someone mid-check would
+       be worse than being briefly out of date. */
+    window.addEventListener('storage', (e) => {
+        if (e.key !== Aether1Theme.STORAGE_KEY || currentTheme) return;
+        paintLabTheme();
+        if (engine) engine.setColorPalette(Aether1Theme.paletteFor(activeColours()));
+    });
+
     $('lab-theme').addEventListener('change', (e) => {
         currentTheme = e.target.value;
-        engine.setColorTheme(currentTheme);
+        engine.setColorPalette(Aether1Theme.paletteFor(activeColours()));
         paintLabTheme();
     });
 

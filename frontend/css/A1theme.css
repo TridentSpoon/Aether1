@@ -24,6 +24,7 @@
   --glow-cyan: 0 0 15px rgba(0, 240, 255, 0.5), 0 0 30px rgba(0, 240, 255, 0.2);
   --glow-purple: 0 0 15px rgba(176, 38, 255, 0.5), 0 0 30px rgba(176, 38, 255, 0.2);
   --glow-green: 0 0 15px rgba(0, 255, 170, 0.5), 0 0 30px rgba(0, 255, 170, 0.2);
+  --viewport-bg: #000000;
   --viewport-glow: rgba(0, 240, 255, 0.5);
   --scanline-color: rgba(0, 240, 255, 0.025);
   --bg-grid-color: rgba(0, 240, 255, 0.03);
@@ -144,14 +145,6 @@
   border-left: 3px solid #1b1b1b;
 }
 
-/* #hologram-viewport is a solid #000 stage by design for the cyberpunk themes -- it reads as
-   a dark projection bay. On Solar that box turns into a jarring black hole in the middle of
-   an otherwise white page, so both of these themes get the avatar sitting directly on
-   --bg-core instead, blending into the rest of the window. */
-[data-theme="solar"] #hologram-viewport,
-[data-theme="eclipse"] #hologram-viewport {
-  background-color: var(--bg-core);
-}
 
 /* ---------------------------------------------------------------------------------------
    Bringing the hardcoded utility classes along.
@@ -241,13 +234,21 @@
   background-color: var(--neon-cyan);
 }
 
-/* The strip under the avatar fades a near-black gradient upward to ground the projection.
-   That is a background-image, so the surface rule above does not reach it -- on Solar it was
-   a black smear across the bottom of a white panel, and on Eclipse a smudge darker than the
-   panel it sits on. Cyberpunk is the one mode that wants it. */
-[data-theme="solar"] .bg-gradient-to-t,
-[data-theme="eclipse"] .bg-gradient-to-t {
-  background-image: none;
+/* The whole avatar panel is the stage, not just the canvas inside it. The waveform strip sits
+   below #hologram-viewport rather than within it, so colouring only the viewport left a lit
+   ledge under a dark bay on the flat shells. One surface reads as a screen; two read as a
+   mistake. The gradient that grounds the projection is a background-image and so untouched by
+   the surface rules -- it belongs again now that what is behind it is dark in every mode. */
+[data-theme] .hud-panel[data-panel="hologram"] {
+  background: var(--viewport-bg);
+}
+
+/* Overlaid on the bay, not on the page: --text-dim is derived for the shell's own background,
+   which on Solar is a grey meant to be read against white. These get their own dim ink. This
+   has to beat the utility-class mapping above, hence the same [data-theme] specificity plus a
+   later position in the file. */
+[data-theme] .viewport-label {
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* Glow helpers: text-shadow is the one thing the flat shells never do. */
@@ -335,8 +336,11 @@ body {
   border-right: 2px solid var(--neon-cyan);
 }
 
+/* The projection bay. Dark in every mode -- see --viewport-bg in theme.js for why -- so the
+   labels laid over it need a light ink of their own rather than the page's, which on a light
+   shell is near-black and would vanish here. */
 #hologram-viewport {
-  background-color: #000;
+  background-color: var(--viewport-bg);
   background-image: radial-gradient(ellipse 110% 55% at 50% 118%, var(--viewport-glow) 0%, transparent 75%);
   transition: background-image 0.4s ease;
 }
