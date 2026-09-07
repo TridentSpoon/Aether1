@@ -204,14 +204,16 @@ doesn't exist, a proxy in the way and an unreachable server each say so in those
 
 ## The top bar and the chin bar
 
-The bar along the top carries what this is and what is on screen:
+The bar along the top carries what is on screen on the left, what this is in the middle, and
+the controls on the right:
 
-- **The wordmark** shows your companion's own name once you have given it one, turning over
-  to AETHER1 PLATFORM every so often so what it is running on stays visible. The version sits
-  directly under it in the desktop app.
 - **Avatar** shows the one that is selected. Click it and the other seven slide out, along
   with the way into the workbench when *Your own* is the one you are using.
-- **Theme** sits under the avatar and switches between Solar, Eclipse and Cyberpunk.
+- **Theme** sits under it and works the same way: the current mode, and Solar, Eclipse and
+  Cyberpunk sliding out when you click it.
+- **The wordmark** sits in the centre. It shows your companion's own name once you have given
+  it one, turning over to AETHER1 PLATFORM every so often so what it is running on stays
+  visible. The version sits directly under it in the desktop app.
 - **The menu** (☰) holds SFX, Activity, Clear conversation and Settings. They live behind one
   control so they are reachable at any window width rather than being the first thing pushed
   off the edge of a narrow one.

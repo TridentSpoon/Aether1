@@ -726,6 +726,18 @@ half overrode the `hidden` half at any normal width and the browser — which ha
 report — showed an empty `--` forever. It now starts hidden and `initVersionAndUpdates`
 reveals it, which is what that function always intended.
 
+**Refined after first use.** The avatar and theme chips moved to the left of the bar and the
+brand to the middle, with the two outer clusters equal-flex so the wordmark sits in the true
+centre of the window rather than the middle of whatever space is left over. Theme stopped
+being a native `<select>` and became a chip and a slide-out like the avatar — a bar with one
+of each taught two interactions for the same kind of choice.
+
+Stacking the two chips exposed a real bug in the first version: each panel was anchored to its
+own chip, so the avatar's panel opened *over* the theme chip beneath it, and a click aimed at
+THEME landed on an avatar instead. Both chips and both panels now share one positioning box,
+so a panel opens below the pair. Worth recording because the failure was invisible in the
+markup and only showed up when something was actually clicked.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies

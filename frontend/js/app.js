@@ -71,7 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudAgentName = document.getElementById('hud-agent-name');
     const terminalAgentLabel = document.getElementById('terminal-agent-label');
     const avatarStructureLabel = document.getElementById('avatar-structure-label');
-    const themeModeSelect = document.getElementById('theme-mode-select');
+    const themeChipValue = document.getElementById('hud-theme-name');
     const themeModeNote = document.getElementById('theme-mode-note');
     const themeColourInputs = {
         background: document.getElementById('theme-colour-background'),
@@ -164,6 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
        again. */
     const hudMenus = [
         { button: document.getElementById('btn-avatar-menu'), panel: document.getElementById('avatar-menu') },
+        { button: document.getElementById('btn-theme-menu'), panel: document.getElementById('theme-menu') },
         { button: document.getElementById('btn-hud-menu'), panel: document.getElementById('hud-menu') }
     ].filter((m) => m.button && m.panel);
 
@@ -325,8 +326,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function syncThemeControls(theme) {
-        if (themeModeSelect && themeModeSelect.value !== theme.mode) themeModeSelect.value = theme.mode;
+        if (themeChipValue) themeChipValue.textContent = Aether1Theme.MODE_LABELS[theme.mode] || theme.mode;
 
+        // Covers both the three buttons in Settings and the three in the top bar's slide-out.
         document.querySelectorAll('.theme-mode-btn').forEach(btn => {
             btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
         });
@@ -1699,20 +1701,13 @@ document.addEventListener('DOMContentLoaded', () => {
         paintTheme(Aether1Theme.setPreset(id));
     }
 
-    // Mode: three buttons in Settings and the quick dropdown in the header.
+    // Mode: the three buttons in Settings and the same three in the top bar's slide-out.
     document.querySelectorAll('.theme-mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             voiceEngine.playSFX('click');
             paintTheme(Aether1Theme.setMode(btn.getAttribute('data-theme-mode')));
         });
     });
-
-    if (themeModeSelect) {
-        themeModeSelect.addEventListener('change', () => {
-            voiceEngine.playSFX('click');
-            paintTheme(Aether1Theme.setMode(themeModeSelect.value));
-        });
-    }
 
     // Colours: the presets...
     document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
