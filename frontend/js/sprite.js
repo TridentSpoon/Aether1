@@ -122,17 +122,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Matches whatever avatar/theme/voice-preference the main HUD is currently using --
     // aether_avatar is a plain localStorage key the main window already writes (see app.js),
     // shared here because both windows load from the same Tauri origin; the theme goes through
-    // Aether1Theme so this window falls back to the OS light/dark setting exactly as the HUD
-    // does, rather than to a hardcoded default the HUD is not using.
+    // Aether1Theme so this window resolves it exactly as the HUD does, including falling back
+    // to the OS light/dark setting when nothing has been chosen.
     // That only covers the sprite's own startup, though: if the HUD switches avatar/theme
     // while the sprite is already open, localStorage alone won't tell this window that
     // happened. Rather than have the sprite sit there polling localStorage for a change, the
     // HUD pushes it directly the moment it happens, over a Tauri event both windows share.
     const savedAvatar = localStorage.getItem('aether_avatar') || 'a1';
-    const savedTheme = Aether1Theme.resolve();
+    const savedTheme = Aether1Theme.apply(document);
     hologram.setAvatar(savedAvatar);
-    hologram.setColorTheme(savedTheme);
-    document.documentElement.setAttribute('data-theme', savedTheme);
+    hologram.setColorPalette(Aether1Theme.paletteFor(savedTheme.colours));
 
     // Rebuild the custom avatar when the saved design has moved on from what is on screen
     // here -- same staleness check app.js runs. build() only ever reads the recipe once
@@ -150,9 +149,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (event.payload.avatar === 'custom') refreshCustomAvatarIfStale();
         }).catch((e) => console.warn('Could not listen for avatar changes', e));
 
+        /* The HUD sends the whole theme -- mode plus the three colours -- rather than a name,
+           because a hand-mixed set has no name to send. */
         window.__TAURI__.event.listen('color-theme-changed', (event) => {
-            hologram.setColorTheme(event.payload.theme);
-            document.documentElement.setAttribute('data-theme', event.payload.theme);
+            const theme = event.payload;
+            if (!theme || !theme.colours) return;
+            Aether1Theme.paint(document, theme.mode, theme.colours);
+            hologram.setColorPalette(Aether1Theme.paletteFor(theme.colours));
         }).catch((e) => console.warn('Could not listen for color theme changes', e));
     }
 

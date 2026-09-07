@@ -56,16 +56,28 @@
         picker.value = currentAvatar;
     }
 
+    /* The presets rather than every key in THEME_PALETTES: that object also carries the
+       aliases kept for old saved settings, and offering "crimson" and "red" as two entries
+       that do the same thing is just confusing in a picker. */
     function fillThemePicker() {
         const picker = $('lab-theme');
         picker.innerHTML = '';
-        Object.keys(THEME_PALETTES).forEach((id) => {
+        Aether1Theme.presets().forEach((preset) => {
             const option = document.createElement('option');
-            option.value = id;
-            option.textContent = id;
+            option.value = preset.id;
+            option.textContent = `${preset.label} (${Aether1Theme.MODE_LABELS[preset.mode]})`;
             picker.appendChild(option);
         });
         picker.value = currentTheme;
+        paintLabTheme();
+    }
+
+    /* The workbench previews avatars, so it wears whichever theme is being previewed rather
+       than the one saved for the HUD -- and it paints it the same way the HUD does, since a
+       preset id in data-theme would name no mode and leave the page with no colours at all. */
+    function paintLabTheme() {
+        const preset = Aether1Theme.preset(currentTheme);
+        if (preset) Aether1Theme.paint(document, preset.mode, preset);
     }
 
     $('lab-avatar').addEventListener('change', (e) => {
@@ -77,7 +89,7 @@
     $('lab-theme').addEventListener('change', (e) => {
         currentTheme = e.target.value;
         engine.setColorTheme(currentTheme);
-        document.documentElement.setAttribute('data-theme', currentTheme);
+        paintLabTheme();
     });
 
     document.querySelectorAll('.state-btn').forEach((button) => {

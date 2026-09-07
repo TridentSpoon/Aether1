@@ -229,9 +229,12 @@ class HologramAvatar {
         this.buildAltAvatar();
         this.buildRegisteredAvatars();
 
-        // Initial avatar shape + color theme setup (independent of each other)
+        /* Initial avatar shape + colour setup (independent of each other). Tinting goes
+           through applyColorPalette rather than setColorTheme so that a palette handed in
+           before build() -- three colours picked by hand, which have no preset id -- is not
+           thrown away and replaced by whatever id was last named. */
         this.setAvatar(this.currentAvatar);
-        this.setColorTheme(this.currentColorTheme);
+        this.applyColorPalette();
 
         // Avatars sit front-facing and static at rest; a click wakes them up with a reaction
         // pulse, and a drag spins the whole hologram on its Y axis (with inertia -- see
@@ -391,15 +394,23 @@ class HologramAvatar {
         this.camera.updateProjectionMatrix();
     }
 
-    // Which color palette tints the currently active (and future) avatar shapes.
+    /* Which color palette tints the currently active (and future) avatar shapes.
+       Two ways in, because there are two kinds of caller. A preset id is what the workbench
+       and any avatar file written against the documented API pass; an explicit palette is what
+       the HUD passes, because its colours are three values someone can pick by hand and there
+       is no id for those. */
     setColorTheme(theme) {
         this.currentColorTheme = theme;
+        this.setColorPalette(THEME_PALETTES[theme] || THEME_PALETTES.halcy);
+    }
+
+    setColorPalette(palette) {
+        this.activePalette = palette || THEME_PALETTES.halcy;
         this.applyColorPalette();
     }
 
     applyColorPalette() {
-        const p = THEME_PALETTES[this.currentColorTheme] || THEME_PALETTES.halcy;
-        this.activePalette = p;
+        const p = this.activePalette;
 
         // hAlcy particle lattice (the obsidian core + both rings have fixed colors by design,
         // independent of the color theme — see buildHalcyAvatar)

@@ -72,7 +72,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const hudAgentName = document.getElementById('hud-agent-name');
     const terminalAgentLabel = document.getElementById('terminal-agent-label');
     const avatarStructureLabel = document.getElementById('avatar-structure-label');
-    const colorThemeSelect = document.getElementById('color-theme-select');
+    const themeModeSelect = document.getElementById('theme-mode-select');
+    const themeModeNote = document.getElementById('theme-mode-note');
+    const themeColourInputs = {
+        background: document.getElementById('theme-colour-background'),
+        main: document.getElementById('theme-colour-main'),
+        highlight: document.getElementById('theme-colour-highlight')
+    };
 
     // Model Scanner Elements
     const btnScanSystem = document.getElementById('btn-scan-system');
@@ -122,7 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoSpeak = true;
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
-    let currentColorTheme = Aether1Theme.resolve();
+    let currentTheme = Aether1Theme.current();
 
     // Clock
     function updateClock() {
@@ -233,32 +239,55 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Color Theme Handler — purely cosmetic, independent of the selected avatar shape.
-    // `chosen` separates a decision from a display: picking a theme saves it (and so ends the
-    // follow-the-OS behaviour below), while painting the startup theme or reacting to the OS
-    // flipping to dark must not, or the first paint would lock the choice in on its own.
-    function applyColorTheme(themeName, chosen = true) {
-        currentColorTheme = themeName;
-        if (chosen) Aether1Theme.save(themeName);
-        document.documentElement.setAttribute('data-theme', themeName);
-        hologram.setColorTheme(themeName);
-        // Push the change straight to the desktop sprite window (if open) instead of making
-        // it discover this by polling localStorage -- see sprite.js's 'color-theme-changed' listener.
+    /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
+       any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
+       is saved and when -- and everything here is the consequences of it: the page, the 3D
+       avatar, the sprite window and the controls that have to agree with what is on screen. */
+    function paintTheme(theme) {
+        currentTheme = theme;
+        Aether1Theme.paint(document, theme.mode, theme.colours);
+        hologram.setColorPalette(Aether1Theme.paletteFor(theme.colours));
+
+        // Push the change straight to the desktop sprite window (if open) instead of making it
+        // discover this by polling localStorage -- see sprite.js's 'color-theme-changed' listener.
         if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
-            window.__TAURI__.event.emit('color-theme-changed', { theme: themeName }).catch(() => {});
+            window.__TAURI__.event.emit('color-theme-changed', theme).catch(() => {});
         }
+        syncThemeControls(theme);
+    }
 
-        if (colorThemeSelect && colorThemeSelect.value !== themeName) colorThemeSelect.value = themeName;
+    function syncThemeControls(theme) {
+        if (themeModeSelect && themeModeSelect.value !== theme.mode) themeModeSelect.value = theme.mode;
 
-        // Highlight active color-theme pills/buttons
+        document.querySelectorAll('.theme-mode-btn').forEach(btn => {
+            btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
+        });
+
+        /* A preset button lights up only while the colours still match it exactly. Nudge one
+           picker and nothing is selected, which is the honest state: what is on screen is no
+           longer any of the presets. */
         document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
             const val = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            if (val === themeName) {
-                btn.classList.add('cyber-btn-active');
-            } else {
-                btn.classList.remove('cyber-btn-active');
-            }
+            btn.classList.toggle('cyber-btn-active', val === theme.colours.preset);
         });
+
+        Object.keys(themeColourInputs).forEach(slot => {
+            const input = themeColourInputs[slot];
+            if (input && input.value.toLowerCase() !== theme.colours[slot]) input.value = theme.colours[slot];
+        });
+
+        if (themeModeNote) {
+            themeModeNote.textContent = Aether1Theme.followingSystem()
+                ? 'Following your system\u2019s light/dark setting. Picking a mode stops that.'
+                : '';
+        }
+    }
+
+    /* #rrggbb -> rgba(). Canvas has no notion of a colour with an alpha applied, and the
+       theme's three colours are opaque hex by design. */
+    function withAlpha(hex, alpha) {
+        const n = parseInt(hex.slice(1), 16);
+        return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
     }
 
     // Audio Waveform Visualizer
@@ -269,13 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
         canvasCtx.clearRect(0, 0, width, height);
 
         let strokeColor = '#00f0ff';
-        if (currentColorTheme === 'red' || currentColorTheme === 'crimson') strokeColor = '#ff2244';
-        else if (currentColorTheme === 'arx-limes') strokeColor = '#ffaa00';
-        else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') strokeColor = '#00ff66';
-        else if (currentColorTheme === 'arx-logos') strokeColor = '#e024c3';
-        else if (currentColorTheme === 'night-city') strokeColor = '#fcee0a';
-        else if (currentColorTheme === 'solar') strokeColor = '#0067c0';
-        else if (currentColorTheme === 'eclipse') strokeColor = '#60cdff';
+        strokeColor = currentTheme.colours.main;
 
         canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         canvasCtx.lineWidth = 1;
@@ -329,30 +352,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const maxVal = Math.max(...sparkline, 100);
         const step = w / Math.max(sparkline.length - 1, 1);
 
-        let lineColor = '#b026ff';
-        let fillColor = 'rgba(176, 38, 255, 0.15)';
-        if (currentColorTheme === 'red' || currentColorTheme === 'crimson') {
-            lineColor = '#ff2244';
-            fillColor = 'rgba(255, 34, 68, 0.15)';
-        } else if (currentColorTheme === 'arx-limes') {
-            lineColor = '#ffaa00';
-            fillColor = 'rgba(255, 170, 0, 0.15)';
-        } else if (currentColorTheme === 'nexus' || currentColorTheme === 'matrix') {
-            lineColor = '#00ff66';
-            fillColor = 'rgba(0, 255, 102, 0.15)';
-        } else if (currentColorTheme === 'arx-logos') {
-            lineColor = '#e024c3';
-            fillColor = 'rgba(224, 36, 195, 0.15)';
-        } else if (currentColorTheme === 'night-city') {
-            lineColor = '#fcee0a';
-            fillColor = 'rgba(252, 238, 10, 0.15)';
-        } else if (currentColorTheme === 'solar') {
-            lineColor = '#0067c0';
-            fillColor = 'rgba(0, 103, 192, 0.15)';
-        } else if (currentColorTheme === 'eclipse') {
-            lineColor = '#60cdff';
-            fillColor = 'rgba(96, 205, 255, 0.15)';
-        }
+        /* The token graph is drawn on a canvas, so it cannot inherit a CSS variable -- it has
+           to be told. It follows the highlight rather than the main colour so the graph stays
+           distinguishable from the gauges above it, which are all main. */
+        const lineColor = currentTheme.colours.highlight;
+        const fillColor = withAlpha(lineColor, 0.15);
 
         tokensCanvasCtx.beginPath();
         tokensCanvasCtx.moveTo(0, h);
@@ -1131,10 +1135,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 : (data.audio_url ? API_BASE + data.audio_url : null);
             updateAgentNameDisplay(data.name);
 
-            if (data.name.includes("R.E.D.")) { applyAvatar('red'); applyColorTheme('red'); }
-            else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyColorTheme('nexus'); }
-            else if (data.name.includes("A.R.X.LOGOS")) { applyAvatar('arx-logos'); applyColorTheme('arx-logos'); }
-            else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyColorTheme('arx-limes'); }
+            if (data.name.includes("R.E.D.")) { applyAvatar('red'); applyThemePreset('red'); }
+            else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyThemePreset('nexus'); }
+            else if (data.name.includes("A.R.X.LOGOS")) { applyAvatar('arx-logos'); applyThemePreset('arx-logos'); }
+            else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyThemePreset('arx-limes'); }
 
             settingsModal.classList.add('hidden');
             appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, audioUrl);
@@ -1619,22 +1623,56 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Color Theme Selector Buttons & Pills
+    /* Applying a colour preset. Note it can move you between modes: the Daylight and Midnight
+       presets belong to Solar and Eclipse, so picking one from Cyberpunk switches the chrome
+       too -- which is what someone clicking a light preset means. */
+    function applyThemePreset(id) {
+        paintTheme(Aether1Theme.setPreset(id));
+    }
+
+    // Mode: three buttons in Settings and the quick dropdown in the header.
+    document.querySelectorAll('.theme-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            paintTheme(Aether1Theme.setMode(btn.getAttribute('data-theme-mode')));
+        });
+    });
+
+    if (themeModeSelect) {
+        themeModeSelect.addEventListener('change', () => {
+            voiceEngine.playSFX('click');
+            paintTheme(Aether1Theme.setMode(themeModeSelect.value));
+        });
+    }
+
+    // Colours: the presets...
     document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            const theme = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            if (theme) {
+            const preset = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
+            if (preset) {
                 voiceEngine.playSFX('click');
-                applyColorTheme(theme);
+                applyThemePreset(preset);
             }
         });
     });
 
-    // Color Theme Quick Dropdown (header)
-    if (colorThemeSelect) {
-        colorThemeSelect.addEventListener('change', () => {
+    /* ...and the three pickers. 'input' rather than 'change' so the page repaints while the
+       colour is being dragged around -- picking a background you cannot see the effect of is
+       guesswork. Each write only touches its own slot, which is what keeps the background
+       stable while an accent is being tried. */
+    Object.keys(themeColourInputs).forEach(slot => {
+        const input = themeColourInputs[slot];
+        if (!input) return;
+        input.addEventListener('input', () => {
+            paintTheme(Aether1Theme.setColour(slot, input.value));
+        });
+    });
+
+    const btnThemeColoursReset = document.getElementById('btn-theme-colours-reset');
+    if (btnThemeColoursReset) {
+        btnThemeColoursReset.addEventListener('click', () => {
             voiceEngine.playSFX('click');
-            applyColorTheme(colorThemeSelect.value);
+            paintTheme(Aether1Theme.resetColours());
         });
     }
 
@@ -1764,12 +1802,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial Startup
     applyAvatar(currentAvatar, false);
-    applyColorTheme(currentColorTheme, false);
+    paintTheme(currentTheme);
 
     /* Nothing chosen yet means the OS is still the authority, so a switch to dark mode while
        the window is open should be followed rather than waiting for a restart. Aether1Theme
-       stops calling this the moment a theme is picked. */
-    Aether1Theme.followSystem((theme) => applyColorTheme(theme, false));
+       stops calling this the moment a mode is picked. */
+    Aether1Theme.followSystem(paintTheme);
     loadStaticInfo();
     loadSettings();
     // A proposal outlives the conversation that made it, so anything still waiting from a
