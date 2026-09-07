@@ -51,15 +51,12 @@
             <!-- COLOR THEME QUICK PICKER -->
             <div class="hidden lg:flex items-center gap-1 bg-black/40 p-1 rounded border border-cyan-500/30 text-xs font-mono">
                 <span class="text-slate-400 px-1 text-[10px]">THEME:</span>
-                <select id="color-theme-select" class="bg-slate-900 border border-cyan-500/40 rounded px-1.5 py-0.5 text-cyan-300 font-mono text-xs focus:outline-none focus:border-cyan-400">
-                    <option value="halcy">🔷 hAlcy Cyan</option>
-                    <option value="nexus">🟢 Nexus Green</option>
-                    <option value="arx-limes">🔶 A.R.X.LIMES Amber</option>
-                    <option value="arx-logos">🟣 A.R.X.LOGOS Magenta</option>
-                    <option value="red">🔴 Crimson</option>
-                    <option value="night-city">⚠️ Night City</option>
-                    <option value="corporate-light">☀️ Corporate Light</option>
-                    <option value="corporate-dark">🌙 Corporate Dark</option>
+                <!-- Mode only. The colours under it are a separate choice and live in
+                     Settings, where there is room for the three pickers. -->
+                <select id="theme-mode-select" class="bg-slate-900 border border-cyan-500/40 rounded px-1.5 py-0.5 text-cyan-300 font-mono text-xs focus:outline-none focus:border-cyan-400">
+                    <option value="solar">☀️ Solar</option>
+                    <option value="eclipse">🌙 Eclipse</option>
+                    <option value="cyberpunk">⚡ Cyberpunk</option>
                 </select>
             </div>
 
@@ -361,17 +358,46 @@
                         <button id="btn-open-avatar-lab" type="button" class="cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-cyan-300">🛠️ Design your own</button>
                     </div>
 
+                    <!-- A theme is a mode plus three colours. The mode decides the chrome:
+                         Solar and Eclipse are flat window shells, Cyberpunk keeps the
+                         scanlines, brackets and neon. -->
                     <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider mt-1.5">🎨 THEME</label>
-                    <div class="grid grid-cols-8 gap-1">
+                    <div class="grid grid-cols-3 gap-1">
+                        <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="solar">☀️ Solar</button>
+                        <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="eclipse">🌙 Eclipse</button>
+                        <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="cyberpunk">⚡ Cyberpunk</button>
+                    </div>
+                    <p id="theme-mode-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
+
+                    <!-- The same three colours in every mode, so a preset built for Cyberpunk
+                         can be worn by Solar. Each mode remembers its own set. -->
+                    <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider mt-1.5">🖌️ COLOURS</label>
+                    <div class="grid grid-cols-4 gap-1">
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-color-theme="halcy">🔷 Cyan</button>
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-green-400 border-green-400" data-color-theme="nexus">🟢 Green</button>
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-amber-400 border-amber-400" data-color-theme="arx-limes">🔶 Amber</button>
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 Magenta</button>
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
                         <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-yellow-300 border-yellow-300" data-color-theme="night-city">⚠️ Night</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-300 border-slate-400" data-color-theme="corporate-light">☀️ Light</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-blue-300 border-blue-400" data-color-theme="corporate-dark">🌙 Dark</button>
+                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-300 border-slate-400" data-color-theme="solar">☀️ Daylight</button>
+                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-blue-300 border-blue-400" data-color-theme="eclipse">🌙 Midnight</button>
                     </div>
+
+                    <div class="grid grid-cols-3 gap-2 mt-1.5">
+                        <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1">
+                            Background
+                            <input type="color" id="theme-colour-background" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The ground everything sits on. Changing an accent never moves it.">
+                        </label>
+                        <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1">
+                            Main
+                            <input type="color" id="theme-colour-main" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="Headings, borders, gauges and the avatar itself.">
+                        </label>
+                        <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1">
+                            Highlight
+                            <input type="color" id="theme-colour-highlight" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The companion colour, so the main one is not the only one on screen.">
+                        </label>
+                    </div>
+                    <button type="button" id="btn-theme-colours-reset" class="cyber-btn text-[10px] leading-tight py-1.5 px-2 justify-center w-full">↺ Reset this mode's colours</button>
                 </div>
 
                 <!-- Persona Selector -->
@@ -668,8 +694,9 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/palettes.js?v=17"></script>
-    <script src="js/hologram/core.js?v=36"></script>
+    <script src="js/hologram/palettes.js?v=19"></script>
+    <script src="js/theme.js?v=2"></script>
+    <script src="js/hologram/core.js?v=37"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
     <script src="js/hologram/avatar-halcy.js?v=16"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
@@ -685,7 +712,7 @@
     <script src="js/hologram/avatar-a1.js?v=1"></script>
     <script src="js/hologram/animate.js?v=36"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=24"></script>
+    <script src="js/app.js?v=26"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

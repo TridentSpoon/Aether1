@@ -1,4 +1,12 @@
-/* Cyberpunk & Holographic Multi-Theme Engine */
+/* Themes are two choices, and neither of them lives here any more.
+   The *mode* -- solar, eclipse or cyberpunk -- arrives as data-theme on <html> and decides
+   the chrome: the rules further down strip the scanlines, corner brackets, grid backdrop and
+   neon from the two flat modes. The *colours* arrive as these custom properties, written onto
+   <html> by theme.js from one background, one main and one highlight. There used to be eight
+   hand-written blocks here, one per theme, which is why there could never be a ninth.
+   What follows is the fallback: the values the page uses if theme.js has not run yet or at
+   all. They are the Cyan preset, so a scripting failure looks like the original HUD rather
+   than like nothing. */
 :root {
   --bg-core: #040711;
   --bg-panel: rgba(8, 15, 30, 0.75);
@@ -19,194 +27,233 @@
   --viewport-glow: rgba(0, 240, 255, 0.5);
   --scanline-color: rgba(0, 240, 255, 0.025);
   --bg-grid-color: rgba(0, 240, 255, 0.03);
+  --bg-wash-main: rgba(0, 240, 255, 0.12);
+  --bg-wash-highlight: rgba(176, 38, 255, 0.07);
+  --tint-main: rgba(0, 240, 255, 0.08);
 }
 
-/* R.E.D. 9000 (REACTIVE ENGINE DAEMON) */
-[data-theme="red"], [data-theme="crimson"] {
-  --bg-core: #0d0204;
-  --bg-panel: rgba(28, 5, 9, 0.85);
-  --bg-panel-hover: rgba(45, 8, 15, 0.92);
-  --border-neon: rgba(255, 34, 68, 0.45);
-  --border-neon-bright: #ff2244;
-  --neon-cyan: #ff2244; /* Core Red */
-  --neon-blue: #0066ff; /* Tactical Blue Circle */
-  --neon-purple: #00f0ff; /* Tactical Cyan Circle */
-  --neon-green: #ff5577;
-  --neon-amber: #ff0044;
-  --text-main: #ffe8ec;
-  --text-dim: #b87480;
-  --glow-cyan: 0 0 15px rgba(255, 34, 68, 0.6), 0 0 30px rgba(204, 0, 34, 0.35);
-  --viewport-glow: rgba(255, 34, 68, 0.5);
-  --scanline-color: rgba(255, 34, 68, 0.035);
-  --bg-grid-color: rgba(255, 34, 68, 0.04);
-}
+/* ---------------------------------------------------------------------------------------
+   The two flat modes.
 
-/* THE NEXUS (MATRIX DIGITAL RAIN & GRAVITATIONAL SINGULARITY) */
-[data-theme="nexus"], [data-theme="matrix"] {
-  --bg-core: #010c04;
-  --bg-panel: rgba(4, 25, 8, 0.82);
-  --bg-panel-hover: rgba(8, 42, 14, 0.9);
-  --border-neon: rgba(0, 255, 102, 0.45);
-  --border-neon-bright: #00ff66;
-  --neon-cyan: #00ff66; /* Matrix Phosphor Green */
-  --neon-blue: #00cc55;
-  --neon-purple: #00ffaa;
-  --neon-green: #33ff88;
-  --neon-amber: #88ff00;
-  --text-main: #e8ffee;
-  --text-dim: #75b884;
-  --glow-cyan: 0 0 15px rgba(0, 255, 102, 0.6), 0 0 30px rgba(0, 204, 85, 0.35);
-  --viewport-glow: rgba(0, 255, 102, 0.5);
-  --scanline-color: rgba(0, 255, 102, 0.035);
-  --bg-grid-color: rgba(0, 255, 102, 0.04);
-}
+   Cyberpunk needs no rules of its own -- it is what the stylesheet already does. Solar and
+   Eclipse are the departure: no CRT scanline overlay, no vignette darkening the edges, no HUD
+   corner brackets, no neon grid backdrop, and headings in a plain sans-serif rather than the
+   sci-fi display font. Everything below is that subtraction, plus the Windows-shell details
+   that replace it -- rounded corners, hairline borders, shallow shadows, labels that are
+   neither uppercase nor letter-spaced.
 
-/* A.R.X.LIMES THEME (ARCHIVAL GOLD & AMBER) */
-[data-theme="arx-limes"] {
-  --bg-core: #0e0600;
-  --bg-panel: rgba(28, 13, 2, 0.8);
-  --bg-panel-hover: rgba(45, 22, 4, 0.9);
-  --border-neon: rgba(255, 170, 0, 0.4);
-  --border-neon-bright: #ffaa00;
-  --neon-cyan: #ffaa00; /* A.R.X.LIMES Gold */
-  --neon-blue: #ff6600;
-  --neon-purple: #ff3300;
-  --neon-green: #ffdd44;
-  --neon-amber: #ff7700;
-  --text-main: #fff0d4;
-  --text-dim: #cca06e;
-  --glow-cyan: 0 0 15px rgba(255, 170, 0, 0.6), 0 0 30px rgba(255, 102, 0, 0.3);
-  --viewport-glow: rgba(255, 170, 0, 0.5);
-  --scanline-color: rgba(255, 170, 0, 0.03);
-  --bg-grid-color: rgba(255, 170, 0, 0.035);
-}
-
-/* A.R.X.LOGOS / CYBERPUNK MAGENTA THEME */
-[data-theme="arx-logos"] {
-  --bg-core: #0b0214;
-  --bg-panel: rgba(24, 6, 38, 0.8);
-  --bg-panel-hover: rgba(38, 10, 60, 0.9);
-  --border-neon: rgba(224, 36, 195, 0.4);
-  --border-neon-bright: #e024c3;
-  --neon-cyan: #e024c3;
-  --neon-blue: #00e5ff;
-  --neon-purple: #9d00ff;
-  --text-main: #fae6ff;
-  --glow-cyan: 0 0 15px rgba(224, 36, 195, 0.6), 0 0 30px rgba(157, 0, 255, 0.3);
-  --viewport-glow: rgba(224, 36, 195, 0.5);
-  --scanline-color: rgba(224, 36, 195, 0.03);
-  --bg-grid-color: rgba(224, 36, 195, 0.035);
-}
-
-/* NIGHT CITY (CYBERPUNK 2077 CLASSIC YELLOW/BLACK, CYAN & RED ACCENTS) */
-[data-theme="night-city"] {
-  --bg-core: #0a0a06;
-  --bg-panel: rgba(24, 22, 4, 0.82);
-  --bg-panel-hover: rgba(40, 36, 6, 0.9);
-  --border-neon: rgba(252, 238, 10, 0.4);
-  --border-neon-bright: #fcee0a;
-  --neon-cyan: #fcee0a; /* Night City Phosphor Yellow */
-  --neon-blue: #00e5ff;
-  --neon-purple: #ff003c;
-  --neon-green: #fff066;
-  --neon-amber: #ff003c;
-  --neon-red: #ff003c;
-  --text-main: #fdf9e0;
-  --text-dim: #b7ac6e;
-  --glow-cyan: 0 0 15px rgba(252, 238, 10, 0.6), 0 0 30px rgba(255, 0, 60, 0.3);
-  --viewport-glow: rgba(252, 238, 10, 0.5);
-  --scanline-color: rgba(252, 238, 10, 0.03);
-  --bg-grid-color: rgba(252, 238, 10, 0.035);
-}
-
-/* CORPORATE LIGHT (professional daylight theme -- a clean blue-on-white palette meant to
-   look like ordinary business software, not a HUD; see the suppression rules below that
-   strip the cyberpunk chrome -- scanlines, vignette, corner brackets, grid backdrop --
-   whenever either corporate theme is active). */
-[data-theme="corporate-light"] {
-  --bg-core: #f1f5f9;
-  --bg-panel: rgba(255, 255, 255, 0.92);
-  --bg-panel-hover: rgba(255, 255, 255, 1);
-  --border-neon: rgba(37, 99, 235, 0.25);
-  --border-neon-bright: #2563eb;
-  --neon-cyan: #2563eb; /* primary accent */
-  --neon-blue: #1d4ed8;
-  --neon-purple: #4f46e5;
-  --neon-green: #16a34a;
-  --neon-amber: #d97706;
-  --neon-red: #dc2626;
-  --text-main: #0f172a;
-  --text-dim: #64748b;
-  --glow-cyan: 0 1px 3px rgba(37, 99, 235, 0.25);
-  --glow-purple: 0 1px 3px rgba(79, 70, 229, 0.25);
-  --glow-green: 0 1px 3px rgba(22, 163, 74, 0.25);
-  --viewport-glow: rgba(37, 99, 235, 0.10);
-  --scanline-color: transparent;
-  --bg-grid-color: transparent;
-}
-
-/* CORPORATE DARK (professional dark-mode counterpart -- muted slate instead of near-black,
-   and the same restrained blue accent as corporate-light rather than neon.) */
-[data-theme="corporate-dark"] {
-  --bg-core: #0f172a;
-  --bg-panel: rgba(30, 41, 59, 0.88);
-  --bg-panel-hover: rgba(51, 65, 85, 0.94);
-  --border-neon: rgba(96, 165, 250, 0.3);
-  --border-neon-bright: #60a5fa;
-  --neon-cyan: #60a5fa; /* primary accent */
-  --neon-blue: #3b82f6;
-  --neon-purple: #818cf8;
-  --neon-green: #4ade80;
-  --neon-amber: #fbbf24;
-  --neon-red: #f87171;
-  --text-main: #f1f5f9;
-  --text-dim: #94a3b8;
-  --glow-cyan: 0 1px 4px rgba(96, 165, 250, 0.35);
-  --glow-purple: 0 1px 4px rgba(129, 140, 248, 0.35);
-  --glow-green: 0 1px 4px rgba(74, 222, 128, 0.35);
-  --viewport-glow: rgba(96, 165, 250, 0.18);
-  --scanline-color: transparent;
-  --bg-grid-color: transparent;
-}
-
-/* Both corporate themes drop the cyberpunk chrome entirely: no CRT scanline overlay, no
-   vignette darkening the edges, no HUD corner brackets, no neon grid backdrop, and
-   headings fall back to a plain sans-serif instead of the sci-fi display font. */
-[data-theme^="corporate"] .scanlines,
-[data-theme^="corporate"] .vignette {
+   The two are listed by hand throughout because they share no prefix to match on, and they
+   are separate values rather than one "flat" mode because the picker offers three choices and
+   each remembers its own colours.
+   --------------------------------------------------------------------------------------- */
+[data-theme="solar"] .scanlines,
+[data-theme="solar"] .vignette,
+[data-theme="eclipse"] .scanlines,
+[data-theme="eclipse"] .vignette {
   display: none;
 }
 
-[data-theme^="corporate"] body {
+[data-theme="solar"] body,
+[data-theme="eclipse"] body {
   background-image: none;
 }
 
-[data-theme^="corporate"] .hud-panel::before,
-[data-theme^="corporate"] .hud-panel::after {
+[data-theme="solar"] .hud-panel::before,
+[data-theme="solar"] .hud-panel::after,
+[data-theme="eclipse"] .hud-panel::before,
+[data-theme="eclipse"] .hud-panel::after {
   display: none;
 }
 
-[data-theme^="corporate"] .font-orbitron {
+[data-theme="solar"] .font-orbitron,
+[data-theme="eclipse"] .font-orbitron {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   letter-spacing: normal;
 }
 
-/* Chat bubbles: .msg-user is a near-invisible white-on-white fill by design for the dark
-   cyberpunk themes (it reads as a bright highlight against their near-black backgrounds).
-   Corporate Light is the first theme with a light --bg-core, so it needs its own ink-on-
-   paper version instead of inheriting the white-on-white one. */
-[data-theme="corporate-light"] .msg-user {
-  background: rgba(15, 23, 42, 0.05);
-  border: 1px solid rgba(15, 23, 42, 0.18);
-  border-left: 3px solid #0f172a;
+/* Windows rounds its corners and keeps its shadows shallow; the HUD's default is a hard-edged
+   panel sitting under a deep 32px drop shadow, which reads as a floating card rather than a
+   window. */
+[data-theme="solar"] .hud-panel,
+[data-theme="eclipse"] .hud-panel {
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
 }
 
-/* #hologram-viewport is a solid #000 stage by design for the cyberpunk themes -- it reads
-   as a dark projection bay. On corporate-light that box turns into a jarring black hole
-   in the middle of an otherwise white page, so both corporate themes get the avatar
-   sitting directly on --bg-core instead, blending into the rest of the page. */
-[data-theme^="corporate"] #hologram-viewport {
+/* Nothing in the Windows shell is uppercase-with-letter-spacing. Buttons keep their labels
+   as written, get the same soft corner, and lose the lift-on-hover. */
+[data-theme="solar"] .cyber-btn,
+[data-theme="eclipse"] .cyber-btn {
+  text-transform: none;
+  letter-spacing: normal;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-main);
+  border-color: var(--border-neon);
+}
+
+/* The shared hover rule floods the button with the accent and forces black text -- correct
+   for a neon HUD, wrong for a window: hovering a Windows button lightens it slightly and
+   leaves the label alone. The !important on the colour is only there to beat the equally
+   !important black in the shared rule. */
+[data-theme="solar"] .cyber-btn:hover,
+[data-theme="eclipse"] .cyber-btn:hover {
+  transform: none;
+  background: var(--bg-panel-hover);
+  border-color: var(--border-neon-bright);
+  color: var(--text-main) !important;
+  box-shadow: none;
+}
+
+/* The selected button is the accent colour with the label reversed out of it. Which ink
+   reads depends on the accent: Solar's #0067c0 is dark and needs white on it, Eclipse's
+   #60cdff is pale and needs near-black -- the shared default of black text would leave
+   Solar's selected button unreadable. */
+[data-theme="solar"] .cyber-btn-active,
+[data-theme="eclipse"] .cyber-btn-active {
+  background: var(--neon-cyan) !important;
+  border-color: var(--neon-cyan) !important;
+}
+
+[data-theme="solar"] .cyber-btn-active {
+  color: #ffffff !important;
+}
+
+[data-theme="eclipse"] .cyber-btn-active {
+  color: #1b1b1b !important;
+}
+
+/* .gauge-bar-track is a near-black slot, which is invisible on Eclipse's dark ground and a
+   black bar on Solar's white one. Both want the track to read as a recess in the surface
+   it sits on. */
+[data-theme="solar"] .gauge-bar-track {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="eclipse"] .gauge-bar-track {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Chat bubbles: .msg-user is a near-invisible white-on-white fill by design for the dark
+   cyberpunk themes (it reads as a bright highlight against their near-black backgrounds).
+   Solar is the light one, so it needs its own ink-on-paper version instead of inheriting
+   a white fill on a white page. */
+[data-theme="solar"] .msg-user {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-left: 3px solid #1b1b1b;
+}
+
+/* #hologram-viewport is a solid #000 stage by design for the cyberpunk themes -- it reads as
+   a dark projection bay. On Solar that box turns into a jarring black hole in the middle of
+   an otherwise white page, so both of these themes get the avatar sitting directly on
+   --bg-core instead, blending into the rest of the window. */
+[data-theme="solar"] #hologram-viewport,
+[data-theme="eclipse"] #hologram-viewport {
   background-color: var(--bg-core);
+}
+
+/* ---------------------------------------------------------------------------------------
+   Bringing the hardcoded utility classes along.
+
+   The theme variables only reach the elements that use them. Much of the markup names its
+   colours directly instead -- bg-slate-950/80 on the header, text-cyan-400 on every panel
+   heading, border-cyan-500/30 everywhere. That was survivable while a theme was one of eight
+   hand-written blocks that all sat on near-black with a cyan-ish accent. It is not survivable
+   now: the point of three colour pickers is that picking amber turns the HUD amber, and a
+   heading that is cyan because the class says so does not turn.
+
+   So each family of hardcoded colours is mapped onto whatever the theme's variables currently
+   say. Keyed on the bare [data-theme] attribute, which is present for all three modes and
+   absent only when theme.js has not run -- in which case the fallback :root palette and the
+   original utility colours are consistent with each other anyway.
+
+   Single-class utilities lose to a [data-theme] ancestor on specificity, so nothing here needs
+   !important. The avatar and theme pickers are excluded: their labels are coloured to preview
+   the thing they select, so a green "Nexus" and an amber "A.R.X.LIMES" are the point.
+   --------------------------------------------------------------------------------------- */
+
+/* Surfaces: every panel, bar and well collapses onto the two theme surfaces. */
+[data-theme] :is(.bg-black\/40, .bg-black\/60, .bg-black\/80,
+  .bg-slate-900, .bg-slate-900\/60, .bg-slate-900\/80,
+  .bg-slate-950\/60, .bg-slate-950\/80, .bg-slate-950\/90,
+  .bg-cyan-950\/20, .bg-cyan-950\/30, .bg-cyan-950\/40, .bg-cyan-950\/80,
+  .bg-purple-950\/30) {
+  background-color: var(--bg-panel);
+}
+
+/* ...except a field, which reads as a recess you type into rather than another panel. */
+[data-theme] :is(input, select, textarea) {
+  background-color: var(--bg-panel-hover);
+  border-color: var(--border-neon);
+  color: var(--text-main);
+}
+
+[data-theme] :is(.border-cyan-500, .border-cyan-500\/20, .border-cyan-500\/30,
+  .border-cyan-500\/40, .border-cyan-500\/50, .border-purple-500\/30, .border-purple-500\/40,
+  .border-purple-500\/50, .border-slate-600\/40, .border-slate-700,
+  .border-slate-700\/50):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  border-color: var(--border-neon);
+}
+
+/* Headings and links: the main colour. */
+[data-theme] :is(.text-cyan-300, .text-cyan-400,
+  .text-cyan-500):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  color: var(--neon-cyan);
+}
+
+/* Body copy. */
+[data-theme] :is(.text-cyan-100, .text-slate-100, .text-slate-200, .text-purple-100,
+  .text-purple-200):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  color: var(--text-main);
+}
+
+/* Labels, captions, units -- the quiet half of the text. */
+[data-theme] :is(.text-slate-300, .text-slate-400, .text-slate-500, .text-purple-300,
+  .text-cyan-300\/80, .text-cyan-400\/70,
+  .text-cyan-400\/80):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  color: var(--text-dim);
+}
+
+/* Status colours stay status colours, but the theme's readable version of them: Tailwind's
+   green-400 and yellow-300 are picked to glow on black and all but vanish on Solar's white. */
+[data-theme] .text-green-400:not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  color: var(--neon-green);
+}
+
+[data-theme] :is(.text-amber-400,
+  .text-yellow-300):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  color: var(--neon-amber);
+}
+
+[data-theme] .text-red-400:not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  color: var(--neon-red);
+}
+
+[data-theme] :is(.text-purple-400, .text-pink-400,
+  .text-blue-300):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
+  color: var(--neon-purple);
+}
+
+/* bg-cyan-400 marks live indicators -- a filled dot, not a surface, so it follows the accent
+   rather than collapsing into the panel with the other backgrounds above. */
+[data-theme] .bg-cyan-400 {
+  background-color: var(--neon-cyan);
+}
+
+/* The strip under the avatar fades a near-black gradient upward to ground the projection.
+   That is a background-image, so the surface rule above does not reach it -- on Solar it was
+   a black smear across the bottom of a white panel, and on Eclipse a smudge darker than the
+   panel it sits on. Cyberpunk is the one mode that wants it. */
+[data-theme="solar"] .bg-gradient-to-t,
+[data-theme="eclipse"] .bg-gradient-to-t {
+  background-image: none;
+}
+
+/* Glow helpers: text-shadow is the one thing the flat shells never do. */
+[data-theme="solar"] .glow-cyan,
+[data-theme="eclipse"] .glow-cyan {
+  text-shadow: none;
 }
 
 * {
@@ -222,9 +269,11 @@ body {
   overflow: hidden;
   height: 100vh;
   width: 100vw;
-  background-image: 
-    radial-gradient(circle at 50% 40%, rgba(0, 100, 180, 0.15) 0%, transparent 60%),
-    radial-gradient(circle at 80% 20%, rgba(176, 38, 255, 0.08) 0%, transparent 40%),
+  /* The two ambient washes used to be a hardcoded blue and purple, so an amber or crimson
+     theme still had a blue glow behind it. They now follow the theme's own two colours. */
+  background-image:
+    radial-gradient(circle at 50% 40%, var(--bg-wash-main) 0%, transparent 60%),
+    radial-gradient(circle at 80% 20%, var(--bg-wash-highlight) 0%, transparent 40%),
     linear-gradient(var(--bg-grid-color) 1px, transparent 1px),
     linear-gradient(90deg, var(--bg-grid-color) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
@@ -359,7 +408,7 @@ body {
 }
 
 .cyber-btn {
-  background: rgba(0, 240, 255, 0.08);
+  background: var(--tint-main);
   border: 1px solid var(--neon-cyan);
   color: var(--neon-cyan);
   padding: 8px 16px;
@@ -428,7 +477,7 @@ body {
 }
 
 .msg-agent {
-  background: rgba(0, 240, 255, 0.08);
+  background: var(--tint-main);
   border: 1px solid var(--border-neon);
   border-left: 3px solid var(--neon-cyan);
   border-radius: 4px;

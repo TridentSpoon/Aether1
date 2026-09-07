@@ -220,6 +220,41 @@ Both are remembered on this machine and survive a restart. Settings has a
 **Reset panels to their default places** button when you want the original layout
 back.
 
+## Themes
+
+A theme is two choices, and they are independent.
+
+**The mode** decides the shape of everything -- pick it from the dropdown in the top bar or
+the THEME row in Settings:
+
+- **Solar** and **Eclipse** are flat window shells modelled on Windows 11: plain surfaces,
+  hairline borders, one accent colour, no glow. Solar is the light one, Eclipse the dark one.
+- **Cyberpunk** is the HUD the app started as -- scanlines, corner brackets, a grid backdrop
+  and real neon.
+
+**The colours** are three, and they work the same way in all three modes:
+
+- **Background** -- the ground everything sits on. It is deliberately stable: changing an
+  accent never moves it, so you can try colours out without the page jumping around.
+- **Main** -- headings, borders, gauges, and the avatar itself.
+- **Highlight** -- the companion, so the main colour is not the only one on screen.
+
+Settings has a picker for each, plus eight presets. The six neon ones -- Cyan, Green, Amber,
+Magenta, Crimson and Night -- are the themes Aether1 used to ship as fixed choices; Daylight
+and Midnight are Solar's and Eclipse's own. A preset is nothing more than a named set of those
+three colours and a mode, so anything a preset does you can do by hand -- including putting a
+Cyberpunk accent on Solar, or a colour of your own on any of them.
+
+Each mode remembers its own colours, so switching to Solar to read something in daylight and
+back to Cyberpunk afterwards does not cost you the accent you had picked. **Reset this mode's
+colours** puts one mode back to its default without touching the others.
+
+**The first run follows your operating system**: Solar on a machine set to light, Eclipse on
+one set to dark, and it keeps following as you flip that setting. Picking a mode is also how
+you opt out -- from then on it stays where you put it, across restarts.
+
+Any theme can be worn by any avatar; the two are independent choices.
+
 ## Making your own avatar
 
 The avatar is a module of its own -- everything that draws it lives in

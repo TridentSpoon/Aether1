@@ -582,6 +582,84 @@ companion cannot switch it off about itself -- the same rule `tools_enabled` fol
 This does not close step 19, and is not meant to. It draws the line step 19 has to stay
 inside.
 
+### Step 21: Solar and Eclipse, and starting from the system — **shipped**
+
+The HUD shipped with eight colour themes, six of them cyberpunk and two — corporate-light
+and corporate-dark — meant to look like ordinary software. "Ordinary software" was the
+whole specification, so they were only ordinary in the sense of being restrained: a Tailwind
+blue on a Tailwind slate, resembling nothing in particular.
+
+They are now **Solar** and **Eclipse**, and the thing they resemble is the Windows 11 shell:
+`#f3f3f3` / `#202020` grounds, `#0067c0` / `#60cdff` accents, hairline borders at a tenth
+opacity, 8px corners, shallow shadows, and labels that are neither uppercase nor
+letter-spaced.
+
+Two things made this more than a table of hex values.
+
+**The markup names its own colours.** Roughly fifty hardcoded utility classes —
+`bg-slate-950/80` on the header, `text-cyan-400` on every panel heading,
+`border-cyan-500/30` throughout — bypass the theme variables entirely. That is invisible
+while all eight themes sit on near-black, and obvious the moment one turns white. A block at
+the end of `A1theme.css` maps each family onto the theme's own variables, with the avatar and
+theme pickers excluded because their labels are coloured to preview what they select.
+
+**The first paint is not a choice.** The HUD now opens matching the operating system's
+light/dark setting, and keeps following it until someone picks a theme — at which point
+the choice is saved and the OS stops being consulted. Separating those two states is the
+whole design: `applyColorTheme` gained a `chosen` flag so that painting a theme and choosing
+one are different acts, since otherwise the startup paint would save the system's answer as
+if it were the operator's and the mode would end on the first frame. `frontend/js/theme.js`
+holds the rule, because the HUD, the desktop sprite and the avatar workbench all need to give
+the same answer, and each used to hardcode its own.
+
+Anyone who had picked corporate-light or corporate-dark keeps their choice: the old names are
+translated to the new ones on read, rather than being treated as unknown and silently reset.
+
+### Step 22: a theme is a mode and three colours — **shipped**
+
+Step 21 renamed two themes and repainted them. This replaces what a theme *is*.
+
+There were eight themes, each a hand-written block of CSS custom properties. Eight blocks meant
+eight looks and no ninth, and it meant "pick a theme" was the only control anyone had. The HUD
+now separates the two things that block was conflating:
+
+**Mode** — `solar`, `eclipse` or `cyberpunk` — decides the chrome, and is the only thing left
+in `data-theme`. Cyberpunk needs no rules of its own; it is what the stylesheet already did.
+Solar and Eclipse are the departure, and every rule keyed on them is that subtraction plus the
+Windows-shell details that replace it.
+
+**Colours** — background, main, highlight — are three values, and `variablesFor()` in
+`theme.js` derives every property the stylesheet reads from them. That function is the eight
+deleted blocks: they were eight hand-written answers to it. The presets in `palettes.js` are
+now just named bundles of a mode and three colours, so the six neon themes are colour choices
+rather than privileged themes, and three colour pickers in Settings can do anything a preset
+can — including to Solar and Eclipse, which was the point.
+
+Three things this forced, each worth more than the refactor:
+
+**The markup's hardcoded colours had to go.** Around fifty utility classes name their colours
+directly and bypass the theme — `text-cyan-400` on every heading, `bg-slate-950/80` on the
+header. That was survivable while every theme was a dark ground with a cyan-ish accent. It is
+not survivable when picking amber is supposed to turn the HUD amber. Every family is now mapped
+onto the live variables, keyed on the bare `[data-theme]` attribute so all three modes get it
+and the no-JavaScript fallback does not.
+
+**Light and dark are measured, not declared.** Every light-or-dark decision asks the
+background's luminance rather than which mode is active, so a Solar with a dark background
+still gets light text. `color-scheme` is set from the same answer, which is what stops the
+browser's own furniture — scrollbars, the list a `<select>` opens — staying dark on a white
+page.
+
+**The avatar needed a second way in.** `setColorTheme(id)` is a documented contract that
+third-party avatar files depend on, and a hand-mixed set of three colours has no id.
+`setColorPalette(palette)` takes the palette directly; the id-based call is kept and now routes
+through it.
+
+Each mode remembers its own colours, because carrying them across is what you must not do:
+Solar with Cyberpunk's near-black ground is not a light theme, it is a broken one. Saved
+single-word themes from before this — including `corporate-light` and `corporate-dark` from
+before step 21 — are translated to a mode and a colour set on read.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies
