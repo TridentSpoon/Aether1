@@ -27,73 +27,87 @@
     <div class="vignette"></div>
 
     <!-- TOP HUD BAR -->
-    <header class="w-full bg-slate-950/80 border-b border-cyan-500/30 px-6 py-2.5 flex items-center justify-between z-20 backdrop-blur-md">
-        <div class="flex items-center gap-4">
-            <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-full bg-cyan-400 box-glow-cyan animate-pulse"></div>
-                <h1 class="font-orbitron font-bold text-lg text-cyan-400 tracking-wider glow-cyan flex items-center gap-2">
-                    AETHER1 <span id="hud-agent-name" class="text-xs px-2 py-0.5 border border-cyan-500/50 rounded text-cyan-300 font-mono">HALCY</span>
-                </h1>
-                <button id="version-badge" title="Click to check for updates" class="hidden sm:inline-flex items-center text-[10px] font-mono text-slate-500 border border-slate-700 rounded px-1.5 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">
+    <!-- TOP HUD BAR
+         Three clusters: what this is (brand + version), what is on screen (the current
+         avatar and theme, each collapsed to the one that is selected), and the controls.
+         Everything that used to sit in a row here and fall off a narrow window is now
+         either stacked or behind a menu, so nothing becomes unreachable at any width. -->
+    <header class="w-full bg-slate-950/80 border-b border-cyan-500/30 px-4 py-2 flex items-center gap-4 z-30 backdrop-blur-md">
+        <div class="flex items-center gap-2.5 shrink-0">
+            <div class="w-2.5 h-2.5 rounded-full bg-cyan-400 box-glow-cyan animate-pulse shrink-0"></div>
+            <div class="flex flex-col items-start gap-0.5">
+                <!-- The wordmark carries the agent's own name once one is set, and turns over
+                     to AETHER1 PLATFORM every so often so what it is running on is never a
+                     mystery. See refreshWordmark in app.js. -->
+                <h1 id="hud-wordmark" class="font-orbitron font-bold text-base leading-none text-cyan-400 tracking-wider glow-cyan">AETHER1</h1>
+                <!-- Starts hidden and is revealed by initVersionAndUpdates, which only runs
+                     in the desktop app: the browser has no version to report, and an empty
+                     badge reading "--" under the wordmark forever is worse than no badge. -->
+                <button id="version-badge" title="Click to check for updates" class="hidden items-center text-[9px] leading-none font-mono text-slate-500 border border-slate-700 rounded px-1 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">
                     --
                 </button>
             </div>
+        </div>
 
-            <!-- AVATAR PICKER PILLS -->
-            <div class="hidden lg:flex items-center gap-1 bg-black/40 p-1 rounded border border-cyan-500/30 text-xs font-mono">
-                <span class="text-slate-400 px-1 text-[10px]">AVATAR:</span>
-                <button class="avatar-pill px-2 py-0.5 rounded text-slate-300 hover:bg-slate-800/60" data-avatar-val="a1">🅰️ A1</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-cyan-300 hover:bg-cyan-950/60" data-avatar-val="halcy">🔷 hAlcy</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-green-400 hover:bg-green-950/60 font-bold" data-avatar-val="nexus">🟢 The Nexus</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-amber-400 hover:bg-amber-950/60 font-bold" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-pink-400 hover:bg-pink-950/60" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-red-400 hover:bg-red-950/60 font-bold" data-avatar-val="red">🔴 R.E.D. 9000</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-yellow-300 hover:bg-yellow-950/60 font-bold" data-avatar-val="alt">⚠️ A1ter_nul</button>
-                <button class="avatar-pill px-2 py-0.5 rounded text-slate-300 hover:bg-slate-800/60" data-avatar-val="custom" title="An avatar you design yourself">✨ Your own</button>
-                <!-- Only shown while "Your own" is the selected avatar: the way to change it
-                     has to be where you looked for it, not buried in Settings. -->
-                <button id="btn-customise-avatar" class="hidden px-2 py-0.5 rounded text-cyan-300 border border-cyan-500/50 hover:bg-cyan-950/60" title="Open the avatar workbench">✎ Customise</button>
+        <!-- WHAT IS ON SCREEN. Only the current choice is shown; the alternatives slide out
+             when asked for. Eight avatar pills in a row was most of the bar's width spent
+             telling you about seven things you had not picked. -->
+        <div class="flex flex-col gap-1 min-w-0">
+            <div class="relative">
+                <button id="btn-avatar-menu" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="avatar-menu"
+                        class="hud-chip" title="Change the avatar">
+                    <span class="hud-chip-label">AVATAR</span>
+                    <span id="hud-agent-name" class="hud-chip-value">A1</span>
+                    <span class="hud-chip-caret" aria-hidden="true">▾</span>
+                </button>
+                <div id="avatar-menu" class="hud-slideout hidden" role="menu" aria-labelledby="btn-avatar-menu">
+                    <div class="grid grid-cols-2 gap-1">
+                        <button class="avatar-pill" data-avatar-val="a1">🅰️ A1</button>
+                        <button class="avatar-pill" data-avatar-val="halcy">🔷 hAlcy</button>
+                        <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
+                        <button class="avatar-pill" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
+                        <button class="avatar-pill" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
+                        <button class="avatar-pill" data-avatar-val="red">🔴 R.E.D. 9000</button>
+                        <button class="avatar-pill" data-avatar-val="alt">⚠️ A1ter_nul</button>
+                        <button class="avatar-pill" data-avatar-val="custom" title="An avatar you design yourself">✨ Your own</button>
+                    </div>
+                    <!-- Only shown while "Your own" is the selected avatar: the way to change it
+                         has to be where you looked for it, not buried in Settings. -->
+                    <button id="btn-customise-avatar" class="hidden hud-slideout-action mt-1" title="Open the avatar workbench">✎ Customise this avatar</button>
+                </div>
             </div>
 
-            <!-- COLOR THEME QUICK PICKER -->
-            <div class="hidden lg:flex items-center gap-1 bg-black/40 p-1 rounded border border-cyan-500/30 text-xs font-mono">
-                <span class="text-slate-400 px-1 text-[10px]">THEME:</span>
+            <div class="flex items-center gap-1.5">
+                <span class="hud-chip-label shrink-0">THEME</span>
                 <!-- Mode only. The colours under it are a separate choice and live in
                      Settings, where there is room for the three pickers. -->
-                <select id="theme-mode-select" class="bg-slate-900 border border-cyan-500/40 rounded px-1.5 py-0.5 text-cyan-300 font-mono text-xs focus:outline-none focus:border-cyan-400">
+                <select id="theme-mode-select" class="bg-slate-900 border border-cyan-500/40 rounded px-1.5 py-0.5 text-cyan-300 font-mono text-[11px] leading-none focus:outline-none focus:border-cyan-400">
                     <option value="solar">☀️ Solar</option>
                     <option value="eclipse">🌙 Eclipse</option>
                     <option value="cyberpunk">⚡ Cyberpunk</option>
                 </select>
             </div>
-
-            <div class="flex items-center gap-2">
-                <span class="text-xs font-mono text-slate-400">STATE:</span>
-                <span id="status-badge" class="px-2 py-0.5 text-xs font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
-                    IDLE
-                </span>
-            </div>
         </div>
 
-        <div class="flex items-center gap-3">
-            <div id="live-clock" class="hidden sm:block font-mono text-xs text-cyan-300/80">
+        <div class="flex items-center gap-3 ml-auto shrink-0">
+            <div id="live-clock" class="hidden md:block font-mono text-xs text-cyan-300/80">
                 00:00:00 // 2026-08-24
             </div>
-            <button id="btn-genesis-quick" class="cyber-btn text-xs py-1 px-2.5 text-purple-300 border-purple-500/50 hover:bg-purple-950/40">
-                ⚡ Genesis
-            </button>
-            <button id="btn-sfx" class="cyber-btn text-xs py-1 px-2.5">
-                🔊 SFX: ON
-            </button>
-            <button id="btn-clear-chat" class="cyber-btn text-xs py-1 px-2.5 text-slate-400 hover:text-red-400">
-                🗑️ Clear
-            </button>
-            <button id="btn-activity" class="cyber-btn text-xs py-1 px-3">
-                📜 Activity
-            </button>
-            <button id="btn-settings" class="cyber-btn text-xs py-1 px-3">
-                ⚙️ Settings
-            </button>
+            <!-- Four buttons that used to be laid out in a row and were the first thing to be
+                 pushed off a narrow window. Behind one control they are reachable at every
+                 width, which is what "available" has to mean. -->
+            <div class="relative">
+                <button id="btn-hud-menu" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="hud-menu"
+                        class="cyber-btn text-xs py-1.5 px-3" title="Menu">
+                    <span aria-hidden="true">☰</span><span class="sr-only">Menu</span>
+                </button>
+                <div id="hud-menu" class="hud-slideout hud-slideout-right hidden" role="menu" aria-labelledby="btn-hud-menu">
+                    <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
+                    <button id="btn-activity" class="hud-slideout-action" role="menuitem">📜 Activity</button>
+                    <button id="btn-clear-chat" class="hud-slideout-action" role="menuitem">🗑️ Clear conversation</button>
+                    <button id="btn-settings" class="hud-slideout-action" role="menuitem">⚙️ Settings</button>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -290,6 +304,15 @@
         </section>
 
     </main>
+
+    <!-- THE CHIN BAR. One slim strip along the bottom that is always there, so what the
+         companion is doing right now never has to win space against anything else. -->
+    <footer id="chin-bar" class="w-full shrink-0 bg-slate-950/80 border-t border-cyan-500/30 px-4 py-1 flex items-center gap-2 z-20 backdrop-blur-md">
+        <span class="text-[10px] font-mono text-slate-400 tracking-wider">STATE</span>
+        <span id="status-badge" class="px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
+            IDLE
+        </span>
+    </footer>
 
     <!-- ACTIVITY LOG MODAL -- everything the companion has actually done -->
     <div id="activity-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">

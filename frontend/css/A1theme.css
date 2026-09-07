@@ -127,7 +127,152 @@
 /* .gauge-bar-track is a near-black slot, which is invisible on Eclipse's dark ground and a
    black bar on Solar's white one. Both want the track to read as a recess in the surface
    it sits on. */
-[data-theme="solar"] .gauge-bar-track {
+[data-theme="solar"] /* ---------------------------------------------------------------------------------------
+   The top bar's chips and slide-outs.
+
+   A chip is one selected thing plus the way to change it. The bar used to lay every choice
+   out at once -- eight avatar pills in a row -- which spent most of its width telling you
+   about the seven you had not picked, and fell off the edge of a narrow window rather than
+   adapting. What is selected stays visible; what is not slides out when asked for.
+   --------------------------------------------------------------------------------------- */
+
+.hud-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-neon);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  cursor: pointer;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  transition: border-color 0.15s ease;
+}
+
+.hud-chip:hover {
+  border-color: var(--border-neon-bright);
+}
+
+.hud-chip-label {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+}
+
+.hud-chip-value {
+  color: var(--neon-cyan);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Turned over while the panel it opens is showing, so the chip says which way it goes. */
+.hud-chip-caret {
+  color: var(--text-dim);
+  font-size: 9px;
+  transition: transform 0.16s ease;
+}
+
+.hud-chip[aria-expanded="true"] .hud-chip-caret {
+  transform: rotate(180deg);
+}
+
+/* The slide-out itself. Positioned rather than in flow, so opening one never reflows the
+   bar and shifts everything under the pointer. */
+.hud-slideout {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid var(--border-neon);
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  animation: hudSlideOut 0.16s ease-out;
+}
+
+/* Wide enough for two columns of the longest avatar name at this size. Narrower and
+   A.R.X.LOGOS and R.E.D. 9000 come out ellipsised, which is a picker that will not tell you
+   what you are picking. */
+#avatar-menu {
+  min-width: 280px;
+}
+
+/* Anchored to the right edge instead, for the menu that sits at the end of the bar and
+   would otherwise open off the side of the window. */
+.hud-slideout-right {
+  left: auto;
+  right: 0;
+}
+
+@keyframes hudSlideOut {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-slideout { animation: none; }
+  .hud-chip-caret { transition: none; }
+}
+
+.hud-slideout-action {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+}
+
+.hud-slideout-action:hover {
+  background: var(--tint-main);
+  color: var(--neon-cyan);
+}
+
+/* The avatar choices. .avatar-pill carried its own Tailwind colours when it lived in the
+   bar; inside the slide-out they are rows in a list, and the selected one is marked by
+   .cyber-btn-active from applyAvatar like every other picker in the app. */
+.avatar-pill {
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.avatar-pill:hover {
+  background: var(--tint-main);
+  border-color: var(--border-neon);
+}
+
+/* Visible only to a screen reader: the menu button is an icon, and an icon with no name is
+   an unlabelled button to anything that is not looking at it. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.gauge-bar-track {
   background: rgba(0, 0, 0, 0.08);
 }
 

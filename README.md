@@ -202,6 +202,24 @@ Cloud providers — Gemini, Groq, OpenAI, Anthropic — need a key in the **API 
 model name typed in. If a call fails, the HUD says why: a rejected key, a model name that
 doesn't exist, a proxy in the way and an unreachable server each say so in those words.
 
+## The top bar and the chin bar
+
+The bar along the top carries what this is and what is on screen:
+
+- **The wordmark** shows your companion's own name once you have given it one, turning over
+  to AETHER1 PLATFORM every so often so what it is running on stays visible. The version sits
+  directly under it in the desktop app.
+- **Avatar** shows the one that is selected. Click it and the other seven slide out, along
+  with the way into the workbench when *Your own* is the one you are using.
+- **Theme** sits under the avatar and switches between Solar, Eclipse and Cyberpunk.
+- **The menu** (☰) holds SFX, Activity, Clear conversation and Settings. They live behind one
+  control so they are reachable at any window width rather than being the first thing pushed
+  off the edge of a narrow one.
+
+**The chin bar** is the slim strip along the bottom. It shows what the companion is doing --
+IDLE, LISTENING, THINKING, SPEAKING -- and is always there, so the state never has to compete
+for room with anything else.
+
 ## Rearranging the HUD
 
 The main window is three columns of panels, and both what is in them and how wide
