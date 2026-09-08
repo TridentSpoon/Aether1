@@ -1,16 +1,16 @@
-/* Avatar: White Rabbit -- Senti and the Nexus, merged into one avatar.
+/* Avatar: White Rabbit -- Nexus Sent and the Nexus, merged into one avatar.
  *
- * The bottom half is Senti's: the square-tube brass emitter ring and the tapering
+ * The bottom half is Nexus Sent's: the square-tube brass emitter ring and the tapering
  * column of light rising out of it (see avatar-senti.js). What floats at the top of
- * that beam is no longer Senti's small probe core -- it's the Nexus's own elongated,
+ * that beam is no longer Nexus Sent's small probe core -- it's the Nexus's own elongated,
  * bulbous hull (see avatar-nexus.js's buildNexusAvatar), scaled down to sit there
  * instead, wireframe/point-cloud rendered the same way, with the same forward
- * eye-lens cluster on its nose. Senti's small obsidian core is nested inside the
+ * eye-lens cluster on its nose. Nexus Sent's small obsidian core is nested inside the
  * hull's belly, glimpsed through the sparse wireframe rather than out in the open --
  * the one physical piece of hardware the two avatars share. Trailing from the hull's
- * tail is a burst of tentacles, using Senti's fluid traveling-wave joints (root
+ * tail is a burst of tentacles, using Nexus Sent's fluid traveling-wave joints (root
  * anchored, amplitude growing toward the tip) rather than the Nexus's own rebuilt
- * chain-link segments, tipped in the Nexus's fixed red instead of Senti's icy blue.
+ * chain-link segments, tipped in the Nexus's fixed red instead of Nexus Sent's icy blue.
  *
  * Left out of the merge: the Nexus's letter rain and radar-grid backdrop -- CRT/hacker
  * dressing that belonged to the Nexus specifically and doesn't carry a meaning here.
@@ -33,7 +33,7 @@ HologramAvatar.registerAvatar({
         const group = new THREE.Group();
         const HOT = 0xff2418; // the Nexus's own eye/claw red, carried over as the fixed accent here
 
-        // --- Emitter ring + beam: identical technique to Senti's (see avatar-senti.js for
+        // --- Emitter ring + beam: identical technique to Nexus Sent's (see avatar-senti.js for
         // the square-tube-around-a-circle explanation). ---
         class CircularPath extends THREE.Curve {
             constructor(radius) { super(); this.radius = radius; }
@@ -92,7 +92,7 @@ HologramAvatar.registerAvatar({
 
         // --- The body: everything below is built at the Nexus's own native scale (a hull
         // roughly 46 units nose-to-tail), then this one group scales the whole assembly
-        // down to sit proportionately atop Senti's beam, the same way Senti's own core
+        // down to sit proportionately atop Nexus Sent's beam, the same way Nexus Sent's own core
         // used to. bodyBaseY is animate()'s bob baseline, same role coreBaseY played there. ---
         const bodyScale = 0.62;
         const bodyBaseY = 18;
@@ -169,7 +169,7 @@ HologramAvatar.registerAvatar({
             hullMesh.add(rib);
         });
 
-        // Senti's core, nested inside the hull's belly rather than out in the open --
+        // Nexus Sent's core, nested inside the hull's belly rather than out in the open --
         // glimpsed through the sparse wireframe instead of being its own free-floating
         // probe. Still the one fixed-dark, Phong-lit "obsidian core" every avatar here
         // keeps at its center.
@@ -206,10 +206,10 @@ HologramAvatar.registerAvatar({
             hullMesh.add(glow);
         });
 
-        // --- Tentacles: Senti's fluid traveling-wave joints (see avatar-senti.js), trailing
+        // --- Tentacles: Nexus Sent's fluid traveling-wave joints (see avatar-senti.js), trailing
         // from the hull's tail instead of bursting from a small core -- mostly backward
-        // (-Z, toward the hull's narrow tail end) with a moderate fan, rather than Senti's
-        // full spherical burst. ---
+        // (-Z, toward the hull's narrow tail end) with a moderate fan, rather than Nexus
+        // Sent's full spherical burst. ---
         const tentacleLineMat = new THREE.LineBasicMaterial({
             color: api.palette.hex2, transparent: true, opacity: 0.6
         });
@@ -280,7 +280,7 @@ HologramAvatar.registerAvatar({
         const isSpeaking = ctx.state === 'SPEAKING';
 
         // The whole body drifts in a slow turn at rest, sharpening into a faster spin
-        // while thinking -- Senti's own rotation/bob formulas, now driving the hull
+        // while thinking -- Nexus Sent's own rotation/bob formulas, now driving the hull
         // instead of the small probe core.
         model.group.rotation.y = ctx.time * (isThinking ? 1.1 : 0.25);
 
@@ -288,7 +288,7 @@ HologramAvatar.registerAvatar({
         const audioBob = isSpeaking ? ctx.audio * 8 : 0;
         model.bodyGroup.position.y = model.bodyBaseY + bob + audioBob + ctx.click * 10;
 
-        // Tentacles ripple with the same traveling wave as Senti's, offset from the hull's
+        // Tentacles ripple with the same traveling wave as Nexus Sent's, offset from the hull's
         // tail point instead of a central core.
         const droop = (isThinking || isSpeaking) ? -0.12 : -0.45;
         const waveAmp = isThinking ? 9 : isSpeaking ? 7 + ctx.audio * 6 : 4;

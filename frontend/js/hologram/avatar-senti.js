@@ -1,4 +1,4 @@
-/* Avatar: Senti -- a small mechanical-organic probe caught mid-scan, hovering on a
+/* Avatar: Nexus Sent -- a small mechanical-organic probe caught mid-scan, hovering on a
  * column of light above a brass emitter ring, with a burst of long tentacles radiating
  * from its core that ripple in a genuine traveling wave -- root anchored, amplitude
  * growing toward the tip, the way a real whip or a jellyfish's trailing arms move.
@@ -19,7 +19,7 @@
 
 HologramAvatar.registerAvatar({
     id: 'senti',
-    label: 'Senti',
+    label: 'Nexus Sent',
 
     build(api) {
         const group = new THREE.Group();
