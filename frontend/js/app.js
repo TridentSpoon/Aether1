@@ -12,7 +12,8 @@ const AVATAR_DISPLAY_NAMES = {
     'arx-limes': 'A.R.X.LIMES',
     'arx-logos': 'A.R.X.LOGOS',
     red: 'R.E.D. 9000',
-    crimson: 'R.E.D. 9000'
+    crimson: 'R.E.D. 9000',
+    senti: 'NEXUS SENT'
 };
 
 // When this page is loaded by the Tauri desktop shell, it's served from Tauri's own

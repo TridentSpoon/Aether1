@@ -1,17 +1,23 @@
-/* Avatar: Senti -- a small mechanical-organic probe caught mid-scan, hovering on a
- * column of light above a brass emitter ring, with a burst of long tentacles radiating
- * from its core that ripple in a genuine traveling wave -- root anchored, amplitude
- * growing toward the tip, the way a real whip or a jellyfish's trailing arms move.
- * Inspired by the general idea of "a body with many limbs radiating outward, moving
- * fluidly" and by the classic "hologram in a porthole" beat -- a creature made of
- * projected light rising out of a physical housing -- rather than any one specific
- * design, and built in this engine's own point-cloud/wireframe language throughout.
+/* Avatar: Nexus Sent -- a small, square-tube brass emitter ring casting a column of
+ * light that gathers into a hovering, wireframe/point-cloud hull with a burst of
+ * tentacles trailing from its tail.
  *
- * The ring is real hardware (fixed brass, Phong-lit like every other avatar's obsidian
- * core) and stays put; everything above it -- the beam, the tentacles, the core -- is
- * drawn light and follows the color theme. The core's own "sensor" glow and the
- * tentacles' joints/tips stay a fixed icy white-blue regardless of theme, the same
- * "hot accents don't retint" convention R.E.D. 9000's lens and the Nexus's eyes follow.
+ * The hull, its rib bands and its forward eye-lens cluster reuse the Nexus's own
+ * technique (see avatar-nexus.js's buildNexusAvatar) at a smaller scale, with a small
+ * obsidian core nested in its belly -- the one piece of hardware every avatar here
+ * keeps at its center. The tentacles are a dense, asynchronous swimming cluster: each
+ * one ripples on its own traveling wave (root anchored, amplitude growing toward the
+ * tip, its own frequency and amplitude slightly off from its neighbors') so the whole
+ * burst reads as many independent limbs swimming rather than one choreographed ripple.
+ * Inspired by the general idea of a many-limbed creature swimming/whipping through
+ * water -- not a copy of any one specific design -- and built throughout in this
+ * engine's own point-cloud/wireframe language.
+ *
+ * The ring and the hull are both fixed/lit (Phong) like every avatar's obsidian core;
+ * the beam, hull wireframe and tentacle strands are drawn light and follow the color
+ * theme. The nested core, the eye cluster and the tentacle joints/tips stay a fixed
+ * red regardless of theme, the same "hot accents don't retint" convention R.E.D. 9000's
+ * lens and the Nexus's eyes follow.
  *
  * Registered through the same HologramAvatar.registerAvatar() contract any avatar file
  * uses -- see js/hologram/README.md and avatar-template.js.
@@ -19,18 +25,14 @@
 
 HologramAvatar.registerAvatar({
     id: 'senti',
-    label: 'Senti',
+    label: 'Nexus Sent',
 
     build(api) {
         const group = new THREE.Group();
-        const HOT = 0xbfe8ff; // the probe's own sensor light -- fixed, not theme-tinted
+        const HOT = 0xff2418; // the eye/claw accent -- fixed, not theme-tinted
 
-        // --- Emitter ring: the physical housing the hologram projects from. Fixed brass,
-        // lit (MeshPhongMaterial) rather than additive-glow, since it's meant to read as
-        // solid hardware the creature above is projected out of, not drawn light itself.
-        // Still a ring (a circular loop, same as a torus) but with a square cross-section
-        // instead of a round one -- a square profile swept around a circle, like a donut
-        // milled from square-stock tubing instead of a smooth round one. ---
+        // --- Emitter ring: a circular loop (like a torus) swept with a square cross-section
+        // instead of a round one, via ExtrudeGeometry's extrudePath along a circular curve. ---
         class CircularPath extends THREE.Curve {
             constructor(radius) { super(); this.radius = radius; }
             getPoint(t, target = new THREE.Vector3()) {
@@ -40,9 +42,6 @@ HologramAvatar.registerAvatar({
         }
 
         function squareTubeRingGeometry(pathRadius, half, segments = 64) {
-            // The cross-section: a small square, swept so its local X follows the ring's
-            // radial direction and local Y follows straight up -- the same "square profile"
-            // a torus would have if its round tube were milled flat on all four sides.
             const crossSection = new THREE.Shape();
             crossSection.moveTo(-half, -half);
             crossSection.lineTo(half, -half);
@@ -67,9 +66,7 @@ HologramAvatar.registerAvatar({
         lip.position.y = -50;
         group.add(lip);
 
-        // --- Projection beam: a tapering column of points rising from the ring -- denser
-        // and wider near the housing, thinning toward the probe above, like light
-        // gathering into a shape rather than a flat cylinder of haze. ---
+        // --- Projection beam: a tapering column of points rising from the ring. ---
         const beamCount = 900;
         const beamBottomY = -46;
         const beamTopY = -2;
@@ -86,49 +83,137 @@ HologramAvatar.registerAvatar({
         const beamGeo = new THREE.BufferGeometry();
         beamGeo.setAttribute('position', new THREE.BufferAttribute(beamPositions, 3));
         const beamMaterial = new THREE.PointsMaterial({
-            color: api.palette.hex,
-            map: api.helpers.glowTexture(24),
-            size: 1.8,
-            transparent: true,
-            opacity: 0.5,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false
+            color: api.palette.hex, map: api.helpers.glowTexture(24), size: 1.8,
+            transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false
         });
         const beamPoints = new THREE.Points(beamGeo, beamMaterial);
         group.add(beamPoints);
 
-        // --- The probe: a small obsidian core with a burst of long, fluid tentacles,
-        // hovering at the top of the beam. The core stays a fixed dark material like
-        // every other avatar's core; the tentacles are drawn light and follow the theme. ---
-        const coreBaseY = 18;
-        const coreMat = new THREE.MeshPhongMaterial({
+        // --- The body: built at the Nexus hull's own native scale (roughly 46 units
+        // nose-to-tail), then this one group scales the whole assembly down to sit
+        // proportionately atop the beam. bodyBaseY is animate()'s bob baseline. ---
+        const bodyScale = 0.62;
+        const bodyBaseY = 18;
+        const bodyGroup = new THREE.Group();
+        bodyGroup.scale.setScalar(bodyScale);
+        bodyGroup.position.y = bodyBaseY;
+        group.add(bodyGroup);
+
+        // A fixed local tilt so the hull's own elongation axis isn't staring straight down
+        // the camera's Z axis (see avatar-nexus.js's nexusRestTiltGroup for why).
+        const tiltGroup = new THREE.Group();
+        tiltGroup.rotation.set(0.18, 0.4, 0.06);
+        bodyGroup.add(tiltGroup);
+
+        const hullProfile = [
+            [0.8, -24], [6, -19], [10, -11], [12.5, -2], [13.5, 5],
+            [12, 11], [8.5, 16], [4.5, 19.5], [1.2, 22]
+        ].map(([r, z]) => new THREE.Vector2(r, z));
+        const hullGeom = new THREE.LatheGeometry(hullProfile, 24);
+        hullGeom.rotateX(Math.PI / 2);
+
+        // Vertical gradient (dim underside, bright crown) via vertex colors, multiplying
+        // with material.color so theme tinting still tints a gradient rather than a flat fill.
+        const hullPos = hullGeom.attributes.position;
+        const hullBounds = new THREE.Box3().setFromBufferAttribute(hullPos);
+        const hullMinY = hullBounds.min.y, hullMaxY = hullBounds.max.y;
+        const hullColors = new Float32Array(hullPos.count * 3);
+        for (let i = 0; i < hullPos.count; i++) {
+            const t = (hullPos.getY(i) - hullMinY) / (hullMaxY - hullMinY || 1);
+            const lum = 0.32 + t * 0.68;
+            hullColors[i * 3] = lum;
+            hullColors[i * 3 + 1] = lum;
+            hullColors[i * 3 + 2] = lum;
+        }
+        hullGeom.setAttribute('color', new THREE.BufferAttribute(hullColors, 3));
+
+        const hullFillMat = new THREE.MeshBasicMaterial({
+            color: api.palette.hex, vertexColors: true, transparent: true, opacity: 0.06, depthWrite: false
+        });
+        const hullMesh = new THREE.Mesh(hullGeom, hullFillMat);
+        tiltGroup.add(hullMesh);
+
+        const hullInnerWireMat = new THREE.LineBasicMaterial({
+            color: api.palette.hex, transparent: true, opacity: 0.22
+        });
+        const hullInnerWire = new THREE.LineSegments(new THREE.WireframeGeometry(hullGeom), hullInnerWireMat);
+        tiltGroup.add(hullInnerWire);
+
+        const hullOutlineMat = new THREE.LineBasicMaterial({
+            color: api.palette.hex3, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending
+        });
+        const hullOutline = new THREE.LineSegments(new THREE.EdgesGeometry(hullGeom, 30), hullOutlineMat);
+        tiltGroup.add(hullOutline);
+
+        const hullPointsMat = new THREE.PointsMaterial({
+            color: api.palette.hex3, map: api.helpers.glowTexture(24), size: 2.6,
+            transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false
+        });
+        const hullPoints = new THREE.Points(hullGeom, hullPointsMat);
+        tiltGroup.add(hullPoints);
+
+        // Squash to an oval head-on, same 0.6 factor the Nexus uses.
+        [hullMesh, hullInnerWire, hullOutline, hullPoints].forEach((obj) => obj.scale.set(1, 0.6, 1));
+
+        // Ribbed carapace bands, theme-tinted.
+        const ribMat = new THREE.LineBasicMaterial({
+            color: api.palette.hex3, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending
+        });
+        [{ z: -10, r: 11.7 }, { z: 0, r: 13.2 }, { z: 9, r: 12.2 }].forEach(({ z, r }) => {
+            const ribGeom = new THREE.TorusGeometry(r, 0.3, 6, 32);
+            const rib = new THREE.LineSegments(new THREE.EdgesGeometry(ribGeom, 20), ribMat);
+            rib.position.z = z;
+            hullMesh.add(rib);
+        });
+
+        // A small obsidian core nested inside the hull's belly, glimpsed through the
+        // sparse wireframe -- the one fixed-dark, Phong-lit core every avatar here keeps.
+        const nestedCoreMat = new THREE.MeshPhongMaterial({
             color: 0x0a0a0f, specular: HOT, shininess: 90, transparent: true, opacity: 0.97
         });
-        const core = new THREE.Mesh(new THREE.IcosahedronGeometry(9, 1), coreMat);
-        core.position.y = coreBaseY;
-        group.add(core);
+        const nestedCore = new THREE.Mesh(new THREE.IcosahedronGeometry(6, 1), nestedCoreMat);
+        nestedCore.position.z = -2;
+        hullMesh.add(nestedCore);
 
+        // Forward eye-lens cluster, fixed red regardless of theme.
+        const eyeMat = new THREE.MeshBasicMaterial({
+            color: HOT, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending
+        });
         const eyeGlowMat = new THREE.SpriteMaterial({
             map: api.helpers.glowTexture(32), color: HOT, transparent: true,
-            opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false
+            opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false
         });
-        const eyeGlow = new THREE.Sprite(eyeGlowMat);
-        eyeGlow.scale.set(16, 16, 1);
-        eyeGlow.position.z = 8;
-        core.add(eyeGlow);
+        const eyeLayout = [
+            [-7.5, -4, 15.5, 2.2], [-4.5, -6.5, 17, 1.8], [-1, -3.5, 18.5, 2.6],
+            [2.5, -6, 17.5, 1.9], [6, -3.5, 16, 2.3], [8, -6.5, 14, 1.5],
+            [0, -8, 15.5, 1.6], [-2.5, -1.5, 18.8, 1.4]
+        ];
+        const eyeXyScale = 0.75;
+        eyeLayout.forEach(([rawEx, rawEy, rawEz, er]) => {
+            const ex = rawEx * eyeXyScale, ey = rawEy * eyeXyScale, ez = rawEz + 1;
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(er, 8, 8), eyeMat);
+            eye.position.set(ex, ey, ez);
+            hullMesh.add(eye);
 
-        // Each tentacle is a chain of joints sharing one BufferGeometry -- a thin Line for
-        // the strand itself (theme-tinted, reads as the tentacle's own drawn-light body)
-        // and a Points overlay at the same joints for brighter node markers (fixed icy
-        // white-blue, the same "nodes brighter than the line between them" depth cue the
-        // Nexus's hull uses). animate() rewrites the position attribute every frame -- a
-        // cheap kinematic update, not a rebuild -- so the whole thing can ripple with a
-        // real traveling wave instead of the geometry ever being reconstructed.
+            const glow = new THREE.Sprite(eyeGlowMat);
+            glow.scale.setScalar(er * 3.2);
+            glow.position.set(ex, ey, ez);
+            hullMesh.add(glow);
+        });
+
+        // --- Tentacles: a dense, asynchronous swimming cluster trailing from the hull's
+        // tail, mostly backward (-Z) with a wide fan. Each tentacle is a chain of joints
+        // sharing one BufferGeometry -- a thin Line for the strand itself (theme-tinted)
+        // and a Points overlay at the same joints for brighter node markers (fixed red).
+        // animate() rewrites the position attribute every frame -- a cheap kinematic
+        // update, not a rebuild -- with each tentacle's own frequency/amplitude/phase
+        // slightly off from its neighbors', so the burst reads as many independent limbs
+        // swimming rather than one choreographed ripple. ---
         const tentacleLineMat = new THREE.LineBasicMaterial({
-            color: api.palette.hex, transparent: true, opacity: 0.6
+            color: api.palette.hex2, transparent: true, opacity: 0.6
         });
         const tentacleNodeMat = new THREE.PointsMaterial({
-            color: HOT, map: api.helpers.glowTexture(20), size: 2.6,
+            color: HOT, map: api.helpers.glowTexture(20), size: 2.8,
             transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false
         });
         const tentacleTipMat = new THREE.SpriteMaterial({
@@ -136,15 +221,18 @@ HologramAvatar.registerAvatar({
             opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false
         });
 
-        const tentacleCount = 12;
-        const jointCount = 9; // root (doesn't move relative to the core) plus 8
+        const tailPoint = new THREE.Vector3(0, 0, -24); // the hull profile's own tail tip
+        const tentacleCount = 15;
+        const jointCount = 10;
         const tentacles = [];
         for (let i = 0; i < tentacleCount; i++) {
-            // Each tentacle's rest direction radiates outward from the core in a burst,
-            // spread evenly in azimuth with a little jitter so they don't read as a
-            // perfectly mechanical fan.
-            const azimuth = (i / tentacleCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
-            const dir = new THREE.Vector3(Math.cos(azimuth), 0, Math.sin(azimuth)).normalize();
+            const azimuth = (i / tentacleCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+            const fan = 0.62; // how wide the tentacles splay from straight-back
+            const dir = new THREE.Vector3(
+                Math.cos(azimuth) * fan,
+                Math.sin(azimuth) * fan * 0.65,
+                -1
+            ).normalize();
             const perpA = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0));
             if (perpA.lengthSq() < 1e-6) perpA.set(1, 0, 0);
             perpA.normalize();
@@ -156,22 +244,25 @@ HologramAvatar.registerAvatar({
 
             const line = new THREE.Line(geom, tentacleLineMat);
             const nodes = new THREE.Points(geom, tentacleNodeMat);
-            core.add(line, nodes);
+            tiltGroup.add(line, nodes);
 
             const tip = new THREE.Sprite(tentacleTipMat);
-            tip.scale.set(4, 4, 1);
-            core.add(tip);
+            tip.scale.set(4.2, 4.2, 1);
+            tiltGroup.add(tip);
 
             tentacles.push({
                 positions, geom, tip, dir, perpA, perpB,
-                length: 22 + Math.random() * 10,
+                length: 27 + Math.random() * 15,
                 phase: Math.random() * Math.PI * 2,
-                speedMult: 0.85 + Math.random() * 0.3
+                // Independent variance per tentacle -- not just a shared phase offset --
+                // is what keeps the whole cluster from reading as one wave repeated N
+                // times; each limb genuinely swims to its own rhythm.
+                speedMult: 0.7 + Math.random() * 0.6,
+                freqMult: 0.75 + Math.random() * 0.5,
+                ampMult: 0.75 + Math.random() * 0.5
             });
         }
 
-        // Soft ambient glow behind everything, theme-tinted, so the hologram reads as
-        // light filling the space rather than sitting flat against the backdrop.
         const glowMaterial = new THREE.SpriteMaterial({
             map: api.helpers.glowTexture(64), color: api.palette.hex, transparent: true,
             opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false
@@ -182,8 +273,9 @@ HologramAvatar.registerAvatar({
         group.add(glow);
 
         return {
-            group, core, coreBaseY, beamPoints, beamMaterial, tentacleLineMat, tentacles,
-            eyeGlowMat, glow, glowMaterial
+            group, bodyGroup, bodyBaseY, beamPoints, beamMaterial,
+            hullFillMat, hullInnerWireMat, hullOutlineMat, hullPointsMat, ribMat,
+            tentacleLineMat, tentacles, tailPoint, eyeGlowMat, glow, glowMaterial
         };
     },
 
@@ -191,40 +283,39 @@ HologramAvatar.registerAvatar({
         const isThinking = ctx.state === 'THINKING';
         const isSpeaking = ctx.state === 'SPEAKING';
 
-        // The whole probe drifts in a slow turn at rest, sharpening into a faster spin
-        // while thinking, as if scanning for wherever it's "looking".
         model.group.rotation.y = ctx.time * (isThinking ? 1.1 : 0.25);
 
-        // The core hovers and bobs on top of the beam -- a gentle idle drift, a quicker
-        // jitter while thinking, and a lift with the voice while speaking. A click gives
-        // it a brief startled hop.
         const bob = Math.sin(ctx.time * (isThinking ? 3.2 : 1.1)) * (isThinking ? 3 : 5);
         const audioBob = isSpeaking ? ctx.audio * 8 : 0;
-        model.core.position.y = model.coreBaseY + bob + audioBob + ctx.click * 10;
+        model.bodyGroup.position.y = model.bodyBaseY + bob + audioBob + ctx.click * 10;
 
-        // Tentacles ripple with a traveling wave whose amplitude grows toward the tip --
-        // drooping and calm at rest, whipping wider and faster while thinking, with an
-        // added kick from the voice while speaking. The root (joint 0) barely moves in
-        // any state, the same way a real whip's motion is all in its far end.
-        const droop = (isThinking || isSpeaking) ? -0.12 : -0.45;
-        const waveAmp = isThinking ? 9 : isSpeaking ? 7 + ctx.audio * 6 : 4;
-        const waveFreq = isThinking ? 2.6 : 1.8;
-        const waveSpeed = isThinking ? 5 : isSpeaking ? 3.5 : 1.6;
+        // Tentacles are always swimming, even at rest -- a lower amplitude/speed floor
+        // than Senti's original resting droop, since "swimming" reads as continuous
+        // motion rather than something that only animates once alert. Thinking/speaking
+        // push the whole cluster wider and faster on top of that baseline.
+        const droop = (isThinking || isSpeaking) ? -0.1 : -0.3;
+        const waveAmpBase = isThinking ? 11 : isSpeaking ? 8 + ctx.audio * 7 : 6;
+        const waveFreqBase = isThinking ? 2.8 : 2.1;
+        const waveSpeedBase = isThinking ? 5.5 : isSpeaking ? 4 : 2.2;
 
         model.tentacles.forEach((t) => {
+            const waveAmp = waveAmpBase * t.ampMult;
+            const waveFreq = waveFreqBase * t.freqMult;
+            const waveSpeed = waveSpeedBase * t.speedMult;
+
             const segments = t.positions.length / 3 - 1;
             let tipX = 0, tipY = 0, tipZ = 0;
             for (let j = 0; j <= segments; j++) {
                 const jt = j / segments;
                 const reach = jt * t.length;
-                const wavePhase = jt * waveFreq * Math.PI * 2 - ctx.time * waveSpeed * t.speedMult + t.phase;
-                const spread = Math.pow(jt, 1.4); // keeps the root anchored, the tip doing the swinging
+                const wavePhase = jt * waveFreq * Math.PI * 2 - ctx.time * waveSpeed + t.phase;
+                const spread = Math.pow(jt, 1.4);
                 const swingA = Math.sin(wavePhase) * waveAmp * spread;
                 const swingB = Math.cos(wavePhase * 0.7) * waveAmp * 0.6 * spread;
 
-                const px = t.dir.x * reach + t.perpA.x * swingA + t.perpB.x * swingB;
-                const py = t.dir.y * reach + t.perpA.y * swingA + t.perpB.y * swingB + droop * reach * jt;
-                const pz = t.dir.z * reach + t.perpA.z * swingA + t.perpB.z * swingB;
+                const px = model.tailPoint.x + t.dir.x * reach + t.perpA.x * swingA + t.perpB.x * swingB;
+                const py = model.tailPoint.y + t.dir.y * reach + t.perpA.y * swingA + t.perpB.y * swingB + droop * reach * jt;
+                const pz = model.tailPoint.z + t.dir.z * reach + t.perpA.z * swingA + t.perpB.z * swingB;
 
                 t.positions[j * 3] = px;
                 t.positions[j * 3 + 1] = py;
@@ -235,17 +326,15 @@ HologramAvatar.registerAvatar({
             t.tip.position.set(tipX, tipY, tipZ);
         });
 
-        // The beam brightens and thickens with speech, and simmers faintly while thinking.
         let beamOpacity = 0.5;
         if (isSpeaking) beamOpacity = 0.5 + ctx.audio * 0.4;
         else if (isThinking) beamOpacity = 0.5 + Math.abs(Math.sin(ctx.time * 6)) * 0.25;
         model.beamMaterial.opacity = beamOpacity;
         model.beamMaterial.size = 1.8 + (isSpeaking ? ctx.audio * 1.2 : 0);
 
-        // The core's sensor glow pulses like a slow heartbeat at rest, and flares with speech.
         model.eyeGlowMat.opacity = isSpeaking
-            ? 0.8 + ctx.audio * 0.5
-            : 0.6 + Math.abs(Math.sin(ctx.time * 1.6)) * 0.25;
+            ? 0.7 + ctx.audio * 0.5
+            : 0.5 + Math.abs(Math.sin(ctx.time * 1.6)) * 0.25;
 
         let glowIntensity;
         if (isSpeaking) glowIntensity = 0.2 + ctx.audio * 0.3;
@@ -256,6 +345,11 @@ HologramAvatar.registerAvatar({
 
     applyPalette(model, palette) {
         model.beamMaterial.color.setHex(palette.hex);
+        model.hullFillMat.color.setHex(palette.hex);
+        model.hullInnerWireMat.color.setHex(palette.hex);
+        model.hullOutlineMat.color.setHex(palette.hex3);
+        model.hullPointsMat.color.setHex(palette.hex3);
+        model.ribMat.color.setHex(palette.hex3);
         model.tentacleLineMat.color.setHex(palette.hex2);
         model.glowMaterial.color.setHex(palette.hex);
     },
