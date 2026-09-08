@@ -20,7 +20,7 @@ pub use genesis::Identity;
 use persona::Provider;
 // Re-exported because commands.rs serves the persona catalogue to the HUD: the Settings list
 // is built from the enum rather than written out again in the markup.
-pub use persona::Persona;
+pub use persona::{Domain, Persona, Root};
 use providers::ChatContext;
 pub use providers::Sink;
 pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
@@ -191,7 +191,7 @@ impl LlmEngine {
         let endpoint = self
             .db
             .get_setting_string("llm_endpoint", "http://localhost:11434");
-        let persona_key = self.db.get_setting_string("persona_type", "halcy");
+        let persona_key = self.db.get_setting_string("persona_type", "default");
         let custom_directive = self.db.get_setting_string("custom_directive", "");
 
         if agent_name == "HALCY" {
@@ -480,7 +480,7 @@ impl LlmEngine {
         sink: providers::Sink,
     ) -> String {
         let registry = crate::tools::registry();
-        let tool_ctx = crate::tools::ToolContext { db: &self.db };
+        let tool_ctx = crate::tools::ToolContext::new(&self.db);
 
         let mut history = base_history;
         let mut current_prompt = user_prompt.to_string();
@@ -613,6 +613,7 @@ impl LlmEngine {
         if tools_on {
             system_prompt.push_str(&crate::tools::protocol::instructions(
                 &registry.prompt_catalog(),
+                &config.persona.domain().field(),
             ));
         }
 
@@ -854,13 +855,16 @@ mod tests {
         crate::model_scanner::CLOUD_ENV_TEST_GUARD.lock().unwrap()
     }
 
+    /// A fresh install runs the diagnostic persona, not the conversational one -- the same
+    /// answer `get_settings` and the tool layer give, so the persona generating the reply is
+    /// the persona whose field decides what runs without asking.
     #[test]
-    fn default_config_is_offline_halcy() {
+    fn default_config_is_offline_with_the_diagnostic_persona() {
         let _guard = env_guard();
         let engine = temp_engine("default_config");
         let config = engine.load_config();
         assert_eq!(config.provider, Provider::Offline);
-        assert_eq!(config.persona, Persona::Halcy);
+        assert_eq!(config.persona, Persona::Default);
         assert_eq!(config.agent_name, "HALCY");
     }
 
@@ -878,12 +882,17 @@ mod tests {
         reply
     }
 
+    /// Offline, the reply has one job: say there is no reasoning engine behind it and point
+    /// at where to connect one. Each persona says that in its own words -- the diagnostic
+    /// default reports on the machine first -- so this asserts the job rather than one
+    /// persona's phrasing.
     #[test]
-    fn generate_response_offline_default_mentions_standby() {
+    fn generate_response_offline_says_there_is_no_engine_and_where_to_connect_one() {
         let _guard = env_guard();
         let engine = temp_engine("offline_default");
         let reply = generate(&engine, "hello there", "test-session");
-        assert!(reply.contains("Offline Standby Mode"), "reply was: {reply}");
+        assert!(reply.contains("Ollama"), "reply was: {reply}");
+        assert!(reply.contains("Settings"), "reply was: {reply}");
     }
 
     #[test]

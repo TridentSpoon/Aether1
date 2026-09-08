@@ -138,7 +138,8 @@ impl Persona {
         }
     }
 
-    /// The catalogue Settings renders. Built here rather than written out in the HTML so
+    /// The catalogue Settings renders, including the field each persona reaches without
+    /// asking. Built here rather than written out in the HTML so
     /// that adding a persona is one change in one file: a list in the markup would have
     /// drifted from this enum the first time either moved.
     pub fn catalogue() -> serde_json::Value {
@@ -151,6 +152,10 @@ impl Persona {
                         "short_name": p.short_name(),
                         "speciality": p.speciality(),
                         "avatar": p.avatar(),
+                        // What it reaches without asking. Settings shows it because
+                        // picking a persona is now picking a level of access, and that
+                        // should not be something you find out by watching it ask.
+                        "field": p.domain().field(),
                     })
                 })
                 .collect(),
@@ -340,6 +345,132 @@ impl Persona {
             ),
         }
     }
+
+    /// What this persona reaches without asking.
+    ///
+    /// Two rules govern the whole design: a persona reads its own field automatically, and
+    /// everything else is proposed for that one call. The table below is the first rule
+    /// written down. It is deliberately not symmetrical -- To the Point, Model's Own and
+    /// Custom are styles rather than specialities, and Conversational is a manner, so
+    /// inventing a field for them would hand out access nothing asked for. They get the
+    /// minimum: the telemetry the HUD already shows, and the operator's own notes.
+    ///
+    /// A domain can only narrow. It never widens what the program will read at all --
+    /// fs_guard's deny list is checked first and is not overridable by a domain, by an
+    /// approval, or by elevation.
+    pub fn domain(&self) -> Domain {
+        // The two tools with no path argument that every persona keeps: what the HUD is
+        // already displaying, and the operator's own notes.
+        const MINIMUM_TOOLS: &[&str] = &["telemetry_detail", "search_memory"];
+        const READS_FILES: &[&str] =
+            &["read_file", "list_dir", "telemetry_detail", "search_memory"];
+
+        match self {
+            Persona::Default => Domain {
+                tools: &[
+                    "list_processes",
+                    "read_file",
+                    "list_dir",
+                    "telemetry_detail",
+                ],
+                roots: &[Root::SystemLogs, Root::ServiceState],
+            },
+            Persona::Alt => Domain {
+                tools: &[
+                    "list_processes",
+                    "read_file",
+                    "list_dir",
+                    "telemetry_detail",
+                ],
+                roots: &[Root::NetworkConfig, Root::ServiceState],
+            },
+            Persona::Nexus => Domain {
+                tools: READS_FILES,
+                roots: &[Root::ProjectTree],
+            },
+            Persona::ArxLimes => Domain {
+                tools: READS_FILES,
+                roots: &[Root::Vault, Root::ProjectTree],
+            },
+            Persona::ArxLogos => Domain {
+                tools: READS_FILES,
+                roots: &[Root::Vault],
+            },
+            Persona::Halcy | Persona::Red9000 | Persona::Llm | Persona::Custom => Domain {
+                tools: MINIMUM_TOOLS,
+                roots: &[Root::Vault],
+            },
+        }
+    }
+}
+
+/// What a persona reaches without being asked about it.
+///
+/// Split in two because the two questions are different: `tools` answers "may this persona
+/// call this at all without asking", and `roots` answers "and if it takes a path, where may
+/// that path be". A tool with no path argument is settled entirely by the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Domain {
+    /// Read-only tools this persona may call without asking.
+    pub tools: &'static [&'static str],
+    /// Path roots read_file and list_dir may reach without asking.
+    pub roots: &'static [Root],
+}
+
+impl Domain {
+    pub fn allows_tool(&self, tool: &str) -> bool {
+        self.tools.contains(&tool)
+    }
+
+    /// The field in words, for the sentence an elevation prompt shows the operator.
+    /// Derived from the roots rather than written out beside them, so the description
+    /// cannot drift from the thing it describes.
+    pub fn field(&self) -> String {
+        let labels: Vec<&str> = self.roots.iter().map(|r| r.label()).collect();
+        match labels.len() {
+            0 => "nothing on disk".to_string(),
+            1 => labels[0].to_string(),
+            _ => format!(
+                "{} and {}",
+                labels[..labels.len() - 1].join(", "),
+                labels[labels.len() - 1]
+            ),
+        }
+    }
+}
+
+/// A place on disk, named by what it *is* rather than where it lives.
+///
+/// Symbolic on purpose: the same domain has to mean the right directories on Windows,
+/// Linux and macOS, and a hardcoded `/var/log` is wrong on two of the three. Resolution
+/// lives in `tools::domain`, next to the path guard it works with; getting it wrong fails
+/// in the safe direction, because an unresolved root simply contains nothing and the read
+/// is proposed rather than run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Root {
+    /// /var/log, the journal, the Windows event log.
+    SystemLogs,
+    /// systemd units, Windows services.
+    ServiceState,
+    /// Hosts file, resolver and firewall configuration.
+    NetworkConfig,
+    /// The working directory the companion was started in, when that is a project and not
+    /// simply the operator's home directory.
+    ProjectTree,
+    /// The operator's notes.
+    Vault,
+}
+
+impl Root {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Root::SystemLogs => "system logs",
+            Root::ServiceState => "service state",
+            Root::NetworkConfig => "network configuration",
+            Root::ProjectTree => "the project directory",
+            Root::Vault => "your notes",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -430,6 +561,12 @@ mod tests {
             assert_eq!(Persona::from_key(key), persona, "{key} does not round-trip");
             assert!(!row["short_name"].as_str().unwrap().is_empty());
             assert!(!row["speciality"].as_str().unwrap().is_empty());
+            // Settings has to be able to say what each persona reaches without asking.
+            // A persona whose access is invisible until it acts is one nobody chose.
+            assert!(
+                !row["field"].as_str().unwrap().is_empty(),
+                "{key} does not say what its field is"
+            );
         }
     }
 

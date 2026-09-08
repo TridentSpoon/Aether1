@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn appending_adds_without_losing_what_was_there() {
         let (db, root) = fixture("append");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let before = std::fs::read_to_string(root.join("profile.md")).unwrap();
 
         let outcome = AppendNote
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn appending_to_a_new_note_creates_it_and_undo_removes_it() {
         let (db, root) = fixture("append_new");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
 
         let outcome = AppendNote
             .call(
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn rewriting_restores_the_old_contents_on_undo() {
         let (db, root) = fixture("write");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let before = std::fs::read_to_string(root.join("machine.md")).unwrap();
 
         let outcome = WriteNote
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn notes_cannot_be_written_outside_the_vault() {
         let (db, _root) = fixture("escape");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         for bad in ["../escape.md", "/etc/passwd.md", "notes/../../escape.md"] {
             assert!(
                 AppendNote
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn a_note_must_be_markdown() {
         let (db, _root) = fixture("md");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         assert!(WriteNote
             .call(&json!({"note": ".bashrc", "content": "evil"}), &ctx)
             .is_err());

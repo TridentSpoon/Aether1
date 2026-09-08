@@ -31,10 +31,14 @@ pub struct ToolCall {
 
 /// Instructions appended to the system prompt when tools are available. Written to be read
 /// by a 3B local model as well as a frontier one: short, imperative, one example.
-pub fn instructions(catalog: &str) -> String {
+pub fn instructions(catalog: &str, field: &str) -> String {
     format!(
         "\n[AVAILABLE TOOLS]\nYou can inspect the operator's machine by calling these tools:\n\
          {catalog}\n\n\
+         Your field is {field}. Reads inside it happen straight away. Anything else -- \
+         another tool, or a path outside it -- is shown to the operator first and runs only \
+         if they approve it, for that one call. Say what you want to look at and why, then \
+         wait; asking again does not make it happen faster.\n\n\
          To call one, emit a fenced block tagged `tool` containing JSON, and stop:\n\
          {FENCE}{TOOL_TAG}\n\
          {{\"tool\": \"read_file\", \"arguments\": {{\"path\": \"/etc/hostname\"}}}}\n\

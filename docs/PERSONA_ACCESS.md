@@ -1,7 +1,10 @@
 # Per-persona access, and elevation that lasts one request
 
-**Status: designed, not built.** Written before any code so the security decisions are made
-deliberately rather than discovered halfway through. Nothing in this document is implemented.
+**Status: built.** Written as a design first, so the security decisions were made deliberately
+rather than discovered halfway through — and the writing is what surfaced the escalation path
+in "The escalation path this opens", which would otherwise have been found late. What follows
+describes what the code now does; the three questions the design left open are answered at the
+bottom, with the reasoning.
 
 ---
 
@@ -131,11 +134,19 @@ the companion cannot author its own directive — is easy to state and easy to k
 
 | File | Change |
 |---|---|
-| `llm/persona.rs` | `Domain`, `Root`, `Persona::domain()`, and the table above. Tests that every persona has a domain and that no domain names a tool the registry does not have. |
-| `tools/mod.rs` | `ToolContext` carries the active `Persona`. `dispatch` checks the domain **before** the `mutating()` branch, so an out-of-domain read takes the same proposal path a mutating call does. |
-| `tools/consent.rs` | The proposal record gains the persona and the reason, so the prompt can say which field this falls outside and the log can answer "why did it read that?" later. |
-| `tools/mutating.rs` | `persona_type` and `avatar` (and, recommended, `custom_directive`) leave `SETTABLE`. |
+| `llm/persona.rs` | `Domain`, `Root`, `Persona::domain()`, and the table above. `Domain::field()` renders the roots as a phrase, so the sentence an operator reads cannot drift from the access it describes. `catalogue()` carries the field, and Settings shows it. |
+| `tools/domain.rs` | **New.** Resolves a `Root` to real directories on this platform, decides whether a path falls inside them, and writes the reason an elevation card shows. Split out of `persona.rs` so the platform path work sits beside `fs_guard`, which it works with. |
+| `tools/mod.rs` | `ToolContext` carries the active `Persona`, read from the settings table by `ToolContext::new` and nowhere else. `run` checks the domain **before** the `mutating()` branch, so an out-of-domain read takes the same proposal path a mutating call does. |
+| `tools/consent.rs` | `propose` carries the mutating flag and the reason. Pre-approval is refused outright for read-only tools, and an elevation card never offers the "stop asking" checkbox — the gate it would lift is the persona's, not the tool's. |
+| `tools/protocol.rs` | The prompt tells the model its field and that anything outside it is a single approved call. |
+| `llm/db.rs` | `action_log` gains a `reason` column (additive migration, same shape as `approved_by`), so the log can still answer "why did it read that?" a week later. |
+| `tools/mutating.rs` | `persona_type`, `avatar` and `custom_directive` leave `SETTABLE`. |
 | `fs_guard` | Unchanged. It is the floor, and this design does not touch the floor. |
+
+One thing changed outside the table. `load_config` defaulted `persona_type` to `"halcy"` while
+`get_settings` defaulted it to `"default"` — harmless while a persona only chose a tone, and not
+harmless once it chooses access, because the persona writing the reply would not have been the
+persona whose field was enforced. Both now say `default`.
 
 `Root` resolution is the only genuinely new platform work: SystemLogs and ServiceState mean
 different directories on Windows and Linux, and getting that wrong fails in the safe direction
@@ -177,12 +188,36 @@ That is the right default and it should ship on. But it changes the feel of the 
 - Root resolution returns the right directories per platform, or nothing at all rather than a
   wrong guess.
 
-## Open questions
+## The open questions, answered
 
-1. **`custom_directive`:** remove from `SETTABLE` as recommended, or keep? It is not an
-   escalation under this design, only adjacent to one.
-2. **Does elevation persist for the length of one *turn*?** A persona reading three log files
-   to answer one question would prompt three times. Per-turn batching is friendlier and still
-   not a mode — but "one request" is the stated rule, and this is the first place it bends.
-3. **ProjectTree when there is no project.** The companion is often started from a home
-   directory. ProjectTree resolving to `~` would make Coding's domain nearly everything.
+1. **`custom_directive` is out of `SETTABLE`.** It was the recommendation, and the cost is
+   small: the companion cannot author its own instructions. That is a property you can state
+   in one sentence and keep, which is worth more than the convenience it costs.
+
+2. **Elevation does not batch. It is one call, and nothing more.** A persona reading three log
+   files outside its field prompts three times. Per-turn batching is friendlier and it is
+   genuinely tempting — but "one request" was the rule, and the first bend is the one that
+   turns a per-call grant into a short-lived mode. `approving_an_elevation_buys_exactly_one_call`
+   is the test that holds this: it approves a call, watches it run, then makes the identical
+   call again and asserts it is proposed all over again.
+
+   The friendliness problem is real and is answered somewhere better: by making the minimum
+   domain genuinely usable, so the everyday case never prompts at all.
+
+3. **ProjectTree is the working directory, unless that is home.** It resolves to the directory
+   Aether1 was started in — but not when that is the operator's home directory, the filesystem
+   root, or an ancestor of home. Resolving to `~` would have made the Coding persona's field
+   nearly the whole disk, which is the opposite of what a field is for. The cost is that the
+   Coding persona asks before reading files until it is started inside a project, and that is
+   the right way round: a click, rather than a quiet grant.
+
+## What the operator sees
+
+Settings shows each persona's field under its speciality, in the same words the elevation card
+uses ("Reads your notes without asking. Anything else asks you first, once, for that one call.").
+Picking a persona is picking a level of access now, and nobody should learn that by watching it
+ask — or, worse, by watching it not ask.
+
+The card itself is labelled apart from a mutating approval. **APPROVAL REQUIRED** asks whether
+something may change the machine; **OUTSIDE ITS FIELD** asks whether something unusual may look,
+once. Giving both the same heading would train the operator to read neither.

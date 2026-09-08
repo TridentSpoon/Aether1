@@ -52,6 +52,13 @@ pub fn set_always_allowed(
     if allowed {
         match registry.get(tool) {
             None => return Err(format!("no such tool {tool:?}")),
+            Some(t) if !t.mutating() => {
+                return Err(format!(
+                    "{tool} is not asked about tool by tool. Whether it runs without asking \
+                     depends on the persona's field, and pre-approving it here would store a \
+                     setting nothing consults"
+                ))
+            }
             Some(t) if !t.always_allowable() => {
                 return Err(format!(
                     "{tool} is asked about every time: its name doesn't say what it would do, so agreeing to it once would be agreeing to all of it"
@@ -70,9 +77,21 @@ pub fn set_always_allowed(
         .map_err(|e| e.to_string())
 }
 
-/// Records a mutating call as waiting for the operator, and returns its id.
-pub fn propose(db: &MemoryDb, tool: &str, args: &Value) -> Result<i64, String> {
-    db.log_action(tool, args, true, ActionStatus::Proposed)
+/// Records a call as waiting for the operator, and returns its id.
+///
+/// Two kinds of thing land here. A mutating call, whose reason is the tool itself and needs
+/// no explaining. And a read outside the active persona's field, which carries a `reason`
+/// naming the persona and the field it falls outside -- so the card says what is unusual
+/// about the request rather than only what it is, and the log can still answer "why did it
+/// read that?" a week later.
+pub fn propose(
+    db: &MemoryDb,
+    tool: &str,
+    args: &Value,
+    mutating: bool,
+    reason: Option<&str>,
+) -> Result<i64, String> {
+    db.log_action(tool, args, mutating, ActionStatus::Proposed, reason)
         .map_err(|e| format!("could not record the proposed action: {e}"))
 }
 
@@ -85,7 +104,11 @@ pub fn pending(db: &MemoryDb, registry: &Registry) -> Vec<ActionRecord> {
     for action in &mut waiting {
         if let Some(tool) = registry.get(&action.tool) {
             action.preview = Some(tool.preview(&action.args));
-            action.always_allowable = Some(tool.always_allowable());
+            // Only ever offered for a mutating tool. An elevation card is about one read
+            // outside a persona's field, and "stop asking about read_file" is not an answer
+            // to that question -- the gate it would have to lift is the persona's, not the
+            // tool's.
+            action.always_allowable = Some(tool.always_allowable() && action.mutating);
         }
     }
     waiting
@@ -293,9 +316,9 @@ mod tests {
     #[test]
     fn a_proposal_waits_and_runs_nothing_until_approved() {
         let (db, registry) = fixture("waits");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
 
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
         let waiting = pending(&db, &registry);
         assert_eq!(waiting.len(), 1);
         assert_eq!(waiting[0].id, id);
@@ -316,7 +339,7 @@ mod tests {
     #[test]
     fn a_rejection_is_recorded_rather_than_forgotten() {
         let (db, registry) = fixture("rejects");
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
 
         reject(&db, id).unwrap();
         let record = db.get_action(id).unwrap().unwrap();
@@ -328,8 +351,8 @@ mod tests {
     #[test]
     fn an_action_cannot_be_approved_twice() {
         let (db, registry) = fixture("twice");
-        let ctx = ToolContext { db: &db };
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let ctx = ToolContext::new(&db);
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
 
         approve(&registry, &ctx, id, "operator").unwrap();
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
@@ -339,8 +362,8 @@ mod tests {
     #[test]
     fn a_rejected_action_cannot_then_be_approved() {
         let (db, registry) = fixture("rejected_then_approved");
-        let ctx = ToolContext { db: &db };
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let ctx = ToolContext::new(&db);
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
 
         reject(&db, id).unwrap();
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
@@ -352,8 +375,8 @@ mod tests {
         // The row is the request, and a row can be edited between being written and being
         // run. Trusting the proposal would make the log the security boundary.
         let (db, registry) = fixture("revalidate");
-        let ctx = ToolContext { db: &db };
-        let id = propose(&db, "probe_writer", &json!({"path": 7})).unwrap();
+        let ctx = ToolContext::new(&db);
+        let id = propose(&db, "probe_writer", &json!({"path": 7}), true, None).unwrap();
 
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("should be a string"), "{err}");
@@ -366,9 +389,9 @@ mod tests {
     #[test]
     fn a_proposal_for_a_tool_that_no_longer_exists_fails_cleanly() {
         let (db, _registry) = fixture("gone");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let empty = Registry::new();
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
 
         let err = approve(&empty, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("no longer available"), "{err}");
@@ -377,8 +400,8 @@ mod tests {
     #[test]
     fn stale_proposals_expire_instead_of_waiting_forever() {
         let (db, registry) = fixture("stale");
-        let ctx = ToolContext { db: &db };
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let ctx = ToolContext::new(&db);
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
 
         // Backdate it past the TTL.
         db.set_setting("unused", &json!(1)).unwrap();
@@ -403,8 +426,8 @@ mod tests {
     #[test]
     fn an_executed_action_can_be_undone_once() {
         let (db, registry) = fixture("undo");
-        let ctx = ToolContext { db: &db };
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let ctx = ToolContext::new(&db);
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
         approve(&registry, &ctx, id, "operator").unwrap();
 
         let result = undo(&registry, &ctx, id).unwrap();
@@ -421,8 +444,8 @@ mod tests {
     #[test]
     fn a_proposal_that_never_ran_cannot_be_undone() {
         let (db, registry) = fixture("undo_pending");
-        let ctx = ToolContext { db: &db };
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
+        let ctx = ToolContext::new(&db);
+        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
 
         let err = undo(&registry, &ctx, id).unwrap_err();
         assert!(err.contains("only something that ran"), "{err}");
@@ -481,8 +504,8 @@ mod tests {
         registry.register(Box::new(Writer)).unwrap();
         registry.register(Box::new(Unallowable)).unwrap();
 
-        propose(&db, "probe_writer", &json!({"path": "/tmp/x"})).unwrap();
-        propose(&db, "probe_runner", &json!({"path": "/tmp/x"})).unwrap();
+        propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        propose(&db, "probe_runner", &json!({"path": "/tmp/x"}), true, None).unwrap();
 
         let waiting = pending(&db, &registry);
         let allowable = |name: &str| {

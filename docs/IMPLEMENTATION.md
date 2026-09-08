@@ -769,9 +769,9 @@ now, carrying name, persona, voice and greeting. *Your own* is the deliberate om
 avatar you designed has no persona of its own, and quietly selecting Custom would hand over the
 fallback directive without saying so.
 
-### Step 26: per-persona access, elevated one request at a time
+### Step 26: per-persona access, elevated one request at a time — **shipped**
 
-**Designed, not built.** The design is written out in full in
+**Designed first, then built.** The design is written out in full in
 [PERSONA_ACCESS.md](PERSONA_ACCESS.md); this is the summary and why it is a document before it
 is code.
 
@@ -790,7 +790,21 @@ grant. So `persona_type` and `avatar` have to leave `SETTABLE`, joining the rule
 there already follow: the companion may not change the thing that decides what the companion
 may do. That is the kind of consequence worth finding on paper.
 
-Worth stating plainly: this makes Aether1 **stricter** than it is today, not looser.
+That consequence, found on paper, is now in the code: `persona_type`, `avatar` and
+`custom_directive` are out of `SETTABLE`, and the companion cannot switch its own persona,
+its avatar or its own directive by any route.
+
+The three questions the design left open are answered in PERSONA_ACCESS.md. In short:
+`custom_directive` went too; elevation does **not** batch per turn — one call, and the test
+`approving_an_elevation_buys_exactly_one_call` approves a call and then makes the identical
+call again to prove it asks a second time; and `ProjectTree` refuses to resolve to the home
+directory, so the Coding persona asks before reading files until it is started inside a project.
+
+Settings now shows each persona's field beside its speciality, and an out-of-domain read gets a
+card headed **OUTSIDE ITS FIELD** rather than **APPROVAL REQUIRED** — two different questions
+deserve two different headings, or the operator learns to read neither.
+
+Worth stating plainly: this makes Aether1 **stricter** than it was, not looser.
 
 ## Where this stands
 
