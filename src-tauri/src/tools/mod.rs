@@ -14,6 +14,7 @@
 
 mod builtin;
 pub mod consent;
+pub mod domain;
 mod fs_guard;
 mod mutating;
 mod notes;
@@ -24,7 +25,7 @@ use std::sync::LazyLock;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::llm::{ActionStatus, MemoryDb};
+use crate::llm::{ActionStatus, MemoryDb, Persona};
 
 /// One thing the companion can do. Implementors are stateless and shared across threads:
 /// a tool holds no per-call state, so the registry can be built once and consulted from
@@ -87,6 +88,31 @@ pub trait Tool: Send + Sync {
 /// anything per-machine or per-operator arrives here rather than being held by the tool.
 pub struct ToolContext<'a> {
     pub db: &'a MemoryDb,
+    /// Who is asking. The persona decides which read-only calls run without the operator
+    /// being asked first (see `domain`), so it belongs to the call rather than to the tool.
+    pub persona: Persona,
+}
+
+impl<'a> ToolContext<'a> {
+    /// The context for a real turn: the persona is whatever the operator has selected.
+    /// Read here rather than passed in, so there is exactly one answer to "which persona is
+    /// running" and no caller can quietly supply a more generous one.
+    pub fn new(db: &'a MemoryDb) -> ToolContext<'a> {
+        let key = db.get_setting_string("persona_type", "default");
+        ToolContext {
+            db,
+            persona: Persona::from_key(&key),
+        }
+    }
+
+    /// The context for a specific persona, so a test can state which one it is exercising.
+    /// Deliberately test-only: outside a test the answer comes from the settings table and
+    /// nowhere else, so no code path can quietly supply a more generous persona than the
+    /// one the operator selected.
+    #[cfg(test)]
+    pub fn for_persona(db: &'a MemoryDb, persona: Persona) -> ToolContext<'a> {
+        ToolContext { db, persona }
+    }
 }
 
 /// What a tool call produced.
@@ -316,6 +342,20 @@ pub fn run(
 
     validate_args(&tool.parameters(), args)?;
 
+    // The domain check comes first, so a read outside the active persona's field takes the
+    // same road a mutating call does: written down, shown to the operator, run only if they
+    // say so, and gone the moment it has run. Elevation is per request and nothing else --
+    // a second identical call is proposed again.
+    if let Some(reason) = domain::elevation_needed(ctx, tool, args) {
+        let id = consent::propose(ctx.db, name, args, tool.mutating(), Some(&reason))?;
+        return Ok(format!(
+            "PROPOSED (id {id}): {} is waiting for the operator to approve it. {reason} Do \
+             not assume it happened, and do not propose it again -- tell them what you want \
+             to look at and why, then wait.",
+            tool.preview(args)
+        ));
+    }
+
     // A mutating call does not run here. It is written down and left for the operator --
     // unless they have already decided, once, that this tool never needs asking about.
     if tool.mutating() {
@@ -323,7 +363,7 @@ pub fn run(
         // to be pre-approved stays proposed even if its name is somehow on that list --
         // from an older database, or a tool that used to allow it and no longer does.
         if !tool.always_allowable() || !consent::is_always_allowed(ctx.db, name) {
-            let id = consent::propose(ctx.db, name, args)?;
+            let id = consent::propose(ctx.db, name, args, true, None)?;
             return Ok(format!(
                 "PROPOSED (id {id}): {} is waiting for the operator to approve it. Do not \
                  assume it happened, and do not propose it again -- tell them what you want \
@@ -348,7 +388,7 @@ fn run_now(
 ) -> Result<String, String> {
     let id = ctx
         .db
-        .log_action(name, args, tool.mutating(), ActionStatus::Proposed)
+        .log_action(name, args, tool.mutating(), ActionStatus::Proposed, None)
         .ok();
 
     let outcome = tool.call(args, ctx);
@@ -400,6 +440,10 @@ mod tests {
         name: &'static str,
         mutating: bool,
         always_allowable: bool,
+        /// Whether this probe takes a path. It matters because a path is what the domain
+        /// check measures against a persona's roots -- a tool without one is settled by
+        /// its name alone.
+        takes_path: bool,
     }
 
     impl Tool for Probe {
@@ -410,11 +454,15 @@ mod tests {
             "a test tool"
         }
         fn parameters(&self) -> Value {
-            json!({
-                "type": "object",
-                "properties": { "path": { "type": "string" } },
-                "required": ["path"],
-            })
+            if self.takes_path {
+                json!({
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } },
+                    "required": ["path"],
+                })
+            } else {
+                json!({ "type": "object", "properties": {}, "required": [] })
+            }
         }
         fn mutating(&self) -> bool {
             self.mutating
@@ -432,6 +480,20 @@ mod tests {
             name,
             mutating,
             always_allowable: true,
+            takes_path: true,
+        })
+    }
+
+    /// A read-only probe registered under the name of a tool every persona's domain
+    /// contains, taking no path -- so `run` reaches the execution path rather than the
+    /// elevation one. Anything testing the domain gate itself uses a name that is *not* in
+    /// the domain, deliberately.
+    fn in_domain_probe() -> Box<dyn Tool> {
+        Box::new(Probe {
+            name: "telemetry_detail",
+            mutating: false,
+            always_allowable: true,
+            takes_path: false,
         })
     }
 
@@ -441,6 +503,7 @@ mod tests {
             name,
             mutating: true,
             always_allowable: false,
+            takes_path: true,
         })
     }
 
@@ -516,7 +579,7 @@ mod tests {
     #[test]
     fn tools_are_found_by_name_and_run() {
         let db = temp_db("found_by_name");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
         registry.register(probe("probe_tool", false)).unwrap();
 
@@ -532,16 +595,16 @@ mod tests {
     #[test]
     fn running_a_tool_logs_it_with_its_outcome() {
         let db = temp_db("run_logs");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
-        registry.register(probe("probe_tool", false)).unwrap();
+        registry.register(in_domain_probe()).unwrap();
 
-        let result = run(&registry, &ctx, "probe_tool", &json!({"path": "/tmp"})).unwrap();
-        assert!(result.contains("/tmp"));
+        let result = run(&registry, &ctx, "telemetry_detail", &json!({})).unwrap();
+        assert!(result.starts_with("saw"), "{result}");
 
         let logged = db.recent_actions(1).unwrap();
         assert_eq!(logged.len(), 1);
-        assert_eq!(logged[0].tool, "probe_tool");
+        assert_eq!(logged[0].tool, "telemetry_detail");
         assert_eq!(logged[0].status, ActionStatus::Executed);
         assert_eq!(logged[0].result.as_deref(), Some(result.as_str()));
     }
@@ -549,7 +612,7 @@ mod tests {
     #[test]
     fn a_mutating_tool_is_proposed_rather_than_run() {
         let db = temp_db("run_mutating");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
         registry.register(probe("probe_writer", true)).unwrap();
 
@@ -568,7 +631,7 @@ mod tests {
     #[test]
     fn an_always_allowed_tool_runs_without_asking_and_says_who_let_it() {
         let db = temp_db("run_always_allowed");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
         registry.register(probe("probe_writer", true)).unwrap();
         consent::set_always_allowed(&db, &registry, "probe_writer", true).unwrap();
@@ -588,7 +651,7 @@ mod tests {
     #[test]
     fn a_tool_that_refuses_pre_approval_is_proposed_even_when_the_list_says_otherwise() {
         let db = temp_db("run_unallowable");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
         registry
             .register(unallowable_probe("probe_runner"))
@@ -623,21 +686,172 @@ mod tests {
     #[test]
     fn a_read_only_call_records_that_it_needed_no_approval() {
         let db = temp_db("run_automatic");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
-        registry.register(probe("probe_tool", false)).unwrap();
+        registry.register(in_domain_probe()).unwrap();
 
-        run(&registry, &ctx, "probe_tool", &json!({"path": "/tmp"})).unwrap();
+        run(&registry, &ctx, "telemetry_detail", &json!({})).unwrap();
         assert_eq!(
             db.recent_actions(1).unwrap()[0].approved_by.as_deref(),
             Some("automatic")
         );
     }
 
+    // ------------------------------------------------ per-persona access
+
+    /// The first rule: a persona reads its own field without asking.
+    #[test]
+    fn a_read_inside_the_personas_field_runs_without_asking() {
+        let db = temp_db("domain_in_field");
+        let ctx = ToolContext::for_persona(&db, Persona::Halcy);
+        let mut registry = Registry::new();
+        registry.register(in_domain_probe()).unwrap();
+
+        let reply = run(&registry, &ctx, "telemetry_detail", &json!({})).unwrap();
+        assert!(!reply.starts_with("PROPOSED"), "{reply}");
+        assert!(consent::pending(&db, &registry).is_empty());
+        assert_eq!(
+            db.recent_actions(1).unwrap()[0].approved_by.as_deref(),
+            Some("automatic")
+        );
+    }
+
+    /// The second rule: everything else is proposed, and does not run.
+    #[test]
+    fn a_read_outside_the_personas_field_is_proposed_and_does_not_run() {
+        let db = temp_db("domain_out_of_field");
+        // Creative Work has no business listing processes, so it asks.
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
+        let mut registry = Registry::new();
+        registry.register(probe("list_processes", false)).unwrap();
+
+        let reply = run(&registry, &ctx, "list_processes", &json!({"path": "/tmp"})).unwrap();
+        assert!(reply.starts_with("PROPOSED"), "{reply}");
+        assert!(
+            reply.contains("Creative Work") && reply.contains("ask again next time"),
+            "the model has to be told it is a single call, not a mode: {reply}"
+        );
+
+        let waiting = consent::pending(&db, &registry);
+        assert_eq!(waiting.len(), 1);
+        assert!(
+            waiting[0].result.is_none(),
+            "a proposed read has not run, so it has no result"
+        );
+        assert!(
+            !waiting[0].mutating,
+            "an elevation is a read: logging it as mutating would misreport what was asked"
+        );
+        let reason = waiting[0].reason.as_deref().unwrap_or_default();
+        assert!(
+            reason.contains("your notes"),
+            "the card has to name the field this falls outside: {reason:?}"
+        );
+    }
+
+    /// The test that catches elevation quietly becoming a mode. Approving runs that one
+    /// call; the identical call straight afterwards is proposed all over again.
+    #[test]
+    fn approving_an_elevation_buys_exactly_one_call() {
+        let db = temp_db("domain_one_call");
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
+        let mut registry = Registry::new();
+        registry.register(probe("list_processes", false)).unwrap();
+        let args = json!({"path": "/tmp"});
+
+        let first = run(&registry, &ctx, "list_processes", &args).unwrap();
+        assert!(first.starts_with("PROPOSED"), "{first}");
+        let id = consent::pending(&db, &registry)[0].id;
+
+        let result = consent::approve(&registry, &ctx, id, "operator").unwrap();
+        assert!(result.starts_with("saw"), "{result}");
+        assert!(consent::pending(&db, &registry).is_empty());
+
+        let second = run(&registry, &ctx, "list_processes", &args).unwrap();
+        assert!(
+            second.starts_with("PROPOSED"),
+            "elevation lasts one request; the same call must ask again: {second}"
+        );
+        assert_eq!(consent::pending(&db, &registry).len(), 1);
+    }
+
+    /// "Stop asking about this tool" is an answer to a question about a *tool*. An
+    /// elevation card asks about a persona's field, so the offer must not appear on it --
+    /// and the switch itself is refused for read-only tools, because nothing would consult
+    /// it.
+    #[test]
+    fn a_read_only_tool_cannot_be_pre_approved_at_all() {
+        let db = temp_db("domain_no_preapproval");
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
+        let mut registry = Registry::new();
+        registry.register(probe("list_processes", false)).unwrap();
+
+        let err = consent::set_always_allowed(&db, &registry, "list_processes", true).unwrap_err();
+        assert!(err.contains("persona"), "{err}");
+
+        run(&registry, &ctx, "list_processes", &json!({"path": "/tmp"})).unwrap();
+        assert_eq!(
+            consent::pending(&db, &registry)[0].always_allowable,
+            Some(false),
+            "an elevation card must not offer a checkbox that would change nothing"
+        );
+    }
+
+    /// The floor holds. A denied path stays denied inside a persona's own field and after
+    /// an approval: a domain narrows what runs unasked, it never widens what is readable.
+    #[test]
+    fn the_deny_list_wins_inside_a_domain_and_after_approval() {
+        let db = temp_db("domain_deny_wins");
+        // Creative Work reads files, and its field is the vault -- so this denied file sits
+        // squarely inside the persona's own field rather than outside it.
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
+        let registry = registry();
+
+        // A vault of its own, so this test is not at the mercy of the modules that move
+        // HOME about, and a denied name planted squarely inside the persona's own field.
+        let vault =
+            std::env::temp_dir().join(format!("aether1_deny_in_domain_{}", std::process::id()));
+        std::fs::create_dir_all(&vault).unwrap();
+        db.set_setting("vault_path", &json!(vault.display().to_string()))
+            .unwrap();
+        let secret = vault.join(".env");
+        std::fs::write(&secret, "TOKEN=hunter2").unwrap();
+        let args = json!({"path": secret.display().to_string()});
+
+        // In the field, so nothing is proposed -- and still refused, because the deny list
+        // is the floor and a domain cannot lift it.
+        let err = run(registry, &ctx, "read_file", &args).unwrap_err();
+        assert!(err.contains("off limits"), "{err}");
+
+        // And through the approval path, which is the road an elevation takes.
+        let id = consent::propose(&db, "read_file", &args, false, Some("elevation")).unwrap();
+        let err = consent::approve(registry, &ctx, id, "operator").unwrap_err();
+        assert!(err.contains("off limits"), "{err}");
+    }
+
+    /// Persona carries permissions now, so changing persona is changing permissions. The
+    /// companion may not do that to itself, by either route.
+    #[test]
+    fn the_companion_cannot_switch_its_own_persona_or_avatar() {
+        let db = temp_db("domain_no_self_switch");
+        let ctx = ToolContext::new(&db);
+        let setter = registry().get("set_aether_setting").unwrap();
+
+        for key in ["persona_type", "avatar", "custom_directive"] {
+            let err = setter
+                .call(&json!({"key": key, "value": "alt"}), &ctx)
+                .unwrap_err();
+            assert!(
+                err.contains("not a setting Aether1 may change about itself"),
+                "{key} must not be settable by the companion: {err}"
+            );
+        }
+    }
+
     #[test]
     fn an_unknown_tool_reports_what_does_exist() {
         let db = temp_db("run_unknown");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
         registry.register(probe("probe_tool", false)).unwrap();
 
@@ -649,7 +863,7 @@ mod tests {
     #[test]
     fn bad_arguments_are_rejected_before_the_tool_runs() {
         let db = temp_db("run_badargs");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let mut registry = Registry::new();
         registry.register(probe("probe_tool", false)).unwrap();
 

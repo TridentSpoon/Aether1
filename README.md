@@ -302,9 +302,32 @@ Picking an avatar switches to its persona, its voice and its name -- one choice 
 from either end. *Your own* is the exception: an avatar you designed has no persona of its
 own, so it leaves yours alone.
 
-**These change how the companion works, not what it can do.** Every persona has the same
-tools, the same model and the same permissions. Security & White Hat is more likely to tell
-you about a risk you did not ask about; it has no access the others lack.
+### What each persona reaches without asking
+
+A persona reads its own field automatically. Everything else — another tool, or a path outside
+that field — is shown to you first and runs only if you approve it, **for that one call**. The
+next call asks again. There is no elevated mode and no timed grant.
+
+| Persona | Reads without asking |
+|---|---|
+| **System Diagnosis** | System logs and service state |
+| **Security & White Hat** | Network configuration and service state |
+| **Coding** | The project directory (the folder Aether1 was started in — never your home directory) |
+| **Cites Sources** | Your notes and the project directory |
+| **Creative Work** | Your notes |
+| **Conversational**, **To the Point**, **Model's Own**, **Custom** | Your notes, and the telemetry the HUD already shows |
+
+The last row is deliberate. Those four are styles rather than specialities, and inventing a
+field for them to make the table symmetrical would hand out access nothing asked for.
+
+Two things this does *not* change. Every persona has the same tools available — the field
+decides what runs without a prompt, not what is possible. And the paths Aether1 never reads at
+all (SSH and GPG keys, cloud credentials, `/etc/shadow`, and the rest) stay off limits inside a
+persona's own field and after an approval alike: a field can only narrow.
+
+Because a persona now carries access, the companion cannot change its own persona, avatar or
+directive — those settings are out of reach of `set_aether_setting`, alongside API keys and its
+own permissions. "Switch persona to Security" is not something it may approve itself into.
 
 ## Making your own avatar
 

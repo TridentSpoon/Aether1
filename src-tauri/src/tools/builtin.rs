@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn read_file_refuses_a_path_outside_the_allowed_roots() {
         let db = temp_db("read_file");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let err = ReadFile
             .call(&json!({"path": "/bin/sh"}), &ctx)
             .unwrap_err();
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn read_file_reads_an_allowed_file() {
         let db = temp_db("read_hostname");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let outcome = ReadFile
             .call(&json!({"path": "/etc/hostname"}), &ctx)
             .unwrap();
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn read_file_needs_its_argument() {
         let db = temp_db("read_noargs");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let err = ReadFile.call(&json!({}), &ctx).unwrap_err();
         assert!(err.contains("path"), "{err}");
     }
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn list_dir_lists_and_reports_the_total() {
         let db = temp_db("list_dir");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         let outcome = ListDir.call(&json!({"path": "/etc"}), &ctx).unwrap();
         assert!(outcome.result.contains("/etc ("));
         assert!(outcome.result.contains("entries"));
@@ -357,7 +357,7 @@ mod tests {
         let db = temp_db("search_memory");
         db.set_memory("favorite_editor", "helix", "general")
             .unwrap();
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
 
         let hit = SearchMemory
             .call(&json!({"query": "editor"}), &ctx)
@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn the_no_argument_tools_answer_without_arguments() {
         let db = temp_db("noargs");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         assert!(TelemetryDetail
             .call(&json!({}), &ctx)
             .unwrap()

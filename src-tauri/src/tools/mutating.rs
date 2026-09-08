@@ -154,14 +154,22 @@ impl Tool for WriteFile {
 // -------------------------------------------------------- set_aether_setting
 
 /// Settings the companion may change about itself. Everything absent from this list is
-/// unreachable, and three absences are deliberate: `llm_api_key` (it should never be able
-/// to read out or replace a credential), `tools_enabled` and `tool_always_allow` (nothing
-/// should be able to widen its own permissions -- that decision stays with the operator,
-/// made in Settings, every time).
+/// unreachable.
+///
+/// The rule the exclusions share: **the companion may not change the thing that decides
+/// what the companion may do.** `tools_enabled`, `tool_always_allow`, `command_allowlist`,
+/// `llm_api_key` and `local_only` were always outside it. Three more joined them the moment
+/// a persona started carrying permissions:
+///
+/// - `persona_type`, because "change persona to Security" does not read like "grant
+///   standing access to network configuration", and under one approval it would be both.
+/// - `avatar`, because picking an avatar switches persona in the HUD, which is the same
+///   escalation with one extra hop.
+/// - `custom_directive`, because a companion that can author its own instructions is one
+///   approval away from authoring a more agreeable set. It is not an escalation on its own;
+///   it is close enough that the property is worth having outright.
 const SETTABLE: &[&str] = &[
     "agent_name",
-    "persona_type",
-    "custom_directive",
     "voice_name",
     "auto_speak",
     "enable_sfx",
@@ -170,7 +178,6 @@ const SETTABLE: &[&str] = &[
     "llm_model",
     "llm_endpoint",
     "color_theme",
-    "avatar",
 ];
 
 pub struct SetSetting;
@@ -181,7 +188,7 @@ impl Tool for SetSetting {
     }
 
     fn description(&self) -> &'static str {
-        "Change one of Aether1's own settings: name, persona, voice, avatar, theme, hotkey, or which model it talks to. Requires approval. Cannot touch API keys or its own permissions."
+        "Change one of Aether1's own settings: name, voice, theme, hotkey, or which model it talks to. Requires approval. Cannot touch API keys, its own permissions, its persona, its avatar or its own directive."
     }
 
     fn parameters(&self) -> Value {
@@ -454,7 +461,7 @@ mod tests {
     fn writing_a_new_file_can_be_undone_by_removing_it() {
         let (db, dir) = fixture("write_new");
         with_home(&dir, || {
-            let ctx = ToolContext { db: &db };
+            let ctx = ToolContext::new(&db);
             let target = dir.join("note.md");
             let args = json!({"path": target.to_str().unwrap(), "content": "hello"});
 
@@ -471,7 +478,7 @@ mod tests {
     fn overwriting_keeps_the_previous_contents_and_restores_them() {
         let (db, dir) = fixture("write_over");
         with_home(&dir, || {
-            let ctx = ToolContext { db: &db };
+            let ctx = ToolContext::new(&db);
             let target = dir.join("note.md");
             std::fs::write(&target, "original").unwrap();
 
@@ -492,7 +499,7 @@ mod tests {
     fn a_binary_file_is_not_overwritten_because_it_could_not_be_restored() {
         let (db, dir) = fixture("write_binary");
         with_home(&dir, || {
-            let ctx = ToolContext { db: &db };
+            let ctx = ToolContext::new(&db);
             let target = dir.join("blob.bin");
             std::fs::write(&target, [0xff, 0xfe, 0x00, 0x01]).unwrap();
 
@@ -513,7 +520,7 @@ mod tests {
     #[test]
     fn a_setting_change_restores_its_previous_value() {
         let (db, _dir) = fixture("setting");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         db.set_setting("agent_name", &json!("HALCY")).unwrap();
 
         let outcome = SetSetting
@@ -528,7 +535,7 @@ mod tests {
     #[test]
     fn undoing_a_setting_that_did_not_exist_clears_it() {
         let (db, _dir) = fixture("setting_new");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
 
         let outcome = SetSetting
             .call(&json!({"key": "color_theme", "value": "amber"}), &ctx)
@@ -540,7 +547,7 @@ mod tests {
     #[test]
     fn the_companion_cannot_widen_its_own_permissions() {
         let (db, _dir) = fixture("permissions");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         for key in [
             "tools_enabled",
             "tool_always_allow",
@@ -560,7 +567,7 @@ mod tests {
     #[test]
     fn a_command_not_on_the_allowlist_does_not_run() {
         let (db, _dir) = fixture("cmd_denied");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
 
         let err = RunCommand
             .call(&json!({"program": "echo", "args": ["hi"]}), &ctx)
@@ -571,7 +578,7 @@ mod tests {
     #[test]
     fn a_program_cannot_be_smuggled_in_as_a_path() {
         let (db, _dir) = fixture("cmd_path");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         db.set_setting(ALLOWLIST_SETTING, &json!(["echo"])).unwrap();
 
         let err = RunCommand
@@ -583,7 +590,7 @@ mod tests {
     #[test]
     fn an_allowed_command_runs_and_reports_its_output() {
         let (db, _dir) = fixture("cmd_runs");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         db.set_setting(ALLOWLIST_SETTING, &json!(["echo"])).unwrap();
 
         let outcome = RunCommand
@@ -607,7 +614,7 @@ mod tests {
     #[test]
     fn arguments_are_not_a_shell_command_line() {
         let (db, _dir) = fixture("cmd_noshell");
-        let ctx = ToolContext { db: &db };
+        let ctx = ToolContext::new(&db);
         db.set_setting(ALLOWLIST_SETTING, &json!(["echo"])).unwrap();
 
         // With a shell this would create a file; without one it is just text to echo.

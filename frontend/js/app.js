@@ -780,13 +780,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const header = document.createElement('div');
         header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-amber-500/30 text-xs font-mono text-amber-300';
-        header.innerHTML = `<span>⚠ <strong>APPROVAL REQUIRED</strong></span><span>${new Date().toLocaleTimeString()}</span>`;
+        // Two different questions wear this card. A mutating call asks "may this change
+        // your machine?"; a read outside the persona's field asks "this is unusual for what
+        // it is for -- may it look once?". Labelling both APPROVAL REQUIRED trains the
+        // operator to read neither, so they are named apart.
+        const isElevation = !action.mutating && !!action.reason;
+        header.innerHTML = isElevation
+            ? `<span>👁 <strong>OUTSIDE ITS FIELD</strong></span><span>${new Date().toLocaleTimeString()}</span>`
+            : `<span>⚠ <strong>APPROVAL REQUIRED</strong></span><span>${new Date().toLocaleTimeString()}</span>`;
         card.appendChild(header);
 
         const body = document.createElement('div');
         body.className = 'text-cyan-100 font-mono text-xs my-2 break-all';
         body.textContent = action.preview || `${action.tool} ${JSON.stringify(action.args)}`;
         card.appendChild(body);
+
+        // The reason says which field this falls outside and, in its last sentence, that
+        // approving buys one call. That sentence is the whole difference between granting a
+        // look and granting a standing permission, so it is shown, not summarised away.
+        if (action.reason) {
+            const reason = document.createElement('div');
+            reason.className = 'text-[10px] font-mono text-amber-200/80 my-1';
+            reason.textContent = action.reason;
+            card.appendChild(reason);
+        }
 
         const status = document.createElement('div');
         status.className = 'text-xs font-mono text-slate-400 mt-2';
@@ -807,7 +824,9 @@ document.addEventListener('DOMContentLoaded', () => {
             always.appendChild(document.createTextNode(`Stop asking about ${action.tool}`));
         } else {
             always.className = 'block text-[10px] font-mono text-slate-500 mt-2';
-            always.textContent = `${action.tool} is asked about every time — approving it once would approve every command.`;
+            always.textContent = isElevation
+                ? 'There is no "stop asking" for this. What runs without asking is decided by the persona\u2019s field, in Settings.'
+                : `${action.tool} is asked about every time — approving it once would approve every command.`;
         }
 
         const buttons = document.createElement('div');
@@ -1654,6 +1673,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const option = document.createElement('option');
             option.value = persona.key;
             option.dataset.speciality = persona.speciality || '';
+            option.dataset.field = persona.field || '';
             // "the The Nexus avatar" -- an avatar whose name already carries its article
             // does not want another one.
             const avatarPhrase = /^the\s/i.test(persona.avatar || '')
@@ -1670,12 +1690,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* The one-line description of the selected persona, under the field. It does not fit in
        an <option> at a readable length, and a list where every row is a sentence is a list
-       nobody scans. */
+       nobody scans.
+
+       The second line is what it reads without asking. Picking a persona is now picking a
+       level of access, and that is not something anyone should have to discover by watching
+       it ask -- or worse, by watching it not ask. */
     function showPersonaSpeciality() {
         const select = document.getElementById('setting-persona');
         const line = document.getElementById('persona-speciality');
         if (!select || !line) return;
-        line.textContent = select.selectedOptions[0]?.dataset.speciality || '';
+        const option = select.selectedOptions[0];
+        line.textContent = option?.dataset.speciality || '';
+        const access = document.getElementById('persona-field');
+        if (!access) return;
+        const field = option?.dataset.field || '';
+        access.textContent = field
+            ? `Reads ${field} without asking. Anything else asks you first, once, for that one call.`
+            : '';
     }
 
     function toggleCustomPersonaField() {

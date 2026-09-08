@@ -183,14 +183,14 @@ pub fn pending_actions(engine: &LlmEngine) -> Vec<ActionRecord> {
 
 /// Approves and runs one proposed action.
 pub fn approve_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
-    let ctx = tools::ToolContext { db: engine.db() };
+    let ctx = tools::ToolContext::new(engine.db());
     let result = tools::consent::approve(tools::registry(), &ctx, id, "operator")?;
     Ok(serde_json::json!({ "id": id, "result": result }))
 }
 
 /// Reverses an action that ran.
 pub fn undo_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
-    let ctx = tools::ToolContext { db: engine.db() };
+    let ctx = tools::ToolContext::new(engine.db());
     let result = tools::consent::undo(tools::registry(), &ctx, id)?;
     Ok(serde_json::json!({ "id": id, "result": result }))
 }
