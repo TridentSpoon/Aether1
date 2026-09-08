@@ -24,15 +24,40 @@ HologramAvatar.registerAvatar({
 
         // --- Emitter ring: the physical housing the hologram projects from. Fixed brass,
         // lit (MeshPhongMaterial) rather than additive-glow, since it's meant to read as
-        // solid hardware the creature above is projected out of, not drawn light itself. ---
+        // solid hardware the creature above is projected out of, not drawn light itself.
+        // Squared off rather than round -- a flat picture-frame outline (outer square,
+        // square hole) extruded for thickness, instead of a torus. ---
+        function squareFrameGeometry(halfOuter, halfInner, depth) {
+            const shape = new THREE.Shape();
+            shape.moveTo(-halfOuter, -halfOuter);
+            shape.lineTo(halfOuter, -halfOuter);
+            shape.lineTo(halfOuter, halfOuter);
+            shape.lineTo(-halfOuter, halfOuter);
+            shape.closePath();
+
+            const hole = new THREE.Path();
+            hole.moveTo(-halfInner, -halfInner);
+            hole.lineTo(halfInner, -halfInner);
+            hole.lineTo(halfInner, halfInner);
+            hole.lineTo(-halfInner, halfInner);
+            hole.closePath();
+            shape.holes.push(hole);
+
+            const geo = new THREE.ExtrudeGeometry(shape, {
+                depth, bevelEnabled: true, bevelThickness: 1.2, bevelSize: 1, bevelSegments: 2
+            });
+            geo.translate(0, 0, -depth / 2); // centre the extrusion instead of running 0..depth
+            return geo;
+        }
+
         const ringMat = new THREE.MeshPhongMaterial({ color: 0x8a6a35, specular: 0xffdca0, shininess: 70 });
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(40, 5, 14, 56), ringMat);
+        const ring = new THREE.Mesh(squareFrameGeometry(45, 35, 10), ringMat);
         ring.rotation.x = Math.PI / 2;
         ring.position.y = -50;
         group.add(ring);
 
         const lipMat = new THREE.MeshPhongMaterial({ color: 0x2e2013, specular: 0xd8a45c, shininess: 40 });
-        const lip = new THREE.Mesh(new THREE.TorusGeometry(29, 2.4, 10, 48), lipMat);
+        const lip = new THREE.Mesh(squareFrameGeometry(31.4, 26.6, 4.8), lipMat);
         lip.rotation.x = Math.PI / 2;
         lip.position.y = -50;
         group.add(lip);
