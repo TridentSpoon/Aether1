@@ -25,40 +25,42 @@ HologramAvatar.registerAvatar({
         // --- Emitter ring: the physical housing the hologram projects from. Fixed brass,
         // lit (MeshPhongMaterial) rather than additive-glow, since it's meant to read as
         // solid hardware the creature above is projected out of, not drawn light itself.
-        // Squared off rather than round -- a flat picture-frame outline (outer square,
-        // square hole) extruded for thickness, instead of a torus. ---
-        function squareFrameGeometry(halfOuter, halfInner, depth) {
-            const shape = new THREE.Shape();
-            shape.moveTo(-halfOuter, -halfOuter);
-            shape.lineTo(halfOuter, -halfOuter);
-            shape.lineTo(halfOuter, halfOuter);
-            shape.lineTo(-halfOuter, halfOuter);
-            shape.closePath();
+        // Still a ring (a circular loop, same as a torus) but with a square cross-section
+        // instead of a round one -- a square profile swept around a circle, like a donut
+        // milled from square-stock tubing instead of a smooth round one. ---
+        class CircularPath extends THREE.Curve {
+            constructor(radius) { super(); this.radius = radius; }
+            getPoint(t, target = new THREE.Vector3()) {
+                const angle = t * Math.PI * 2;
+                return target.set(Math.cos(angle) * this.radius, 0, Math.sin(angle) * this.radius);
+            }
+        }
 
-            const hole = new THREE.Path();
-            hole.moveTo(-halfInner, -halfInner);
-            hole.lineTo(halfInner, -halfInner);
-            hole.lineTo(halfInner, halfInner);
-            hole.lineTo(-halfInner, halfInner);
-            hole.closePath();
-            shape.holes.push(hole);
+        function squareTubeRingGeometry(pathRadius, half, segments = 64) {
+            // The cross-section: a small square, swept so its local X follows the ring's
+            // radial direction and local Y follows straight up -- the same "square profile"
+            // a torus would have if its round tube were milled flat on all four sides.
+            const crossSection = new THREE.Shape();
+            crossSection.moveTo(-half, -half);
+            crossSection.lineTo(half, -half);
+            crossSection.lineTo(half, half);
+            crossSection.lineTo(-half, half);
+            crossSection.closePath();
 
-            const geo = new THREE.ExtrudeGeometry(shape, {
-                depth, bevelEnabled: true, bevelThickness: 1.2, bevelSize: 1, bevelSegments: 2
+            return new THREE.ExtrudeGeometry(crossSection, {
+                steps: segments,
+                bevelEnabled: false,
+                extrudePath: new CircularPath(pathRadius)
             });
-            geo.translate(0, 0, -depth / 2); // centre the extrusion instead of running 0..depth
-            return geo;
         }
 
         const ringMat = new THREE.MeshPhongMaterial({ color: 0x8a6a35, specular: 0xffdca0, shininess: 70 });
-        const ring = new THREE.Mesh(squareFrameGeometry(45, 35, 10), ringMat);
-        ring.rotation.x = Math.PI / 2;
+        const ring = new THREE.Mesh(squareTubeRingGeometry(40, 5), ringMat);
         ring.position.y = -50;
         group.add(ring);
 
         const lipMat = new THREE.MeshPhongMaterial({ color: 0x2e2013, specular: 0xd8a45c, shininess: 40 });
-        const lip = new THREE.Mesh(squareFrameGeometry(31.4, 26.6, 4.8), lipMat);
-        lip.rotation.x = Math.PI / 2;
+        const lip = new THREE.Mesh(squareTubeRingGeometry(29, 2.4), lipMat);
         lip.position.y = -50;
         group.add(lip);
 
