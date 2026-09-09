@@ -172,25 +172,9 @@ fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
         .or_else(|_| which::which("espeak"))
         .map_err(|_| os_status().unwrap_err())?;
 
-    let mut child = Command::new(&binary)
-        .arg("-w")
-        .arg(output_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not start {}: {e}", binary.display()))?;
-
-    child
-        .stdin
-        .as_mut()
-        .ok_or("no stdin on the speech process")?
-        .write_all(text.as_bytes())
-        .map_err(|e| format!("could not send text to {}: {e}", binary.display()))?;
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("could not wait for {}: {e}", binary.display()))?;
+    let mut cmd = Command::new(&binary);
+    cmd.arg("-w").arg(output_path);
+    let output = speak_via_subprocess(cmd, text)?;
     if !output.status.success() {
         return Err(format!(
             "{} failed: {}",
@@ -255,6 +239,37 @@ pub fn local_status(configured_voice: Option<&str>) -> Result<(PathBuf, PathBuf)
     Ok((binary, voice))
 }
 
+/// Spawns `cmd` with piped stdin/stderr, sends it `text` on stdin, and returns its output.
+/// Shared by Piper and the non-Windows OS engine -- both are "pipe text in, wav out"
+/// processes with the same pitfall: writing the *entire* stdin before touching stdout/
+/// stderr deadlocks if the child writes enough to its (piped, and so pipe-buffer-limited)
+/// stderr while this process is still blocked in that stdin write -- neither side can make
+/// progress. A long chat reply is exactly the kind of input that pushes a chatty process
+/// (or just its own echoed text) over that buffer. Writing stdin from a second thread lets
+/// `wait_with_output()` drain stdout/stderr concurrently with the write, the way it already
+/// does with the child's exit, instead of only starting to drain after stdin is done.
+fn speak_via_subprocess(mut cmd: Command, text: &str) -> Result<std::process::Output, String> {
+    let program = cmd.get_program().to_string_lossy().to_string();
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not start {program}: {e}"))?;
+
+    let mut stdin = child.stdin.take().ok_or("no stdin on the speech process")?;
+    let text = text.to_string();
+    let writer = std::thread::spawn(move || stdin.write_all(text.as_bytes()));
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("could not wait for {program}: {e}"))?;
+    // A write failure here (e.g. a broken pipe because the process exited immediately) is
+    // already reflected in output.status/stderr -- that's the diagnostic worth keeping.
+    let _ = writer.join();
+    Ok(output)
+}
+
 /// Runs Piper over `text`, writing a wav.
 fn synthesize_local(
     binary: &Path,
@@ -262,27 +277,12 @@ fn synthesize_local(
     text: &str,
     output_path: &Path,
 ) -> Result<(), String> {
-    let mut child = Command::new(binary)
-        .arg("--model")
+    let mut cmd = Command::new(binary);
+    cmd.arg("--model")
         .arg(voice)
         .arg("--output_file")
-        .arg(output_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not start {}: {e}", binary.display()))?;
-
-    child
-        .stdin
-        .as_mut()
-        .ok_or("no stdin on the speech process")?
-        .write_all(text.as_bytes())
-        .map_err(|e| format!("could not send text to {}: {e}", binary.display()))?;
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("could not wait for {}: {e}", binary.display()))?;
+        .arg(output_path);
+    let output = speak_via_subprocess(cmd, text)?;
     if !output.status.success() {
         return Err(format!(
             "{} failed: {}",
