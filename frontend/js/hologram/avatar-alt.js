@@ -85,20 +85,25 @@ HologramAvatar.prototype.buildAltAvatar = function() {
     }
     this.altGroup.add(this.altShardGroup);
 
-    // --- Firewall perimeter: a static boundary, not a scanning halo -- concentric true
-    // circles (no elliptical stretch), the outermost reaching out toward the window's
-    // own edges, each ring fainter than the one inside it so the boundary reads as
-    // dissipating outward rather than as one hard edge. ---
-    const firewallRadii = [80, 140, 200, 260];
-    const firewallFades = [1, 0.62, 0.36, 0.2]; // outer rings progressively fainter
-    firewallRadii.forEach((radius, i) => {
+    // --- Firewall perimeter: a static boundary, not a scanning halo -- many concentric
+    // true circles (no elliptical stretch), packed close enough together to read as a
+    // continuous dissipating field rather than a handful of discrete hoops, the
+    // outermost reaching out toward the window's own edges. Each ring is fainter than
+    // the one inside it, so the boundary reads as fading outward from a bright core. ---
+    const firewallRingCount = 28;
+    const firewallInnerRadius = 34;
+    const firewallOuterRadius = 260;
+    for (let i = 0; i < firewallRingCount; i++) {
+        const t = i / (firewallRingCount - 1); // 0 (innermost) .. 1 (outermost)
+        const radius = firewallInnerRadius + (firewallOuterRadius - firewallInnerRadius) * t;
+        const fade = Math.pow(1 - t, 1.6); // brightest near the core, fading toward the rim
         const mat = new THREE.MeshBasicMaterial({
             color: 0xfcee0a, transparent: true, opacity: 0.5, side: THREE.DoubleSide, blending: THREE.AdditiveBlending
         });
-        const mesh = new THREE.Mesh(new THREE.RingGeometry(radius, radius + radius * 0.02, 96), mat);
+        const mesh = new THREE.Mesh(new THREE.RingGeometry(radius, radius + radius * 0.012, 96), mat);
         this.altGroup.add(mesh);
-        this.altFirewallRings.push({ mesh, mat, fade: firewallFades[i] });
-    });
+        this.altFirewallRings.push({ mesh, mat, fade });
+    }
 
     // --- Shield tiles: small hex "ICE nodes" ringing the stack, individually lit in
     // sequence like a security scanner sweeping the perimeter. ---
