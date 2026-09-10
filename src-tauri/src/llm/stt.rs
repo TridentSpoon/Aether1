@@ -106,6 +106,7 @@ pub fn transcribe(
         .arg(wav_path)
         .arg("--language")
         .arg(language.unwrap_or("en"));
+    crate::paths::suppress_console_window(&mut command);
 
     let output = command
         .output()
