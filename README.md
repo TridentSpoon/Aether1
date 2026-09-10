@@ -222,6 +222,37 @@ the controls on the right:
 IDLE, LISTENING, THINKING, SPEAKING -- and is always there, so the state never has to compete
 for room with anything else.
 
+## The telemetry panel
+
+A cloud model and a local one raise different questions, so the panel has two views and
+alternates between them while nothing is happening. Once something is generating, it pins to
+whichever view describes what is doing the work. Clicking a tab holds it there.
+
+**USAGE** — what this session has spent. Tokens in and out, against a session budget.
+
+The counts are **what the provider reported**, not a guess: Ollama's `prompt_eval_count` and
+`eval_count`, the OpenAI-compatible `usage` object, Gemini's `usageMetadata`, and Anthropic's
+split across `message_start` and `message_delta`. Where a provider says nothing, the old
+four-characters-per-token estimate still fills the gap — but the panel says `estimated`
+rather than `counted`, because "1,204 tokens" and "about 1,200 tokens" are different claims
+and only one of them can be checked against a provider's own dashboard.
+
+The budget is **Aether1's own**, not a quota anyone enforces. No provider API returns "tokens
+you have left" — that is a billing question answered on a dashboard, not in a response body —
+so the panel says *Budget left* rather than implying the number came from anywhere but here.
+
+**CAPACITY** — what a local model is and how fast it runs. Tokens per second, the context
+length, the parameter count and quantisation, and roughly how much context is left before the
+top of the conversation starts falling off the end.
+
+Throughput is measured from the **model's own generation time** where the server reports one
+(Ollama does), not from wall clock. Wall clock includes loading the model off disk and waiting
+behind another request, which makes a fast model look slow on its first reply and quicker on
+every one after — a cold start that reads like a fault.
+
+Nothing here is invented. A model that reports no context length shows `--` rather than a
+plausible default.
+
 ## Rearranging the HUD
 
 The main window is three columns of panels, and both what is in them and how wide

@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=19">
+    <link rel="stylesheet" href="css/A1theme.css?v=20">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
@@ -146,8 +146,18 @@
                     <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">0.0 TPS</span>
                 </div>
 
-                <!-- Daily Budget / Availability Bar -->
-                <div class="space-y-1">
+                <!-- Two views, because a cloud model and a local one raise different
+                     questions. Against an API the question is what you have spent; on your
+                     own hardware nothing is being spent and the question is how fast it runs
+                     and how much it can hold. The tabs alternate while nothing is happening
+                     and pin to whichever is in use once something is. -->
+                <div id="telemetry-tabs" class="flex gap-1 text-[10px] font-mono">
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="usage" aria-pressed="true">USAGE</button>
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="capacity" aria-pressed="false">CAPACITY</button>
+                </div>
+
+                <!-- USAGE: what this session has spent. -->
+                <div class="space-y-1" data-telemetry-view="usage">
                     <div class="flex justify-between text-xs font-mono">
                         <span class="text-slate-300">SESSION TOKENS</span>
                         <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
@@ -157,14 +167,41 @@
                     </div>
                     <div class="flex justify-between text-[10px] font-mono text-slate-400">
                         <span>Used: <strong id="tokens-used-pct" class="text-purple-300">0%</strong></span>
-                        <span>Available: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
+                        <span>Budget left: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
                     </div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>In: <strong id="tokens-in-val" class="text-cyan-300">0</strong> · Out: <strong id="tokens-out-val" class="text-cyan-300">0</strong></span>
+                        <!-- Says whether the numbers above were reported by the provider or
+                             worked out from the length of the text. They are different
+                             claims and only one of them is checkable. -->
+                        <span id="tokens-accounting" class="text-slate-500">--</span>
+                    </div>
+                </div>
+
+                <!-- CAPACITY: what the local model is and what it can do. -->
+                <div class="space-y-1 hidden" data-telemetry-view="capacity">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">THROUGHPUT</span>
+                        <span id="capacity-tps" class="text-purple-300 font-bold">-- tok/s</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="capacity-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #00b3ff, #00f0ff); box-shadow: 0 0 8px rgba(0, 240, 255, 0.8);"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
+                        <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
+                    </div>
+                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="capacity-note">Nothing local is answering yet.</div>
                 </div>
 
                 <!-- Token History Graph / Canvas -->
                 <div class="space-y-1 pt-1">
                     <div class="text-[10px] font-mono text-slate-400 flex justify-between">
-                        <span>CONSUMPTION GRAPH</span>
+                        <!-- Sits outside both views because it is true of either: a history
+                             of how big each turn was. "Consumption" was only ever right for
+                             a metered provider, and on your own hardware nothing is being
+                             consumed. -->
+                        <span>TOKEN HISTORY</span>
                         <span>BURST SPARKLINE</span>
                     </div>
                     <div class="bg-black/60 p-1.5 rounded border border-purple-500/30">
@@ -781,7 +818,7 @@
     <script src="js/hologram/avatar-operator.js?v=1"></script>
     <script src="js/hologram/animate.js?v=36"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=28"></script>
+    <script src="js/app.js?v=29"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

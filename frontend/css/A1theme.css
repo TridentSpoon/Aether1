@@ -657,3 +657,38 @@ body {
 .pulse-badge {
   animation: pulse-glow 2s infinite ease-in-out;
 }
+
+/* Telemetry tabs -------------------------------------------------------------
+   Small enough to sit inside a panel header without competing with it, and
+   keyed on the theme variables so they follow the mode and the tone sliders
+   like everything else. */
+.telemetry-tab {
+    flex: 1;
+    padding: 2px 6px;
+    border: 1px solid var(--border-neon);
+    border-radius: 4px;
+    background: var(--bg-panel);
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.telemetry-tab:hover {
+    color: var(--text-main);
+    background: var(--bg-panel-hover);
+}
+
+.telemetry-tab[aria-pressed="true"] {
+    color: var(--neon-cyan);
+    border-color: var(--border-neon-bright);
+    background: var(--tint-main);
+}
+
+/* The tab a view is pinned to while something is generating. A steady marker
+   rather than a moving one: the point is that it has stopped cycling. */
+.telemetry-tab[data-pinned="true"]::after {
+    content: " ●";
+    font-size: 0.7em;
+    vertical-align: middle;
+}
