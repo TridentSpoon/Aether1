@@ -265,6 +265,30 @@ and Midnight are Solar's and Eclipse's own. A preset is nothing more than a name
 three colours and a mode, so anything a preset does you can do by hand -- including putting a
 Cyberpunk accent on Solar, or a colour of your own on any of them.
 
+**Two sliders adjust the tone** of whatever you have picked, without changing the picks
+themselves:
+
+- **Saturation** (0--100%) is how much colour the accents carry. Drag it down and the neon
+  calms without anything getting darker or lighter -- each colour is mixed toward the grey of
+  its own brightness, so only the chroma goes. At 0 the whole thing is greyscale.
+- **Depth** (-40 to +40) is how dark the ground sits. Left is deeper, right is lighter, and it
+  carries the panels, borders and the avatar bay with it rather than leaving them floating at
+  the old lightness.
+
+They are separate on purpose, because "the colours are too bright" and "Eclipse is not dark
+enough" are two different complaints. Draining the colour out of a background moves it toward
+grey at the same brightness, not toward black, so one slider could not have answered both.
+
+Depth stops at 40 rather than 100 because light-or-dark is *measured* from the background
+rather than declared by the mode. Dragged far enough, a background crosses the line and the
+whole shell inverts -- light text on what is still nominally the light theme. At 40 the darkest
+Solar is still light and the lightest Eclipse is still dark, so the slider cannot flip the
+window out from under you.
+
+Each mode remembers its own tone, the colour swatches keep showing the colours **as picked**
+rather than as painted -- which is what makes the sliders non-destructive -- and *Reset this
+mode's colours and tone* puts everything back.
+
 Each mode remembers its own colours, so switching to Solar to read something in daylight and
 back to Cyberpunk afterwards does not cost you the accent you had picked. **Reset this mode's
 colours** puts one mode back to its default without touching the others.
