@@ -98,7 +98,9 @@ HologramAvatar.prototype.buildAltAvatar = function() {
     // matter how the avatar tilts. ---
     this.altFirewallStaticGroup = new THREE.Group();
     const firewallRingCount = 28;
-    const firewallInnerRadius = 34;
+    // The shield/ICE tiles orbit at radius 56 (see altShieldGroup below); keep every
+    // ring outside that boundary so the field never crowds in past the hex tiles.
+    const firewallInnerRadius = 78;
     const firewallOuterRadius = 260;
     const firewallMovingLayers = 2;
     for (let i = 0; i < firewallRingCount; i++) {
