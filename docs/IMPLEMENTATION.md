@@ -435,15 +435,43 @@ opens the vault folder. Seeing *why* it said something matters more than another
 - **Verify:** a deliberately segfaulted test binary produces a notification whose
   conversation starts with the crash already in context.
 
-### Step 14: Honest AI telemetry
+### Step 14: Honest AI telemetry — **shipped**
 
-- **`src-tauri/src/llm/mod.rs`** — `estimate_tokens` is a 4-chars-per-token guess. Every
-  provider returns real usage counts; parse them in `providers.rs` and feed
-  `record_usage` actual numbers, falling back to the estimate only where a provider gives
-  nothing.
-- **`frontend/js/app.js`** — extend the existing token panel with provider, model, and
-  (for cloud providers) spend.
-- **Verify:** the counter matches the provider's own dashboard within rounding.
+Every provider returns real token counts, and every one of them was being thrown away and
+replaced with a four-characters-per-token guess. Now they are parsed where they arrive:
+Ollama's `prompt_eval_count`/`eval_count` on the final NDJSON object, the OpenAI-compatible
+`usage` object (behind `stream_options.include_usage`), Gemini's `usageMetadata`, and
+Anthropic's, split across `message_start` for the input and `message_delta` for the output.
+
+The estimate stays as the fallback -- a server that reports nothing still has to produce a
+number -- but it is never dressed up as a measurement. `measured_requests` against
+`total_requests` is what lets the panel say `counted`, `counted 2/3` or `estimated`, and that
+distinction is the whole point of the step: "1,204 tokens" and "about 1,200 tokens" are
+different claims, and only one of them can be checked against a provider's own dashboard.
+
+Three decisions worth keeping:
+
+**`include_usage` goes only to OpenAI and Groq.** Both document it. LM Studio does not get it,
+because it is the local one and the one most likely to be an older build or a look-alike
+server, and a request rejected for carrying an unknown field would cost a working setup to
+gain a count that matters less locally than throughput does.
+
+**Throughput comes from the model's own clock.** Ollama reports `eval_duration`, the time it
+actually spent generating. Wall clock includes loading the model off disk and queueing, which
+makes a fast model look half as fast on its first reply and quicker on every one after -- a
+cold start that reads like a fault.
+
+**The session budget is labelled as ours.** No provider API returns "tokens you have left";
+that is a billing question, answered on a dashboard rather than in a response body. Inventing
+one and calling it *Available* would have been a new fiction replacing the one being removed,
+so the panel says *Budget left* and the constant says what it is in its own doc comment.
+
+The panel became two views, because a cloud model and a local one raise different questions --
+what have I spent, versus how fast is this and how much can it hold. They alternate while idle
+and pin to whichever is in use once something is generating. `/api/show` fills in the local
+model's context length, parameter count and quantisation, fetched once per model at the end of
+a turn rather than on the one-second telemetry tick, because a getter that quietly does I/O on
+a timer is a getter that will one day be the reason the HUD stutters.
 
 ---
 
@@ -872,27 +900,23 @@ the vault as what to do next, and all three shipped some time ago.*
 **Done.** Phase 1 entire (CLI, hotkey, streaming, local TTS and STT). Phase 2 entire (tool
 registry, the read-only loop, the consent path, mutating tools and undo). Phase 3's core (the
 vault, priming from it, and writing back). Plus local-only mode, the theme engine, the top
-bar, personas as specialities, per-persona access with per-request elevation, and reading the
-Windows event log.
+bar, personas as specialities, per-persona access with per-request elevation, reading the
+Windows event log, and honest token telemetry.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Step 14, honest AI telemetry.** The smallest and the most embarrassing gap:
-   `estimate_tokens` is a 4-characters-per-token guess, while every provider returns real
-   counts in the response we already parse. The number on screen is currently a fiction with a
-   progress bar attached.
-2. **Step 8, native tool calling.** The text protocol works, but a model that supports real
+1. **Step 8, native tool calling.** The text protocol works, but a model that supports real
    `tool_use` blocks should get them — fewer parse failures, and the fallback stays for
    everything else.
-3. **Step 11, retrieval and consolidation.** The vault primes from its index today, which is
+2. **Step 11, retrieval and consolidation.** The vault primes from its index today, which is
    fine at twenty notes and will not be at two hundred.
-4. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
+3. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
    screen. Seeing *why* it said something is worth more than another file browser.
-5. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+4. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-6. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+5. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
-7. **Step 19, several local models.** A stated core requirement, and still deliberately not
+6. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,

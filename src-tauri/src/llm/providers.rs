@@ -172,14 +172,42 @@ fn sse_line(line: &str) -> SseLine<'_> {
     }
 }
 
+/// What a provider said about the tokens it actually used.
+///
+/// Every provider here returns real counts, and until now every one of them was thrown
+/// away and replaced with a four-characters-per-token guess. The guess is still the
+/// fallback -- a server that reports nothing has to produce *some* number -- but it is
+/// never presented as if it were measured. See `Metered`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    /// Nanoseconds the model spent generating, when the provider measures it -- Ollama
+    /// does. Wall-clock time includes loading the model off disk and waiting in a queue,
+    /// so tokens-per-second computed from it understates a fast model on its first reply
+    /// and says nothing useful about the hardware.
+    pub eval_nanos: Option<u64>,
+}
+
+/// A finished call: the text, and whatever the provider was willing to say about its own
+/// token use. `usage` is None when it said nothing.
+#[derive(Debug, Clone, Default)]
+pub struct Completion {
+    pub text: String,
+    pub usage: Option<TokenUsage>,
+}
+
 /// A stream that produced no text at all is a failure even when the transport succeeded --
 /// an empty reply would otherwise reach the operator as silence.
-fn finish(accumulated: String) -> Result<String, String> {
+fn finish(accumulated: String, usage: Option<TokenUsage>) -> Result<Completion, String> {
     let trimmed = accumulated.trim().to_string();
     if trimmed.is_empty() {
         Err("stream ended without any content".to_string())
     } else {
-        Ok(trimmed)
+        Ok(Completion {
+            text: trimmed,
+            usage,
+        })
     }
 }
 
@@ -203,6 +231,24 @@ struct OllamaRequest {
 struct OllamaResponse {
     #[serde(default)]
     response: String,
+    /// Only on the final object of a stream (and on a non-streamed reply), which is why
+    /// each is an Option rather than a count that happens to be zero most of the time.
+    #[serde(default)]
+    prompt_eval_count: Option<u64>,
+    #[serde(default)]
+    eval_count: Option<u64>,
+    #[serde(default)]
+    eval_duration: Option<u64>,
+}
+
+impl OllamaResponse {
+    fn usage(&self) -> Option<TokenUsage> {
+        self.eval_count.map(|completion_tokens| TokenUsage {
+            prompt_tokens: self.prompt_eval_count.unwrap_or(0),
+            completion_tokens,
+            eval_nanos: self.eval_duration,
+        })
+    }
 }
 
 fn ollama_payload(model: &str, ctx: &ChatContext, stream: bool) -> OllamaRequest {
@@ -227,7 +273,7 @@ fn ollama_url(endpoint: &str) -> String {
     format!("{}/api/generate", endpoint.trim_end_matches('/'))
 }
 
-pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<String, String> {
+pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
     let response: OllamaResponse = ureq::post(&ollama_url(endpoint))
         .config()
         .timeout_global(Some(CALL_TIMEOUT))
@@ -238,7 +284,10 @@ pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Str
         .read_json()
         .map_err(|e| e.to_string())?;
 
-    Ok(response.response.trim().to_string())
+    Ok(Completion {
+        text: response.response.trim().to_string(),
+        usage: response.usage(),
+    })
 }
 
 /// Ollama streams newline-delimited JSON rather than SSE: one object per token, each with
@@ -248,7 +297,7 @@ pub fn stream_ollama(
     model: &str,
     ctx: &ChatContext,
     sink: Sink,
-) -> Result<String, String> {
+) -> Result<Completion, String> {
     let response = ureq::post(&ollama_url(endpoint))
         .config()
         .timeout_global(Some(STREAM_TIMEOUT))
@@ -257,6 +306,7 @@ pub fn stream_ollama(
         .map_err(|e| e.to_string())?;
 
     let mut full = String::new();
+    let mut usage = None;
     for_each_line(response, |line| {
         let line = line.trim();
         if line.is_empty() {
@@ -268,10 +318,14 @@ pub fn stream_ollama(
             full.push_str(&chunk.response);
             sink(&chunk.response);
         }
+        // The counts ride on the last object of the stream, so this overwrites nothing.
+        if let Some(reported) = chunk.usage() {
+            usage = Some(reported);
+        }
         Ok(true)
     })?;
 
-    finish(full)
+    finish(full, usage)
 }
 
 // -------------------------------------------------- OpenAI-compatible (OpenAI, Groq, LM Studio)
@@ -282,12 +336,43 @@ struct ChatMessage {
     content: String,
 }
 
+/// Asks an OpenAI-compatible server to append a usage object to the stream. Sent only to
+/// the two providers that document supporting it (see `openai_payload`): an older or
+/// homegrown local server can reject a request outright for carrying a field it does not
+/// know, and breaking a working local setup to gain a token count would be a poor trade --
+/// especially since for a local model the number that matters is throughput, which is
+/// measured here regardless.
+#[derive(Serialize)]
+struct OpenAiStreamOptions {
+    include_usage: bool,
+}
+
 #[derive(Serialize)]
 struct OpenAiRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<OpenAiStreamOptions>,
+}
+
+#[derive(Deserialize, Default, Clone, Copy)]
+struct OpenAiUsage {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
+}
+
+impl From<OpenAiUsage> for TokenUsage {
+    fn from(u: OpenAiUsage) -> TokenUsage {
+        TokenUsage {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            eval_nanos: None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -303,6 +388,8 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiResponse {
     choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Deserialize)]
@@ -321,6 +408,83 @@ struct OpenAiStreamChoice {
 struct OpenAiStreamChunk {
     #[serde(default)]
     choices: Vec<OpenAiStreamChoice>,
+    /// Arrives on a final chunk of its own, with an empty `choices`, and only when
+    /// `stream_options.include_usage` was sent.
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
+}
+
+/// What a local model can actually do, as the server itself describes it.
+///
+/// Every field is optional because every field is something a particular server may not
+/// report, and the point of this whole change is to stop presenting a guess as a fact. A
+/// missing number is shown as missing rather than filled in with a plausible default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct LocalCapability {
+    /// How many tokens of context the model was built with.
+    pub context_tokens: Option<u64>,
+    /// "7B", "13B" -- the parameter count as the server spells it.
+    pub parameter_size: Option<String>,
+    /// "Q4_K_M" and friends. Together with the parameter size this is most of what decides
+    /// whether a reply will be fast and shallow or slow and careful.
+    pub quantization: Option<String>,
+}
+
+impl LocalCapability {
+    fn is_empty(&self) -> bool {
+        self == &LocalCapability::default()
+    }
+}
+
+#[derive(Serialize)]
+struct OllamaShowRequest<'a> {
+    model: &'a str,
+}
+
+/// Asks Ollama what a model is: its context length, parameter count and quantisation.
+///
+/// The context length lives under an architecture-prefixed key -- `llama.context_length`,
+/// `qwen2.context_length`, `gemma3.context_length` -- so rather than keeping a list of
+/// architectures that would be out of date by the next release, any key ending in
+/// `.context_length` counts.
+///
+/// Returns None when the server is not Ollama, is not running, or says nothing useful.
+/// Deliberately short-timeout: this is decoration on a telemetry panel, and it must never
+/// be the reason a reply feels slow.
+pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability> {
+    let url = format!("{}/api/show", endpoint.trim_end_matches('/'));
+    let body: serde_json::Value = ureq::post(&url)
+        .config()
+        .timeout_global(Some(std::time::Duration::from_millis(2500)))
+        .build()
+        .send_json(OllamaShowRequest { model })
+        .ok()?
+        .into_body()
+        .read_json()
+        .ok()?;
+
+    let details = body.get("details");
+    let capability = LocalCapability {
+        context_tokens: body
+            .get("model_info")
+            .and_then(|info| info.as_object())
+            .and_then(|info| {
+                info.iter()
+                    .find(|(key, _)| key.ends_with(".context_length"))
+                    .and_then(|(_, value)| value.as_u64())
+            }),
+        parameter_size: details
+            .and_then(|d| d.get("parameter_size"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        quantization: details
+            .and_then(|d| d.get("quantization_level"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    };
+
+    // Nothing known is not the same as a model with no properties; say so with None.
+    (!capability.is_empty()).then_some(capability)
 }
 
 /// The per-provider base URL and the model to use when none is configured.
@@ -377,8 +541,22 @@ fn openai_payload(
             messages,
             temperature: 0.7,
             stream,
+            stream_options: if stream && reports_stream_usage(provider) {
+                Some(OpenAiStreamOptions {
+                    include_usage: true,
+                })
+            } else {
+                None
+            },
         },
     )
+}
+
+/// Whether this provider documents `stream_options.include_usage`. LM Studio is left out
+/// deliberately: it is the local one, it is the one most likely to be an older build or a
+/// look-alike server, and a rejected request there costs a working setup.
+fn reports_stream_usage(provider: Provider) -> bool {
+    matches!(provider, Provider::OpenAi | Provider::Groq)
 }
 
 fn openai_request(
@@ -403,7 +581,7 @@ pub fn call_openai_compatible(
     api_key: &str,
     model: &str,
     ctx: &ChatContext,
-) -> Result<String, String> {
+) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
 
     let response: OpenAiResponse = openai_request(&url, api_key, CALL_TIMEOUT)
@@ -413,11 +591,15 @@ pub fn call_openai_compatible(
         .read_json()
         .map_err(|e| e.to_string())?;
 
+    let usage = response.usage.map(TokenUsage::from);
     response
         .choices
         .into_iter()
         .next()
-        .map(|c| c.message.content.trim().to_string())
+        .map(|c| Completion {
+            text: c.message.content.trim().to_string(),
+            usage,
+        })
         .ok_or_else(|| "empty choices in response".to_string())
 }
 
@@ -428,7 +610,7 @@ pub fn stream_openai_compatible(
     model: &str,
     ctx: &ChatContext,
     sink: Sink,
-) -> Result<String, String> {
+) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
 
     let response = openai_request(&url, api_key, STREAM_TIMEOUT)
@@ -436,6 +618,7 @@ pub fn stream_openai_compatible(
         .map_err(|e| e.to_string())?;
 
     let mut full = String::new();
+    let mut usage = None;
     for_each_line(response, |line| {
         let data = match sse_line(line) {
             SseLine::Data(data) => data,
@@ -444,6 +627,9 @@ pub fn stream_openai_compatible(
         };
         let chunk: OpenAiStreamChunk =
             serde_json::from_str(data).map_err(|e| format!("unparseable chunk: {e}"))?;
+        if let Some(reported) = chunk.usage {
+            usage = Some(TokenUsage::from(reported));
+        }
         for choice in chunk.choices {
             if let Some(text) = choice.delta.and_then(|d| d.content) {
                 if !text.is_empty() {
@@ -455,7 +641,7 @@ pub fn stream_openai_compatible(
         Ok(true)
     })?;
 
-    finish(full)
+    finish(full, usage)
 }
 
 // ---------------------------------------------------------------- Gemini
@@ -491,9 +677,32 @@ struct GeminiCandidate {
     content: GeminiRespContent,
 }
 
+#[derive(Deserialize, Default, Clone, Copy)]
+struct GeminiUsage {
+    #[serde(default, rename = "promptTokenCount")]
+    prompt_token_count: u64,
+    #[serde(default, rename = "candidatesTokenCount")]
+    candidates_token_count: u64,
+}
+
+impl From<GeminiUsage> for TokenUsage {
+    fn from(u: GeminiUsage) -> TokenUsage {
+        TokenUsage {
+            prompt_tokens: u.prompt_token_count,
+            completion_tokens: u.candidates_token_count,
+            eval_nanos: None,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct GeminiResponse {
+    #[serde(default)]
     candidates: Vec<GeminiCandidate>,
+    /// Gemini repeats this on every streamed chunk with a running total, so the last one
+    /// seen is the final count.
+    #[serde(default, rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsage>,
 }
 
 fn gemini_model(model: &str) -> &str {
@@ -540,7 +749,7 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
     GeminiRequest { contents }
 }
 
-pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<String, String> {
+pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={api_key}",
         gemini_model(model)
@@ -556,12 +765,16 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Stri
         .read_json()
         .map_err(|e| e.to_string())?;
 
+    let usage = response.usage_metadata.map(TokenUsage::from);
     response
         .candidates
         .into_iter()
         .next()
         .and_then(|c| c.content.parts.into_iter().next())
-        .map(|p| p.text.trim().to_string())
+        .map(|p| Completion {
+            text: p.text.trim().to_string(),
+            usage,
+        })
         .ok_or_else(|| "empty candidates in response".to_string())
 }
 
@@ -572,7 +785,7 @@ pub fn stream_gemini(
     model: &str,
     ctx: &ChatContext,
     sink: Sink,
-) -> Result<String, String> {
+) -> Result<Completion, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={api_key}",
         gemini_model(model)
@@ -586,6 +799,7 @@ pub fn stream_gemini(
         .map_err(|e| e.to_string())?;
 
     let mut full = String::new();
+    let mut usage = None;
     for_each_line(response, |line| {
         let data = match sse_line(line) {
             SseLine::Data(data) => data,
@@ -594,6 +808,9 @@ pub fn stream_gemini(
         };
         let chunk: GeminiResponse =
             serde_json::from_str(data).map_err(|e| format!("unparseable chunk: {e}"))?;
+        if let Some(reported) = chunk.usage_metadata {
+            usage = Some(TokenUsage::from(reported));
+        }
         for candidate in chunk.candidates {
             for part in candidate.content.parts {
                 if !part.text.is_empty() {
@@ -605,7 +822,7 @@ pub fn stream_gemini(
         Ok(true)
     })?;
 
-    finish(full)
+    finish(full, usage)
 }
 
 // ---------------------------------------------------------------- Anthropic
@@ -631,6 +848,24 @@ struct AnthropicContentBlock {
 #[derive(Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContentBlock>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Deserialize, Default, Clone, Copy)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+}
+
+/// The envelope on a `message_start` event, which is the only place the input count
+/// appears -- the running output count arrives separately on `message_delta`.
+#[derive(Deserialize)]
+struct AnthropicStreamMessage {
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
 }
 
 /// One event from the Messages API stream. Only content_block_delta carries text; the
@@ -644,6 +879,12 @@ struct AnthropicStreamEvent {
     delta: Option<AnthropicDelta>,
     #[serde(default)]
     error: Option<AnthropicError>,
+    /// message_start only.
+    #[serde(default)]
+    message: Option<AnthropicStreamMessage>,
+    /// message_delta only, carrying the output count so far.
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Deserialize)]
@@ -698,7 +939,7 @@ fn anthropic_request(
         .header("content-type", "application/json")
 }
 
-pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<String, String> {
+pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
     let response: AnthropicResponse = anthropic_request(api_key, CALL_TIMEOUT)
         .send_json(anthropic_payload(model, ctx, false))
         .map_err(|e| e.to_string())?
@@ -706,11 +947,19 @@ pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<S
         .read_json()
         .map_err(|e| e.to_string())?;
 
+    let usage = response.usage.map(|u| TokenUsage {
+        prompt_tokens: u.input_tokens,
+        completion_tokens: u.output_tokens,
+        eval_nanos: None,
+    });
     response
         .content
         .into_iter()
         .next()
-        .map(|c| c.text.trim().to_string())
+        .map(|c| Completion {
+            text: c.text.trim().to_string(),
+            usage,
+        })
         .ok_or_else(|| "empty content in response".to_string())
 }
 
@@ -719,12 +968,17 @@ pub fn stream_anthropic(
     model: &str,
     ctx: &ChatContext,
     sink: Sink,
-) -> Result<String, String> {
+) -> Result<Completion, String> {
     let response = anthropic_request(api_key, STREAM_TIMEOUT)
         .send_json(anthropic_payload(model, ctx, true))
         .map_err(|e| e.to_string())?;
 
     let mut full = String::new();
+    // Input arrives once at the top, output as a running total near the end, so the two
+    // halves are accumulated separately and combined when the stream closes.
+    let mut prompt_tokens = 0u64;
+    let mut completion_tokens = 0u64;
+    let mut reported = false;
     for_each_line(response, |line| {
         let data = match sse_line(line) {
             SseLine::Data(data) => data,
@@ -733,6 +987,16 @@ pub fn stream_anthropic(
         };
         let event: AnthropicStreamEvent =
             serde_json::from_str(data).map_err(|e| format!("unparseable event: {e}"))?;
+
+        if let Some(usage) = event.message.as_ref().and_then(|m| m.usage).or(event.usage) {
+            reported = true;
+            if usage.input_tokens > 0 {
+                prompt_tokens = usage.input_tokens;
+            }
+            if usage.output_tokens > 0 {
+                completion_tokens = usage.output_tokens;
+            }
+        }
 
         match event.event_type.as_str() {
             // An error arrives as a stream event with HTTP 200 already sent, so it has to
@@ -758,12 +1022,146 @@ pub fn stream_anthropic(
         }
     })?;
 
-    finish(full)
+    let usage = reported.then_some(TokenUsage {
+        prompt_tokens,
+        completion_tokens,
+        eval_nanos: None,
+    });
+    finish(full, usage)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each provider reports its token counts in a different shape and a different place.
+    /// These parse the real ones -- the counts were being thrown away and replaced with a
+    /// four-characters-per-token guess, and nothing would have noticed if a rename upstream
+    /// silently turned them all back into None.
+    #[test]
+    fn ollama_reports_its_counts_and_its_own_generation_time() {
+        let final_chunk: OllamaResponse = serde_json::from_str(
+            r#"{"response":"","done":true,"prompt_eval_count":41,"eval_count":128,"eval_duration":2000000000}"#,
+        )
+        .unwrap();
+        let usage = final_chunk
+            .usage()
+            .expect("the last chunk carries the counts");
+        assert_eq!(usage.prompt_tokens, 41);
+        assert_eq!(usage.completion_tokens, 128);
+        assert_eq!(usage.eval_nanos, Some(2_000_000_000));
+
+        // Every chunk before the last one has no counts, and must not claim any.
+        let mid: OllamaResponse =
+            serde_json::from_str(r#"{"response":"hi","done":false}"#).unwrap();
+        assert_eq!(mid.usage(), None);
+    }
+
+    #[test]
+    fn the_openai_shape_reports_usage_on_a_chunk_with_no_choices() {
+        let chunk: OpenAiStreamChunk = serde_json::from_str(
+            r#"{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34}}"#,
+        )
+        .unwrap();
+        let usage = TokenUsage::from(chunk.usage.expect("the usage chunk"));
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.completion_tokens, 34);
+        assert_eq!(usage.eval_nanos, None, "only Ollama measures its own time");
+
+        let ordinary: OpenAiStreamChunk =
+            serde_json::from_str(r#"{"choices":[{"delta":{"content":"hi"}}]}"#).unwrap();
+        assert!(ordinary.usage.is_none());
+    }
+
+    /// include_usage goes only to the two providers that document it. LM Studio is the
+    /// local one and the one most likely to be an older build or a look-alike, and a
+    /// rejected request there would cost a working setup to gain a number that matters
+    /// less locally than throughput does.
+    #[test]
+    fn only_the_providers_that_document_it_are_asked_for_stream_usage() {
+        assert!(reports_stream_usage(Provider::OpenAi));
+        assert!(reports_stream_usage(Provider::Groq));
+        assert!(!reports_stream_usage(Provider::LmStudio));
+
+        let ctx = ChatContext {
+            system_prompt: "s",
+            history: &[],
+            prompt: "p",
+            agent_name: "A1",
+        };
+        let (_, lm) = openai_payload(
+            Provider::LmStudio,
+            "http://localhost:1234/v1",
+            "m",
+            &ctx,
+            true,
+        );
+        assert!(
+            serde_json::to_string(&lm)
+                .unwrap()
+                .find("stream_options")
+                .is_none(),
+            "LM Studio must not be sent a field it may reject"
+        );
+        let (_, openai) = openai_payload(Provider::OpenAi, "", "gpt-4o-mini", &ctx, true);
+        assert!(serde_json::to_string(&openai)
+            .unwrap()
+            .contains("include_usage"));
+        // Never on the non-streaming path, where the field means nothing.
+        let (_, blocking) = openai_payload(Provider::OpenAi, "", "gpt-4o-mini", &ctx, false);
+        assert!(!serde_json::to_string(&blocking)
+            .unwrap()
+            .contains("stream_options"));
+    }
+
+    #[test]
+    fn gemini_reports_a_running_total_on_every_chunk() {
+        let chunk: GeminiResponse = serde_json::from_str(
+            r#"{"candidates":[],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":19,"totalTokenCount":26}}"#,
+        )
+        .unwrap();
+        let usage = TokenUsage::from(chunk.usage_metadata.expect("usageMetadata"));
+        assert_eq!(usage.prompt_tokens, 7);
+        assert_eq!(usage.completion_tokens, 19);
+    }
+
+    /// Anthropic splits it: the input count arrives once inside message_start, the output
+    /// count as a running total on message_delta. Reading only one of the two events would
+    /// report half the turn.
+    #[test]
+    fn anthropic_splits_its_counts_across_two_events() {
+        let start: AnthropicStreamEvent = serde_json::from_str(
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":55,"output_tokens":1}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            start.message.and_then(|m| m.usage).map(|u| u.input_tokens),
+            Some(55)
+        );
+
+        let delta: AnthropicStreamEvent =
+            serde_json::from_str(r#"{"type":"message_delta","usage":{"output_tokens":203}}"#)
+                .unwrap();
+        assert_eq!(delta.usage.map(|u| u.output_tokens), Some(203));
+
+        // A plain text delta carries neither, and must not be read as zero counts.
+        let text: AnthropicStreamEvent =
+            serde_json::from_str(r#"{"type":"content_block_delta","delta":{"text":"hello"}}"#)
+                .unwrap();
+        assert!(text.message.is_none() && text.usage.is_none());
+    }
+
+    /// A model with no reported properties is None, not a LocalCapability full of blanks:
+    /// the panel has to be able to tell "nothing said" from "said nothing useful".
+    #[test]
+    fn an_empty_capability_is_no_capability() {
+        assert!(LocalCapability::default().is_empty());
+        assert!(!LocalCapability {
+            context_tokens: Some(8192),
+            ..Default::default()
+        }
+        .is_empty());
+    }
 
     #[test]
     fn sse_lines_are_classified() {
@@ -779,8 +1177,8 @@ mod tests {
 
     #[test]
     fn an_empty_stream_is_an_error_not_an_empty_reply() {
-        assert!(finish("   \n ".to_string()).is_err());
-        assert_eq!(finish(" hello ".to_string()).unwrap(), "hello");
+        assert!(finish("   \n ".to_string(), None).is_err());
+        assert_eq!(finish(" hello ".to_string(), None).unwrap().text, "hello");
     }
 
     #[test]

@@ -504,6 +504,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Voice Callbacks
     voiceEngine.onStateChange = (state) => {
         hologram.setState(state);
+        // THINKING and SPEAKING are the states where something is actually answering, and
+        // the panel should be showing whichever half of itself describes what is doing it.
+        setTelemetryBusy(state === 'THINKING' || state === 'SPEAKING');
         if (elStatusBadge) {
             elStatusBadge.textContent = state;
             if (state === 'LISTENING') {
@@ -609,15 +612,167 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* The telemetry panel's two views.
+     *
+     * A cloud model and a local one raise different questions. Against an API the question
+     * is what this session has spent; on your own hardware nothing is being spent and the
+     * question is how fast it runs and how much it can hold. So there are two views, and
+     * the panel picks between them rather than showing one set of numbers that is only ever
+     * half relevant.
+     *
+     * Idle, it alternates -- but only once both views have something to say, since cycling
+     * to a view that reads "--" is worse than not cycling. While a reply is being generated
+     * it pins to whichever view matches what is answering. A click pins it too, for long
+     * enough to read, and then the cycling resumes. */
+    const TELEMETRY_VIEWS = ['usage', 'capacity'];
+    const TELEMETRY_CYCLE_MS = 9000;
+    const TELEMETRY_CLICK_HOLD_MS = 120000;
+    let telemetryView = 'usage';
+    let telemetryHeldUntil = 0;
+    let telemetryPinned = false;
+    /* Pinning depends on a THINKING being followed by an IDLE, and there are paths where an
+       error could swallow the second half. A pin that never released would quietly stop the
+       panel cycling forever, so it expires on its own too. */
+    const TELEMETRY_PIN_MAX_MS = 180000;
+    let telemetryPinnedAt = 0;
+    let lastTokens = null;
+
+    function showTelemetryView(view, pinned) {
+        telemetryView = view;
+        telemetryPinned = !!pinned;
+        document.querySelectorAll('[data-telemetry-view]').forEach(panel => {
+            panel.classList.toggle('hidden', panel.getAttribute('data-telemetry-view') !== view);
+        });
+        document.querySelectorAll('.telemetry-tab').forEach(tab => {
+            const mine = tab.getAttribute('data-telemetry-tab') === view;
+            tab.setAttribute('aria-pressed', mine ? 'true' : 'false');
+            if (mine && telemetryPinned) tab.setAttribute('data-pinned', 'true');
+            else tab.removeAttribute('data-pinned');
+        });
+    }
+
+    /* Whether a view has anything worth showing. Usage needs a request to have happened;
+       capacity needs something local to have actually answered. */
+    function telemetryHasData(view, tokens) {
+        if (!tokens) return view === 'usage';
+        if (view === 'usage') return tokens.requests > 0;
+        return tokens.mode === 'local' && (!!tokens.capability || tokens.last_tps > 0);
+    }
+
+    function relevantTelemetryView(tokens) {
+        return tokens && tokens.mode === 'local' ? 'capacity' : 'usage';
+    }
+
+    function cycleTelemetryView() {
+        if (telemetryPinned && Date.now() - telemetryPinnedAt > TELEMETRY_PIN_MAX_MS) {
+            telemetryPinned = false;
+            showTelemetryView(telemetryView, false);
+        }
+        if (telemetryPinned || Date.now() < telemetryHeldUntil) return;
+        const usable = TELEMETRY_VIEWS.filter(v => telemetryHasData(v, lastTokens));
+        if (usable.length < 2) return;
+        const next = usable[(usable.indexOf(telemetryView) + 1) % usable.length];
+        showTelemetryView(next, false);
+    }
+
+    /* Called when a turn starts and ends. Generating pins the view to whatever is doing the
+       work; finishing releases it back to the cycle. */
+    function setTelemetryBusy(busy) {
+        if (busy) {
+            telemetryPinnedAt = Date.now();
+            showTelemetryView(relevantTelemetryView(lastTokens), true);
+        } else if (telemetryPinned) {
+            telemetryPinned = false;
+            showTelemetryView(telemetryView, false);
+        }
+    }
+
     function updateTokenTelemetry(tokens) {
         if (!tokens) return;
+        lastTokens = tokens;
+
         if (elTps) elTps.textContent = `${tokens.last_tps || 0} TPS`;
-        if (elSessionTokens) elSessionTokens.textContent = `${tokens.total_session_tokens.toLocaleString()}`;
+        if (elSessionTokens) elSessionTokens.textContent = `${(tokens.total_session_tokens || 0).toLocaleString()}`;
         if (elTokensUsedPct) elTokensUsedPct.textContent = `${tokens.used_percent}%`;
         if (elTokensAvail) elTokensAvail.textContent = `${(tokens.available_tokens / 1000).toFixed(1)}k`;
         if (elTokensGauge) elTokensGauge.style.width = `${tokens.used_percent}%`;
-        
+
+        const elIn = document.getElementById('tokens-in-val');
+        const elOut = document.getElementById('tokens-out-val');
+        if (elIn) elIn.textContent = (tokens.prompt_tokens || 0).toLocaleString();
+        if (elOut) elOut.textContent = (tokens.completion_tokens || 0).toLocaleString();
+
+        /* "1,204 tokens" and "about 1,200 tokens" are different claims, and only one of them
+           can be checked against a provider's own dashboard. The panel says which it is
+           holding rather than letting a guess wear the confidence of a measurement. */
+        const elAccounting = document.getElementById('tokens-accounting');
+        if (elAccounting) {
+            if (!tokens.requests) {
+                elAccounting.textContent = '--';
+                elAccounting.title = '';
+            } else if (tokens.measured_requests >= tokens.requests) {
+                elAccounting.textContent = 'counted';
+                elAccounting.title = 'Every reply this session came back with real token counts from the provider.';
+            } else if (tokens.measured_requests > 0) {
+                elAccounting.textContent = `counted ${tokens.measured_requests}/${tokens.requests}`;
+                elAccounting.title = 'Some replies reported real counts; the rest are estimated from the length of the text.';
+            } else {
+                elAccounting.textContent = 'estimated';
+                elAccounting.title = 'This provider reports no token counts, so these are worked out from the length of the text -- roughly four characters per token.';
+            }
+        }
+
+        updateCapacityView(tokens);
         drawTokenGraph(tokens.sparkline);
+
+        // A view showing nothing useful should give way to the one that is.
+        if (!telemetryPinned && Date.now() >= telemetryHeldUntil && !telemetryHasData(telemetryView, tokens)) {
+            const fallback = TELEMETRY_VIEWS.find(v => telemetryHasData(v, tokens));
+            if (fallback) showTelemetryView(fallback, false);
+        }
+    }
+
+    function updateCapacityView(tokens) {
+        const tps = document.getElementById('capacity-tps');
+        const gauge = document.getElementById('capacity-gauge-fill');
+        const context = document.getElementById('capacity-context');
+        const size = document.getElementById('capacity-size');
+        const note = document.getElementById('capacity-note');
+        if (!tps) return;
+
+        const capability = tokens.capability || null;
+        tps.textContent = tokens.last_tps ? `${tokens.last_tps} tok/s` : '-- tok/s';
+
+        /* The bar is throughput against 60 tok/s, which is roughly the point past which a
+           reply arrives faster than it can be read. It is a reading-speed reference, not a
+           limit, and it is deliberately not dressed up as a percentage of anything. */
+        if (gauge) gauge.style.width = `${Math.min(100, ((tokens.last_tps || 0) / 60) * 100)}%`;
+
+        if (context) {
+            context.textContent = capability && capability.context_tokens
+                ? `${Math.round(capability.context_tokens / 1024)}k`
+                : '--';
+        }
+        if (size) {
+            const parts = capability
+                ? [capability.parameter_size, capability.quantization].filter(Boolean)
+                : [];
+            size.textContent = parts.length ? parts.join(' ') : '--';
+        }
+
+        if (note) {
+            if (tokens.mode !== 'local') {
+                note.textContent = tokens.mode === 'offline'
+                    ? 'No model connected. Connect one in Settings.'
+                    : `Answering from ${tokens.provider || 'the cloud'} — nothing is running on this machine.`;
+            } else if (capability && capability.context_tokens) {
+                const used = tokens.prompt_tokens || 0;
+                const room = Math.max(0, capability.context_tokens - used);
+                note.textContent = `${tokens.model || 'This model'} runs here. About ${room.toLocaleString()} tokens of context left before it starts forgetting the top of the conversation.`;
+            } else {
+                note.textContent = `${tokens.model || 'A local model'} is answering on this machine. It reports nothing about its own size or context.`;
+            }
+        }
     }
 
     // Updates the active LLM persona/identity (chat terminal label, sender names, settings
@@ -1877,6 +2032,17 @@ document.addEventListener('DOMContentLoaded', () => {
             paintTheme(Aether1Theme.setTone(slot, input.value));
         });
     });
+
+    /* The telemetry tabs. A click selects a view and holds it there long enough to read
+       before the idle cycle resumes -- being pulled off the thing you just chose to look at
+       is the failure mode a cycling panel has. */
+    document.querySelectorAll('.telemetry-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            telemetryHeldUntil = Date.now() + TELEMETRY_CLICK_HOLD_MS;
+            showTelemetryView(tab.getAttribute('data-telemetry-tab'), false);
+        });
+    });
+    setInterval(cycleTelemetryView, TELEMETRY_CYCLE_MS);
 
     const btnThemeColoursReset = document.getElementById('btn-theme-colours-reset');
     if (btnThemeColoursReset) {

@@ -35,23 +35,31 @@ pub use tts::{
 /// enough that a model stuck in a loop stops costing time and tokens.
 const MAX_TOOL_ROUNDS: usize = 6;
 
-const SESSION_TOKEN_BUDGET: u64 = 100_000; // matches token_tracker.py's daily_budget_tokens
-const SPARKLINE_LEN: usize = 15; // matches token_tracker.py's history[-15:]
+/// Aether1's own cap on a session, not a quota any provider enforces or reports.
+///
+/// No provider API returns "tokens you have left" -- that is a billing question, answered
+/// on a dashboard rather than in a response body. So this is a budget the operator is
+/// spending against, and the panel labels it that way rather than implying the number came
+/// from anywhere but here.
+const SESSION_TOKEN_BUDGET: u64 = 100_000;
+const SPARKLINE_LEN: usize = 15;
 
 #[derive(Default)]
 struct UsageStats {
     session_prompt_tokens: u64,
     session_completion_tokens: u64,
     total_requests: u64,
+    /// How many of those requests came back with real counts. The difference between this
+    /// and total_requests is how much of the number on screen is a guess.
+    measured_requests: u64,
     last_tps: f64,
-    /// Per-request total token counts, most recent last, capped at SPARKLINE_LEN --
-    /// mirrors token_tracker.py's history-derived sparkline.
+    /// Whether the most recent reply's numbers were reported by the provider.
+    last_measured: bool,
+    /// Per-request total token counts, most recent last, capped at SPARKLINE_LEN.
     sparkline: Vec<u64>,
 }
 
-/// Serializable snapshot of UsageStats for the frontend's token telemetry panel. Field
-/// names match token_tracker.py's get_telemetry() so the same JS (updateTokenTelemetry)
-/// handles both the Python websocket and this Tauri event without a separate code path.
+/// Serializable snapshot of UsageStats for the HUD's telemetry panel.
 #[derive(serde::Serialize)]
 pub struct UsageSnapshot {
     pub last_tps: f64,
@@ -59,25 +67,70 @@ pub struct UsageSnapshot {
     pub used_percent: f64,
     pub available_tokens: u64,
     pub sparkline: Vec<u64>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub requests: u64,
+    /// True when the last reply's counts came from the provider rather than from the
+    /// character-count heuristic. The panel says which, because "1,204 tokens" and
+    /// "about 1,200 tokens" are different claims and only one of them is checkable.
+    pub measured: bool,
+    pub measured_requests: u64,
+    pub session_budget: u64,
+    /// "local", "cloud" or "offline" -- which half of the panel is the relevant one.
+    pub mode: &'static str,
+    pub provider: String,
+    pub model: String,
+    /// What the local model is, when there is one and it says. None for cloud.
+    pub capability: Option<providers::LocalCapability>,
 }
 
+/// About how many tokens a piece of text is, when nothing better is available.
+///
+/// Four characters per token is roughly right for English prose and wrong for code, for
+/// non-Latin scripts, and for anything with a lot of punctuation. It is a fallback, and
+/// anything derived from it is flagged as estimated rather than shown as fact.
 fn estimate_tokens(text: &str) -> u64 {
     if text.is_empty() {
         0
     } else {
-        // Same ~4-chars-per-token heuristic as token_tracker.py's estimate_tokens.
         (text.chars().count() as u64).div_ceil(4).max(1)
     }
 }
 
 impl UsageStats {
-    fn record_usage(&mut self, prompt: &str, completion: &str, duration_secs: f64) {
-        let prompt_tok = estimate_tokens(prompt);
-        let completion_tok = estimate_tokens(completion);
+    /// `reported` is what the provider said about itself, when it said anything. The text
+    /// is still passed in because it is what the estimate falls back to.
+    fn record_usage(
+        &mut self,
+        prompt: &str,
+        completion: &str,
+        duration_secs: f64,
+        reported: Option<providers::TokenUsage>,
+    ) {
+        let (prompt_tok, completion_tok) = match reported {
+            Some(usage) => (usage.prompt_tokens, usage.completion_tokens),
+            None => (estimate_tokens(prompt), estimate_tokens(completion)),
+        };
+
         self.session_prompt_tokens += prompt_tok;
         self.session_completion_tokens += completion_tok;
         self.total_requests += 1;
-        self.last_tps = (completion_tok as f64 / duration_secs.max(0.05) * 10.0).round() / 10.0;
+        self.last_measured = reported.is_some();
+        if self.last_measured {
+            self.measured_requests += 1;
+        }
+
+        /* Generation time, not wall-clock time, wherever the provider measures it. Wall
+        clock includes loading a model off disk and waiting behind another request, so a
+        7B model that answers in two seconds after a four-second load looks half as fast
+        as it is -- and looks slower on the first reply than on every one after, which
+        reads as a fault rather than as a cold start. */
+        let seconds = reported
+            .and_then(|u| u.eval_nanos)
+            .filter(|nanos| *nanos > 0)
+            .map(|nanos| nanos as f64 / 1_000_000_000.0)
+            .unwrap_or(duration_secs);
+        self.last_tps = (completion_tok as f64 / seconds.max(0.05) * 10.0).round() / 10.0;
 
         self.sparkline.push(prompt_tok + completion_tok);
         if self.sparkline.len() > SPARKLINE_LEN {
@@ -85,7 +138,13 @@ impl UsageStats {
         }
     }
 
-    fn snapshot(&self) -> UsageSnapshot {
+    fn snapshot(
+        &self,
+        mode: &'static str,
+        provider: String,
+        model: String,
+        capability: Option<providers::LocalCapability>,
+    ) -> UsageSnapshot {
         let total_session = self.session_prompt_tokens + self.session_completion_tokens;
         let used_percent =
             ((total_session as f64 / SESSION_TOKEN_BUDGET.max(1) as f64) * 100.0).min(100.0);
@@ -102,6 +161,16 @@ impl UsageStats {
             } else {
                 self.sparkline.clone()
             },
+            prompt_tokens: self.session_prompt_tokens,
+            completion_tokens: self.session_completion_tokens,
+            requests: self.total_requests,
+            measured: self.last_measured,
+            measured_requests: self.measured_requests,
+            session_budget: SESSION_TOKEN_BUDGET,
+            mode,
+            provider,
+            model,
+            capability,
         }
     }
 }
@@ -173,6 +242,12 @@ fn detect_cloud_api_key() -> Option<(String, &'static str)> {
 pub struct LlmEngine {
     db: MemoryDb,
     usage: Mutex<UsageStats>,
+    /// What the current local model says it is, keyed by the endpoint and model it was
+    /// asked about. Filled in after a turn rather than when the panel asks, because the
+    /// panel asks about once a second and this costs an HTTP round trip -- a getter that
+    /// quietly does I/O on a timer is a getter that will one day be the reason the HUD
+    /// stutters.
+    capability: Mutex<Option<(String, providers::LocalCapability)>>,
 }
 
 impl LlmEngine {
@@ -180,6 +255,45 @@ impl LlmEngine {
         LlmEngine {
             db,
             usage: Mutex::new(UsageStats::default()),
+            capability: Mutex::new(None),
+        }
+    }
+
+    /// Which half of the telemetry panel this configuration makes sense for.
+    ///
+    /// Takes the provider and endpoint rather than a Config so the one-second telemetry
+    /// tick, which reads settings directly, gets the same answer as the turn that reads a
+    /// whole Config. Two copies of this rule would eventually be two different rules.
+    ///
+    /// The provider alone does not settle it, for the same reason `reaches_the_internet`
+    /// exists: Ollama pointed at a rented box is a cloud call wearing a local provider's
+    /// name, and its tokens are somebody's bill.
+    fn telemetry_mode(provider: Provider, endpoint: &str) -> &'static str {
+        match provider {
+            Provider::Offline => "offline",
+            Provider::Ollama | Provider::LmStudio
+                if crate::local_only::is_local_endpoint(endpoint) =>
+            {
+                "local"
+            }
+            _ => "cloud",
+        }
+    }
+
+    /// After a turn on a local model, ask the server what that model is -- once per
+    /// endpoint-and-model pair, and never again until one of them changes.
+    fn refresh_capability(&self, config: &Config) {
+        if Self::telemetry_mode(config.provider, &config.endpoint) != "local"
+            || config.provider != Provider::Ollama
+        {
+            return;
+        }
+        let key = format!("{}|{}", config.endpoint, config.model_name);
+        if matches!(self.capability.lock().unwrap().as_ref(), Some((known, _)) if *known == key) {
+            return;
+        }
+        if let Some(found) = providers::ollama_capability(&config.endpoint, &config.model_name) {
+            *self.capability.lock().unwrap() = Some((key, found));
         }
     }
 
@@ -382,7 +496,7 @@ impl LlmEngine {
         config: &Config,
         ctx: &ChatContext,
         sink: providers::Sink,
-    ) -> Result<String, StreamFailure> {
+    ) -> Result<providers::Completion, StreamFailure> {
         let mut partial = String::new();
 
         let streamed = {
@@ -417,12 +531,12 @@ impl LlmEngine {
                     &mut collect,
                 ),
                 // Handled before this is ever called.
-                Provider::Offline => Ok(String::new()),
+                Provider::Offline => Ok(providers::Completion::default()),
             }
         };
 
         match streamed {
-            Ok(reply) => Ok(reply),
+            Ok(completion) => Ok(completion),
             Err(stream_error) if partial.is_empty() => {
                 let blocking = match config.provider {
                     Provider::Ollama => {
@@ -443,12 +557,12 @@ impl LlmEngine {
                     Provider::Anthropic => {
                         providers::call_anthropic(&config.api_key, &config.model_name, ctx)
                     }
-                    Provider::Offline => Ok(String::new()),
+                    Provider::Offline => Ok(providers::Completion::default()),
                 };
                 match blocking {
-                    Ok(reply) => {
-                        sink(&reply);
-                        Ok(reply)
+                    Ok(completion) => {
+                        sink(&completion.text);
+                        Ok(completion)
                     }
                     Err(call_error) => Err(StreamFailure {
                         message: format!("{stream_error} (retry without streaming: {call_error})"),
@@ -478,13 +592,35 @@ impl LlmEngine {
         base_history: Vec<Message>,
         user_prompt: &str,
         sink: providers::Sink,
-    ) -> String {
+    ) -> providers::Completion {
         let registry = crate::tools::registry();
         let tool_ctx = crate::tools::ToolContext::new(&self.db);
 
         let mut history = base_history;
         let mut current_prompt = user_prompt.to_string();
         let mut visible = String::new();
+        /* One answer can take several round trips, and every one of them costs tokens. A
+        loop that reported only its final round would show a fraction of what a tool-using
+        turn actually spent, which is precisely the sort of comfortable under-count this
+        whole change exists to remove. */
+        let mut total = providers::TokenUsage::default();
+        let mut any_reported = false;
+        let mut carry = |usage: Option<providers::TokenUsage>| {
+            if let Some(usage) = usage {
+                any_reported = true;
+                total.prompt_tokens += usage.prompt_tokens;
+                total.completion_tokens += usage.completion_tokens;
+                if let Some(nanos) = usage.eval_nanos {
+                    total.eval_nanos = Some(total.eval_nanos.unwrap_or(0) + nanos);
+                }
+            }
+        };
+        let done = |text: String, any_reported: bool, total: providers::TokenUsage| {
+            providers::Completion {
+                text,
+                usage: any_reported.then_some(total),
+            }
+        };
 
         for _round in 0..MAX_TOOL_ROUNDS {
             let ctx = ChatContext {
@@ -512,7 +648,10 @@ impl LlmEngine {
             }
 
             let raw = match outcome {
-                Ok(raw) => raw,
+                Ok(completion) => {
+                    carry(completion.usage);
+                    completion.text
+                }
                 Err(failure) => {
                     eprintln!(
                         "[AETHER1] LLM Engine Error: provider {} error: {}",
@@ -527,13 +666,13 @@ impl LlmEngine {
                         )
                     );
                     sink(&notice);
-                    return format!("{visible}{notice}");
+                    return done(format!("{visible}{notice}"), any_reported, total);
                 }
             };
 
             let calls = crate::tools::protocol::parse_calls(&raw);
             if calls.is_empty() {
-                return visible.trim().to_string();
+                return done(visible.trim().to_string(), any_reported, total);
             }
 
             let mut results = Vec::new();
@@ -575,7 +714,7 @@ impl LlmEngine {
              reaching an answer.]"
         );
         sink(&notice);
-        format!("{visible}{notice}")
+        done(format!("{visible}{notice}"), any_reported, total)
     }
 
     /// Generates a reply, feeding it to `sink` in the order it arrives: one call per
@@ -595,10 +734,12 @@ impl LlmEngine {
         // stream to follow -- they arrive as one delta.
         if let Some(reply) = self.check_instant_commands(prompt, &config) {
             sink(&reply);
-            self.usage
-                .lock()
-                .unwrap()
-                .record_usage(prompt, &reply, start.elapsed().as_secs_f64());
+            self.usage.lock().unwrap().record_usage(
+                prompt,
+                &reply,
+                start.elapsed().as_secs_f64(),
+                None,
+            );
             return reply;
         }
 
@@ -621,6 +762,11 @@ impl LlmEngine {
         // operator still gets an answer -- going mute would be its own kind of failure --
         // but they are told which provider was not contacted, so "it still worked" can
         // never hide "it went out to the internet".
+        // What the provider said about its own token use, when it said anything. Only the
+        // branches that actually reach a model can fill this in; the offline and refusal
+        // paths generate their text here, so there is nothing to report and the estimate
+        // is the honest answer for them.
+        let mut reported: Option<providers::TokenUsage> = None;
         let reply = if config.local_only && config.reaches_the_internet() {
             let fallback = config.persona.offline_reply(
                 prompt,
@@ -644,7 +790,9 @@ impl LlmEngine {
             sink(&reply);
             reply
         } else if tools_on {
-            self.tool_loop(&config, &system_prompt, history, prompt, sink)
+            let completion = self.tool_loop(&config, &system_prompt, history, prompt, sink);
+            reported = completion.usage;
+            completion.text
         } else {
             let ctx = ChatContext {
                 system_prompt: &system_prompt,
@@ -653,7 +801,10 @@ impl LlmEngine {
                 agent_name: &config.agent_name,
             };
             match self.call_provider(&config, &ctx, sink) {
-                Ok(reply) => reply,
+                Ok(completion) => {
+                    reported = completion.usage;
+                    completion.text
+                }
                 Err(failure) => {
                     eprintln!(
                         "[AETHER1] LLM Engine Error: provider {} error: {}",
@@ -694,10 +845,13 @@ impl LlmEngine {
             }
         };
 
-        self.usage
-            .lock()
-            .unwrap()
-            .record_usage(prompt, &reply, start.elapsed().as_secs_f64());
+        self.usage.lock().unwrap().record_usage(
+            prompt,
+            &reply,
+            start.elapsed().as_secs_f64(),
+            reported,
+        );
+        self.refresh_capability(&config);
         reply
     }
 
@@ -732,8 +886,34 @@ impl LlmEngine {
         self.load_config().agent_name
     }
 
+    /// The panel's whole payload. Reads settings directly rather than going through
+    /// load_config, which scans the environment for cloud keys -- fine once a turn, wasteful
+    /// on the one-second telemetry tick this feeds.
     pub fn usage_snapshot(&self) -> UsageSnapshot {
-        self.usage.lock().unwrap().snapshot()
+        let provider_key = self.db.get_setting_string("llm_provider", "offline");
+        let provider = persona::Provider::from_key(&provider_key);
+        let endpoint = self
+            .db
+            .get_setting_string("llm_endpoint", "http://localhost:11434");
+        let model = self.db.get_setting_string("llm_model", "");
+
+        let mode = Self::telemetry_mode(provider, &endpoint);
+
+        let key = format!("{endpoint}|{model}");
+        let capability = self
+            .capability
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(known, _)| *known == key)
+            .map(|(_, found)| found.clone());
+
+        self.usage.lock().unwrap().snapshot(
+            mode,
+            provider.label().to_string(),
+            model,
+            if mode == "local" { capability } else { None },
+        )
     }
 
     pub fn db(&self) -> &MemoryDb {
@@ -838,14 +1018,133 @@ mod tests {
         assert!(!reply.contains("local-only mode is on"), "{reply}");
     }
 
+    /// With nothing reported, the character-count guess is still what fills the panel --
+    /// but it is recorded as a guess.
     #[test]
-    fn usage_stats_estimate_and_accumulate() {
+    fn usage_stats_fall_back_to_the_estimate_and_admit_it() {
         let mut stats = UsageStats::default();
-        stats.record_usage("hello world", "hi there friend", 1.0);
+        stats.record_usage("hello world", "hi there friend", 1.0, None);
         assert!(stats.session_prompt_tokens > 0);
         assert!(stats.session_completion_tokens > 0);
         assert_eq!(stats.total_requests, 1);
+        assert_eq!(stats.measured_requests, 0);
+        assert!(!stats.last_measured);
         assert!(stats.last_tps > 0.0);
+    }
+
+    /// The point of the whole change: when the provider says what it used, that is what is
+    /// counted -- not a number derived from the length of the strings.
+    #[test]
+    fn a_reported_count_beats_the_estimate() {
+        let mut stats = UsageStats::default();
+        // Text whose estimate would be nothing like the reported truth.
+        stats.record_usage(
+            "hi",
+            "ok",
+            1.0,
+            Some(providers::TokenUsage {
+                prompt_tokens: 900,
+                completion_tokens: 100,
+                eval_nanos: None,
+            }),
+        );
+        assert_eq!(stats.session_prompt_tokens, 900);
+        assert_eq!(stats.session_completion_tokens, 100);
+        assert_eq!(stats.measured_requests, 1);
+        assert!(stats.last_measured);
+    }
+
+    /// Tokens per second is computed from the model's own generation time when it reports
+    /// one. Wall clock includes loading the model off disk, which makes a fast model look
+    /// slow on its first reply and faster on every one after -- a cold start that reads as
+    /// a fault.
+    #[test]
+    fn throughput_prefers_the_models_own_clock_to_the_wall_clock() {
+        let mut stats = UsageStats::default();
+        stats.record_usage(
+            "p",
+            "c",
+            10.0, // ten seconds of wall clock, most of it loading
+            Some(providers::TokenUsage {
+                prompt_tokens: 10,
+                completion_tokens: 100,
+                eval_nanos: Some(2_000_000_000), // two seconds actually generating
+            }),
+        );
+        assert_eq!(stats.last_tps, 50.0, "100 tokens in 2s, not in 10s");
+
+        // With no reported generation time, wall clock is all there is.
+        let mut wall = UsageStats::default();
+        wall.record_usage(
+            "p",
+            "c",
+            10.0,
+            Some(providers::TokenUsage {
+                prompt_tokens: 10,
+                completion_tokens: 100,
+                eval_nanos: None,
+            }),
+        );
+        assert_eq!(wall.last_tps, 10.0);
+    }
+
+    /// A turn that used several rounds of tools must report all of them. Reporting only the
+    /// last round would under-count exactly the turns that cost the most.
+    #[test]
+    fn a_session_accumulates_across_requests() {
+        let mut stats = UsageStats::default();
+        let reported = |p, c| {
+            Some(providers::TokenUsage {
+                prompt_tokens: p,
+                completion_tokens: c,
+                eval_nanos: None,
+            })
+        };
+        stats.record_usage("a", "b", 1.0, reported(100, 20));
+        stats.record_usage("a", "b", 1.0, reported(150, 30));
+        stats.record_usage("a", "b", 1.0, None);
+
+        assert_eq!(stats.total_requests, 3);
+        assert_eq!(stats.measured_requests, 2);
+        assert!(stats.session_prompt_tokens >= 250);
+        assert!(
+            !stats.last_measured,
+            "the most recent reply was the estimated one"
+        );
+        assert_eq!(stats.sparkline.len(), 3);
+    }
+
+    /// An endpoint on the loopback or the LAN is local; the same provider pointed at a
+    /// rented box is a cloud call wearing a local provider's name, and its tokens are
+    /// somebody's bill.
+    #[test]
+    fn the_panel_mode_follows_the_endpoint_not_just_the_provider() {
+        let local = Config {
+            agent_name: "A1".into(),
+            provider: Provider::Ollama,
+            model_name: "llama3".into(),
+            api_key: String::new(),
+            endpoint: "http://localhost:11434".into(),
+            persona: Persona::Default,
+            persona_key: "default".into(),
+            custom_directive: String::new(),
+            local_only: false,
+        };
+        assert_eq!(
+            LlmEngine::telemetry_mode(local.provider, &local.endpoint),
+            "local"
+        );
+
+        let rented = Config {
+            endpoint: "https://ollama.example.com".into(),
+            ..local
+        };
+        assert_eq!(
+            LlmEngine::telemetry_mode(rented.provider, &rented.endpoint),
+            "cloud"
+        );
+        // And nothing configured is neither, rather than quietly counting as cloud.
+        assert_eq!(LlmEngine::telemetry_mode(Provider::Offline, ""), "offline");
     }
 
     // load_config's cloud-key fallback reads the same env vars model_scanner::tests
