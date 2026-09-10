@@ -738,6 +738,15 @@ HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clic
         }
     }
 
+    // altFirewallStaticGroup is parented straight to the scene (see buildAltAvatar), so
+    // it's immune to the avatar's own sway -- but a drag on the hologram spins the whole
+    // scene (scene.rotation.y, see core.js's pointerdown/pointermove handlers), which
+    // would otherwise carry the field along with it. Counter-rotate every frame so the
+    // field stays visually fixed no matter how the user spins the view.
+    if (this.altFirewallStaticGroup) {
+        this.altFirewallStaticGroup.rotation.y = -this.scene.rotation.y;
+    }
+
     // Whole-stack breathing pulse -- subtle, so it doesn't fight the per-shard equalizer.
     if (this.altShardGroup) {
         const stackPulse = 1.0 + audioIntensity * 0.03 + clickPulse * 0.04;

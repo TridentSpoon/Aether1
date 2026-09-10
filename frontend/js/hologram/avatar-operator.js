@@ -88,12 +88,16 @@ function buildOperatorStream(texture, count, color, pointSize, baseOpacity) {
 
 // Rewrites one stream's positions/brightness for this frame. speedMult scales how fast
 // glyphs slide outward; the angular slots themselves never move, which is what keeps
-// the ring reading as a static frame rather than a spinning cylinder.
-function updateOperatorStream(stream, ctx, speedMult) {
+// the ring reading as a static frame rather than a spinning cylinder. zoomPulse is a
+// bounded radial offset (not a rate) so it can oscillate quickly without the runaway
+// growth a time-varying multiplier would cause inside a ctx.time-based phase formula;
+// blink is a bounded brightness multiplier, safe to vary freely since it isn't part of
+// any accumulated position.
+function updateOperatorStream(stream, ctx, speedMult, zoomPulse, blink) {
     const { positions, colors, state } = stream;
     for (let i = 0; i < state.length; i++) {
         const s = state[i];
-        const flow = (ctx.time * s.speed * speedMult + s.offset) % OPERATOR_RING_SPAN;
+        const flow = (ctx.time * s.speed * speedMult + s.offset + zoomPulse) % OPERATOR_RING_SPAN;
         const radius = OPERATOR_RING_INNER + flow;
         const p = flow / OPERATOR_RING_SPAN;
         // Fade in just past the centre, hold, then fade out approaching the rim --
@@ -108,7 +112,7 @@ function updateOperatorStream(stream, ctx, speedMult) {
         positions[i * 3] = Math.cos(s.angle) * radius;
         positions[i * 3 + 1] = Math.sin(s.angle) * radius;
         positions[i * 3 + 2] = s.z;
-        const v = s.brightness * fade;
+        const v = s.brightness * fade * blink;
         colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = v;
     }
     stream.points.geometry.attributes.position.needsUpdate = true;
@@ -222,35 +226,43 @@ HologramAvatar.registerAvatar({
         else if (isSpeaking) speedMult = 1.15 + ctx.audio * 0.9;
         speedMult += ctx.click * 1.4;
 
-        updateOperatorStream(model.zeros, ctx, speedMult);
-        updateOperatorStream(model.ones, ctx, speedMult);
+        // A rhythmic "zoom" punch -- a bounded outward radius offset (not a rate, so it
+        // can't destabilise the ctx.time-based flow formula), sharply peaked so it reads
+        // as a periodic push toward the viewer rather than a smooth wobble. Livelier
+        // states get a slightly bigger punch. Layered with a fast, sharply-peaked
+        // "blink" brightness strobe across the whole field, on top of each glyph's own
+        // independent flicker -- together these are the title-sequence's own zoom/blink
+        // rhythm, borrowed as a motion quality rather than any of its actual imagery.
+        const zoomPulse = Math.pow(Math.max(0, Math.sin(ctx.time * 0.55)), 5) * 34 * (0.6 + Math.min(speedMult, 3) * 0.25);
+        const blink = 0.72 + Math.pow(Math.max(0, Math.sin(ctx.time * 3.1 + 0.7)), 14) * 0.55;
 
-        // The prompt line "types" itself out over a repeating cycle, faster while
-        // thinking -- the terminal actively working rather than idling.
-        const period = isThinking ? 1.8 : 3.6;
-        const cyclePos = (ctx.time % period) / period;
-        const leadIndex = cyclePos * (model.promptCount - 1);
+        updateOperatorStream(model.zeros, ctx, speedMult, zoomPulse, blink);
+        updateOperatorStream(model.ones, ctx, speedMult, zoomPulse, blink);
+
+        // The prompt line sits still -- already printed, not typing itself out -- with
+        // a CRT-style flicker instead of a sweep: each tick breathes a little brighter
+        // then a little dimmer, each on its own slightly offset phase so the row shimmers
+        // rather than pulsing in lockstep. Thinking breathes faster, same as before.
+        const flickerSpeed = isThinking ? 3.2 : 1.4;
         for (let i = 0; i < model.promptCount; i++) {
-            const dist = leadIndex - i;
-            let brightness;
-            if (dist < 0) brightness = 0.03; // not typed yet
-            else if (dist < 1.2) brightness = 1.0; // the leading edge, writing now
-            else brightness = 0.3 + (isSpeaking ? ctx.audio * 0.3 : 0); // already printed
+            const phase = i * 0.6;
+            const brightness = 0.32 + (Math.sin(ctx.time * flickerSpeed + phase) * 0.5 + 0.5) * 0.22;
             model.promptColors[i * 3] = model.promptColors[i * 3 + 1] = model.promptColors[i * 3 + 2] = brightness;
         }
         model.promptPoints.geometry.attributes.color.needsUpdate = true;
-        const cursorX = model.promptStartX + leadIndex * model.promptSpacing;
+        // The caret's own fixed resting spot, at the end of the (static) line.
+        const cursorX = model.promptStartX + (model.promptCount - 1) * model.promptSpacing;
         model.cursor.position.set(cursorX, -2, model.promptZ + 4);
         model.cursorGlow.position.set(cursorX, -2, model.promptZ + 2);
 
-        // The caret blinks while waiting, and holds a steady voice-reactive glow while
-        // actually speaking -- it stops "waiting" once it has something to say.
+        // The caret breathes with the same CRT flicker while waiting -- slightly
+        // brighter, then dimmer, not a hard on/off blink -- and holds a steady
+        // voice-reactive glow while actually speaking.
         let cursorOpacity;
         if (isSpeaking) {
             cursorOpacity = 0.75 + ctx.audio * 0.4;
         } else {
-            const blinkRate = isThinking ? 4.5 : 1.4;
-            cursorOpacity = Math.floor(ctx.time * blinkRate) % 2 === 0 ? 1.0 : 0.3;
+            cursorOpacity = 0.72 + (Math.sin(ctx.time * flickerSpeed) * 0.5 + 0.5) * 0.28;
         }
         model.cursorMaterial.opacity = cursorOpacity;
         model.cursorGlowMaterial.opacity = 0.35 + cursorOpacity * 0.35;
