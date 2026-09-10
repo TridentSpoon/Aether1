@@ -148,6 +148,26 @@ One thing changed outside the table. `load_config` defaulted `persona_type` to `
 harmless once it chooses access, because the persona writing the reply would not have been the
 persona whose field was enforced. Both now say `default`.
 
+### Where the roots actually are
+
+| Root | Linux | Windows |
+|---|---|---|
+| SystemLogs | `/var/log` | `%SystemRoot%\System32\winevt\Logs`, `%SystemRoot%\Logs` |
+| ServiceState | `/etc/systemd`, `/etc/init.d`, `/lib/systemd`, `/usr/lib/systemd`, `/run/systemd` | `%SystemRoot%\System32\winevt\Logs` — services are registry entries, not files, so this points at the log that records them starting and stopping |
+| NetworkConfig | `/etc/hosts`, `/etc/resolv.conf`, `/etc/network`, `/etc/netplan`, `/etc/NetworkManager`, `/etc/iptables`, `/proc/net` | `%SystemRoot%\System32\drivers\etc` |
+| ProjectTree | the working directory, when it is inside home and is not home itself | same |
+| Vault | the configured vault path | same |
+
+`%SystemRoot%` is read from the environment, never assumed to be `C:\Windows`.
+
+**A domain root the path guard refuses is worse than no root at all**, because it reads as
+access the persona has and does not — and elevation cannot conjure it either, since `fs_guard`
+is checked after the approval too. `every_resolved_root_is_readable_by_the_path_guard` asserts
+the two lists agree, and it caught two cases where they did not: `ServiceState` named
+`/lib/systemd/system` and `/usr/lib/systemd/system`, which `fs_guard` had never allowed, and
+`ProjectTree` resolved to any working directory including ones outside home. The unit
+directories were added to the guard; `ProjectTree` now requires the project to sit inside home.
+
 `Root` resolution is the only genuinely new platform work: SystemLogs and ServiceState mean
 different directories on Windows and Linux, and getting that wrong fails in the safe direction
 (the read is proposed rather than automatic) but is still wrong.

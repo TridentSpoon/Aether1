@@ -21,10 +21,13 @@ use crate::paths;
 /// Roots the companion may read from. Everything else on the disk is invisible to it --
 /// no /root, no other users' home directories, no arbitrary system paths.
 ///
-/// The system roots are Unix-only on purpose. Their Windows counterparts (C:\Windows,
-/// the registry hives, ProgramData) are not the sort of thing a companion needs to read to
-/// answer a question, and the equivalent of "/etc tells you how this machine is
-/// configured" simply is not a directory over there.
+/// The Windows entries are three named directories, not `C:\Windows`. The whole system
+/// directory is not the counterpart of `/etc` and `/var/log`; these three are:
+/// `System32\winevt\Logs` holds the event logs (which is what "check the event viewer"
+/// actually means), `System32\drivers\etc` holds hosts and the services table, and
+/// `Windows\Logs` holds setup and servicing logs. The registry hives next door in
+/// `System32\config` are not included, and are denied outright below in case a link ever
+/// leads there.
 fn allowed_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = paths::home_dir() {
@@ -34,8 +37,32 @@ fn allowed_roots() -> Vec<PathBuf> {
         roots.push(PathBuf::from("/etc"));
         roots.push(PathBuf::from("/proc"));
         roots.push(PathBuf::from("/var/log"));
+        // Where the unit files actually live. /etc/systemd holds only the operator's
+        // overrides, so without these three "what services does this machine have" is a
+        // question the diagnostic persona cannot answer. All three are service definitions
+        // and runtime state -- no credentials, and the deny list still applies inside them.
+        roots.push(PathBuf::from("/lib/systemd"));
+        roots.push(PathBuf::from("/usr/lib/systemd"));
+        roots.push(PathBuf::from("/run/systemd"));
+    }
+    if let Some(system_root) = paths::system_root() {
+        roots.push(system_root.join("System32").join("winevt").join("Logs"));
+        roots.push(system_root.join("System32").join("drivers").join("etc"));
+        roots.push(system_root.join("Logs"));
     }
     roots
+}
+
+/// A root as it will be compared against a canonicalized path.
+///
+/// Canonicalizing both sides is not cosmetic on Windows: `fs::canonicalize` returns a
+/// verbatim path (`\\?\C:\Users\...`), whose prefix component is a different thing from
+/// the `C:\Users\...` a root is spelled with, and `Path::starts_with` compares components
+/// -- so an uncanonicalized root matches nothing at all over there. A root that cannot be
+/// canonicalized (it does not exist on this machine) falls back to itself, which simply
+/// fails to match, and never widens anything.
+fn comparable_root(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
 }
 
 /// Path fragments that are refused wherever they appear, allowed root or not. Secrets the
@@ -58,6 +85,7 @@ const DENIED_FRAGMENTS: &[&str] = &[
     "/aether1_memory.db",
     // Windows: the DPAPI master keys that protect saved credentials, and the user's
     // registry hive, which holds a great deal more than it looks like it does.
+    "/system32/config/",
     "/appdata/roaming/microsoft/protect/",
     "/appdata/roaming/microsoft/credentials/",
     "/appdata/local/microsoft/credentials/",
@@ -112,7 +140,10 @@ pub fn resolve_readable(path: &str) -> Result<PathBuf, String> {
     }
 
     let roots = allowed_roots();
-    if !roots.iter().any(|root| resolved.starts_with(root)) {
+    if !roots
+        .iter()
+        .any(|root| resolved.starts_with(comparable_root(root)))
+    {
         let readable: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
         return Err(format!(
             "{} is outside the paths Aether1 may read ({})",
@@ -160,7 +191,8 @@ pub fn resolve_writable(path: &str) -> Result<PathBuf, String> {
             "no home directory could be found (neither HOME nor USERPROFILE is set)".to_string(),
         );
     };
-    if !resolved.starts_with(&home) {
+    let home_root = comparable_root(&home);
+    if !resolved.starts_with(&home_root) {
         return Err(format!(
             "{} is outside {}, and Aether1 only writes inside the operator's home directory",
             resolved.display(),
@@ -174,7 +206,7 @@ pub fn resolve_writable(path: &str) -> Result<PathBuf, String> {
         let target = resolved
             .canonicalize()
             .map_err(|e| format!("cannot resolve the symlink {}: {e}", resolved.display()))?;
-        if denied(&target) || !target.starts_with(&home) {
+        if denied(&target) || !target.starts_with(&home_root) {
             return Err(format!(
                 "{} is a symlink pointing outside the writable area ({})",
                 resolved.display(),

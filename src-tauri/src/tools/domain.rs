@@ -37,17 +37,39 @@ pub fn directories(root: Root, db: &MemoryDb) -> Vec<PathBuf> {
             .collect()
     };
 
+    // Under %SystemRoot%, keeping only what is actually there. Windows is not always on
+    // C:, so the prefix is read from the environment rather than assumed.
+    let under_system_root = |tails: &[&[&str]]| -> Vec<PathBuf> {
+        let Some(system_root) = crate::paths::system_root() else {
+            return Vec::new();
+        };
+        tails
+            .iter()
+            .map(|tail| {
+                tail.iter()
+                    .fold(system_root.clone(), |p, part| p.join(part))
+            })
+            .filter(|p| p.exists())
+            .collect()
+    };
+
     match root {
         Root::SystemLogs => {
             if cfg!(windows) {
-                exists(&[r"C:\Windows\System32\winevt"])
+                // The event logs, which is what "check the event viewer" means, plus the
+                // servicing and setup logs beside them.
+                under_system_root(&[&["System32", "winevt", "Logs"], &["Logs"]])
             } else {
                 exists(&["/var/log"])
             }
         }
         Root::ServiceState => {
             if cfg!(windows) {
-                Vec::new()
+                // Windows has no service-state *file*: services live in the registry, and
+                // what they are doing right now comes from list_processes and the System
+                // event log, both of which these personas already hold. So this root points
+                // at the event log rather than pretending a directory of unit files exists.
+                under_system_root(&[&["System32", "winevt", "Logs"]])
             } else {
                 exists(&[
                     "/etc/systemd",
@@ -60,7 +82,9 @@ pub fn directories(root: Root, db: &MemoryDb) -> Vec<PathBuf> {
         }
         Root::NetworkConfig => {
             if cfg!(windows) {
-                Vec::new()
+                // hosts, services, protocol and networks -- the same four files Unix keeps
+                // in /etc, in the one place Windows keeps them.
+                under_system_root(&[&["System32", "drivers", "etc"]])
             } else {
                 exists(&[
                     "/etc/hosts",
@@ -68,8 +92,8 @@ pub fn directories(root: Root, db: &MemoryDb) -> Vec<PathBuf> {
                     "/etc/nsswitch.conf",
                     "/etc/network",
                     "/etc/netplan",
-                    "/etc/NetworkManager",
                     "/etc/iptables",
+                    "/etc/NetworkManager",
                     "/etc/nftables.conf",
                     "/proc/net",
                 ])
@@ -80,20 +104,27 @@ pub fn directories(root: Root, db: &MemoryDb) -> Vec<PathBuf> {
     }
 }
 
-/// The working directory, but only when it is plausibly a project.
+/// The working directory, but only when it is plausibly a project *and* somewhere the path
+/// guard will actually let a tool read.
+///
+/// Two rules, and both matter for the same reason.
 ///
 /// The companion is often launched from the operator's home directory, and a ProjectTree
-/// that resolved to `~` would quietly make the Coding persona's field nearly the whole
-/// disk -- the opposite of what a field is for. So the home directory, the filesystem
-/// root, and anything above the home directory resolve to no project at all, and the
-/// Coding persona asks before reading files until it is started somewhere that is one.
+/// that resolved to `~` would quietly make the Coding persona's field nearly the whole disk
+/// -- the opposite of what a field is for. So home itself, the filesystem root, and any
+/// ancestor of home resolve to no project at all.
+///
+/// And it must sit *inside* home, because that is the only place `fs_guard` permits reading
+/// outside the system roots. Started from `/opt/something`, the directory is a real project
+/// and every read of it would still be refused -- so naming it as the persona's field would
+/// advertise access that does not exist, and elevation would not conjure it either. Better
+/// to say there is no project than to point at one nothing can open.
 fn project_tree() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?.canonicalize().ok()?;
     cwd.parent()?;
-    if let Some(home) = crate::paths::home_dir().and_then(|h| h.canonicalize().ok()) {
-        if cwd == home || home.starts_with(&cwd) {
-            return None;
-        }
+    let home = crate::paths::home_dir()?.canonicalize().ok()?;
+    if cwd == home || !cwd.starts_with(&home) {
+        return None;
     }
     Some(cwd)
 }
@@ -225,11 +256,37 @@ mod tests {
         );
     }
 
+    /// Every root that means something on this platform resolves to somewhere the path
+    /// guard will actually let a tool read. A domain root the guard refuses is decorative:
+    /// it reads as access the persona has and does not.
+    #[test]
+    fn every_resolved_root_is_readable_by_the_path_guard() {
+        let db = temp_db("roots_readable");
+        for root in [
+            Root::SystemLogs,
+            Root::ServiceState,
+            Root::NetworkConfig,
+            Root::ProjectTree,
+        ] {
+            for dir in directories(root, &db) {
+                let as_text = dir.display().to_string();
+                assert!(
+                    super::super::fs_guard::resolve_readable(&as_text).is_ok(),
+                    "{root:?} resolves to {as_text}, which the path guard refuses -- a \
+                     domain root the guard denies is access the persona appears to have \
+                     and does not"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_root_that_this_platform_has_no_answer_for_is_empty_not_everything() {
         let db = temp_db("empty_root");
-        if cfg!(windows) {
-            assert!(directories(Root::NetworkConfig, &db).is_empty());
+        if !cfg!(windows) {
+            // The Windows-only roots have no Unix answer and must stay empty here rather
+            // than falling back to something broad.
+            assert!(crate::paths::system_root().is_none());
         }
         // Whatever this platform resolves, no root may ever resolve to the filesystem root:
         // "everything" is not a field.
