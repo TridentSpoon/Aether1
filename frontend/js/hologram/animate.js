@@ -762,12 +762,14 @@ HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clic
         shard.outlineMat.opacity = Math.max(0.05, Math.min(1, opacity));
     });
 
-    // Firewall perimeter ring -- a slow idle scan that snaps into a fast active sweep.
-    if (this.altFirewallRing) {
-        const spinSpeed = isThinking ? 0.03 : (isSpeaking ? 0.02 : 0.004 + clickPulse * 0.01);
-        this.altFirewallRing.rotation.z += spinSpeed;
-        const ringOpacity = isSpeaking ? 0.5 + audioIntensity * 0.4 : (isThinking ? 0.5 + Math.sin(elapsedTime * 10) * 0.25 : 0.4 + clickPulse * 0.3);
-        this.altFirewallRingMat.opacity = ringOpacity;
+    // Firewall perimeter -- static concentric rings (bound to the window's own edges
+    // rather than shapes that scan around), so only their brightness answers the
+    // current state; each ring keeps its own fixed fade relative to the others.
+    if (this.altFirewallRings.length) {
+        const baseOpacity = isSpeaking ? 0.5 + audioIntensity * 0.4 : (isThinking ? 0.5 + Math.sin(elapsedTime * 10) * 0.25 : 0.4 + clickPulse * 0.3);
+        this.altFirewallRings.forEach(ring => {
+            ring.mat.opacity = baseOpacity * ring.fade;
+        });
     }
 
     // Shield/ICE tiles -- a sequential scan sweep around the perimeter, sped up while alert.
