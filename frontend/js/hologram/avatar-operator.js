@@ -1,10 +1,10 @@
-/* Avatar: Operator -- a terminal prompt sitting in a clear centre, framed by a ring of
- * falling code that constantly flows outward toward the edges of the screen. Two ideas,
- * borrowed as pure technique rather than as any specific film's artwork: a "|>" caret
- * that blinks at the end of a line perpetually typing itself out, and a vignette of
- * digit glyphs in fixed angular slots, each one continuously sliding from the clear
- * centre out to the rim and fading there -- a static frame with motion inside it,
- * rather than a tube the camera flies down.
+/* Avatar: Operator -- a terminal prompt sitting in a clear centre, filling the whole
+ * frame with code streaming outward past the viewer -- the "hyperspace starfield" trick:
+ * points in fixed angular slots that only grow their radius over time read as motion
+ * straight at the camera even though nothing ever moves in depth. Two ideas, borrowed
+ * as pure technique rather than as any specific film's artwork: a "|>" caret that blinks
+ * at the end of a line perpetually typing itself out, and a field of digit glyphs that
+ * never stops sliding from the clear centre out past the edges of the screen.
  *
  * No obsidian core, no fixed hot accent: like A1 and White Rabbit, this reads as a
  * projection rather than a physical creature, so it's fully theme-tinted throughout.
@@ -13,8 +13,11 @@
  * uses -- see js/hologram/README.md and avatar-template.js.
  */
 
-const OPERATOR_RING_INNER = 26;
-const OPERATOR_RING_OUTER = 112;
+// Outer radius reaches past the frustum's edge even at the widest panel aspect the HUD
+// allows (core.js widens the camera's fov up to maxFov=100 for a short, wide panel), so
+// the field always fills the visible frame rather than floating in it as a small disc.
+const OPERATOR_RING_INNER = 24;
+const OPERATOR_RING_OUTER = 260;
 const OPERATOR_RING_SPAN = OPERATOR_RING_OUTER - OPERATOR_RING_INNER;
 
 // Draws a single character onto a transparent square canvas for use as a point-sprite
@@ -63,7 +66,7 @@ function buildOperatorStream(texture, count, color, pointSize, baseOpacity) {
         const brightness = 0.75 + Math.random() * 0.55;
         state[i] = {
             angle: Math.random() * Math.PI * 2,
-            speed: 14 + Math.random() * 22,
+            speed: 40 + Math.random() * 65,
             offset: Math.random() * OPERATOR_RING_SPAN,
             z: -14 + Math.random() * 40,
             nextFlicker: Math.random() * 2,
@@ -122,11 +125,13 @@ HologramAvatar.registerAvatar({
         const zeroTexture = operatorGlyphTexture('0', 64);
         const oneTexture = operatorGlyphTexture('1', 64);
 
-        // The vignette: mostly "0"s, the densest and brightest stream, with a sparser
+        // The field: mostly "0"s, the densest and brightest stream, with a sparser
         // accent stream of "1"s threaded through it, a shade dimmer -- the two-glyph
-        // mix a digital rain needs to read as code rather than static.
-        const zeros = buildOperatorStream(zeroTexture, 1900, api.palette.hex, 7.4, 0.95);
-        const ones = buildOperatorStream(oneTexture, 620, api.palette.hex2, 6, 0.75);
+        // mix a digital rain needs to read as code rather than static. Counts and sizes
+        // are scaled up to keep the same density now that the field reaches the frame's
+        // edges instead of stopping at a small central disc.
+        const zeros = buildOperatorStream(zeroTexture, 3600, api.palette.hex, 9, 0.95);
+        const ones = buildOperatorStream(oneTexture, 1200, api.palette.hex2, 7, 0.75);
         group.add(zeros.points, ones.points);
 
         // The prompt: a row of ticks that perpetually "types" itself out left to right,
