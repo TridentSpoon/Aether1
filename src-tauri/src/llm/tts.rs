@@ -150,8 +150,10 @@ fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
          $s.Speak('{escaped_text}'); \
          $s.Dispose();"
     );
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    crate::paths::suppress_console_window(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("could not start powershell: {e}"))?;
     if !output.status.success() {
@@ -250,6 +252,7 @@ pub fn local_status(configured_voice: Option<&str>) -> Result<(PathBuf, PathBuf)
 /// does with the child's exit, instead of only starting to drain after stdin is done.
 fn speak_via_subprocess(mut cmd: Command, text: &str) -> Result<std::process::Output, String> {
     let program = cmd.get_program().to_string_lossy().to_string();
+    crate::paths::suppress_console_window(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

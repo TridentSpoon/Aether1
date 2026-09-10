@@ -87,6 +87,24 @@ pub fn find_installed_binary(names: &[&str]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Stops a spawned console-subsystem process (PowerShell, Piper, whisper-cli) from
+/// flashing a visible console window on Windows. This app has no console of its own
+/// (`windows_subsystem = "windows"` in main.rs), so Windows' default for a console-mode
+/// child spawned from a windowed parent is to allocate it a brand new console -- which
+/// appears and disappears for every single synthesis/transcription call, exactly the
+/// "a bunch of terminal windows that open then close" symptom. `CREATE_NO_WINDOW` (a Win32
+/// `CreateProcess` flag) suppresses that allocation; it does nothing on other platforms, so
+/// this is a no-op there rather than something call sites need to `#[cfg]` around.
+#[cfg(target_os = "windows")]
+pub fn suppress_console_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn suppress_console_window(_cmd: &mut std::process::Command) {}
+
 /// A path as a lowercase, forward-slashed string, for comparing against the deny lists.
 ///
 /// Windows paths arrive with backslashes and arbitrary case, so `"/.ssh/"` would never
