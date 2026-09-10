@@ -46,11 +46,19 @@ jobs:
       - name: Package the offline bundle
         run: ./scripts/package_offline_linux.sh dist
 
+      # One day rather than the 90-day default, because nothing reads these later. On a tag
+      # run publish-release downloads them minutes from now in this same run, and the copy
+      # that outlives the build is the Release asset, stored separately and not counted
+      # against Actions storage. On a workflow_dispatch run publish-release never fires at
+      # all, so the bundle has no reader whatsoever. At ~0.5 GB each against a 0.5 GB
+      # included allowance, the default retention put the account over its storage limit
+      # after a single run.
       - uses: actions/upload-artifact@v4
         with:
           name: aether1-offline-linux-x86_64
           path: dist/aether1-offline-linux-x86_64.tar.gz
           if-no-files-found: error
+          retention-days: 1
 
   windows-installer:
     name: Windows offline installer
@@ -88,11 +96,13 @@ jobs:
         shell: pwsh
         run: .\scripts\package_offline_windows.ps1 -OutDir dist
 
+      # Same one-day retention as the Linux bundle above, for the same reason.
       - uses: actions/upload-artifact@v4
         with:
           name: aether1-offline-windows-installer
           path: dist/Aether1-Setup.exe
           if-no-files-found: error
+          retention-days: 1
 
   publish-release:
     name: Attach to the GitHub Release
