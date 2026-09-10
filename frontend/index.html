@@ -18,7 +18,7 @@
          head rather than with the engine at the foot of the body: loaded down there, the page
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=3"></script>
+    <script src="js/theme.js?v=4"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
 </head>
@@ -446,7 +446,28 @@
                             <input type="color" id="theme-colour-highlight" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The companion colour, so the main one is not the only one on screen.">
                         </label>
                     </div>
-                    <button type="button" id="btn-theme-colours-reset" class="cyber-btn text-[10px] leading-tight py-1.5 px-2 justify-center w-full">↺ Reset this mode's colours</button>
+                    <!-- Two axes, not one. Saturation is how much colour the accents carry;
+                         depth is how dark the ground is. Draining the colour out of a
+                         background moves it toward grey at the same brightness, not toward
+                         black, so "too bright" and "not dark enough" need separate controls. -->
+                    <div class="space-y-1.5 mt-1.5">
+                        <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                            <span class="w-20 shrink-0">Saturation</span>
+                            <input type="range" id="theme-saturation" min="0" max="100" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How much colour the accents carry. Lower is calmer; 0 is greyscale. Brightness stays where it is.">
+                            <span id="theme-saturation-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">100%</span>
+                        </label>
+                        <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                            <span class="w-20 shrink-0">Depth</span>
+                            <input type="range" id="theme-depth" min="-40" max="40" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How dark the background sits. Left is deeper, right is lighter. It cannot go far enough to turn a light theme dark.">
+                            <span id="theme-depth-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">0</span>
+                        </label>
+                    </div>
+                    <!-- Only shown while the tone is off its default. The swatches above keep
+                         showing the colours as picked rather than as painted, which is what
+                         makes the sliders non-destructive -- but it also means the swatch and
+                         the screen disagree, and that is worth one sentence. -->
+                    <p id="theme-tone-note" class="text-[10px] font-mono text-slate-500 leading-snug"></p>
+                    <button type="button" id="btn-theme-colours-reset" class="cyber-btn text-[10px] leading-tight py-1.5 px-2 justify-center w-full">↺ Reset this mode's colours and tone</button>
                 </div>
 
                 <!-- Persona Selector -->
@@ -760,7 +781,7 @@
     <script src="js/hologram/avatar-operator.js?v=1"></script>
     <script src="js/hologram/animate.js?v=36"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=27"></script>
+    <script src="js/app.js?v=28"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

@@ -79,6 +79,14 @@ document.addEventListener('DOMContentLoaded', () => {
         main: document.getElementById('theme-colour-main'),
         highlight: document.getElementById('theme-colour-highlight')
     };
+    const themeToneInputs = {
+        saturation: document.getElementById('theme-saturation'),
+        depth: document.getElementById('theme-depth')
+    };
+    const themeToneValues = {
+        saturation: document.getElementById('theme-saturation-value'),
+        depth: document.getElementById('theme-depth-value')
+    };
 
     // Model Scanner Elements
     const btnScanSystem = document.getElementById('btn-scan-system');
@@ -353,6 +361,29 @@ document.addEventListener('DOMContentLoaded', () => {
             const input = themeColourInputs[slot];
             if (input && input.value.toLowerCase() !== theme.colours[slot]) input.value = theme.colours[slot];
         });
+
+        /* The tone sliders are read back through toneOf rather than straight off the stored
+           object, so a mode that has never been touched shows its defaults instead of an
+           empty slider parked at whatever the minimum happens to be. */
+        const tone = Aether1Theme.toneOf(theme.colours);
+        Object.keys(themeToneInputs).forEach(slot => {
+            const input = themeToneInputs[slot];
+            if (input && Number(input.value) !== tone[slot]) input.value = String(tone[slot]);
+            const label = themeToneValues[slot];
+            if (label) {
+                label.textContent = slot === 'saturation'
+                    ? `${tone[slot]}%`
+                    : (tone[slot] > 0 ? `+${tone[slot]}` : String(tone[slot]));
+            }
+        });
+
+        const themeToneNote = document.getElementById('theme-tone-note');
+        if (themeToneNote) {
+            const touched = tone.saturation !== Aether1Theme.SATURATION_DEFAULT || tone.depth !== 0;
+            themeToneNote.textContent = touched
+                ? 'The swatches show the colours as picked. The sliders adjust how they are painted, so those two will not match until you reset the tone.'
+                : '';
+        }
 
         if (themeModeNote) {
             themeModeNote.textContent = Aether1Theme.followingSystem()
@@ -1834,6 +1865,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!input) return;
         input.addEventListener('input', () => {
             paintTheme(Aether1Theme.setColour(slot, input.value));
+        });
+    });
+
+    /* ...and the two tone sliders. Same 'input' rather than 'change': the whole point of a
+       slider over a number box is watching the window change as it moves. */
+    Object.keys(themeToneInputs).forEach(slot => {
+        const input = themeToneInputs[slot];
+        if (!input) return;
+        input.addEventListener('input', () => {
+            paintTheme(Aether1Theme.setTone(slot, input.value));
         });
     });
 
