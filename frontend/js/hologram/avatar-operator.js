@@ -132,6 +132,12 @@ HologramAvatar.registerAvatar({
         // edges instead of stopping at a small central disc.
         const zeros = buildOperatorStream(zeroTexture, 3600, api.palette.hex, 9, 0.95);
         const ones = buildOperatorStream(oneTexture, 1200, api.palette.hex2, 7, 0.75);
+        // The HUD panel this renders into is much wider than it is tall, so a circular
+        // field reaches the top/bottom edges while leaving the corners bare. Stretching
+        // the field horizontally (not the individual glyph sprites, just their layout)
+        // turns it into an ellipse that actually reaches the left/right edges too.
+        zeros.points.scale.set(1.9, 1, 1);
+        ones.points.scale.set(1.9, 1, 1);
         group.add(zeros.points, ones.points);
 
         // The prompt: a row of ticks that perpetually "types" itself out left to right,
