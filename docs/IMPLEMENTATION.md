@@ -806,6 +806,34 @@ deserve two different headings, or the operator learns to read neither.
 
 Worth stating plainly: this makes Aether1 **stricter** than it was, not looser.
 
+### Step 27: reading the event log, not just listing it — **shipped**
+
+Step 25 named the diagnostic persona for "system diagnosis and event viewer checking", and
+step 26 gave it the event log directory as part of its field. Neither made the second half
+possible: `.evtx` files are binary, so `read_file` could report their size and `list_dir`
+could say which logs existed, and that was the end of it.
+
+`read_event_log` closes that. It shells out to `wevtutil qe`, newest first, with optional
+filters on severity, age and source.
+
+It is a dedicated tool rather than a `run_command` allowlist entry, and that is the whole
+design decision. Reading events is a read; `run_command` is the mutating,
+never-pre-approvable escape hatch. Putting `wevtutil` on the command allowlist would have
+meant an approval for every single query *and* would have allowed every other subcommand of
+the same program — including `wevtutil cl`, which clears a log. Here the program is fixed,
+the subcommand is fixed at `qe`, and every argument is built from validated input.
+
+The validation that earns its place: a channel name may not begin with `/` or `-`. wevtutil
+takes options as `/c:20` and the channel positionally, so a "channel" spelled `/uni:true`
+would have been read as an option rather than as a log — argument injection with no shell
+anywhere in sight. Quotes and brackets are refused in channel and provider names for the
+same reason one level up, where they would reshape the XPath query around them.
+
+Severity filters enumerate levels (`Level=1 or Level=2`) rather than comparing (`Level<=2`),
+because Level 0 means "undefined" and providers use it for informational events. A range
+would have swept it into every filter, so "show me the errors" would have returned chatter.
+Event Viewer's own Information filter matches `Level=4 or Level=0`; this follows it.
+
 ## Where this stands
 
 Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies

@@ -327,8 +327,16 @@ files in `/etc`. On **Windows** they are the event logs under
 files, which is where Windows keeps what Unix keeps in `/etc`. Windows has no service-state
 *file* — services live in the registry — so **Security & White Hat** and **System Diagnosis**
 answer "what is running" from `list_processes` and the System event log instead. Note that
-`.evtx` event logs are binary, so `read_file` will report their size rather than their
-contents; `list_dir` is what tells you which logs exist.
+`.evtx` event logs are binary, so `read_file` only reports their size — **`read_event_log`
+is the tool that actually reads them**, via `wevtutil`. It takes a channel (`System`,
+`Application`, `Setup`, `Security`, or a full name like
+`Microsoft-Windows-Kernel-Boot/Operational`), returns the newest entries first, and can filter
+by severity (`min_level`), age (`since_hours`) and source (`provider`). "Show me today's disk
+errors" is one call. It is in the field of **System Diagnosis** and **Security & White Hat**,
+so for those two it runs without asking; every other persona proposes it first.
+
+The **Security** channel is readable only by an administrator — that is Windows refusing, not
+Aether1, and the error says so.
 
 Two things this does *not* change. Every persona has the same tools available — the field
 decides what runs without a prompt, not what is possible. And the paths Aether1 never reads at

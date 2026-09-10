@@ -13,7 +13,7 @@ bottom, with the reasoning.
 Aether1 already splits tools two ways, in `src-tauri/src/tools/mod.rs`:
 
 - **Read-only tools run automatically.** `read_file`, `list_dir`, `list_processes`,
-  `telemetry_detail`, `search_memory`.
+  `telemetry_detail`, `search_memory`, `read_event_log`.
 - **Mutating tools are proposed and wait for the operator.** `write_file`, `set_aether_setting`,
   `run_command`, `append_note`, `write_note`. `run_command` additionally refuses to be
   pre-approved at all (`always_allowable() == false`).
@@ -70,8 +70,8 @@ pub enum Root {
 
 | Persona | Tools | Roots |
 |---|---|---|
-| **System Diagnosis** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir` | SystemLogs, ServiceState |
-| **Security & White Hat** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir` | NetworkConfig, ServiceState |
+| **System Diagnosis** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | SystemLogs, ServiceState |
+| **Security & White Hat** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | NetworkConfig, ServiceState |
 | **Coding** | `read_file`, `list_dir`, `search_memory` | ProjectTree |
 | **Cites Sources** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
 | **Creative Work** | `search_memory`, `read_file`, `list_dir` | Vault |
