@@ -20,19 +20,35 @@ const OPERATOR_RING_INNER = 24;
 const OPERATOR_RING_OUTER = 260;
 const OPERATOR_RING_SPAN = OPERATOR_RING_OUTER - OPERATOR_RING_INNER;
 
-// Draws a single character onto a transparent square canvas for use as a point-sprite
-// map -- the same idiom as the built-in glow textures, just with a glyph baked in
-// instead of a gradient.
-function operatorGlyphTexture(char, size) {
+// A short vertical dash on a transparent square canvas, soft-edged top and bottom, for
+// use as a point-sprite map. A field of round glyph dots reads as scattered static; the
+// same field built from vertical dashes packed close together reads as a woven wall of
+// code instead -- the texture a code-rain effect actually needs, without reproducing any
+// specific character, font or composition.
+function operatorTickTexture(size, widthFrac, heightFrac) {
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
-    ctx.font = `bold ${Math.floor(size * 0.8)}px "Courier New", Consolas, monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(char, size / 2, size / 2 + size * 0.05);
+    const w = size * widthFrac;
+    const h = size * heightFrac;
+    const x = (size - w) / 2;
+    const y = (size - h) / 2;
+    const r = w / 2;
+    const gradient = ctx.createLinearGradient(0, y, 0, y + h);
+    gradient.addColorStop(0, 'rgba(255,255,255,0)');
+    gradient.addColorStop(0.18, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.82, 'rgba(255,255,255,1)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
     return new THREE.CanvasTexture(canvas);
 }
 
@@ -126,16 +142,15 @@ HologramAvatar.registerAvatar({
     build(api) {
         const group = new THREE.Group();
 
-        const zeroTexture = operatorGlyphTexture('0', 64);
-        const oneTexture = operatorGlyphTexture('1', 64);
+        const primaryTick = operatorTickTexture(64, 0.34, 0.92);
+        const accentTick = operatorTickTexture(64, 0.22, 0.6);
 
-        // The field: mostly "0"s, the densest and brightest stream, with a sparser
-        // accent stream of "1"s threaded through it, a shade dimmer -- the two-glyph
-        // mix a digital rain needs to read as code rather than static. Counts and sizes
-        // are scaled up to keep the same density now that the field reaches the frame's
-        // edges instead of stopping at a small central disc.
-        const zeros = buildOperatorStream(zeroTexture, 3600, api.palette.hex, 9, 0.95);
-        const ones = buildOperatorStream(oneTexture, 1200, api.palette.hex2, 7, 0.75);
+        // The field: a dense primary layer of long, thick dashes, with a sparser accent
+        // layer of shorter, thinner ones threaded through it, a shade dimmer -- packed
+        // close enough (see counts/size below) that neighbouring dashes overlap into a
+        // continuous woven texture rather than reading as scattered individual dots.
+        const zeros = buildOperatorStream(primaryTick, 5200, api.palette.hex, 13, 0.95);
+        const ones = buildOperatorStream(accentTick, 2000, api.palette.hex2, 8, 0.75);
         // The HUD panel this renders into is much wider than it is tall, so a circular
         // field reaches the top/bottom edges while leaving the corners bare. Stretching
         // the field horizontally (not the individual glyph sprites, just their layout)
@@ -162,7 +177,7 @@ HologramAvatar.registerAvatar({
         promptGeometry.setAttribute('position', new THREE.BufferAttribute(promptPositions, 3));
         promptGeometry.setAttribute('color', new THREE.BufferAttribute(promptColors, 3));
         const promptMaterial = new THREE.PointsMaterial({
-            color: api.palette.hex3, map: zeroTexture, size: 5.5, vertexColors: true,
+            color: api.palette.hex3, map: accentTick, size: 5.5, vertexColors: true,
             transparent: true, opacity: 0.95, depthWrite: false,
             blending: THREE.AdditiveBlending, sizeAttenuation: true,
         });

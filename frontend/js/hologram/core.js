@@ -92,6 +92,7 @@ class HologramAvatar {
         // blink in animateRed9000. Fixed color regardless of theme, same convention as the
         // obsidian core itself.
         this.redLensGlow = null;
+        this.redInnerGlow = null; // same warm gradient, depth-test off, bleeds past the core's silhouette
         this.redEyeLight = null;
         // Blink scheduling -- see animateRed9000. redBlinkStartTime is elapsedTime when the
         // eyelids started closing; redNextBlinkTime is when the next autonomous blink fires.

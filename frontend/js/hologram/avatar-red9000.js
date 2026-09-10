@@ -7,10 +7,14 @@ HologramAvatar.prototype.buildRed9000Avatar = function() {
     this.redGroup = new THREE.Group();
 
     // 1. Obsidian inner core (HAL / Reactive Daemon Eye) -- fixed dark glossy material,
-    // a touch smaller than the old glowing-red sphere, not theme-tinted.
+    // a touch smaller than the old glowing-red sphere, not theme-tinted. A faint warm
+    // emissive tint (not just a specular highlight) hints that there's heat inside the
+    // glass rather than the surface just catching light, especially at the rim where
+    // the lens glow sprite in front can't reach.
     const coreGeom = new THREE.SphereGeometry(22, 32, 32);
     const coreMat = new THREE.MeshPhongMaterial({
         color: 0x0a0505,
+        emissive: 0x3a0a04,
         specular: 0xff6a55,
         shininess: 90,
         transparent: true,
@@ -50,6 +54,25 @@ HologramAvatar.prototype.buildRed9000Avatar = function() {
     this.redLensGlow.scale.set(30, 30, 1);
     this.redLensGlow.position.z = 25;
     this.redGroup.add(this.redLensGlow);
+
+    // Inner halo -- the same warm gradient, but seated at the core's own centre and
+    // drawn without a depth test, so the opaque core sphere in front of it never hides
+    // it: it bleeds out past the sphere's silhouette on every side, not just the front
+    // face, reading as light radiating from inside the glass rather than a lens decal
+    // stuck on the front. Kept dimmer and drawn before the core (renderOrder) so the
+    // core's own surface still reads as solid glass with light behind it, not a hole.
+    const innerGlowMat = new THREE.SpriteMaterial({
+        map: lensGlowTexture,
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false
+    });
+    this.redInnerGlow = new THREE.Sprite(innerGlowMat);
+    this.redInnerGlow.scale.set(50, 50, 1);
+    this.redInnerGlow.renderOrder = -1;
+    this.redGroup.add(this.redInnerGlow);
 
     // Eye light -- a warm point light seated at the lens so the obsidian core's specular
     // highlight breathes along with the lens glow above (animateRed9000 drives intensity).
