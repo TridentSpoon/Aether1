@@ -1,9 +1,10 @@
 /* Avatar parts.
  *
  * A kit of pieces an avatar can be assembled from, rather than modelled by hand. The
- * six built-in avatars are hand-built and stay that way -- they do things no kit could
- * anticipate. This is for the other case: someone who wants an avatar of their own and
- * would rather choose than write three.js.
+ * seven hand-built avatars (A1, hAlcy, R.E.D. 9000, A.R.X.LIMES, A.R.X.LOGOS, A1ter_nul,
+ * White Rabbit, Operator, and The Nexus / Nexus Sent) stay hand-built -- they do things
+ * no kit could anticipate. This is for the other case: someone who wants an avatar of
+ * their own and would rather choose than write three.js.
  *
  * Every part answers the same three questions, which is the whole reason they can be
  * mixed freely:
@@ -17,8 +18,22 @@
  * Parts never read the palette at build time and keep it -- they are always told, so
  * that a theme switched later reaches every part including the ones not on screen.
  *
+ * Four tiers, matching the workbench's four pickers:
+ *
+ *   cores       -- the thing at the middle
+ *   innerRings  -- a structure wrapping close around the core
+ *   outerRings  -- a boundary further out, toward the edge of the shape
+ *   effects     -- an ambient layer or background, not a fixed structure
+ *
+ * Some parts here are generic (built for this kit). Others are adapted from pieces of
+ * the hand-built avatars whose designs are open for reuse this way -- rabbit, operator,
+ * hAlcy, R.E.D. 9000, A.R.X.LIMES, A.R.X.LOGOS and A1ter_nul. (The Nexus / Nexus Sent
+ * and A1 are not sources here -- their designs stay theirs alone.) An adapted part is a
+ * fresh, simplified build of the same visual idea using only api.helpers, not the
+ * original file's code -- it has to stand on its own next to parts it never met.
+ *
  * Used by avatar-custom.js (which renders a saved recipe) and available to any
- * hand-written avatar that wants a ring without writing one.
+ * hand-written avatar that wants a piece without writing one from scratch.
  */
 (function () {
     'use strict';
@@ -36,6 +51,74 @@
         return sum / (per * 255);
     }
 
+    // ---- Small shared geometry helpers ---------------------------------------
+    // Hand-rolled from api.helpers.hexVertices rather than the engine's own
+    // prototype methods (buildHexFill/buildHexOutline/buildPolygonShard), which a
+    // standalone part has no access to -- see js/hologram/README.md's four-helper
+    // contract.
+
+    function hexFillMesh(api, radius, rotationOffset, material, cx = 0, cy = 0) {
+        const geom = new THREE.CircleGeometry(radius, 6, rotationOffset);
+        const mesh = new THREE.Mesh(geom, material);
+        mesh.position.set(cx, cy, 0);
+        return mesh;
+    }
+
+    function hexOutlineLoop(api, radius, rotationOffset, material, cx = 0, cy = 0) {
+        const geom = new THREE.BufferGeometry().setFromPoints(api.helpers.hexVertices(radius, rotationOffset, cx, cy));
+        return new THREE.LineLoop(geom, material);
+    }
+
+    // One flat-ish irregular polygon "shard": points2D form a loop in local space with
+    // its near edge at y=0, extending toward +y; the far edge recedes in Z so a cluster
+    // of shards reads as facets of a convex dome.
+    function polygonShard(points2D, bulge, fillMat, outlineMat) {
+        const maxY = Math.max(...points2D.map((p) => p.y), 1);
+        const verts = points2D.map((p) => new THREE.Vector3(p.x, p.y, -bulge * (p.y / maxY)));
+        const positions = [];
+        for (let i = 1; i < verts.length - 1; i++) {
+            positions.push(verts[0].x, verts[0].y, verts[0].z);
+            positions.push(verts[i].x, verts[i].y, verts[i].z);
+            positions.push(verts[i + 1].x, verts[i + 1].y, verts[i + 1].z);
+        }
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geom.computeVertexNormals();
+        const fillMesh = new THREE.Mesh(geom, fillMat);
+        const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(verts), outlineMat);
+        const group = new THREE.Group();
+        group.add(fillMesh, outline);
+        return group;
+    }
+
+    // Rejection-samples `count` points inside the union of ellipses {cx,cy,rx,ry} --
+    // the same plain 2D containment math White Rabbit uses for its silhouette.
+    function sampleEllipseCluster(ellipses, count, zJitter) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        ellipses.forEach(({ cx, cy, rx, ry }) => {
+            minX = Math.min(minX, cx - rx); maxX = Math.max(maxX, cx + rx);
+            minY = Math.min(minY, cy - ry); maxY = Math.max(maxY, cy + ry);
+        });
+        const positions = new Float32Array(count * 3);
+        let filled = 0, attempts = 0;
+        const maxAttempts = count * 200;
+        while (filled < count && attempts < maxAttempts) {
+            attempts++;
+            const x = THREE.MathUtils.lerp(minX, maxX, Math.random());
+            const y = THREE.MathUtils.lerp(minY, maxY, Math.random());
+            const inside = ellipses.some(({ cx, cy, rx, ry }) => {
+                const dx = (x - cx) / rx, dy = (y - cy) / ry;
+                return dx * dx + dy * dy <= 1;
+            });
+            if (!inside) continue;
+            positions[filled * 3] = x;
+            positions[filled * 3 + 1] = y;
+            positions[filled * 3 + 2] = (Math.random() - 0.5) * zJitter;
+            filled++;
+        }
+        return positions;
+    }
+
     // ---- Cores: the thing at the middle -------------------------------------
 
     const CORES = {
@@ -49,9 +132,6 @@
         orb: {
             label: 'Obsidian orb',
             build(api, options) {
-                /* Phong rather than Basic so the scene's lights actually land on it --
-                   this is the one part meant to look like a solid object rather than
-                   drawn light, the same trick the built-in hAlcy core uses. */
                 const mat = new THREE.MeshPhongMaterial({
                     color: 0x05070f, emissive: 0x0a1030, shininess: 90, specular: 0x8fa8ff,
                 });
@@ -105,8 +185,6 @@
                 });
                 const lens = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.55, 48), lensMat);
                 lens.position.z = options.size * 0.86;
-                /* The hot centre is a sprite, not geometry: it has to read as light
-                   spilling toward the viewer rather than a disc sitting in space. */
                 const glowMat = new THREE.SpriteMaterial({
                     map: api.helpers.radialGlowTexture(128, 'rgba(255,240,180,1)', 'rgba(255,40,20,0)'),
                     transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
@@ -127,11 +205,584 @@
                 };
             },
         },
+
+        // Adapted from R.E.D. 9000: an obsidian eye with a hot lens glow on the front
+        // face and a second, depth-test-off halo at its own centre so the glow bleeds
+        // past the sphere's silhouette on every side, not just the front.
+        redEye: {
+            label: 'R.E.D. eye',
+            build(api, options) {
+                const group = new THREE.Group();
+                const coreMat = new THREE.MeshPhongMaterial({
+                    color: 0x0a0505, emissive: 0x3a0a04, specular: 0xff6a55, shininess: 90,
+                    transparent: true, opacity: 0.97,
+                });
+                const core = new THREE.Mesh(new THREE.SphereGeometry(options.size, 40, 40), coreMat);
+                const glowTexture = api.helpers.radialGlowTexture(128, '#fff26b', '#ff2200');
+                const lensGlowMat = new THREE.SpriteMaterial({
+                    map: glowTexture, transparent: true, opacity: 0.55,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const lensGlow = new THREE.Sprite(lensGlowMat);
+                lensGlow.scale.setScalar(options.size * 1.35);
+                lensGlow.position.z = options.size * 1.1;
+                const innerGlowMat = new THREE.SpriteMaterial({
+                    map: glowTexture, transparent: true, opacity: 0.35,
+                    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+                });
+                const innerGlow = new THREE.Sprite(innerGlowMat);
+                innerGlow.scale.setScalar(options.size * 2.3);
+                innerGlow.renderOrder = -1;
+                group.add(core, lensGlow, innerGlow);
+                return {
+                    object: group,
+                    applyPalette() { /* fixed: a hot lens stays hot regardless of theme */ },
+                    animate(ctx) {
+                        const heat = 0.5 + ctx.audio * 1.2 + ctx.click * 0.4
+                            + (ctx.state === 'THINKING' ? Math.abs(Math.sin(ctx.time * 16)) * 0.35 : 0);
+                        core.scale.setScalar(1 + ctx.audio * 0.15 + ctx.click * 0.12);
+                        lensGlow.material.opacity = Math.min(1, 0.35 + heat * 0.4);
+                        innerGlow.material.opacity = Math.min(0.7, 0.2 + heat * 0.28);
+                        innerGlow.scale.setScalar(options.size * 2.3 * (1 + heat * 0.18));
+                    },
+                };
+            },
+        },
+
+        // Adapted from A1ter_nul: a row of dark-glass shard bars, tallest in the
+        // middle, each answering its own audio bin like a broken-glass equaliser.
+        altShards: {
+            label: 'Broken shard stack',
+            build(api, options) {
+                const group = new THREE.Group();
+                const count = 7;
+                const totalSpan = options.size * 3.2;
+                const maxLength = options.size * 2.1;
+                const minLength = options.size * 0.9;
+                const shards = [];
+                for (let i = 0; i < count; i++) {
+                    const t = count > 1 ? i / (count - 1) : 0.5;
+                    const taper = 1 - Math.pow(Math.abs(t - 0.5) * 2, 1.6);
+                    const length = minLength + (maxLength - minLength) * taper;
+                    const x = -totalSpan / 2 + (i / (count - 1)) * totalSpan;
+                    const fillMat = new THREE.MeshBasicMaterial({
+                        color: 0x0a0a0c, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+                    });
+                    const outlineMat = new THREE.LineBasicMaterial({
+                        color: 0x00f0ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
+                    });
+                    const geom = new THREE.PlaneGeometry(options.size * 0.34, length);
+                    const mesh = new THREE.Mesh(geom, fillMat);
+                    const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geom), outlineMat);
+                    const shard = new THREE.Group();
+                    shard.add(mesh, outline);
+                    shard.position.x = x;
+                    group.add(shard);
+                    shards.push({ outlineMat, index: i });
+                }
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        const bottom = new THREE.Color(p.hex2), top = new THREE.Color(p.hex3);
+                        shards.forEach(({ outlineMat, index }) => outlineMat.color.copy(bottom).lerp(top, index / (count - 1)));
+                    },
+                    animate(ctx) {
+                        shards.forEach(({ outlineMat, index }) => {
+                            const level = band(ctx, index, count);
+                            outlineMat.opacity = 0.35 + level * 0.55 + ctx.click * 0.2;
+                        });
+                        group.rotation.y = Math.sin(ctx.time * 0.2) * 0.1;
+                    },
+                };
+            },
+        },
+
+        // Adapted from White Rabbit: the same rejection-sampled point cloud, drawn as a
+        // blank front-facing silhouette rather than a solid body -- here just the
+        // rounded head/body shape, sized by options.size.
+        rabbitSilhouette: {
+            label: 'Rabbit silhouette',
+            build(api, options) {
+                const s = options.size / 20;
+                const positions = sampleEllipseCluster(
+                    [{ cx: 0, cy: -0.4 * s * 20, rx: 0.95 * s * 20, ry: 1.05 * s * 20 },
+                     { cx: 0, cy: 0.75 * s * 20, rx: 0.7 * s * 20, ry: 0.75 * s * 20 }],
+                    1600, 8 * s
+                );
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const mat = new THREE.PointsMaterial({
+                    color: api.palette.hex, map: api.helpers.glowTexture(24), size: 2.2,
+                    transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const scale = 1 + Math.sin(ctx.time * 0.8) * 0.015 + ctx.audio * 0.06 + ctx.click * 0.04;
+                        points.scale.setScalar(scale);
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOGOS: a central hexagon with a fixed dark pupil and a
+        // catchlight, reading as an eye rather than a plain panel.
+        hexEye: {
+            label: 'Hex eye',
+            build(api, options) {
+                const group = new THREE.Group();
+                const radius = options.size;
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: 0xe024c3, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
+                });
+                const outlineMat = new THREE.LineBasicMaterial({ color: 0xe024c3, transparent: true, opacity: 0.95 });
+                const fill = hexFillMesh(api, radius, 0, fillMat);
+                const outline = hexOutlineLoop(api, radius, 0, outlineMat);
+                const pupilMat = new THREE.MeshBasicMaterial({ color: 0x050208, transparent: true, opacity: 0.92 });
+                const pupil = hexFillMesh(api, radius * 0.35, 0, pupilMat);
+                pupil.position.z = 0.5;
+                const catchMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+                const catchlight = hexFillMesh(api, radius * 0.09, 0, catchMat, -radius * 0.16, radius * 0.16);
+                catchlight.position.z = 1;
+                group.add(fill, outline, pupil, catchlight);
+                return {
+                    object: group,
+                    applyPalette(p) { fillMat.color.setHex(p.hex); outlineMat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const scale = ctx.state === 'SPEAKING' ? 1 + ctx.audio * 0.5
+                            : ctx.state === 'THINKING' ? 1 + Math.sin(ctx.time * 16) * 0.15 : 1 + ctx.click * 0.15;
+                        fill.scale.setScalar(scale);
+                        outline.scale.setScalar(scale);
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LIMES: the small faceted anchor its plates orbit, on its
+        // own here as a compact geodesic core.
+        facetedHub: {
+            label: 'Faceted hub',
+            build(api, options) {
+                const geom = new THREE.IcosahedronGeometry(options.size * 0.4, 1);
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: 0xffaa00, side: THREE.DoubleSide, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending,
+                });
+                const outlineMat = new THREE.LineBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.95 });
+                const mesh = new THREE.Mesh(geom, fillMat);
+                const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geom, 12), outlineMat);
+                const group = new THREE.Group();
+                group.add(mesh, outline);
+                return {
+                    object: group,
+                    applyPalette(p) { fillMat.color.setHex(p.hex2); outlineMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.25;
+                        group.scale.setScalar(1 + ctx.audio * 0.15 + ctx.click * 0.12);
+                    },
+                };
+            },
+        },
     };
 
-    // ---- Bodies: the structure around the core ------------------------------
+    // ---- Inner rings: a structure wrapping close around the core -------------
 
-    const BODIES = {
+    const INNER_RINGS = {
+        none: {
+            label: 'Nothing',
+            build() {
+                return { object: new THREE.Group(), applyPalette() {}, animate() {} };
+            },
+        },
+
+        shards: {
+            label: 'Shard stack',
+            build(api, options) {
+                const group = new THREE.Group();
+                const shards = [];
+                const COUNT = 9;
+                for (let i = 0; i < COUNT; i++) {
+                    const t = i / (COUNT - 1);
+                    const w = options.radius * (0.5 + Math.sin(t * Math.PI) * 0.8);
+                    const geom = new THREE.PlaneGeometry(w, options.radius * 0.16);
+                    const fill = new THREE.MeshBasicMaterial({
+                        color: 0x05070f, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+                    });
+                    const outlineMat = new THREE.LineBasicMaterial({
+                        color: 0x00f0ff, transparent: true, opacity: 0.95,
+                    });
+                    const mesh = new THREE.Mesh(geom, fill);
+                    const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geom), outlineMat);
+                    const shard = new THREE.Group();
+                    shard.add(mesh, outline);
+                    shard.position.y = (t - 0.5) * options.radius * 2.1;
+                    shard.rotation.z = (Math.random() - 0.5) * 0.14;
+                    group.add(shard);
+                    shards.push({ shard, outlineMat, index: i, baseY: shard.position.y });
+                }
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        const bottom = new THREE.Color(p.hex2);
+                        const top = new THREE.Color(p.hex3);
+                        shards.forEach(({ outlineMat, index }) => {
+                            outlineMat.color.copy(bottom).lerp(top, index / (COUNT - 1));
+                        });
+                    },
+                    animate(ctx) {
+                        shards.forEach(({ shard, outlineMat, index, baseY }) => {
+                            const level = band(ctx, index, COUNT);
+                            shard.scale.x = 1 + level * 1.1 + ctx.click * 0.2;
+                            shard.position.y = baseY + Math.sin(ctx.time * 1.2 + index) * 1.5;
+                            outlineMat.opacity = 0.5 + level * 0.5;
+                        });
+                        group.rotation.y = Math.sin(ctx.time * 0.25) * 0.35;
+                    },
+                };
+            },
+        },
+
+        // Adapted from hAlcy: a segmented ring hugging the core, each segment its own
+        // audio bin, so it reads as a literal ring-shaped equaliser.
+        equalizerRing: {
+            label: 'Equalizer ring',
+            build(api, options) {
+                const group = new THREE.Group();
+                const segCount = 32;
+                const segMat = new THREE.MeshBasicMaterial({
+                    color: 0x2b3eff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const segs = [];
+                const segLength = options.radius * 0.22;
+                for (let i = 0; i < segCount; i++) {
+                    const angle = (i / segCount) * Math.PI * 2;
+                    const geom = new THREE.BoxGeometry(options.radius * 0.06, segLength, options.radius * 0.045);
+                    geom.translate(0, segLength / 2, 0);
+                    const seg = new THREE.Mesh(geom, segMat);
+                    seg.position.set(Math.cos(angle) * options.radius, Math.sin(angle) * options.radius, 0);
+                    seg.rotation.z = angle - Math.PI / 2;
+                    group.add(seg);
+                    segs.push({ seg, index: i });
+                }
+                return {
+                    object: group,
+                    applyPalette(p) { segMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        segs.forEach(({ seg, index }) => {
+                            const level = band(ctx, index, segCount);
+                            seg.scale.y = 1 + level * 3 + ctx.click * 0.4;
+                        });
+                        group.rotation.z += 0.0025;
+                    },
+                };
+            },
+        },
+
+        // Adapted from R.E.D. 9000: two partial-ring arcs cupping the core from above
+        // and below at slightly different depths, closing together in a blink.
+        eyelidArcs: {
+            label: 'Eyelid arcs',
+            build(api, options) {
+                const r1 = options.radius, r2 = options.radius + options.radius * 0.06;
+                const topMat = new THREE.MeshBasicMaterial({
+                    color: 0x0066ff, side: THREE.DoubleSide, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const bottomMat = new THREE.MeshBasicMaterial({
+                    color: 0x00f0ff, side: THREE.DoubleSide, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const top = new THREE.Mesh(new THREE.RingGeometry(r1, r2, 48, 1, 0.35, 2.44), topMat);
+                top.position.z = options.radius * 0.1;
+                const bottom = new THREE.Mesh(new THREE.RingGeometry(r1, r2, 48, 1, Math.PI + 0.35, 2.44), bottomMat);
+                bottom.position.z = options.radius * 0.25;
+                const group = new THREE.Group();
+                group.add(top, bottom);
+                let nextBlink = 3 + Math.random() * 3;
+                let blinkStart = -10;
+                return {
+                    object: group,
+                    applyPalette(p) { topMat.color.setHex(p.hex); bottomMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        if (ctx.time > nextBlink) { blinkStart = ctx.time; nextBlink = ctx.time + 3 + Math.random() * 4; }
+                        const dt = ctx.time - blinkStart;
+                        const closeness = (dt >= 0 && dt < 0.28) ? Math.sin((dt / 0.28) * Math.PI) : 0;
+                        const scaleY = 1 - closeness * 0.96;
+                        top.scale.y = scaleY;
+                        bottom.scale.y = scaleY;
+                        const opacity = (ctx.state === 'SPEAKING' ? 0.85 + ctx.audio * 0.15 : 0.85) + closeness * 0.15;
+                        topMat.opacity = opacity;
+                        bottomMat.opacity = opacity;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LIMES: the eyelid-shaped top/bottom plates and four wing
+        // blades hugging the hub, read together as a fractured shell.
+        plateCluster: {
+            label: 'Faceted plate cluster',
+            build(api, options) {
+                const group = new THREE.Group();
+                const s = options.radius / 62;
+                const mainFillMat = new THREE.MeshBasicMaterial({
+                    color: 0xffaa00, side: THREE.DoubleSide, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending,
+                });
+                const wingFillMat = new THREE.MeshBasicMaterial({
+                    color: 0xff5500, side: THREE.DoubleSide, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending,
+                });
+                const outlineMat = new THREE.LineBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.95 });
+                const topShape = [{ x: -16, y: 0 }, { x: 16, y: 0 }, { x: 8, y: 13 }, { x: -8, y: 13 }].map((p) => ({ x: p.x * s, y: p.y * s }));
+                const bottomShape = [{ x: -19, y: 0 }, { x: 19, y: 0 }, { x: 10, y: 16 }, { x: -10, y: 16 }].map((p) => ({ x: p.x * s, y: p.y * s }));
+                const wingRight = [{ x: -2, y: 0 }, { x: 2, y: 0 }, { x: 17, y: 26 }, { x: 4, y: 31 }].map((p) => ({ x: p.x * s, y: p.y * s }));
+                const wingLeft = wingRight.map((p) => ({ x: -p.x, y: p.y }));
+                const plates = [];
+                const addPlate = (shape, fillMat, angleDeg, radius) => {
+                    const worldAngle = angleDeg * Math.PI / 180;
+                    const plate = polygonShard(shape, 10 * s, fillMat, outlineMat);
+                    plate.position.set(Math.cos(worldAngle) * radius, Math.sin(worldAngle) * radius, 0);
+                    plate.rotation.z = worldAngle - Math.PI / 2;
+                    group.add(plate);
+                    plates.push({ plate, baseAngle: worldAngle, phase: angleDeg * 0.03 });
+                };
+                addPlate(topShape, mainFillMat, 90, options.radius * 0.26);
+                addPlate(bottomShape, mainFillMat, -90, options.radius * 0.26);
+                addPlate(wingRight, wingFillMat, 15, options.radius * 0.42);
+                addPlate(wingRight, wingFillMat, -15, options.radius * 0.42);
+                addPlate(wingLeft, wingFillMat, 165, options.radius * 0.42);
+                addPlate(wingLeft, wingFillMat, -165, options.radius * 0.42);
+                return {
+                    object: group,
+                    applyPalette(p) { mainFillMat.color.setHex(p.hex); wingFillMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        plates.forEach(({ plate, phase }) => {
+                            plate.scale.setScalar(1 + Math.sin(ctx.time * 1.2 + phase) * 0.05 + ctx.audio * 0.1 + ctx.click * 0.1);
+                        });
+                        group.rotation.z = Math.sin(ctx.time * 0.2) * 0.08;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A1ter_nul: the two innermost rings of its firewall field, the
+        // ones that carry the avatar's own motion rather than sitting fully static.
+        altInnerRings: {
+            label: 'Firewall inner rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mats = [];
+                [0.7, 0.92].forEach((frac, i) => {
+                    const radius = options.radius * frac;
+                    const mat = new THREE.MeshBasicMaterial({
+                        color: 0xfcee0a, transparent: true, opacity: 0.5 - i * 0.15,
+                        side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                    });
+                    const mesh = new THREE.Mesh(new THREE.RingGeometry(radius, radius + radius * 0.02, 96), mat);
+                    group.add(mesh);
+                    mats.push(mat);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mats.forEach((m) => m.color.setHex(p.hex)); },
+                    animate(ctx) {
+                        const pulse = ctx.state === 'SPEAKING' ? 0.5 + ctx.audio * 0.4
+                            : ctx.state === 'THINKING' ? 0.5 + Math.sin(ctx.time * 10) * 0.25 : 0.4 + ctx.click * 0.3;
+                        mats.forEach((m, i) => { m.opacity = pulse * (1 - i * 0.3); });
+                    },
+                };
+            },
+        },
+    };
+
+    // ---- Outer rings: a boundary further out ---------------------------------
+
+    const OUTER_RINGS = {
+        none: {
+            label: 'Nothing',
+            build() {
+                return { object: new THREE.Group(), applyPalette() {}, animate() {} };
+            },
+        },
+
+        rings: {
+            label: 'Orbital rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mats = [];
+                const rings = [];
+                for (let i = 0; i < 3; i++) {
+                    const mat = new THREE.MeshBasicMaterial({
+                        color: 0x00f0ff, transparent: true, opacity: 0.75,
+                        side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                    });
+                    const r = options.radius * (1 + i * 0.22);
+                    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.9, 8, 96), mat);
+                    ring.rotation.x = Math.PI / 2 * (i === 0 ? 1 : 0.4 * i);
+                    ring.rotation.y = i * 0.5;
+                    mats.push(mat);
+                    rings.push({ ring, speed: 0.2 + i * 0.15, tilt: i });
+                    group.add(ring);
+                }
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        mats[0].color.setHex(p.hex);
+                        mats[1].color.setHex(p.hex2);
+                        mats[2].color.setHex(p.hex3);
+                    },
+                    animate(ctx) {
+                        rings.forEach(({ ring, speed, tilt }) => {
+                            ring.rotation.z = ctx.time * speed;
+                            ring.rotation.y = Math.sin(ctx.time * 0.3 + tilt) * 0.6 + tilt * 0.5;
+                            ring.scale.setScalar(1 + ctx.audio * 0.18 + ctx.click * 0.12);
+                        });
+                    },
+                };
+            },
+        },
+
+        spikes: {
+            label: 'Radial spikes',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.LineBasicMaterial({
+                    color: 0x00f0ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                });
+                const SPIKES = 64;
+                const geom = new THREE.BufferGeometry();
+                const positions = new Float32Array(SPIKES * 2 * 3);
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const lines = new THREE.LineSegments(geom, mat);
+                group.add(lines);
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        for (let i = 0; i < SPIKES; i++) {
+                            const a = (i / SPIKES) * Math.PI * 2 + ctx.time * 0.15;
+                            const level = band(ctx, i % 32, 32);
+                            const inner = options.radius;
+                            const outer = inner + 6 + level * options.radius * 0.9 + ctx.click * 8;
+                            positions.set([Math.cos(a) * inner, Math.sin(a) * inner, 0], i * 6);
+                            positions.set([Math.cos(a) * outer, Math.sin(a) * outer, 0], i * 6 + 3);
+                        }
+                        geom.attributes.position.needsUpdate = true;
+                    },
+                };
+            },
+        },
+
+        // Adapted from hAlcy: an outer ring with one broad swell baked into its band,
+        // which rides around the circumference as it spins -- reads as motion rather
+        // than a static disc.
+        bulgingRing: {
+            label: 'Bulging ring',
+            build(api, options) {
+                const baseRadius = options.radius * 1.25;
+                const thickness = options.radius * 0.045;
+                const geom = new THREE.RingGeometry(baseRadius - thickness / 2, baseRadius + thickness / 2, 128);
+                const bulgeHalfAngle = Math.PI / 2.6;
+                const bulgeMax = options.radius * 0.06;
+                const pos = geom.attributes.position;
+                for (let vi = 0; vi < pos.count; vi++) {
+                    const vx = pos.getX(vi), vy = pos.getY(vi);
+                    const angle = Math.atan2(vy, vx);
+                    const baseR = Math.sqrt(vx * vx + vy * vy);
+                    let bulge = 0;
+                    if (baseR > baseRadius) {
+                        const diff = Math.atan2(Math.sin(angle), Math.cos(angle));
+                        if (Math.abs(diff) < bulgeHalfAngle) bulge = bulgeMax * 0.5 * (1 + Math.cos((diff / bulgeHalfAngle) * Math.PI));
+                    }
+                    const r = baseR + bulge;
+                    pos.setXY(vi, Math.cos(angle) * r, Math.sin(angle) * r);
+                }
+                pos.needsUpdate = true;
+                const mat = new THREE.MeshBasicMaterial({
+                    color: 0x00f0ff, side: THREE.DoubleSide, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending,
+                });
+                const mesh = new THREE.Mesh(geom, mat);
+                return {
+                    object: mesh,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        mesh.rotation.z = ctx.time * 0.25;
+                        mat.opacity = 0.4 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A1ter_nul: many concentric true circles, each fainter than the
+        // one inside it, static -- the field never rotates, only its brightness answers
+        // the voice.
+        altFirewallField: {
+            label: 'Concentric firewall field',
+            build(api, options) {
+                const group = new THREE.Group();
+                const count = 16;
+                const inner = options.radius * 1.05;
+                const outer = options.radius * 2.6;
+                const rings = [];
+                for (let i = 0; i < count; i++) {
+                    const t = i / (count - 1);
+                    const radius = inner + (outer - inner) * t;
+                    const fade = Math.pow(1 - t, 1.6);
+                    const mat = new THREE.MeshBasicMaterial({
+                        color: 0xfcee0a, transparent: true, opacity: 0.5, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                    });
+                    const mesh = new THREE.Mesh(new THREE.RingGeometry(radius, radius + radius * 0.012, 96), mat);
+                    group.add(mesh);
+                    rings.push({ mat, fade });
+                }
+                return {
+                    object: group,
+                    applyPalette(p) { rings.forEach(({ mat }) => mat.color.setHex(p.hex)); },
+                    animate(ctx) {
+                        const base = ctx.state === 'SPEAKING' ? 0.5 + ctx.audio * 0.4
+                            : ctx.state === 'THINKING' ? 0.5 + Math.sin(ctx.time * 10) * 0.25 : 0.4 + ctx.click * 0.3;
+                        rings.forEach(({ mat, fade }) => { mat.opacity = base * fade; });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOGOS: two hex-outline shells at different radii, each
+        // tilted onto its own axis and tumbling at its own speed.
+        hexShells: {
+            label: 'Hex shells',
+            build(api, options) {
+                const group = new THREE.Group();
+                const configs = [
+                    { radius: options.radius * 1.1, tiltX: 0.5, tiltY: 0.15, color: 0x9d00ff, speed: { x: 0.006, y: 0.01 } },
+                    { radius: options.radius * 1.35, tiltX: -0.35, tiltY: 0.4, color: 0xff00ff, speed: { x: -0.004, y: 0.008 } },
+                ];
+                const mats = [];
+                const shells = [];
+                configs.forEach((cfg) => {
+                    const mat = new THREE.LineBasicMaterial({ color: cfg.color, transparent: true, opacity: 0.5 });
+                    const ring = hexOutlineLoop(api, cfg.radius, 0, mat);
+                    ring.rotation.x = cfg.tiltX;
+                    ring.rotation.y = cfg.tiltY;
+                    group.add(ring);
+                    mats.push(mat);
+                    shells.push({ ring, speed: cfg.speed });
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mats[0].color.setHex(p.hex2); mats[1].color.setHex(p.hex3); },
+                    animate() {
+                        shells.forEach(({ ring, speed }) => {
+                            ring.rotation.x += speed.x;
+                            ring.rotation.y += speed.y;
+                        });
+                    },
+                };
+            },
+        },
+    };
+
+    // ---- Effects: an ambient layer or background ------------------------------
+
+    const EFFECTS = {
         none: {
             label: 'Nothing',
             build() {
@@ -148,8 +799,6 @@
                 const colors = new Float32Array(count * 3);
                 const base = [];
                 for (let i = 0; i < count; i++) {
-                    /* Even spread over a sphere: picking a random latitude directly
-                       clusters points at the poles, so cosine-distribute it. */
                     const theta = Math.random() * Math.PI * 2;
                     const phi = Math.acos(2 * Math.random() - 1);
                     const r = options.radius * (0.85 + Math.random() * 0.15);
@@ -195,92 +844,6 @@
             },
         },
 
-        rings: {
-            label: 'Orbital rings',
-            build(api, options) {
-                const group = new THREE.Group();
-                const mats = [];
-                const rings = [];
-                for (let i = 0; i < 3; i++) {
-                    const mat = new THREE.MeshBasicMaterial({
-                        color: 0x00f0ff, transparent: true, opacity: 0.75,
-                        side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
-                    });
-                    const r = options.radius * (1 + i * 0.22);
-                    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.9, 8, 96), mat);
-                    ring.rotation.x = Math.PI / 2 * (i === 0 ? 1 : 0.4 * i);
-                    ring.rotation.y = i * 0.5;
-                    mats.push(mat);
-                    rings.push({ ring, speed: 0.2 + i * 0.15, tilt: i });
-                    group.add(ring);
-                }
-                return {
-                    object: group,
-                    applyPalette(p) {
-                        mats[0].color.setHex(p.hex);
-                        mats[1].color.setHex(p.hex2);
-                        mats[2].color.setHex(p.hex3);
-                    },
-                    animate(ctx) {
-                        rings.forEach(({ ring, speed, tilt }) => {
-                            ring.rotation.z = ctx.time * speed;
-                            ring.rotation.y = Math.sin(ctx.time * 0.3 + tilt) * 0.6 + tilt * 0.5;
-                            ring.scale.setScalar(1 + ctx.audio * 0.18 + ctx.click * 0.12);
-                        });
-                    },
-                };
-            },
-        },
-
-        shards: {
-            label: 'Shard stack',
-            build(api, options) {
-                const group = new THREE.Group();
-                const shards = [];
-                const COUNT = 9;
-                for (let i = 0; i < COUNT; i++) {
-                    const t = i / (COUNT - 1);
-                    const w = options.radius * (0.5 + Math.sin(t * Math.PI) * 0.8);
-                    const geom = new THREE.PlaneGeometry(w, options.radius * 0.16);
-                    const fill = new THREE.MeshBasicMaterial({
-                        color: 0x05070f, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
-                    });
-                    const outlineMat = new THREE.LineBasicMaterial({
-                        color: 0x00f0ff, transparent: true, opacity: 0.95,
-                    });
-                    const mesh = new THREE.Mesh(geom, fill);
-                    const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geom), outlineMat);
-                    const shard = new THREE.Group();
-                    shard.add(mesh, outline);
-                    shard.position.y = (t - 0.5) * options.radius * 2.1;
-                    shard.rotation.z = (Math.random() - 0.5) * 0.14;
-                    group.add(shard);
-                    shards.push({ shard, outlineMat, index: i, baseY: shard.position.y });
-                }
-                return {
-                    object: group,
-                    applyPalette(p) {
-                        /* Ramped bottom to top so the stack reads as a spectrum rather
-                           than one flat colour -- the same idea as a real EQ's ramp. */
-                        const bottom = new THREE.Color(p.hex2);
-                        const top = new THREE.Color(p.hex3);
-                        shards.forEach(({ outlineMat, index }) => {
-                            outlineMat.color.copy(bottom).lerp(top, index / (COUNT - 1));
-                        });
-                    },
-                    animate(ctx) {
-                        shards.forEach(({ shard, outlineMat, index, baseY }) => {
-                            const level = band(ctx, index, COUNT);
-                            shard.scale.x = 1 + level * 1.1 + ctx.click * 0.2;
-                            shard.position.y = baseY + Math.sin(ctx.time * 1.2 + index) * 1.5;
-                            outlineMat.opacity = 0.5 + level * 0.5;
-                        });
-                        group.rotation.y = Math.sin(ctx.time * 0.25) * 0.35;
-                    },
-                };
-            },
-        },
-
         swarm: {
             label: 'Orbiting swarm',
             build(api, options) {
@@ -319,57 +882,6 @@
                 };
             },
         },
-    };
-
-    // ---- Equalisers: the part that answers the voice -------------------------
-
-    const EQUALISERS = {
-        none: {
-            label: 'Nothing',
-            build() {
-                return { object: new THREE.Group(), applyPalette() {}, animate() {} };
-            },
-        },
-
-        ring: {
-            label: 'Ring of bars',
-            build(api, options) {
-                const group = new THREE.Group();
-                const mat = new THREE.MeshBasicMaterial({
-                    color: 0x0066ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
-                });
-                const BARS = 48;
-                const BAR_LENGTH = 8;
-                const bars = [];
-                for (let i = 0; i < BARS; i++) {
-                    const angle = (i / BARS) * Math.PI * 2;
-                    /* Each bar is a box standing along its own local Y, rotated so that
-                       Y points away from the centre. Growing it then reads as a spike
-                       pushing outward -- which is what an equaliser bar should do. */
-                    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.4, BAR_LENGTH, 1.4), mat);
-                    bar.rotation.z = angle - Math.PI / 2;
-                    group.add(bar);
-                    bars.push({ bar, angle, index: i });
-                }
-                return {
-                    object: group,
-                    applyPalette(p) { mat.color.setHex(p.hex2); },
-                    animate(ctx) {
-                        bars.forEach(({ bar, angle, index }) => {
-                            const level = band(ctx, index % 32, 32);
-                            const scale = 1 + level * 5 + ctx.click * 0.6;
-                            bar.scale.y = scale;
-                            /* Scaling grows a box about its own centre, so the bar has
-                               to move out by half of what it gained -- otherwise it eats
-                               inward across the ring as it rises. */
-                            const out = options.radius + (BAR_LENGTH * scale) / 2;
-                            bar.position.set(Math.cos(angle) * out, Math.sin(angle) * out, 0);
-                        });
-                        group.rotation.z = ctx.time * 0.1;
-                    },
-                };
-            },
-        },
 
         stack: {
             label: 'Vertical bars',
@@ -378,9 +890,6 @@
                 const BARS = 12;
                 const bars = [];
                 const mats = [];
-                /* The row's width and its drop below the body are both capped. A row
-                   that simply scaled with the avatar ran off both edges of the viewport
-                   at the larger sizes, where it is exactly the part you want to watch. */
                 const span = Math.min(options.radius, 76);
                 for (let i = 0; i < BARS; i++) {
                     const mat = new THREE.MeshBasicMaterial({
@@ -392,9 +901,6 @@
                     bars.push({ bar, index: i });
                     mats.push(mat);
                 }
-                /* Sat directly under the body, but not so far down that a large avatar
-                   pushes it off the bottom of the viewport -- the cap is what keeps the
-                   bars visible across the whole size range. */
                 group.position.y = -Math.min(options.radius * 1.15, 76);
                 return {
                     object: group,
@@ -408,39 +914,179 @@
                             const level = band(ctx, index, BARS);
                             const h = 2 + level * span * 1.1 + ctx.click * 4;
                             bar.scale.y = h / 2;
-                            bar.position.y = h / 2; // grow upward from the baseline, not both ways
+                            bar.position.y = h / 2;
                         });
                     },
                 };
             },
         },
 
-        spikes: {
-            label: 'Radial spikes',
+        // Adapted from Operator: short vertical dash sprites in fixed angular slots,
+        // each sliding from a clear centre out past the edges and fading near the rim
+        // -- a static frame with a field of code constantly flowing outward inside it.
+        codeRainField: {
+            label: 'Code-rain field',
             build(api, options) {
+                const inner = options.radius * 0.4;
+                const outer = options.radius * 3.4;
+                const span = outer - inner;
+                function tick(size, widthFrac, heightFrac) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size; canvas.height = size;
+                    const c = canvas.getContext('2d');
+                    const w = size * widthFrac, h = size * heightFrac;
+                    const x = (size - w) / 2, y = (size - h) / 2, r = w / 2;
+                    const grad = c.createLinearGradient(0, y, 0, y + h);
+                    grad.addColorStop(0, 'rgba(255,255,255,0)');
+                    grad.addColorStop(0.18, 'rgba(255,255,255,1)');
+                    grad.addColorStop(0.82, 'rgba(255,255,255,1)');
+                    grad.addColorStop(1, 'rgba(255,255,255,0)');
+                    c.fillStyle = grad;
+                    c.beginPath();
+                    c.moveTo(x + r, y);
+                    c.arcTo(x + w, y, x + w, y + h, r);
+                    c.arcTo(x + w, y + h, x, y + h, r);
+                    c.arcTo(x, y + h, x, y, r);
+                    c.arcTo(x, y, x + w, y, r);
+                    c.closePath();
+                    c.fill();
+                    return new THREE.CanvasTexture(canvas);
+                }
+                function stream(texture, count, color, size, opacity) {
+                    const positions = new Float32Array(count * 3);
+                    const colors = new Float32Array(count * 3);
+                    const state = new Array(count);
+                    for (let i = 0; i < count; i++) {
+                        const brightness = 0.75 + Math.random() * 0.55;
+                        state[i] = {
+                            angle: Math.random() * Math.PI * 2,
+                            speed: (10 + Math.random() * 16) * (options.radius / 62),
+                            offset: Math.random() * span,
+                            z: (-14 + Math.random() * 28) * (options.radius / 62),
+                        };
+                        colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = brightness;
+                    }
+                    const geom = new THREE.BufferGeometry();
+                    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                    const mat = new THREE.PointsMaterial({
+                        color, map: texture, size, vertexColors: true, transparent: true, opacity,
+                        depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+                    });
+                    return { points: new THREE.Points(geom, mat), mat, positions, colors, state };
+                }
+                const primary = stream(tick(64, 0.34, 0.92), Math.round(900 * (options.radius / 62)), api.palette.hex, 8, 0.9);
+                const accent = stream(tick(64, 0.2, 0.6), Math.round(350 * (options.radius / 62)), api.palette.hex2, 5.5, 0.7);
                 const group = new THREE.Group();
-                const mat = new THREE.LineBasicMaterial({
-                    color: 0x00f0ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
-                });
-                const SPIKES = 64;
-                const geom = new THREE.BufferGeometry();
-                const positions = new Float32Array(SPIKES * 2 * 3);
-                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                const lines = new THREE.LineSegments(geom, mat);
-                group.add(lines);
+                group.add(primary.points, accent.points);
+                function updateStream(s, ctx, speedMult) {
+                    const { positions, colors, state } = s;
+                    for (let i = 0; i < state.length; i++) {
+                        const st = state[i];
+                        const flow = (ctx.time * st.speed * speedMult + st.offset) % span;
+                        const radius = inner + flow;
+                        const p = flow / span;
+                        const fade = p < 0.12 ? p / 0.12 : (p > 0.72 ? Math.max(0, (1 - p) / 0.28) : 1);
+                        positions[i * 3] = Math.cos(st.angle) * radius;
+                        positions[i * 3 + 1] = Math.sin(st.angle) * radius;
+                        positions[i * 3 + 2] = st.z;
+                        colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = fade;
+                    }
+                    s.points.geometry.attributes.position.needsUpdate = true;
+                    s.points.geometry.attributes.color.needsUpdate = true;
+                }
                 return {
                     object: group,
-                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    applyPalette(p) { primary.mat.color.setHex(p.hex); accent.mat.color.setHex(p.hex2); },
                     animate(ctx) {
-                        for (let i = 0; i < SPIKES; i++) {
-                            const a = (i / SPIKES) * Math.PI * 2 + ctx.time * 0.15;
-                            const level = band(ctx, i % 32, 32);
-                            const inner = options.radius;
-                            const outer = inner + 6 + level * options.radius * 0.9 + ctx.click * 8;
-                            positions.set([Math.cos(a) * inner, Math.sin(a) * inner, 0], i * 6);
-                            positions.set([Math.cos(a) * outer, Math.sin(a) * outer, 0], i * 6 + 3);
+                        let speedMult = 1;
+                        if (ctx.state === 'THINKING') speedMult = 2.2;
+                        else if (ctx.state === 'LISTENING') speedMult = 1.4;
+                        else if (ctx.state === 'SPEAKING') speedMult = 1.1 + ctx.audio * 0.8;
+                        speedMult += ctx.click * 1.2;
+                        updateStream(primary, ctx, speedMult);
+                        updateStream(accent, ctx, speedMult);
+                    },
+                };
+            },
+        },
+
+        // Adapted from hAlcy: a sphere of points distributed by golden-angle spiral
+        // (an even spread with no clustering at the poles), breathing with the voice.
+        harmonicLattice: {
+            label: 'Harmonic lattice',
+            build(api, options) {
+                const count = 1400;
+                const radius = options.radius * 0.85;
+                const geom = new THREE.BufferGeometry();
+                const positions = new Float32Array(count * 3);
+                const colors = new Float32Array(count * 3);
+                const base = [];
+                for (let i = 0; i < count; i++) {
+                    const phi = Math.acos(-1 + (2 * i) / count);
+                    const theta = Math.sqrt(count * Math.PI) * phi;
+                    const v = new THREE.Vector3(
+                        radius * Math.cos(theta) * Math.sin(phi),
+                        radius * Math.sin(theta) * Math.sin(phi),
+                        radius * Math.cos(phi)
+                    );
+                    base.push(v);
+                    positions.set([v.x, v.y, v.z], i * 3);
+                }
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                const mat = new THREE.PointsMaterial({
+                    size: 2.4, vertexColors: true, map: api.helpers.glowTexture(32),
+                    transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette(p) {
+                        for (let i = 0; i < count; i++) {
+                            colors[i * 3] = p.r; colors[i * 3 + 1] = Math.min(1, p.g + 0.1); colors[i * 3 + 2] = p.b;
                         }
-                        geom.attributes.position.needsUpdate = true;
+                        geom.attributes.color.needsUpdate = true;
+                    },
+                    animate(ctx) {
+                        const push = 1 + ctx.audio * 0.18 + ctx.click * 0.1;
+                        points.scale.setScalar(push);
+                        points.rotation.y = ctx.time * 0.08;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOGOS: small hex nodes drifting freely in 3D around the
+        // whole structure, unlike anything locked to a flat plane.
+        hexSwarm: {
+            label: 'Hex swarm',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: 0xe024c3, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending,
+                });
+                const nodes = [];
+                const count = 20;
+                for (let i = 0; i < count; i++) {
+                    const radius = options.radius * (1.1 + Math.random() * 1.1);
+                    const angle = Math.random() * Math.PI * 2;
+                    const heightOffset = (Math.random() - 0.5) * options.radius * 1.1;
+                    const node = hexFillMesh(api, 2.5 + Math.random() * 1.8, Math.random() * Math.PI, mat);
+                    node.position.set(Math.cos(angle) * radius, heightOffset, Math.sin(angle) * radius);
+                    node.userData = { radius, angle, heightOffset, speed: 0.15 + Math.random() * 0.25, bob: Math.random() * Math.PI * 2 };
+                    nodes.push(node);
+                    group.add(node);
+                }
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        nodes.forEach((n) => {
+                            const d = n.userData;
+                            const a = d.angle + ctx.time * d.speed;
+                            n.position.set(Math.cos(a) * d.radius, d.heightOffset + Math.sin(ctx.time + d.bob) * 4, Math.sin(a) * d.radius);
+                        });
                     },
                 };
             },
@@ -455,13 +1101,15 @@
 
     window.AvatarParts = {
         cores: CORES,
-        bodies: BODIES,
-        equalisers: EQUALISERS,
+        innerRings: INNER_RINGS,
+        outerRings: OUTER_RINGS,
+        effects: EFFECTS,
         band,
         options: {
             cores: () => catalogue(CORES),
-            bodies: () => catalogue(BODIES),
-            equalisers: () => catalogue(EQUALISERS),
+            innerRings: () => catalogue(INNER_RINGS),
+            outerRings: () => catalogue(OUTER_RINGS),
+            effects: () => catalogue(EFFECTS),
         },
     };
 })();

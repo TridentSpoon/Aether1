@@ -215,13 +215,14 @@
 
     // ---- The builder --------------------------------------------------------
 
-    const RECIPE_FIELDS = ['core', 'body', 'equaliser', 'size', 'radius', 'spin', 'bob'];
+    const RECIPE_FIELDS = ['core', 'innerRing', 'outerRing', 'effect', 'size', 'radius', 'spin', 'bob'];
 
     function fillPartPickers() {
         const map = {
             'build-core': window.AvatarParts.options.cores(),
-            'build-body': window.AvatarParts.options.bodies(),
-            'build-equaliser': window.AvatarParts.options.equalisers(),
+            'build-innerRing': window.AvatarParts.options.innerRings(),
+            'build-outerRing': window.AvatarParts.options.outerRings(),
+            'build-effect': window.AvatarParts.options.effects(),
         };
         Object.keys(map).forEach((id) => {
             const picker = $(id);
@@ -238,8 +239,9 @@
     function readRecipeFromControls() {
         return {
             core: $('build-core').value,
-            body: $('build-body').value,
-            equaliser: $('build-equaliser').value,
+            innerRing: $('build-innerRing').value,
+            outerRing: $('build-outerRing').value,
+            effect: $('build-effect').value,
             size: Number($('build-size').value),
             radius: Number($('build-radius').value),
             // Spin is a slider of whole numbers because a slider of 0.01 steps is
@@ -251,8 +253,9 @@
 
     function writeRecipeToControls(recipe) {
         $('build-core').value = recipe.core;
-        $('build-body').value = recipe.body;
-        $('build-equaliser').value = recipe.equaliser;
+        $('build-innerRing').value = recipe.innerRing;
+        $('build-outerRing').value = recipe.outerRing;
+        $('build-effect').value = recipe.effect;
         $('build-size').value = recipe.size;
         $('build-radius').value = recipe.radius;
         $('build-spin').value = Math.round(recipe.spin * 100);
@@ -320,7 +323,7 @@
        for someone who then wants to hand-edit it. */
     function exportAsFile() {
         const recipe = window.CustomAvatarRecipe.normalise(readRecipeFromControls());
-        const id = `custom-${recipe.core}-${recipe.body}`;
+        const id = `custom-${recipe.core}-${recipe.innerRing}`;
         const source = `/* An Aether1 avatar, exported from the avatar workbench.
  *
  * Install: put this file in frontend/js/hologram/ and add one line to
@@ -341,8 +344,9 @@ HologramAvatar.registerAvatar({
         const options = { size: recipe.size, radius: recipe.radius };
         const parts = [
             AvatarParts.cores[recipe.core].build(api, options),
-            AvatarParts.bodies[recipe.body].build(api, options),
-            AvatarParts.equalisers[recipe.equaliser].build(api, options),
+            AvatarParts.innerRings[recipe.innerRing].build(api, options),
+            AvatarParts.outerRings[recipe.outerRing].build(api, options),
+            AvatarParts.effects[recipe.effect].build(api, options),
         ];
         parts.forEach((part) => group.add(part.object));
         return { group, parts, recipe };

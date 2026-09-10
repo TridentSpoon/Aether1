@@ -285,6 +285,11 @@ HologramAvatar.prototype.animateRed9000 = function(elapsedTime, audioIntensity, 
         this.redLensGlow.scale.set(glowScale, glowScale, 1);
         this.redLensGlow.material.opacity = Math.min(1, 0.35 + glowIntensity * 0.4);
     }
+    if (this.redInnerGlow) {
+        const haloScale = 50 * (1 + glowIntensity * 0.22);
+        this.redInnerGlow.scale.set(haloScale, haloScale, 1);
+        this.redInnerGlow.material.opacity = Math.min(0.7, 0.2 + glowIntensity * 0.28);
+    }
     if (this.redEyeLight) {
         this.redEyeLight.intensity = 2 + glowIntensity * 5;
     }

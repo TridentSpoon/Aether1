@@ -1,8 +1,9 @@
 /* The avatar you build yourself.
  *
  * One registered avatar, id "custom", assembled at build time from a *recipe*: a small
- * object saying which core, which body, which equaliser, and how it moves. The recipe
- * lives in localStorage, written by the avatar workbench (frontend/avatar-lab.html).
+ * object saying which core, which inner ring, which outer ring, which effect, and how
+ * it moves. The recipe lives in localStorage, written by the avatar workbench
+ * (frontend/avatar-lab.html).
  *
  * The recipe is the thing that gets shared, not the code. That is deliberate -- a
  * recipe is a few lines of JSON that cannot do anything, so passing one to someone is
@@ -23,8 +24,9 @@
 
     const DEFAULT_RECIPE = {
         core: 'crystal',
-        body: 'rings',
-        equaliser: 'ring',
+        innerRing: 'equalizerRing',
+        outerRing: 'rings',
+        effect: 'none',
         size: 26,
         radius: 62,
         spin: 0.15,
@@ -33,13 +35,21 @@
 
     /* Anything missing, misspelled or of the wrong type falls back to the default for
        that one field, so a recipe written by hand -- or by an older version of the
-       workbench -- still produces an avatar rather than an error. */
+       workbench -- still produces an avatar rather than an error. A recipe saved before
+       the four-tier split (core/body/equaliser) still lands somewhere sane: its body and
+       equaliser choices carry over to innerRing/outerRing where the ids still exist,
+       instead of silently reverting to the defaults. */
     function normalise(raw) {
         const recipe = Object.assign({}, DEFAULT_RECIPE, raw && typeof raw === 'object' ? raw : {});
         const parts = window.AvatarParts;
+        if (raw && typeof raw === 'object') {
+            if (recipe.innerRing === undefined && raw.body !== undefined) recipe.innerRing = raw.body;
+            if (recipe.outerRing === undefined && raw.equaliser !== undefined) recipe.outerRing = raw.equaliser;
+        }
         if (!parts.cores[recipe.core]) recipe.core = DEFAULT_RECIPE.core;
-        if (!parts.bodies[recipe.body]) recipe.body = DEFAULT_RECIPE.body;
-        if (!parts.equalisers[recipe.equaliser]) recipe.equaliser = DEFAULT_RECIPE.equaliser;
+        if (!parts.innerRings[recipe.innerRing]) recipe.innerRing = DEFAULT_RECIPE.innerRing;
+        if (!parts.outerRings[recipe.outerRing]) recipe.outerRing = DEFAULT_RECIPE.outerRing;
+        if (!parts.effects[recipe.effect]) recipe.effect = DEFAULT_RECIPE.effect;
         const number = (value, fallback, min, max) =>
             (Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
         recipe.size = number(recipe.size, DEFAULT_RECIPE.size, 4, 70);
@@ -73,10 +83,12 @@
             const parts = window.AvatarParts;
             const group = new THREE.Group();
 
+            const options = { size: recipe.size, radius: recipe.radius };
             const built = [
-                parts.cores[recipe.core].build(api, { size: recipe.size, radius: recipe.radius }),
-                parts.bodies[recipe.body].build(api, { size: recipe.size, radius: recipe.radius }),
-                parts.equalisers[recipe.equaliser].build(api, { size: recipe.size, radius: recipe.radius }),
+                parts.cores[recipe.core].build(api, options),
+                parts.innerRings[recipe.innerRing].build(api, options),
+                parts.outerRings[recipe.outerRing].build(api, options),
+                parts.effects[recipe.effect].build(api, options),
             ];
             built.forEach((part) => group.add(part.object));
 

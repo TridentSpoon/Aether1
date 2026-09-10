@@ -53,9 +53,17 @@ it, or open Settings and use **Design your own avatar**. Either opens the workbe
 its own window. (You can also open `frontend/avatar-lab.html` directly in a browser --
 it needs nothing else running.)
 
-Choose a core, a body and a voice equaliser, set the sizes and the motion, and press
-**Use this in Aether1**. The HUD picks it up immediately: the two windows share the saved
-recipe, so an open HUD updates the moment you save, with no reload.
+Choose four tiers -- a core (the thing at the middle), an inner ring (wrapping close
+around it), an outer ring (further out, toward the edge) and an effect (an ambient layer
+or background) -- set the sizes and the motion, and press **Use this in Aether1**. The
+HUD picks it up immediately: the two windows share the saved recipe, so an open HUD
+updates the moment you save, with no reload.
+
+Some of the options in each tier are generic, built for the kit. Others are adapted
+pieces of the hand-built avatars whose designs are open for reuse this way -- White
+Rabbit, Operator, hAlcy, R.E.D. 9000, A.R.X.LIMES, A.R.X.LOGOS and A1ter_nul. (The Nexus
+/ Nexus Sent and A1 are not sources for the kit -- their designs stay theirs alone.) See
+`js/hologram/parts.js` for the full catalogue.
 
 What is saved is a *recipe* — a few lines of settings, not code. A recipe can be pasted
 to someone else safely, because settings cannot do anything.
