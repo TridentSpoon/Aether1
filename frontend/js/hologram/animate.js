@@ -762,10 +762,9 @@ HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clic
         shard.outlineMat.opacity = Math.max(0.05, Math.min(1, opacity));
     });
 
-    // Firewall perimeter ring -- a slow idle scan that snaps into a fast active sweep.
+    // Firewall perimeter ring -- static (bound to the window's own edges rather than a
+    // shape that scans around), so only its brightness answers the current state.
     if (this.altFirewallRing) {
-        const spinSpeed = isThinking ? 0.03 : (isSpeaking ? 0.02 : 0.004 + clickPulse * 0.01);
-        this.altFirewallRing.rotation.z += spinSpeed;
         const ringOpacity = isSpeaking ? 0.5 + audioIntensity * 0.4 : (isThinking ? 0.5 + Math.sin(elapsedTime * 10) * 0.25 : 0.4 + clickPulse * 0.3);
         this.altFirewallRingMat.opacity = ringOpacity;
     }
