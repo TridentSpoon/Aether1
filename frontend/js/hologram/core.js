@@ -131,15 +131,14 @@ class HologramAvatar {
 
         // 6. A1ter_nul (Cunningham) -- modelled on Cyberpunk 2077's Black Wall / relic: a
         // stack of irregular dark-glass shards with gaps between them (not a solid body),
-        // behind a rotating firewall/ICE perimeter ring. Each shard's glass fill is a
-        // fixed obsidian material; its glowing edge is theme-tinted and, while speaking,
-        // driven by its own audio frequency bin -- the stack as a vertical equalizer built
-        // out of broken relic glass -- see buildAltAvatar.
+        // behind a static firewall/ICE perimeter of concentric, fading rings. Each shard's
+        // glass fill is a fixed obsidian material; its glowing edge is theme-tinted and,
+        // while speaking, driven by its own audio frequency bin -- the stack as a vertical
+        // equalizer built out of broken relic glass -- see buildAltAvatar.
         this.altGroup = null;
         this.altShardGroup = null;
         this.altShards = []; // { fillMat, outlineMat, baseOpacity, phase, binIndex }
-        this.altFirewallRing = null;
-        this.altFirewallRingMat = null;
+        this.altFirewallRings = []; // { mesh, mat, fade } -- concentric, outer rings fainter
         this.altShieldGroup = null;
         this.altShieldTiles = []; // { fill, outline, baseAngle, phase }
         this.altShieldFillMat = null;
@@ -475,7 +474,7 @@ class HologramAvatar {
             const tt = this.altShards.length > 1 ? i / (this.altShards.length - 1) : 0;
             shard.outlineMat.color.copy(altBottom).lerp(altTop, tt);
         });
-        if (this.altFirewallRingMat) this.altFirewallRingMat.color.setHex(p.hex);
+        this.altFirewallRings.forEach(ring => ring.mat.color.setHex(p.hex));
         if (this.altShieldFillMat) this.altShieldFillMat.color.setHex(p.hex);
         if (this.altShieldOutlineMat) this.altShieldOutlineMat.color.setHex(p.hex3);
 

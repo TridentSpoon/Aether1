@@ -85,17 +85,20 @@ HologramAvatar.prototype.buildAltAvatar = function() {
     }
     this.altGroup.add(this.altShardGroup);
 
-    // --- Firewall perimeter ring: a static boundary, not a scanning halo -- sized to
-    // reach the window's own outer edges (past the frustum edge even at the HUD's
-    // widest allowed aspect -- see core.js's maxFov) and stretched horizontally to
-    // match the panel's wide-short shape, so it reads as an unbroken, infinite loop
-    // bounding the whole view rather than a modest circle floating in the middle. ---
-    this.altFirewallRingMat = new THREE.MeshBasicMaterial({
-        color: 0xfcee0a, transparent: true, opacity: 0.5, side: THREE.DoubleSide, blending: THREE.AdditiveBlending
+    // --- Firewall perimeter: a static boundary, not a scanning halo -- concentric true
+    // circles (no elliptical stretch), the outermost reaching out toward the window's
+    // own edges, each ring fainter than the one inside it so the boundary reads as
+    // dissipating outward rather than as one hard edge. ---
+    const firewallRadii = [80, 140, 200, 260];
+    const firewallFades = [1, 0.62, 0.36, 0.2]; // outer rings progressively fainter
+    firewallRadii.forEach((radius, i) => {
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0xfcee0a, transparent: true, opacity: 0.5, side: THREE.DoubleSide, blending: THREE.AdditiveBlending
+        });
+        const mesh = new THREE.Mesh(new THREE.RingGeometry(radius, radius + radius * 0.02, 96), mat);
+        this.altGroup.add(mesh);
+        this.altFirewallRings.push({ mesh, mat, fade: firewallFades[i] });
     });
-    this.altFirewallRing = new THREE.Mesh(new THREE.RingGeometry(250, 260, 96), this.altFirewallRingMat);
-    this.altFirewallRing.scale.set(1.9, 1, 1);
-    this.altGroup.add(this.altFirewallRing);
 
     // --- Shield tiles: small hex "ICE nodes" ringing the stack, individually lit in
     // sequence like a security scanner sweeping the perimeter. ---
