@@ -379,9 +379,15 @@ pub fn pull_model(model_name: &str) -> PullResult {
         };
     }
 
+    // Nothing answered on the port and there is no CLI to fall back on, which means Ollama
+    // is not installed rather than merely stopped. Saying "start it" to someone who has not
+    // got it sends them looking for a service that was never there.
     PullResult {
         status: PullStatus::Error,
-        message: "Ollama service is not running. Please start Ollama (`ollama serve`) first."
+        message: "Ollama was not found on this machine -- there is nothing listening on \
+                  port 11434 and no `ollama` command on PATH. Install it first (on Arch and \
+                  CachyOS: `sudo pacman -S ollama`, then `sudo systemctl enable --now \
+                  ollama`; elsewhere see ollama.com/download), then run this again."
             .to_string(),
     }
 }
@@ -440,6 +446,62 @@ mod local_server_tests {
     fn each_api_shape_maps_to_the_provider_that_drives_it() {
         assert_eq!(LocalApi::OpenAi.provider_key(), "lmstudio");
         assert_eq!(LocalApi::Native.provider_key(), "ollama");
+    }
+
+    /// A stub HTTP server that answers one path with one JSON body and nothing else, so a
+    /// probe can be pointed at something real. Returns the port it bound.
+    fn stub_server(path: &'static str, body: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            // Two connections: the probe tries the OpenAI shape first and the native shape
+            // second, so a native-only stub has to survive the first request missing.
+            for stream in listener.incoming().take(2) {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = [0u8; 1024];
+                let read = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..read]).to_string();
+                let response = if request.contains(path) {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                } else {
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string()
+                };
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        port
+    }
+
+    /// The happy path: a server that answers is found, and the endpoint reported is the one
+    /// that belongs in the setting -- `/v1` and all. Without this, every other test here
+    /// would still pass if the probe found nothing, ever.
+    #[test]
+    fn a_server_answering_the_openai_shape_is_found_with_its_models() {
+        let port = stub_server("/v1/models", r#"{"data":[{"id":"qwen2.5-7b"}]}"#);
+        let found = probe_local_port(port).expect("a server that answers must be found");
+        assert_eq!(found.api, LocalApi::OpenAi);
+        assert_eq!(found.provider_key, "lmstudio");
+        assert_eq!(found.endpoint, format!("http://127.0.0.1:{port}/v1"));
+        assert_eq!(found.models, vec!["qwen2.5-7b".to_string()]);
+    }
+
+    /// And the native shape, which is what a default Ollama install answers with. The
+    /// endpoint carries no `/v1` here, which is exactly the detail the operator should
+    /// never have to know.
+    #[test]
+    fn a_server_answering_the_native_shape_is_found_and_needs_no_v1() {
+        let port = stub_server("/api/tags", r#"{"models":[{"name":"llama3.2:1b"}]}"#);
+        let found = probe_local_port(port).expect("a native server must be found");
+        assert_eq!(found.api, LocalApi::Native);
+        assert_eq!(found.provider_key, "ollama");
+        assert_eq!(found.endpoint, format!("http://127.0.0.1:{port}"));
+        assert_eq!(found.models, vec!["llama3.2:1b".to_string()]);
     }
 
     /// Whatever is running locally, the scan must not hang: every port is probed at once.

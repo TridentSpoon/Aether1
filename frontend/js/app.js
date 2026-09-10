@@ -1363,8 +1363,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 html += `<div class="text-slate-400">⚪ No local LLM server answered on this machine. Start one, or type its address into the endpoint box if it uses an unusual port.</div>`;
             }
 
+            // "Installed but stopped" and "not installed at all" are different problems
+            // with different fixes, and telling someone to start a service they have never
+            // installed sends them looking for something that was never there.
             if (data.ollama.cli_installed && !servers.some(s => s.port === 11434)) {
-                html += `<div class="text-yellow-400">⚠ A local model runner is installed but not serving -- start it first (for Ollama, \`ollama serve\`).</div>`;
+                html += `<div class="text-yellow-400">⚠ A local model runner is installed but not serving -- start it first (for Ollama, \`ollama serve\`, or \`sudo systemctl start ollama\` where it is a service).</div>`;
+            } else if (!servers.length) {
+                html += `<div class="text-slate-400">No local model runner is installed either -- there is no \`ollama\` on PATH. See ollama.com/download, or point the endpoint box at a server on another machine on your LAN.</div>`;
             }
 
             populateLocalServers(servers);

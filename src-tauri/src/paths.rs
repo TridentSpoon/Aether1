@@ -87,6 +87,23 @@ pub fn find_installed_binary(names: &[&str]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Where Windows is installed, from %SystemRoot% (or %WinDir%).
+///
+/// Read from the environment rather than hardcoded to `C:\\Windows`, because it is not
+/// always C: -- a second OS on another volume, or an imaged machine, puts it elsewhere, and
+/// a hardcoded guess would silently resolve to nothing on exactly the machines that are
+/// hardest to debug. None on every other platform, and None on a Windows box with the
+/// variable unset, which resolves to "this root contains nothing" rather than a wrong guess.
+pub fn system_root() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("WinDir"))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 /// A path as a lowercase, forward-slashed string, for comparing against the deny lists.
 ///
 /// Windows paths arrive with backslashes and arbitrary case, so `"/.ssh/"` would never

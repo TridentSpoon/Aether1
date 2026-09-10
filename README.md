@@ -312,13 +312,23 @@ next call asks again. There is no elevated mode and no timed grant.
 |---|---|
 | **System Diagnosis** | System logs and service state |
 | **Security & White Hat** | Network configuration and service state |
-| **Coding** | The project directory (the folder Aether1 was started in — never your home directory) |
+| **Coding** | The project directory (the folder Aether1 was started in — never your home directory, and only when it sits inside it) |
 | **Cites Sources** | Your notes and the project directory |
 | **Creative Work** | Your notes |
 | **Conversational**, **To the Point**, **Model's Own**, **Custom** | Your notes, and the telemetry the HUD already shows |
 
 The last row is deliberate. Those four are styles rather than specialities, and inventing a
 field for them to make the table symmetrical would hand out access nothing asked for.
+
+On **Linux** those roots are `/var/log`, the systemd unit directories, and the networking
+files in `/etc`. On **Windows** they are the event logs under
+`%SystemRoot%\System32\winevt\Logs`, the servicing logs in `%SystemRoot%\Logs`, and
+`%SystemRoot%\System32\drivers\etc` — the `hosts`, `services`, `protocol` and `networks`
+files, which is where Windows keeps what Unix keeps in `/etc`. Windows has no service-state
+*file* — services live in the registry — so **Security & White Hat** and **System Diagnosis**
+answer "what is running" from `list_processes` and the System event log instead. Note that
+`.evtx` event logs are binary, so `read_file` will report their size rather than their
+contents; `list_dir` is what tells you which logs exist.
 
 Two things this does *not* change. Every persona has the same tools available — the field
 decides what runs without a prompt, not what is possible. And the paths Aether1 never reads at
