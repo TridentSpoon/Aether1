@@ -261,18 +261,20 @@ impl LlmEngine {
 
     /// Which half of the telemetry panel this configuration makes sense for.
     ///
+    /// Takes the provider and endpoint rather than a Config so the one-second telemetry
+    /// tick, which reads settings directly, gets the same answer as the turn that reads a
+    /// whole Config. Two copies of this rule would eventually be two different rules.
+    ///
     /// The provider alone does not settle it, for the same reason `reaches_the_internet`
     /// exists: Ollama pointed at a rented box is a cloud call wearing a local provider's
     /// name, and its tokens are somebody's bill.
-    fn telemetry_mode(config: &Config) -> &'static str {
-        match config.provider {
+    fn telemetry_mode(provider: Provider, endpoint: &str) -> &'static str {
+        match provider {
             Provider::Offline => "offline",
-            Provider::Ollama | Provider::LmStudio => {
-                if crate::local_only::is_local_endpoint(&config.endpoint) {
-                    "local"
-                } else {
-                    "cloud"
-                }
+            Provider::Ollama | Provider::LmStudio
+                if crate::local_only::is_local_endpoint(endpoint) =>
+            {
+                "local"
             }
             _ => "cloud",
         }
@@ -281,7 +283,9 @@ impl LlmEngine {
     /// After a turn on a local model, ask the server what that model is -- once per
     /// endpoint-and-model pair, and never again until one of them changes.
     fn refresh_capability(&self, config: &Config) {
-        if Self::telemetry_mode(config) != "local" || config.provider != Provider::Ollama {
+        if Self::telemetry_mode(config.provider, &config.endpoint) != "local"
+            || config.provider != Provider::Ollama
+        {
             return;
         }
         let key = format!("{}|{}", config.endpoint, config.model_name);
@@ -893,17 +897,7 @@ impl LlmEngine {
             .get_setting_string("llm_endpoint", "http://localhost:11434");
         let model = self.db.get_setting_string("llm_model", "");
 
-        let mode = match provider {
-            Provider::Offline => "offline",
-            Provider::Ollama | Provider::LmStudio => {
-                if crate::local_only::is_local_endpoint(&endpoint) {
-                    "local"
-                } else {
-                    "cloud"
-                }
-            }
-            _ => "cloud",
-        };
+        let mode = Self::telemetry_mode(provider, &endpoint);
 
         let key = format!("{endpoint}|{model}");
         let capability = self
@@ -1136,13 +1130,21 @@ mod tests {
             custom_directive: String::new(),
             local_only: false,
         };
-        assert_eq!(LlmEngine::telemetry_mode(&local), "local");
+        assert_eq!(
+            LlmEngine::telemetry_mode(local.provider, &local.endpoint),
+            "local"
+        );
 
         let rented = Config {
             endpoint: "https://ollama.example.com".into(),
             ..local
         };
-        assert_eq!(LlmEngine::telemetry_mode(&rented), "cloud");
+        assert_eq!(
+            LlmEngine::telemetry_mode(rented.provider, &rented.endpoint),
+            "cloud"
+        );
+        // And nothing configured is neither, rather than quietly counting as cloud.
+        assert_eq!(LlmEngine::telemetry_mode(Provider::Offline, ""), "offline");
     }
 
     // load_config's cloud-key fallback reads the same env vars model_scanner::tests
