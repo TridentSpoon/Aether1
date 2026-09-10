@@ -139,6 +139,10 @@ class HologramAvatar {
         this.altShardGroup = null;
         this.altShards = []; // { fillMat, outlineMat, baseOpacity, phase, binIndex }
         this.altFirewallRings = []; // { mesh, mat, fade } -- concentric, outer rings fainter
+        // Parent for all but the innermost two firewall rings -- added straight to the
+        // scene (not nested under altGroup) so those rings never inherit the avatar's
+        // own sway/click-nudge and stay genuinely static. See buildAltAvatar.
+        this.altFirewallStaticGroup = null;
         this.altShieldGroup = null;
         this.altShieldTiles = []; // { fill, outline, baseAngle, phase }
         this.altShieldFillMat = null;
@@ -322,6 +326,7 @@ class HologramAvatar {
         if (this.redGroup) this.redGroup.visible = isRed;
         if (this.arxLogosGroup) this.arxLogosGroup.visible = isArxLogos;
         if (this.altGroup) this.altGroup.visible = isAlt;
+        if (this.altFirewallStaticGroup) this.altFirewallStaticGroup.visible = isAlt;
 
         // CRT scanline/flicker overlay (see #hologram-viewport.crt-active::after in
         // A1theme.css / sprite.css) -- only The Nexus Crew's wireframe "live sensor feed"

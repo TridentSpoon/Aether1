@@ -89,10 +89,18 @@ HologramAvatar.prototype.buildAltAvatar = function() {
     // true circles (no elliptical stretch), packed close enough together to read as a
     // continuous dissipating field rather than a handful of discrete hoops, the
     // outermost reaching out toward the window's own edges. Each ring is fainter than
-    // the one inside it, so the boundary reads as fading outward from a bright core. ---
+    // the one inside it, so the boundary reads as fading outward from a bright core.
+    //
+    // Only the two innermost rings live in altGroup, so they still carry the avatar's
+    // own subtle sway/click-nudge along with the shard stack. Everything past that is
+    // parented to altFirewallStaticGroup instead, which core.js adds straight to the
+    // scene rather than nesting under altGroup -- so the field itself never moves, no
+    // matter how the avatar tilts. ---
+    this.altFirewallStaticGroup = new THREE.Group();
     const firewallRingCount = 28;
     const firewallInnerRadius = 34;
     const firewallOuterRadius = 260;
+    const firewallMovingLayers = 2;
     for (let i = 0; i < firewallRingCount; i++) {
         const t = i / (firewallRingCount - 1); // 0 (innermost) .. 1 (outermost)
         const radius = firewallInnerRadius + (firewallOuterRadius - firewallInnerRadius) * t;
@@ -101,9 +109,10 @@ HologramAvatar.prototype.buildAltAvatar = function() {
             color: 0xfcee0a, transparent: true, opacity: 0.5, side: THREE.DoubleSide, blending: THREE.AdditiveBlending
         });
         const mesh = new THREE.Mesh(new THREE.RingGeometry(radius, radius + radius * 0.012, 96), mat);
-        this.altGroup.add(mesh);
+        (i < firewallMovingLayers ? this.altGroup : this.altFirewallStaticGroup).add(mesh);
         this.altFirewallRings.push({ mesh, mat, fade });
     }
+    this.scene.add(this.altFirewallStaticGroup);
 
     // --- Shield tiles: small hex "ICE nodes" ringing the stack, individually lit in
     // sequence like a security scanner sweeping the perimeter. ---
