@@ -364,24 +364,24 @@ impl Persona {
         const MINIMUM_TOOLS: &[&str] = &["telemetry_detail", "search_memory"];
         const READS_FILES: &[&str] =
             &["read_file", "list_dir", "telemetry_detail", "search_memory"];
+        /// What the two machine-facing personas share: the file tools, plus the two that
+        /// answer "what is this machine doing" -- the process table, and the Windows event
+        /// log, which is the other half of "system diagnosis and event viewer checking".
+        const INSPECTS_THE_MACHINE: &[&str] = &[
+            "list_processes",
+            "read_file",
+            "list_dir",
+            "telemetry_detail",
+            "read_event_log",
+        ];
 
         match self {
             Persona::Default => Domain {
-                tools: &[
-                    "list_processes",
-                    "read_file",
-                    "list_dir",
-                    "telemetry_detail",
-                ],
+                tools: INSPECTS_THE_MACHINE,
                 roots: &[Root::SystemLogs, Root::ServiceState],
             },
             Persona::Alt => Domain {
-                tools: &[
-                    "list_processes",
-                    "read_file",
-                    "list_dir",
-                    "telemetry_detail",
-                ],
+                tools: INSPECTS_THE_MACHINE,
                 roots: &[Root::NetworkConfig, Root::ServiceState],
             },
             Persona::Nexus => Domain {

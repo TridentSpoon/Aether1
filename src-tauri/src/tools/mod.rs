@@ -15,6 +15,7 @@
 mod builtin;
 pub mod consent;
 pub mod domain;
+mod eventlog;
 pub(crate) mod fs_guard;
 mod mutating;
 mod notes;
@@ -251,6 +252,7 @@ pub fn registry() -> &'static Registry {
             Box::new(builtin::ListProcesses),
             Box::new(builtin::TelemetryDetail),
             Box::new(builtin::SearchMemory),
+            Box::new(eventlog::ReadEventLog),
             // Everything below changes something, so everything below goes through the
             // consent path -- proposed to the operator, never run from a conversation.
             Box::new(mutating::WriteFile),
@@ -266,6 +268,24 @@ pub fn registry() -> &'static Registry {
         registry
     });
     &REGISTRY
+}
+
+/// Cuts `text` to at most `limit` bytes, saying so when it does.
+///
+/// The byte limit is stepped back to a character boundary rather than sliced at: `&s[..n]`
+/// panics when `n` lands inside a multi-byte character, and every caller here is truncating
+/// text that came off a machine -- a log line, a filename, a program's output -- where a
+/// non-ASCII byte at exactly the wrong offset is a matter of luck rather than of input
+/// nobody would ever send.
+pub(super) fn truncate(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let mut end = limit;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…[truncated]", &text[..end])
 }
 
 /// Checks `args` against a tool's schema: every required key present, and each present
@@ -695,6 +715,51 @@ mod tests {
             db.recent_actions(1).unwrap()[0].approved_by.as_deref(),
             Some("automatic")
         );
+    }
+
+    /// The byte limit is stepped back to a character boundary. Slicing straight at it
+    /// panics when the limit lands inside a multi-byte character -- and every caller is
+    /// truncating text off a machine, where a non-ASCII byte at exactly that offset is
+    /// luck rather than input nobody would send.
+    #[test]
+    fn truncation_never_splits_a_character_in_half() {
+        // "é" is two bytes, so a limit of 3 lands inside the second one.
+        let text = "aéb";
+        assert_eq!(text.len(), 4);
+        let cut = truncate(text, 3);
+        assert!(cut.starts_with('a'), "{cut}");
+        assert!(cut.contains("[truncated]"), "{cut}");
+
+        // Nothing to cut is returned whole, with no marker bolted on.
+        assert_eq!(truncate("short", 64), "short");
+        assert_eq!(truncate("exact", 5), "exact");
+
+        // And every limit across a multi-byte string is safe, which is the property that
+        // matters -- a panic here would take the whole turn down.
+        let mixed = "日本語 mixed ascii ümlaut";
+        for limit in 0..=mixed.len() {
+            let _ = truncate(mixed, limit);
+        }
+    }
+
+    /// Reading the event log is the diagnostic persona's job, so it runs unasked -- and is
+    /// not Creative Work's job, so there it is a proposal like anything else out of field.
+    #[test]
+    fn the_event_log_is_in_the_diagnostic_field_and_not_in_everyones() {
+        assert!(Persona::Default.domain().allows_tool("read_event_log"));
+        assert!(Persona::Alt.domain().allows_tool("read_event_log"));
+        for persona in [
+            Persona::ArxLogos,
+            Persona::Nexus,
+            Persona::Halcy,
+            Persona::Custom,
+        ] {
+            assert!(
+                !persona.domain().allows_tool("read_event_log"),
+                "{} should have to ask before reading the event log",
+                persona.key()
+            );
+        }
     }
 
     // ------------------------------------------------ per-persona access

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::fs_guard;
-use super::{Outcome, Tool, ToolContext};
+use super::{truncate, Outcome, Tool, ToolContext};
 
 /// A file this size is not something a chat message should be rewriting.
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
@@ -26,14 +26,6 @@ fn string_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing required string argument {key:?}"))
-}
-
-fn truncate(text: &str, limit: usize) -> String {
-    if text.len() <= limit {
-        text.to_string()
-    } else {
-        format!("{}…[truncated]", &text[..limit])
-    }
 }
 
 // --------------------------------------------------------------- write_file
