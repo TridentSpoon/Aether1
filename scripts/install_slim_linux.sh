@@ -23,6 +23,18 @@ BIN_DIR="$HOME/.local/bin"
 SHARE_DIR="$HOME/.local/share"
 mkdir -p "$BIN_DIR" "$SHARE_DIR/applications" "$SHARE_DIR/icons/hicolor/256x256/apps"
 
+# If this machine previously had the *offline* bundle installed, its Piper runtime/voices
+# and whisper.cpp binary/model are dead weight here -- the slim bundle gets Piper and
+# Whisper from pip instead (see below) and never reads $SHARE_DIR/piper or
+# $SHARE_DIR/whisper. Safe to remove unconditionally: neither holds anything but those
+# prebuilt binaries/models, and app settings/conversation history live entirely separately
+# under $SHARE_DIR/aether1 (see project_root() in main.rs), which this never touches.
+if [ -d "$SHARE_DIR/piper" ] || [ -d "$SHARE_DIR/whisper" ] || [ -f "$BIN_DIR/whisper-cli" ]; then
+    echo "🧹 Removing leftover files from a previous offline-bundle install..."
+    rm -rf "$SHARE_DIR/piper" "$SHARE_DIR/whisper"
+    rm -f "$BIN_DIR/whisper-cli"
+fi
+
 echo "📦 Installing the app..."
 install -m 755 bin/aether1 "$BIN_DIR/aether1"
 
