@@ -406,7 +406,6 @@ impl MemoryDb {
         Ok(changed)
     }
 
-    #[allow(dead_code)] // read by the undo path, once actions can be undone
     pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
         self.connect()?
             .query_row(

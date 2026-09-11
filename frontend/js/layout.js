@@ -386,8 +386,4 @@
 
     applySaved();
     markEmptyColumns();
-
-    /* Exposed for the settings panel and for anything that needs to know the
-       boxes moved. */
-    window.AetherLayout = { reset: resetLayout };
 })();
