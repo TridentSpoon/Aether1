@@ -7,8 +7,20 @@
 // machine -- unlike the Web Speech API it replaces, which in most browsers is a cloud
 // service wearing a local-looking API.
 //
-// Transcription shells out to whisper.cpp, which wants exactly what the page produces:
-// 16 kHz mono 16-bit WAV.
+// Two engines, tried in order, both wanting exactly what the page produces: 16 kHz mono
+// 16-bit WAV.
+//
+//   1. whisper.cpp -- a prebuilt native binary with no Python dependency at all. This is
+//      what the fully-offline installer bundles (see scripts/package_offline_*), because
+//      it needs nothing else on the machine and never touches the network once installed.
+//   2. faster-whisper -- a `pip install faster-whisper` away, no native binary to bundle.
+//      This is what the small installer relies on instead: smaller artifact, at the cost of
+//      needing Python and a network reachable the first time a given model size is used
+//      (it caches itself under ~/.cache/huggingface after that).
+//
+// Whichever is actually installed wins; a machine with both installed uses whisper.cpp,
+// since a dedicated native binary needs nothing from Python's own environment to keep
+// working.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,6 +34,25 @@ const MODEL_DIRS: &[&str] = &[
     "/usr/share/whisper",
     "/usr/local/share/whisper",
 ];
+/// faster-whisper's model size when none is configured -- matches WHISPER_MODEL in
+/// scripts/package_offline_linux.sh / package_offline_windows.ps1, so "small" means the
+/// same trade-off (accuracy vs. download size and speed) regardless of which engine ends
+/// up running.
+const DEFAULT_FASTER_WHISPER_MODEL: &str = "small";
+/// Feeds `sys.argv[1..]` (model size, wav path, language) to faster-whisper and prints the
+/// transcript, plain, one line, no timestamps -- there is no CLI to shell out to the way
+/// there is for whisper.cpp, since pip installs a library. Passed to `python -c` rather
+/// than a shipped .py file so there is no extra path to resolve on every platform this
+/// runs on; the parameters arrive as real argv entries, not string-interpolated into the
+/// script, so nothing here can be broken by a WAV path with spaces or quotes in it.
+const FASTER_WHISPER_SCRIPT: &str = "\
+import sys
+from faster_whisper import WhisperModel
+model_size, wav_path, language = sys.argv[1], sys.argv[2], sys.argv[3]
+model = WhisperModel(model_size, device='cpu', compute_type='int8')
+segments, _ = model.transcribe(wav_path, language=None if language == 'auto' else language)
+print(' '.join(segment.text.strip() for segment in segments))
+";
 
 pub fn whisper_binary() -> Option<PathBuf> {
     crate::paths::find_installed_binary(WHISPER_BINARIES)
@@ -50,23 +81,64 @@ pub fn whisper_model(configured: Option<&str>) -> Option<PathBuf> {
     None
 }
 
-/// What local recognition can currently do. "No binary" and "no model" are separated
-/// because they are different problems with different fixes.
+/// `python3` before `python`: on Linux, plenty of distributions no longer symlink the
+/// bare name at all, while `python3` is the one guarantee across all of them. On Windows,
+/// where a bare `python3` is rare, the fallback picks up whatever winget/python.org
+/// installed as plain `python`.
+fn python_binary() -> Option<PathBuf> {
+    which::which("python3")
+        .or_else(|_| which::which("python"))
+        .ok()
+}
+
+/// Whether faster-whisper is importable through whichever Python this machine has. Pip
+/// installs it as a library, not a CLI, so there is no binary on PATH to look for the way
+/// there is for whisper.cpp -- asking the interpreter directly is the only real check.
+fn faster_whisper_status() -> Result<PathBuf, String> {
+    let python = python_binary().ok_or_else(|| {
+        "no python or python3 found on PATH -- install Python (winget on Windows, your \
+         package manager on Linux), then `pip install faster-whisper`"
+            .to_string()
+    })?;
+    let mut cmd = Command::new(&python);
+    cmd.args(["-c", "import faster_whisper"]);
+    crate::paths::suppress_console_window(&mut cmd);
+    let ok = cmd.output().map(|o| o.status.success()).unwrap_or(false);
+    if ok {
+        Ok(python)
+    } else {
+        Err(format!(
+            "faster-whisper is not installed for {} -- run: {} -m pip install faster-whisper",
+            python.display(),
+            python.display()
+        ))
+    }
+}
+
+/// What local recognition can currently do, and with which engine. "No binary" and "no
+/// model" are separated for whisper.cpp because they are different problems with
+/// different fixes; faster-whisper has no separate model-file step (see
+/// FASTER_WHISPER_SCRIPT), so its `model` half of the pair is the size name rather than a
+/// path, purely for the settings panel to have something to show.
 pub fn local_status(configured_model: Option<&str>) -> Result<(PathBuf, PathBuf), String> {
-    let binary = whisper_binary().ok_or_else(|| {
-        format!(
-            "no local speech recognition found (looked for {})",
+    if let Some(binary) = whisper_binary() {
+        let model = whisper_model(configured_model).ok_or_else(|| {
+            format!(
+                "{} is installed but no .bin model was found (looked in {})",
+                binary.display(),
+                MODEL_DIRS.join(", ")
+            )
+        })?;
+        return Ok((binary, model));
+    }
+    match faster_whisper_status() {
+        Ok(python) => Ok((python, PathBuf::from(DEFAULT_FASTER_WHISPER_MODEL))),
+        Err(faster_whisper_why) => Err(format!(
+            "no local speech recognition found -- neither whisper.cpp (looked for {}) nor \
+             faster-whisper ({faster_whisper_why})",
             WHISPER_BINARIES.join(", ")
-        )
-    })?;
-    let model = whisper_model(configured_model).ok_or_else(|| {
-        format!(
-            "{} is installed but no .bin model was found (looked in {})",
-            binary.display(),
-            MODEL_DIRS.join(", ")
-        )
-    })?;
-    Ok((binary, model))
+        )),
+    }
 }
 
 /// whisper.cpp prints timestamped lines like `[00:00:00.000 --> 00:00:02.000]   text`.
@@ -89,19 +161,16 @@ fn clean_transcript(raw: &str) -> String {
         .to_string()
 }
 
-/// Transcribes a 16 kHz mono WAV file. Blocking: runs a process that takes as long as the
-/// audio takes.
-pub fn transcribe(
+fn transcribe_with_whisper_cpp(
+    binary: &Path,
+    model: &Path,
     wav_path: &Path,
-    configured_model: Option<&str>,
     language: Option<&str>,
 ) -> Result<String, String> {
-    let (binary, model) = local_status(configured_model)?;
-
-    let mut command = Command::new(&binary);
+    let mut command = Command::new(binary);
     command
         .arg("--model")
-        .arg(&model)
+        .arg(model)
         .arg("--file")
         .arg(wav_path)
         .arg("--language")
@@ -125,6 +194,60 @@ pub fn transcribe(
         return Err("nothing was said, or nothing could be made out".to_string());
     }
     Ok(transcript)
+}
+
+fn transcribe_with_faster_whisper(
+    python: &Path,
+    wav_path: &Path,
+    language: Option<&str>,
+) -> Result<String, String> {
+    let mut command = Command::new(python);
+    command
+        .arg("-c")
+        .arg(FASTER_WHISPER_SCRIPT)
+        .arg(DEFAULT_FASTER_WHISPER_MODEL)
+        .arg(wav_path)
+        .arg(language.unwrap_or("en"));
+    crate::paths::suppress_console_window(&mut command);
+
+    let output = command
+        .output()
+        .map_err(|e| format!("could not run {}: {e}", python.display()))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "faster-whisper failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let transcript = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if transcript.is_empty() {
+        return Err("nothing was said, or nothing could be made out".to_string());
+    }
+    Ok(transcript)
+}
+
+/// Transcribes a 16 kHz mono WAV file with whichever engine is installed (whisper.cpp
+/// preferred; faster-whisper otherwise -- see the module doc comment). Blocking: runs a
+/// process that takes as long as the audio takes.
+pub fn transcribe(
+    wav_path: &Path,
+    configured_model: Option<&str>,
+    language: Option<&str>,
+) -> Result<String, String> {
+    if let Some(binary) = whisper_binary() {
+        let model = whisper_model(configured_model).ok_or_else(|| {
+            format!(
+                "{} is installed but no .bin model was found (looked in {})",
+                binary.display(),
+                MODEL_DIRS.join(", ")
+            )
+        })?;
+        return transcribe_with_whisper_cpp(&binary, &model, wav_path, language);
+    }
+    let python = faster_whisper_status()?;
+    transcribe_with_faster_whisper(&python, wav_path, language)
 }
 
 /// Writes uploaded audio to a scratch file for the transcriber to read. Returns the path;
@@ -194,5 +317,29 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn faster_whisper_missing_says_whether_its_python_or_the_package() {
+        // Whichever half is missing on this machine (no python at all, or python without
+        // the package pip-installed), the message names that specific thing rather than a
+        // bare "unavailable" -- same philosophy as tts.rs's equivalent espeak-ng test.
+        if let Err(message) = faster_whisper_status() {
+            assert!(
+                message.contains("no python or python3")
+                    || message.contains("faster-whisper is not installed"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn faster_whisper_script_reads_argv_and_prints_one_line() {
+        // Not a real transcription (no model download in a test run) -- just confirms the
+        // script this module hands to `python -c` is self-contained Python that reads its
+        // three parameters from argv rather than expecting them baked into the source.
+        assert!(FASTER_WHISPER_SCRIPT.contains("sys.argv[1], sys.argv[2], sys.argv[3]"));
+        assert!(FASTER_WHISPER_SCRIPT.contains("from faster_whisper import WhisperModel"));
+        assert_eq!(FASTER_WHISPER_SCRIPT.matches("print(").count(), 1);
     }
 }
