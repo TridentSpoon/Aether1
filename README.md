@@ -25,7 +25,8 @@ Intended features
 - **1-Click Packaging & Portability**:
   - Auto-installer for Linux and Windows (`setup.sh` / `setup.bat`).
   - Offline installers for both platforms with speech (Piper + whisper.cpp) already bundled
-    -- see "Offline install" below.
+    -- see "Offline install" below. A slim Linux installer trades that for a much smaller
+    download, fetching speech via pip instead -- see "Slim install" below.
 
 ## Installing
 
@@ -101,6 +102,23 @@ in each bundle credits what's inside.
 This is a different distribution from cloning the repo: it installs a fixed version rather
 than a live checkout, so `git pull` isn't how you update it -- download a newer release
 instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` above instead.
+
+### Slim install (Linux, small download, needs a network once)
+
+The trade-off in the other direction: `aether1-slim-linux-x86_64.tar.gz` (also on
+[Releases](../../releases)) ships just the binary -- no Piper, no whisper.cpp, no models --
+and has its install script fetch speech separately: `pip install --user piper-tts
+faster-whisper`, plus `python3`/`espeak-ng` via your distribution's package manager if
+either is missing. A fraction of the offline bundle's size, at the cost of needing a
+network for that one install step (and the first time each engine's model downloads,
+which happens automatically the first time you actually speak or listen -- after that it's
+cached and works offline like everything else here).
+
+```sh
+tar -xzf aether1-slim-linux-x86_64.tar.gz
+cd aether1-slim-linux-x86_64
+./install-slim-linux.sh
+```
 
 ### Building from source
 
