@@ -137,6 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoSpeak = true;
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
+    let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
     /* The wordmark. Once the companion has a name of its own, that is what the top-left of
@@ -2208,8 +2209,25 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Manual avatar zoom -- picked by hand, independent of the engine's own auto-fit.
+    // Lives next to the voice waveform since that's the other "how it looks while
+    // running" control in this panel.
+    const avatarZoomSlider = document.getElementById('avatar-zoom');
+    const avatarZoomReadout = document.getElementById('avatar-zoom-readout');
+    if (avatarZoomSlider) {
+        avatarZoomSlider.value = String(Math.round(currentZoom * 100));
+        if (avatarZoomReadout) avatarZoomReadout.textContent = `${avatarZoomSlider.value}%`;
+        avatarZoomSlider.addEventListener('input', () => {
+            currentZoom = Number(avatarZoomSlider.value) / 100;
+            localStorage.setItem('aether_avatar_zoom', String(currentZoom));
+            hologram.setZoom(currentZoom);
+            if (avatarZoomReadout) avatarZoomReadout.textContent = `${avatarZoomSlider.value}%`;
+        });
+    }
+
     // Initial Startup
     applyAvatar(currentAvatar, false);
+    hologram.setZoom(currentZoom);
     paintTheme(currentTheme);
 
     /* Nothing chosen yet means the OS is still the authority, so a switch to dark mode while

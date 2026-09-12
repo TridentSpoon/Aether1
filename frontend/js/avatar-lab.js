@@ -28,6 +28,7 @@
        thing this window is for. */
     let currentTheme = '';
     let currentState = 'IDLE';
+    let currentZoom = 1;
 
     // ---- The engine ---------------------------------------------------------
 
@@ -41,6 +42,7 @@
         engine.setAvatar(currentAvatar);
         engine.setColorPalette(Aether1Theme.paletteFor(activeColours()));
         engine.setState(currentState);
+        engine.setZoom(currentZoom);
         say(`showing ${currentAvatar}`);
     }
 
@@ -211,6 +213,12 @@
 
     $('lab-level').addEventListener('input', (e) => {
         $('lab-level-readout').textContent = `${e.target.value}%`;
+    });
+
+    $('lab-zoom').addEventListener('input', (e) => {
+        currentZoom = Number(e.target.value) / 100;
+        $('lab-zoom-readout').textContent = `${e.target.value}%`;
+        if (engine) engine.setZoom(currentZoom);
     });
 
     // ---- The builder --------------------------------------------------------

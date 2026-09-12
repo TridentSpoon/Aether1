@@ -124,6 +124,14 @@
                     <input id="lab-level" type="range" min="0" max="100" value="60">
                 </div>
                 <canvas id="lab-spectrum" width="340" height="46" class="w-full bg-black/60 rounded border border-cyan-500/30"></canvas>
+                <div class="lab-field pt-1">
+                    <label class="font-mono text-cyan-300">AVATAR ZOOM <span id="lab-zoom-readout" class="lab-readout text-slate-400">100%</span></label>
+                    <input id="lab-zoom" type="range" min="50" max="250" value="100">
+                    <span class="text-[10px] font-mono text-slate-500 block">
+                        Manual framing, independent of the engine's own auto-fit -- scales tiers
+                        1-3 of the avatar, never a tier-4 effect/background.
+                    </span>
+                </div>
             </div>
 
             <!-- The builder -->
@@ -203,20 +211,20 @@
 
     <!-- The avatar engine, in the order it needs. core.js first (it defines the class
          the rest attach to), then the shapes, then the animation loop. -->
-    <script src="js/hologram/core.js?v=37"></script>
+    <script src="js/hologram/core.js?v=38"></script>
     <script src="js/hologram/geometry-helpers.js?v=19"></script>
-    <script src="js/hologram/avatar-halcy.js?v=16"></script>
-    <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
-    <script src="js/hologram/avatar-nexus.js?v=28"></script>
-    <script src="js/hologram/avatar-red9000.js?v=16"></script>
-    <script src="js/hologram/avatar-arx-logos.js?v=16"></script>
-    <script src="js/hologram/avatar-alt.js?v=2"></script>
+    <script src="js/hologram/avatar-halcy.js?v=17"></script>
+    <script src="js/hologram/avatar-arx-limes.js?v=17"></script>
+    <script src="js/hologram/avatar-nexus.js?v=29"></script>
+    <script src="js/hologram/avatar-red9000.js?v=17"></script>
+    <script src="js/hologram/avatar-arx-logos.js?v=17"></script>
+    <script src="js/hologram/avatar-alt.js?v=3"></script>
     <script src="js/hologram/parts.js?v=1"></script>
-    <script src="js/hologram/avatar-custom.js?v=1"></script>
+    <script src="js/hologram/avatar-custom.js?v=2"></script>
     <script src="js/hologram/avatar-a1.js?v=1"></script>
     <script src="js/hologram/avatar-senti.js?v=1"></script>
     <script src="js/hologram/avatar-white-rabbit.js?v=1"></script>
-    <script src="js/hologram/animate.js?v=36"></script>
-    <script src="js/avatar-lab.js?v=3"></script>
+    <script src="js/hologram/animate.js?v=37"></script>
+    <script src="js/avatar-lab.js?v=4"></script>
 </body>
 </html>

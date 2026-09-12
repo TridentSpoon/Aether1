@@ -42,7 +42,7 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
     });
 
     this.particleSystem = new THREE.Points(geometry, material);
-    this.scene.add(this.particleSystem);
+    this.avatarZoomGroup.add(this.particleSystem);
 
     // Obsidian inner sphere — solid glossy dark core, fixed color regardless of color theme
     const coreGeom = new THREE.SphereGeometry(18, 32, 32);
@@ -54,7 +54,7 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
         opacity: 0.97
     });
     this.coreOrb = new THREE.Mesh(coreGeom, coreMat);
-    this.scene.add(this.coreOrb);
+    this.avatarZoomGroup.add(this.coreOrb);
 
     // Inner ring's resting radius (a few pixels clear of the lattice) and its baseline
     // outward reach once its equalizer segments are included -- both are re-derived every
@@ -111,7 +111,7 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
         blending: THREE.AdditiveBlending
     });
     this.halcyOuterRing = new THREE.Mesh(outerRingGeom, outerRingMat);
-    this.scene.add(this.halcyOuterRing);
+    this.avatarZoomGroup.add(this.halcyOuterRing);
 
     // Inner ultramarine equalizer ring — segmented so its circumference can "thicken" per-bar
     // like an audio equalizer while speaking, and the whole ring can sway on its Z axis.
@@ -152,5 +152,5 @@ HologramAvatar.prototype.buildHalcyAvatar = function() {
         this.halcyInnerSegments.push(seg);
         this.halcyInnerRingGroup.add(seg);
     }
-    this.scene.add(this.halcyInnerRingGroup);
+    this.avatarZoomGroup.add(this.halcyInnerRingGroup);
 };

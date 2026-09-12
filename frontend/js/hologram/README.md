@@ -7,7 +7,7 @@ rewritten without touching the rest of the app.
 
 ## The contract
 
-The rest of Aether1 talks to the avatar through **five things, and only these five**:
+The rest of Aether1 talks to the avatar through **six things, and only these six**:
 
 ```js
 const hologram = new HologramAvatar('hologram-viewport'); // build it into a container
@@ -15,18 +15,26 @@ hologram.setAvatar('halcy');        // which avatar is on screen
 hologram.setColorTheme('nexus');    // which colour palette tints it
 hologram.setState('THINKING');      // IDLE | LISTENING | THINKING | SPEAKING
 hologram.updateAudioData(bins);     // 64 frequency bins from the voice, 0-255
+hologram.setZoom(1.4);              // manual framing, 0.5-2.5x, independent of auto-fit
 ```
 
 Two files use them: `js/app.js` (the HUD) and `js/sprite.js` (the desktop floater).
 
 **This list changes only deliberately.** It is small enough to keep in your head, and
-that is what makes the avatar a module rather than a tangle. Adding a sixth method is a
+that is what makes the avatar a module rather than a tangle. Adding a seventh method is a
 decision, not a convenience — if something new is needed, ask first whether it belongs
 inside the avatar instead.
 
-`dispose()` exists as a sixth method for one narrow case: something that builds more
+`dispose()` exists as a seventh method for one narrow case: something that builds more
 than one engine in a page. The HUD builds exactly one and keeps it; the workbench
 rebuilds on every change, and without `dispose()` the old render loops pile up.
+
+`setZoom(scale)` is a deliberate manual override, not an auto-fit setting: auto-fit (see
+`applyContentFit` in `core.js`) exists purely to keep an avatar's own resting geometry from
+clipping the frame, and widens the camera's FOV to whatever that takes; `setZoom` is
+someone picking a size by hand on top of that, and is never overridden by it. It scales
+every avatar uniformly except the custom one's tier-4 effect/background layer, which stays
+outside its reach on purpose -- see `avatar-custom.js`.
 
 ## The files
 
@@ -92,7 +100,14 @@ HologramAvatar.registerAvatar({
 
 `api` carries `THREE`, the current `palette`, and `helpers` (the same texture makers the
 built-in avatars use). `ctx` carries `time`, `audio` (0–1 loudness), `audioData` (the 64
-bins), `click` (a brief pulse when the avatar is clicked), `state` and `palette`.
+bins), `click` (a brief pulse when the avatar is clicked), `state`, `palette`, `zoom` (the
+current manual zoom scale, see `setZoom`) and `viewRotationY` (the scene's current drag-yaw).
+Most avatars can ignore the last two -- their group is scaled by `setZoom` for free, and
+spinning along with a drag is the normal, wanted behaviour. They're there for the rare
+avatar that wants to opt out of one: Operator counters `viewRotationY` every frame so its
+depth tunnel stays camera-locked instead of spinning with the hologram, and the custom
+avatar reads `zoom` directly because it must scale its own tiers 1-3 but never its tier-4
+effect layer.
 
 A broken avatar is reported to the console and skipped — a mistake in one avatar file
 does not take the HUD down with it.

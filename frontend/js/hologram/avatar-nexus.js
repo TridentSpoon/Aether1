@@ -292,5 +292,5 @@ HologramAvatar.prototype.buildNexusAvatar = function() {
     }
 
     this.nexusGroup.add(this.nexusCreatureGroup);
-    this.scene.add(this.nexusGroup);
+    this.avatarZoomGroup.add(this.nexusGroup);
 };

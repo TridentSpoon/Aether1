@@ -324,6 +324,11 @@
             </div>
 
             <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent">
+                <div class="flex items-center gap-2 mb-1.5" title="Manual zoom -- how big the avatar reads on screen">
+                    <span class="text-[9px] font-mono text-cyan-400/80 tracking-wider">ZOOM</span>
+                    <input id="avatar-zoom" type="range" min="50" max="250" value="100" class="cyber-range flex-1" aria-label="Avatar zoom">
+                    <span id="avatar-zoom-readout" class="text-[9px] font-mono text-slate-400 w-9 text-right">100%</span>
+                </div>
                 <canvas id="audio-waveform" width="360" height="36" class="w-full"></canvas>
             </div>
         </div>
@@ -805,26 +810,26 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/core.js?v=37"></script>
+    <script src="js/hologram/core.js?v=38"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
-    <script src="js/hologram/avatar-halcy.js?v=16"></script>
-    <script src="js/hologram/avatar-arx-limes.js?v=16"></script>
-    <script src="js/hologram/avatar-nexus.js?v=28"></script>
-    <script src="js/hologram/avatar-red9000.js?v=18"></script>
-    <script src="js/hologram/avatar-arx-logos.js?v=17"></script>
-    <script src="js/hologram/avatar-alt.js?v=2"></script>
+    <script src="js/hologram/avatar-halcy.js?v=17"></script>
+    <script src="js/hologram/avatar-arx-limes.js?v=17"></script>
+    <script src="js/hologram/avatar-nexus.js?v=29"></script>
+    <script src="js/hologram/avatar-red9000.js?v=19"></script>
+    <script src="js/hologram/avatar-arx-logos.js?v=18"></script>
+    <script src="js/hologram/avatar-alt.js?v=3"></script>
     <!-- The parts kit and the avatar assembled from a saved recipe (see
          frontend/avatar-lab.html). Any hand-written avatar file goes here too:
          after core.js, before app.js. -->
     <script src="js/hologram/parts.js?v=1"></script>
-    <script src="js/hologram/avatar-custom.js?v=1"></script>
+    <script src="js/hologram/avatar-custom.js?v=2"></script>
     <script src="js/hologram/avatar-a1.js?v=1"></script>
     <script src="js/hologram/avatar-senti.js?v=1"></script>
     <script src="js/hologram/avatar-white-rabbit.js?v=1"></script>
-    <script src="js/hologram/avatar-operator.js?v=1"></script>
-    <script src="js/hologram/animate.js?v=36"></script>
+    <script src="js/hologram/avatar-operator.js?v=2"></script>
+    <script src="js/hologram/animate.js?v=37"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=29"></script>
+    <script src="js/app.js?v=30"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

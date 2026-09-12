@@ -658,6 +658,26 @@ body {
   animation: pulse-glow 2s infinite ease-in-out;
 }
 
+/* A themed range input -- browsers give this element nothing to inherit, so left alone it
+   is a blue OS-native bar sitting in the middle of a cyan HUD. Shared by the HUD's avatar
+   zoom slider and the workbench's, so both read as the same control. */
+.cyber-range {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 4px; border-radius: 2px;
+  background: var(--tint-main);
+  border: 1px solid var(--border-neon);
+  outline: none;
+}
+.cyber-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 12px; height: 14px; border-radius: 2px; cursor: grab;
+  background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
+}
+.cyber-range::-moz-range-thumb {
+  width: 12px; height: 14px; border: 0; border-radius: 2px; cursor: grab;
+  background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
+}
+
 /* Telemetry tabs -------------------------------------------------------------
    Small enough to sit inside a panel header without competing with it, and
    keyed on the theme variables so they follow the mode and the tone sliders

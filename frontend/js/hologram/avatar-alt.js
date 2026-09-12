@@ -114,7 +114,7 @@ HologramAvatar.prototype.buildAltAvatar = function() {
         (i < firewallMovingLayers ? this.altGroup : this.altFirewallStaticGroup).add(mesh);
         this.altFirewallRings.push({ mesh, mat, fade });
     }
-    this.scene.add(this.altFirewallStaticGroup);
+    this.avatarZoomGroup.add(this.altFirewallStaticGroup);
 
     // --- Shield tiles: small hex "ICE nodes" ringing the stack, individually lit in
     // sequence like a security scanner sweeping the perimeter. ---
@@ -141,5 +141,5 @@ HologramAvatar.prototype.buildAltAvatar = function() {
     }
     this.altGroup.add(this.altShieldGroup);
 
-    this.scene.add(this.altGroup);
+    this.avatarZoomGroup.add(this.altGroup);
 };

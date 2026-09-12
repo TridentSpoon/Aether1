@@ -90,9 +90,22 @@
                 parts.outerRings[recipe.outerRing].build(api, options),
                 parts.effects[recipe.effect].build(api, options),
             ];
-            built.forEach((part) => group.add(part.object));
+            // Tiers 1-3 (core, inner ring, outer ring) each get their own wrapper so the
+            // manual zoom slider (ctx.zoom, see setZoom in core.js) can scale them without
+            // touching the part's own animate() -- which may already be setting a scale on
+            // its object directly (an audio-reactive pulse, say) and would otherwise fight
+            // a scale written to that same object from outside. Tier 4 (the effect/
+            // background) is added straight to group, unwrapped, so it never zooms with the
+            // avatar -- exactly the split the workbench's four tiers already describe.
+            const zoomWraps = built.slice(0, 3).map((part) => {
+                const wrap = new THREE.Group();
+                wrap.add(part.object);
+                group.add(wrap);
+                return wrap;
+            });
+            group.add(built[3].object);
 
-            return { group, parts: built, recipe };
+            return { group, parts: built, zoomWraps, recipe };
         },
 
         applyPalette(model, palette) {
@@ -101,6 +114,7 @@
 
         animate(model, ctx) {
             model.parts.forEach((part) => part.animate(ctx));
+            model.zoomWraps.forEach((wrap) => wrap.scale.setScalar(ctx.zoom));
             const { spin, bob } = model.recipe;
             model.group.rotation.y += spin * 0.01;
             model.group.position.y = Math.sin(ctx.time * 0.8) * bob;
