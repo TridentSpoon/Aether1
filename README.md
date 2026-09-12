@@ -92,7 +92,9 @@ which does this for every tagged release) and requiring nothing but itself once 
   ./install-offline.sh
   ```
 - **Windows**: download `Aether1-Setup.exe` from [Releases](../../releases) and run it --
-  a normal installer, no PowerShell required.
+  a normal installer, no PowerShell required. It is unsigned, so Windows will have something
+  to say about it first -- see "Windows blocked it" below, and read the warning there before
+  touching Smart App Control.
 
 Both bundle Piper (TTS) and whisper.cpp (STT) with a voice and a model already inside, so
 speech works fully offline immediately, not just once you separately track those down --
@@ -119,6 +121,53 @@ tar -xzf aether1-slim-linux-x86_64.tar.gz
 cd aether1-slim-linux-x86_64
 ./install-slim-linux.sh
 ```
+
+### Windows blocked it: SmartScreen and Smart App Control
+
+Aether1's builds are **not code-signed**, so Windows has no publisher to check them against.
+Two different things can stop it, and only one of them can be clicked past.
+
+**"Windows protected your PC"** (blue dialog, SmartScreen). Click **More info** → **Run
+anyway**. If the installer was downloaded rather than built locally, right-clicking the file
+→ **Properties** → **Unblock** before running it avoids the prompt in the first place.
+
+**"Smart App Control blocked an app that may be unsafe"** (grey dialog, only *Okay* and *Get
+apps from the Store*). This one has no override. Smart App Control is stricter than
+SmartScreen: it runs everything past Microsoft's own reputation service and refuses anything
+unsigned, wherever it came from. There is no per-app allow list, and marking the file as
+unblocked does not help.
+
+> [!WARNING]
+> **Turning Smart App Control off is a one-way door.** Microsoft documents that it cannot be
+> switched back on afterwards — the only way back is a clean reinstall of Windows. It is on
+> by default on clean installs of Windows 11 22H2 and later, so if you have it, you have it
+> for the life of the installation. Do not turn it off casually, and not just to run this.
+
+Check which state you are in under **Windows Security → App & browser control → Smart App
+Control settings**. There are three: **On**, **Off**, and **Evaluation** (Windows is still
+deciding, and will pick one for you). If it already says Off, none of this applies to you.
+
+Switching install methods does not help: the clone-and-`setup.bat` path produces an unsigned
+`aether1.exe` of its own and hits exactly the same wall, and so does `start.bat --browser`,
+since the browser fallback still runs that same executable. What is left is:
+
+1. **Run it where Smart App Control is not on.** Any Windows install upgraded from an earlier
+   version, or one already Off or in Evaluation, runs Aether1 normally after the SmartScreen
+   prompt.
+2. **Sign the builds.** The real fix, and the only one that makes Aether1 installable by
+   anyone else on a current Windows 11. It needs a code-signing certificate:
+   [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/) is Microsoft's
+   own service and the cheapest route for an individual developer (a monthly subscription
+   rather than the few hundred a year a traditional OV or EV certificate costs), and being
+   Microsoft-issued it earns reputation quickly. A traditional certificate works too, but a
+   plain OV one still has to build SmartScreen reputation over time.
+
+A self-signed certificate does **not** work here, even installed into Trusted Root. Smart App
+Control judges signatures against Microsoft's own trust and reputation service, not against
+your machine's certificate store, so signing it yourself changes nothing.
+
+Nothing in `.github/workflows/release.yml` signs anything today, so every release carries this
+caveat. The signing step belongs there once a certificate exists.
 
 ### Building from source
 
