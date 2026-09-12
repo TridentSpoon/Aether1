@@ -100,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const settingsVersionLabel = document.getElementById('settings-version-label');
     const updateStatusBox = document.getElementById('update-status-box');
     const btnCheckUpdate = document.getElementById('btn-check-update');
+    const btnInstallGh = document.getElementById('btn-install-gh');
     const btnApplyUpdate = document.getElementById('btn-apply-update');
 
     // Hardware Telemetry Elements
@@ -1676,12 +1677,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Win32/Win64/WinCE cover every real Windows UA; navigator.platform is deprecated but
+    // still present in the WebView2 shell this app actually runs in, and this only decides
+    // whether to show a button, not anything security-relevant.
+    function isWindows() {
+        return /^Win/.test(navigator.platform || '') || /Windows/.test(navigator.userAgent || '');
+    }
+
     async function handleCheckForUpdate() {
         if (versionBadge) versionBadge.classList.add('animate-pulse');
         if (updateStatusBox) {
             updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Checking GitHub for the latest commit on main...</div>';
         }
         if (btnApplyUpdate) btnApplyUpdate.classList.add('hidden');
+        if (btnInstallGh) btnInstallGh.classList.add('hidden');
 
         try {
             const status = await tauriInvoke('check_for_update_rust');
@@ -1692,6 +1701,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     updateStatusBox.innerHTML = `<div class="text-yellow-400">⚠ Could not check for updates: ${status.error || 'unknown error'}</div>`;
                 }
                 if (versionBadge) versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
+                if (btnInstallGh) btnInstallGh.classList.toggle('hidden', !(status.needs_gh_auth && isWindows()));
                 return;
             }
 
@@ -1720,6 +1730,30 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } finally {
             if (versionBadge) versionBadge.classList.remove('animate-pulse');
+        }
+    }
+
+    async function handleInstallGh() {
+        voiceEngine.playSFX('click');
+        if (btnInstallGh) btnInstallGh.disabled = true;
+        if (btnCheckUpdate) btnCheckUpdate.disabled = true;
+        if (updateStatusBox) {
+            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Installing gh via winget -- this can take a minute...</div>';
+        }
+
+        try {
+            const message = await tauriInvoke('install_gh_via_winget_rust');
+            if (updateStatusBox) {
+                updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${message}</div>`;
+            }
+            if (btnInstallGh) btnInstallGh.classList.add('hidden');
+        } catch (e) {
+            if (updateStatusBox) {
+                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ Could not install gh: ${e.message || e}</div>`;
+            }
+        } finally {
+            if (btnInstallGh) btnInstallGh.disabled = false;
+            if (btnCheckUpdate) btnCheckUpdate.disabled = false;
         }
     }
 
@@ -2131,6 +2165,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (btnCheckUpdate) {
         btnCheckUpdate.addEventListener('click', () => handleCheckForUpdate());
+    }
+    if (btnInstallGh) {
+        btnInstallGh.addEventListener('click', () => handleInstallGh());
     }
     if (btnApplyUpdate) {
         btnApplyUpdate.addEventListener('click', () => handleApplyUpdate());
