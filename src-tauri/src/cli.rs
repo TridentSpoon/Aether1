@@ -38,6 +38,11 @@ USAGE:
     aether1 show | toggle          Summon (or dismiss) the HUD of a running instance
     aether1 --serve                Run headless as an HTTP/WebSocket server, reachable
                                    from this machine only
+    aether1 discover               List other AETHER1 instances announcing themselves on
+                                   the LAN (default: listens 3 seconds, then stops)
+    aether1 announce               Announce this machine on the LAN so `discover` can find
+                                   it (Ctrl+C to stop). A standalone prototype for now --
+                                   not wired into --serve until it has real authentication.
 
 OPTIONS:
     prompt --session <ID>          Conversation to continue (default: \"default\",
@@ -48,6 +53,10 @@ OPTIONS:
     --serve --lan                  Also accept connections from your network. There is no
                                    password: anyone who can reach this machine can read
                                    your conversation and approve pending actions.
+    discover --timeout <SECS>      How long to listen for (default: 3)
+    announce --name <NAME>         Instance name other machines will see (default: this
+                                   machine's hostname)
+    announce --port <PORT>         Port to announce (default: 8378, --serve's own port)
     -h, --help                     Show this help
     -V, --version                  Show the version
 
@@ -85,6 +94,13 @@ pub enum Invocation {
         text: Option<String>,
         voice: Option<String>,
         play: bool,
+    },
+    Discover {
+        timeout_secs: u64,
+    },
+    Announce {
+        name: Option<String>,
+        port: Option<u16>,
     },
     Help,
     Version,
@@ -133,6 +149,36 @@ fn free_text(rest: Vec<String>) -> Result<Option<String>, String> {
     })
 }
 
+fn parse_discover(rest: Vec<String>) -> Result<Invocation, String> {
+    let (timeout, rest) = take_option(&rest, "--timeout")?;
+    let timeout_secs = match timeout {
+        Some(t) => t
+            .parse::<u64>()
+            .map_err(|_| format!("--timeout expects a whole number of seconds (got {t:?})"))?,
+        None => 3,
+    };
+    match free_text(rest)? {
+        Some(extra) => Err(format!("discover takes no arguments (got {extra:?})")),
+        None => Ok(Invocation::Discover { timeout_secs }),
+    }
+}
+
+fn parse_announce(rest: Vec<String>) -> Result<Invocation, String> {
+    let (name, rest) = take_option(&rest, "--name")?;
+    let (port, rest) = take_option(&rest, "--port")?;
+    let port = match port {
+        Some(p) => Some(
+            p.parse::<u16>()
+                .map_err(|_| format!("--port expects a number from 0-65535 (got {p:?})"))?,
+        ),
+        None => None,
+    };
+    match free_text(rest)? {
+        Some(extra) => Err(format!("announce takes no arguments (got {extra:?})")),
+        None => Ok(Invocation::Announce { name, port }),
+    }
+}
+
 pub fn parse(argv: &[String]) -> Invocation {
     let args: Vec<String> = argv.iter().skip(1).cloned().collect();
 
@@ -178,6 +224,8 @@ pub fn parse(argv: &[String]) -> Invocation {
                 play: !no_play,
             })
         }),
+        "discover" => parse_discover(rest),
+        "announce" => parse_announce(rest),
         "show" | "toggle" => free_text(rest.clone()).and_then(|extra| match extra {
             Some(extra) => Err(format!("{command} takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Window {
@@ -276,6 +324,51 @@ fn run_say(text: Option<String>, voice: Option<String>, play: bool) -> Result<St
     }
 }
 
+fn run_discover(timeout_secs: u64) -> Result<String, String> {
+    let peers = crate::discovery::discover(std::time::Duration::from_secs(timeout_secs))?;
+    if peers.is_empty() {
+        return Ok(format!(
+            "No other AETHER1 instances answered within {timeout_secs}s. \
+             (Nothing is on the LAN to find until another machine runs `aether1 announce`.)"
+        ));
+    }
+    let mut lines = vec![format!("Found {} instance(s):", peers.len())];
+    for peer in peers {
+        let addresses = peer
+            .addresses
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "  {} -- {}:{} ({addresses})",
+            peer.instance_name, peer.host, peer.port
+        ));
+        for (key, value) in &peer.properties {
+            lines.push(format!("      {key} = {value}"));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
+fn run_announce(name: Option<String>, port: Option<u16>) -> Result<String, String> {
+    let name = name
+        .or_else(sysinfo::System::host_name)
+        .unwrap_or_else(|| "aether1".to_string());
+    let port = port.unwrap_or(8378);
+    println!(
+        "Announcing this machine as {name:?} on port {port} ({}) -- Ctrl+C to stop.",
+        crate::discovery::SERVICE_TYPE
+    );
+    let version = crate::APP_VERSION;
+    let _announcement = crate::discovery::announce(&name, port, &[("version", version)])?;
+    // Nothing else to do -- the mDNS daemon answers queries on its own background thread
+    // for as long as `_announcement` is alive, which is until this process exits.
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+    }
+}
+
 /// Runs a headless invocation and returns the process exit code. `App` and `Serve` are
 /// handled by main() and are a no-op here.
 pub fn run(invocation: Invocation) -> i32 {
@@ -290,6 +383,8 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Prompt { text, session } => run_prompt(text, session),
         Invocation::Status { json } => Ok(run_status(json)),
         Invocation::Say { text, voice, play } => run_say(text, voice, play),
+        Invocation::Discover { timeout_secs } => run_discover(timeout_secs),
+        Invocation::Announce { name, port } => run_announce(name, port),
         Invocation::Invalid(message) => {
             eprintln!("aether1: {message}\n\n{}", USAGE.trim_end());
             return 2;

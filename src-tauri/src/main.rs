@@ -19,6 +19,7 @@
 
 mod cli;
 mod commands;
+mod discovery;
 mod hotkey;
 mod llm;
 mod local_only;
@@ -846,7 +847,7 @@ fn main() {
             runtime.block_on(server::run(engine, lan));
             return;
         }
-        // One-shot CLI: prompt/status/say/help/version.
+        // One-shot CLI: prompt/status/say/discover/announce/help/version.
         other => std::process::exit(cli::run(other)),
     }
 
