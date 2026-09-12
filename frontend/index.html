@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=20">
+    <link rel="stylesheet" href="css/A1theme.css?v=21">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
@@ -70,13 +70,24 @@
                         <button class="avatar-pill" data-avatar-val="a1">🅰️ A1</button>
                         <button class="avatar-pill" data-avatar-val="halcy">🔷 hAlcy</button>
                         <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
-                        <button class="avatar-pill" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
-                        <button class="avatar-pill" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
                         <button class="avatar-pill" data-avatar-val="red">🔴 R.E.D. 9000</button>
                         <button class="avatar-pill" data-avatar-val="alt">⚠️ A1ter_nul</button>
                         <button class="avatar-pill" data-avatar-val="senti">🛸 Nexus Sent</button>
                         <button class="avatar-pill" data-avatar-val="white-rabbit">🐇 White Rabbit</button>
                         <button class="avatar-pill" data-avatar-val="operator">📟 Operator</button>
+                    </div>
+
+                    <!-- The Umbrals: the A.R.X. line. Kept together, and meant to stay together
+                         as more join it -- a new A.R.X. avatar's pill goes in this grid, not the
+                         one above, so the family reads as one group rather than scattered entries
+                         that happen to share a naming prefix. -->
+                    <div class="avatar-group-label">THE UMBRALS</div>
+                    <div class="grid grid-cols-2 gap-1">
+                        <button class="avatar-pill" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
+                        <button class="avatar-pill" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-1 mt-1">
                         <button class="avatar-pill" data-avatar-val="custom" title="An avatar you design yourself">✨ Your own</button>
                     </div>
                     <!-- Only shown while "Your own" is the selected avatar: the way to change it
@@ -810,7 +821,7 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/core.js?v=38"></script>
+    <script src="js/hologram/core.js?v=39"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
     <script src="js/hologram/avatar-halcy.js?v=17"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=17"></script>

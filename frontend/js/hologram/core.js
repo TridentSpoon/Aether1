@@ -15,6 +15,12 @@
  *    an operator has actually picked a persona/avatar
  * 8. Real-time Audio Frequency and State deformation.
  *
+ * A.R.X.LIMES (2) and A.R.X.LOGOS (5) are "The Umbrals" -- a family sharing the A.R.X.
+ * name, grouped together (not scattered through the list above) in index.html's
+ * avatar-menu and js/avatar-lab.js's BUILT_IN. A new A.R.X. avatar joins the same group in
+ * both places; see registerAvatar's optional def.group if it's built as a plugin rather
+ * than a hand-modelled buildXAvatar() like these two.
+ *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).
  * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,
  * and the per-frame animation loop in animate.js -- all attached via HologramAvatar.prototype,
@@ -692,10 +698,13 @@ HologramAvatar.registerAvatar = function (def) {
     return true;
 };
 
-/* What is on offer, for anything drawing an avatar picker. */
+/* What is on offer, for anything drawing an avatar picker. group is optional and purely
+   organisational -- a plugin avatar that belongs to a named family (see "The Umbrals" in
+   index.html's avatar-menu and js/avatar-lab.js's BUILT_IN) sets def.group to the same
+   family name so pickers can cluster it with its relatives instead of listing it flat. */
 HologramAvatar.registeredAvatars = function () {
     return Array.from(HologramAvatar.avatarPlugins.values())
-        .map((def) => ({ id: def.id, label: def.label || def.id }));
+        .map((def) => ({ id: def.id, label: def.label || def.id, group: def.group }));
 };
 
 /* Geometry and materials live on the GPU and are not reclaimed by dropping the last
