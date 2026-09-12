@@ -259,6 +259,7 @@ pub fn registry() -> &'static Registry {
             Box::new(mutating::RunCommand),
             Box::new(notes::AppendNote),
             Box::new(notes::WriteNote),
+            Box::new(notes::ArchiveNote),
         ] {
             registry
                 .register(tool)
@@ -546,6 +547,7 @@ mod tests {
             changing,
             vec![
                 "append_note",
+                "archive_note",
                 "run_command",
                 "set_aether_setting",
                 "write_file",

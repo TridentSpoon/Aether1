@@ -438,6 +438,46 @@ rather than a projection. That panel is the one part of the window that does not
 background colour.
 
 
+## What it remembers
+
+Everything the companion keeps about you is a folder of ordinary markdown files, by default
+`~/Aether1Vault`. Not a database — a folder. You can open it in any editor, search it, put it
+in git, sync it with Obsidian, hand it to a different assistant, or delete a line you disagree
+with, and none of that needs a feature from us.
+
+```
+Aether1Vault/
+  INDEX.md        what is here, and which notes matter for which question
+  profile.md      who you are and how you like things done
+  machine.md      what this computer is
+  memories.md     things you asked it to remember
+  projects/       one note per project
+  daily/          what happened on a given day
+  archive/        notes that stopped being true, kept rather than deleted
+```
+
+Notes link to each other with `[[wiki links]]`, which is what turns the folder into a graph —
+open it in Obsidian and the graph view *is* a picture of what your companion knows.
+
+**How it finds things.** `INDEX.md`, `profile.md` and `machine.md` are loaded into every
+conversation; everything else it goes and reads when the question calls for it. Once the vault
+outgrows its index it searches instead, ranking by *where* a word appears rather than by how
+recent a note is: a note named for the topic comes first, then one with the topic in a heading,
+then one that just mentions it in passing. That ordering is the whole point. Asking about
+sourdough should find your sourdough note, not last Tuesday's conversation.
+
+**How it forgets.** Nothing is deleted. A note that has stopped being true, or whose contents
+have been folded into a better note, gets moved to `archive/` — it keeps its text, its links
+and its searchability, and the index line says `(archived)` rather than vanishing. Once the
+`daily/` folder passes a fortnight's worth of notes, the companion is told to *offer* to tidy
+them into topic notes at a natural pause. It will not interrupt you to do it and it will not do
+it without asking, because a fact worth keeping belongs in the note about its subject, and
+deciding which facts those are is a judgement you should get a say in.
+
+Writing to the vault always shows you an approval card first — what it wants to record, and
+where. The one exception is `remember that …`, which writes straight through: that is your own
+instruction, and asking you to approve your own sentence would be ceremony rather than consent.
+
 ## Personas
 
 A persona is a **job**, not a character. The character is how the job sounds. Settings leads

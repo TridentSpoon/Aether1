@@ -373,6 +373,11 @@ impl Persona {
             "list_dir",
             "telemetry_detail",
             "read_event_log",
+            // Searching the operator's own notes is the least dangerous read there is, and
+            // MINIMUM_TOOLS calls it something every persona keeps. Leaving it off here
+            // meant the two machine-facing personas fell *below* the minimum, which is not
+            // a minimum -- and made "have I told you about this box before?" a proposal.
+            "search_memory",
         ];
 
         match self {
