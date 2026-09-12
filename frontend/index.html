@@ -633,6 +633,12 @@
                         <button id="btn-check-update" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
                             🔄 Check for Updates
                         </button>
+                        <!-- Shown only on Windows, only when the update check fails for lack of
+                             `gh` credentials -- see needs_gh_auth in main.rs and
+                             handleCheckForUpdate() in app.js. -->
+                        <button id="btn-install-gh" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">
+                            📦 Install gh via winget
+                        </button>
                         <button id="btn-apply-update" class="hidden cyber-btn text-xs py-1 px-3 text-green-400 border-green-400 whitespace-nowrap">
                             ⬆ Update Now
                         </button>
