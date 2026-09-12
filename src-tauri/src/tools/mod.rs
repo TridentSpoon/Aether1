@@ -137,7 +137,6 @@ impl Outcome {
         }
     }
 
-    #[allow(dead_code)] // used by the first mutating tools, once the consent path exists
     pub fn reversible(result: impl Into<String>, undo: Value) -> Outcome {
         Outcome {
             result: result.into(),

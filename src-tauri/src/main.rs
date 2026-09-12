@@ -19,11 +19,13 @@
 
 mod cli;
 mod commands;
+mod discovery;
 mod hotkey;
 mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod serve_auth;
 mod server;
 mod tools;
 mod vault;
@@ -125,10 +127,33 @@ fn github_token() -> Option<String> {
     }
 }
 
+/// Distinguishes "no `gh` credentials" from every other way the update check can fail, so
+/// the frontend can offer a fix for this one specifically (an Install via winget button on
+/// Windows) instead of only ever displaying prose. Kept as its own type rather than matching
+/// on the rendered message string, which would silently break the moment either wording
+/// changed.
+enum UpdateCheckError {
+    NoGithubAuth,
+    Other(String),
+}
+
+impl UpdateCheckError {
+    fn message(&self) -> String {
+        match self {
+            UpdateCheckError::NoGithubAuth => {
+                "this repo is private and no GitHub credentials were found on this machine -- \
+                 install the `gh` CLI and run `gh auth login`, then try again"
+                    .to_string()
+            }
+            UpdateCheckError::Other(e) => e.clone(),
+        }
+    }
+}
+
 /// Blocking GET against GitHub's REST API for the latest commit on `main`. Always call
 /// this off the main thread -- it can take up to the timeout below if the network is slow
 /// or absent, and must never hold up the tray or the window.
-fn fetch_latest_main_sha() -> Result<String, String> {
+fn fetch_latest_main_sha() -> Result<String, UpdateCheckError> {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/commits/main");
     let mut request = ureq::get(&url)
         .config()
@@ -150,11 +175,9 @@ fn fetch_latest_main_sha() -> Result<String, String> {
         // report waiting to happen rather than the expected result of not being logged
         // into `gh` on this machine.
         if !have_token && matches!(e, ureq::Error::StatusCode(404)) {
-            "this repo is private and no GitHub credentials were found on this machine -- \
-             install the `gh` CLI and run `gh auth login`, then try again"
-                .to_string()
+            UpdateCheckError::NoGithubAuth
         } else {
-            e.to_string()
+            UpdateCheckError::Other(e.to_string())
         }
     })?;
 
@@ -162,7 +185,7 @@ fn fetch_latest_main_sha() -> Result<String, String> {
         .into_body()
         .read_json::<GhCommit>()
         .map(|c| c.sha)
-        .map_err(|e| e.to_string())
+        .map_err(|e| UpdateCheckError::Other(e.to_string()))
 }
 
 /// Result of comparing this build against the latest commit on `main` -- the shared shape
@@ -178,6 +201,9 @@ struct UpdateStatus {
     built_commit_short: String,
     latest_commit: Option<String>,
     error: Option<String>,
+    /// True only for the specific "no `gh` credentials" failure -- the frontend uses this,
+    /// not the error text, to decide whether to offer the Windows winget install button.
+    needs_gh_auth: bool,
 }
 
 /// Whether this install is in local-only mode. Read through the managed engine so the
@@ -210,6 +236,7 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
             built_commit_short: short_hash(BUILT_COMMIT).to_string(),
             latest_commit: None,
             error: Some(local_only::refusal("GitHub was not contacted")),
+            needs_gh_auth: false,
         };
     }
 
@@ -221,6 +248,7 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
         built_commit_short: short_hash(BUILT_COMMIT).to_string(),
         latest_commit: None,
         error: None,
+        needs_gh_auth: false,
     };
 
     if BUILT_COMMIT == "unknown" {
@@ -238,7 +266,8 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
             ..base
         },
         Err(e) => UpdateStatus {
-            error: Some(e),
+            needs_gh_auth: matches!(e, UpdateCheckError::NoGithubAuth),
+            error: Some(e.message()),
             ..base
         },
     }
@@ -251,6 +280,48 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
 #[tauri::command]
 fn check_for_update_rust(app: tauri::AppHandle) -> UpdateStatus {
     compute_update_status(local_only_enabled(&app))
+}
+
+/// Runs `winget install --id GitHub.cli` for the operator who hit `needs_gh_auth` above and
+/// clicked the resulting "Install via winget" button, so getting past that error doesn't
+/// require leaving the app to find a terminal. winget itself still needs the operator to
+/// have accepted its Store agreement at least once (Windows' own one-time step, not
+/// something this can do for them) -- a failure here says so via winget's own stderr rather
+/// than trying to paper over it.
+#[tauri::command]
+fn install_gh_via_winget_rust() -> Result<String, String> {
+    if !cfg!(target_os = "windows") {
+        return Err("winget is only available on Windows".to_string());
+    }
+    let mut cmd = Command::new("winget");
+    cmd.args([
+        "install",
+        "--id",
+        "GitHub.cli",
+        "-e",
+        "--source",
+        "winget",
+        "--accept-package-agreements",
+        "--accept-source-agreements",
+    ]);
+    paths::suppress_console_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("could not run winget: {e}"))?;
+    if output.status.success() {
+        Ok(
+            "gh installed via winget. Run `gh auth login` in a terminal, then Check for \
+            Updates again."
+                .to_string(),
+        )
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Err(format!(
+            "winget install failed: {}",
+            if stderr.is_empty() { stdout } else { stderr }
+        ))
+    }
 }
 
 /// Rust-native equivalent for the frontend of get_version_info -- current version string
@@ -846,7 +917,7 @@ fn main() {
             runtime.block_on(server::run(engine, lan));
             return;
         }
-        // One-shot CLI: prompt/status/say/help/version.
+        // One-shot CLI: prompt/status/say/discover/announce/help/version.
         other => std::process::exit(cli::run(other)),
     }
 
@@ -891,6 +962,7 @@ fn main() {
             get_version_info,
             check_for_update_rust,
             apply_update_rust,
+            install_gh_via_winget_rust,
             toggle_sprite_window_rust,
             open_avatar_lab_rust,
             show_main_window_rust,

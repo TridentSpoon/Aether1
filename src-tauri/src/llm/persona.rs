@@ -510,6 +510,23 @@ impl Provider {
     }
 }
 
+impl Provider {
+    /// The name to put in front of a person. `Display` gives the settings key, which is
+    /// what belongs in a log line and in an error naming a setting to go and change --
+    /// "openai" is the value in the box. On a panel it should read as the product.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Provider::Ollama => "Ollama",
+            Provider::LmStudio => "LM Studio",
+            Provider::OpenAi => "OpenAI",
+            Provider::Groq => "Groq",
+            Provider::Gemini => "Gemini",
+            Provider::Anthropic => "Anthropic",
+            Provider::Offline => "Offline",
+        }
+    }
+}
+
 impl fmt::Display for Provider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.key())

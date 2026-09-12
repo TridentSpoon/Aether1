@@ -33,6 +33,9 @@ tauri-plugin-single-instance = "2"
 # whether a configured endpoint is on this machine or the local network by parsing its
 # host properly, rather than by string-matching a URL.
 url = "2"
+mdns-sd = "0.21.3"
+bip39 = { version = "2.2.2", features = ["rand"] }
+sha2 = "0.11.0"
 
 [profile.release]
 panic = "abort"

@@ -457,7 +457,6 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
         const dirX = Math.cos(tentacle.baseAngle);
         const dirY = Math.sin(tentacle.baseAngle) * 0.6;
         const perpX = -dirY;
-        const perpY = dirX;
         const segCount = tentacle.positions.length / 3;
 
         for (let sIdx = 0; sIdx < segCount; sIdx++) {

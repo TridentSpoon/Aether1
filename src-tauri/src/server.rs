@@ -13,10 +13,12 @@ use axum::{
     body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        Path, Query, Request, State,
     },
     http::{header, StatusCode},
-    response::Response,
+    middleware,
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -26,9 +28,11 @@ use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
 
 use crate::commands;
+use crate::discovery;
 use crate::llm::{self, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
+use crate::serve_auth::{self, ServeAuth, Setup};
 
 #[derive(Clone)]
 struct AppState {
@@ -38,15 +42,16 @@ struct AppState {
 
 /// The address the HTTP server listens on.
 ///
-/// Loopback is the default because this server has no authentication of any kind: every
+/// Loopback is the default because nothing here needs a password to be safe on it: every
 /// route -- the conversation, the action log, approving a pending action -- is open to
-/// whoever can reach the port. On 0.0.0.0 that is everyone on the network, which for a
-/// laptop means every cafe, hotel and office it is ever carried into. Binding 127.0.0.1
-/// makes the operating system itself refuse those connections, so the guarantee does not
-/// depend on this code being careful.
-///
-/// `--serve --lan` opts back in, for the person who genuinely wants the HUD on their
-/// phone and knows what they are trading.
+/// whoever can reach the port, but reaching 127.0.0.1 already means being a process on this
+/// machine. On 0.0.0.0 that same openness would mean everyone on the network, which for a
+/// laptop means every cafe, hotel and office it is ever carried into -- so `--lan` gates
+/// every route behind a pairing token instead (see serve_auth and require_lan_token below).
+/// Binding 127.0.0.1 in the default case makes the operating system itself refuse remote
+/// connections, so that guarantee doesn't depend on this code being careful; --lan's
+/// guarantee depends on the token check below being correct, which is a strictly weaker
+/// promise, made only when the operator has opted into needing it.
 fn bind_address(lan: bool) -> &'static str {
     if lan {
         "0.0.0.0:8378"
@@ -84,7 +89,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
     let static_service =
         ServeDir::new(project_root().join("frontend")).append_index_html_on_directories(true);
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/api/static-info", get(static_info))
         .route("/api/chat", post(chat))
         .route("/api/agent/genesis", post(genesis))
@@ -106,8 +111,43 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
-        .with_state(state)
-        .fallback_service(static_service);
+        .with_state(state);
+
+    // Loopback mode needs none of this: the operating system already refuses every
+    // connection that isn't from this machine, so a second "type a phrase in" gate on top
+    // would be friction with nothing behind it. --lan is where an actual network boundary
+    // exists, so it's the only mode that gets one.
+    //
+    // `_announcement` is never read again -- its only job is to stay alive (keeping the
+    // mDNS daemon answering queries) for as long as `run()`'s stack frame does, which is
+    // the life of the server.
+    let mut _announcement = None;
+    if lan {
+        let (auth, setup) =
+            serve_auth::load_or_create().expect("could not set up the --lan pairing token");
+        if let Setup::New { phrase } = setup {
+            println!(
+                "\n[AETHER1] --lan pairing phrase (shown once -- write it down now):\n\n    {phrase}\n\n\
+                 Type this into another AETHER1 instance's pairing prompt to let it reach this \
+                 one. Run `aether1 pair` later to generate a new phrase and revoke this one.\n"
+            );
+        }
+        let auth = Arc::new(auth);
+        let pair_router = Router::new()
+            .route("/api/pair", post(pair))
+            .with_state(auth.clone());
+        app = app
+            .route_layer(middleware::from_fn_with_state(auth, require_lan_token))
+            .merge(pair_router);
+
+        let instance_name = sysinfo::System::host_name().unwrap_or_else(|| "aether1".to_string());
+        match discovery::announce(&instance_name, 8378, &[("version", crate::APP_VERSION)]) {
+            Ok(guard) => _announcement = Some(guard),
+            Err(e) => eprintln!("[AETHER1] could not announce on the LAN: {e} (still serving)"),
+        }
+    }
+
+    let app = app.fallback_service(static_service);
 
     let listener = tokio::net::TcpListener::bind(bind_address(lan))
         .await
@@ -117,14 +157,78 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         // Said plainly and every time. Someone who typed --lan once in a script should
         // still be told what it means on the day they run it somewhere unfamiliar.
         println!(
-            "[AETHER1] --lan: anyone on this network can open the HUD. There is no password: \
-             they can read your conversation, see what the companion has done, and approve \
-             actions waiting for you. Use it on a network you trust."
+            "[AETHER1] --lan: reachable from your network, but every request needs the \
+             pairing token above (or POST /api/pair with the phrase) -- without it, AETHER1 \
+             refuses to show your conversation or run anything."
         );
     } else {
         println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
     }
     axum::serve(listener, app).await.expect("axum server error");
+}
+
+fn bearer_token(request: &Request) -> Option<String> {
+    request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_string)
+}
+
+/// A WebSocket handshake can't carry a custom `Authorization` header from a browser, so the
+/// `/ws/*` routes also accept the token as `?token=...` -- the standard workaround for this
+/// exact limitation.
+fn token_from_query(request: &Request) -> Option<String> {
+    let query = request.uri().query()?;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(k, _)| k == "token")
+        .map(|(_, v)| v.into_owned())
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error": "pairing required",
+            "hint": "POST your pairing phrase to /api/pair to get a token, then send it back \
+                      as `Authorization: Bearer <token>` (or ?token=<token> for a WebSocket)"
+        })),
+    )
+        .into_response()
+}
+
+async fn require_lan_token(
+    State(auth): State<Arc<ServeAuth>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match bearer_token(&request).or_else(|| token_from_query(&request)) {
+        Some(token) if auth.accepts(&token) => next.run(request).await,
+        _ => unauthorized(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PairRequest {
+    phrase: String,
+}
+
+/// The one route under `--lan` that needs no token -- it's what produces one. `phrase` is
+/// checked and discarded here; only the derived token it resolves to ever goes back over the
+/// wire, matching serve_auth's rule that the phrase itself never leaves the two ends that
+/// already know it (the person who read it off this machine, and whoever they typed it into).
+async fn pair(
+    State(auth): State<Arc<ServeAuth>>,
+    Json(req): Json<PairRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let token = serve_auth::derive_token_from_phrase(&req.phrase)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    if auth.accepts(&token) {
+        Ok(Json(serde_json::json!({ "token": token })))
+    } else {
+        Err((StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()))
+    }
 }
 
 fn internal_error<E: std::fmt::Display>(e: E) -> (StatusCode, String) {

@@ -25,7 +25,8 @@ Intended features
 - **1-Click Packaging & Portability**:
   - Auto-installer for Linux and Windows (`setup.sh` / `setup.bat`).
   - Offline installers for both platforms with speech (Piper + whisper.cpp) already bundled
-    -- see "Offline install" below.
+    -- see "Offline install" below. A slim Linux installer trades that for a much smaller
+    download, fetching speech via pip instead -- see "Slim install" below.
 
 ## Installing
 
@@ -91,7 +92,9 @@ which does this for every tagged release) and requiring nothing but itself once 
   ./install-offline.sh
   ```
 - **Windows**: download `Aether1-Setup.exe` from [Releases](../../releases) and run it --
-  a normal installer, no PowerShell required.
+  a normal installer, no PowerShell required. It is unsigned, so Windows will have something
+  to say about it first -- see "Windows blocked it" below, and read the warning there before
+  touching Smart App Control.
 
 Both bundle Piper (TTS) and whisper.cpp (STT) with a voice and a model already inside, so
 speech works fully offline immediately, not just once you separately track those down --
@@ -101,6 +104,70 @@ in each bundle credits what's inside.
 This is a different distribution from cloning the repo: it installs a fixed version rather
 than a live checkout, so `git pull` isn't how you update it -- download a newer release
 instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` above instead.
+
+### Slim install (Linux, small download, needs a network once)
+
+The trade-off in the other direction: `aether1-slim-linux-x86_64.tar.gz` (also on
+[Releases](../../releases)) ships just the binary -- no Piper, no whisper.cpp, no models --
+and has its install script fetch speech separately: `pip install --user piper-tts
+faster-whisper`, plus `python3`/`espeak-ng` via your distribution's package manager if
+either is missing. A fraction of the offline bundle's size, at the cost of needing a
+network for that one install step (and the first time each engine's model downloads,
+which happens automatically the first time you actually speak or listen -- after that it's
+cached and works offline like everything else here).
+
+```sh
+tar -xzf aether1-slim-linux-x86_64.tar.gz
+cd aether1-slim-linux-x86_64
+./install-slim-linux.sh
+```
+
+### Windows blocked it: SmartScreen and Smart App Control
+
+Aether1's builds are **not code-signed**, so Windows has no publisher to check them against.
+Two different things can stop it, and only one of them can be clicked past.
+
+**"Windows protected your PC"** (blue dialog, SmartScreen). Click **More info** → **Run
+anyway**. If the installer was downloaded rather than built locally, right-clicking the file
+→ **Properties** → **Unblock** before running it avoids the prompt in the first place.
+
+**"Smart App Control blocked an app that may be unsafe"** (grey dialog, only *Okay* and *Get
+apps from the Store*). This one has no override. Smart App Control is stricter than
+SmartScreen: it runs everything past Microsoft's own reputation service and refuses anything
+unsigned, wherever it came from. There is no per-app allow list, and marking the file as
+unblocked does not help.
+
+> [!WARNING]
+> **Turning Smart App Control off is a one-way door.** Microsoft documents that it cannot be
+> switched back on afterwards — the only way back is a clean reinstall of Windows. It is on
+> by default on clean installs of Windows 11 22H2 and later, so if you have it, you have it
+> for the life of the installation. Do not turn it off casually, and not just to run this.
+
+Check which state you are in under **Windows Security → App & browser control → Smart App
+Control settings**. There are three: **On**, **Off**, and **Evaluation** (Windows is still
+deciding, and will pick one for you). If it already says Off, none of this applies to you.
+
+Switching install methods does not help: the clone-and-`setup.bat` path produces an unsigned
+`aether1.exe` of its own and hits exactly the same wall, and so does `start.bat --browser`,
+since the browser fallback still runs that same executable. What is left is:
+
+1. **Run it where Smart App Control is not on.** Any Windows install upgraded from an earlier
+   version, or one already Off or in Evaluation, runs Aether1 normally after the SmartScreen
+   prompt.
+2. **Sign the builds.** The real fix, and the only one that makes Aether1 installable by
+   anyone else on a current Windows 11. It needs a code-signing certificate:
+   [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/) is Microsoft's
+   own service and the cheapest route for an individual developer (a monthly subscription
+   rather than the few hundred a year a traditional OV or EV certificate costs), and being
+   Microsoft-issued it earns reputation quickly. A traditional certificate works too, but a
+   plain OV one still has to build SmartScreen reputation over time.
+
+A self-signed certificate does **not** work here, even installed into Trusted Root. Smart App
+Control judges signatures against Microsoft's own trust and reputation service, not against
+your machine's certificate store, so signing it yourself changes nothing.
+
+Nothing in `.github/workflows/release.yml` signs anything today, so every release carries this
+caveat. The signing step belongs there once a certificate exists.
 
 ### Building from source
 
@@ -222,6 +289,37 @@ the controls on the right:
 IDLE, LISTENING, THINKING, SPEAKING -- and is always there, so the state never has to compete
 for room with anything else.
 
+## The telemetry panel
+
+A cloud model and a local one raise different questions, so the panel has two views and
+alternates between them while nothing is happening. Once something is generating, it pins to
+whichever view describes what is doing the work. Clicking a tab holds it there.
+
+**USAGE** — what this session has spent. Tokens in and out, against a session budget.
+
+The counts are **what the provider reported**, not a guess: Ollama's `prompt_eval_count` and
+`eval_count`, the OpenAI-compatible `usage` object, Gemini's `usageMetadata`, and Anthropic's
+split across `message_start` and `message_delta`. Where a provider says nothing, the old
+four-characters-per-token estimate still fills the gap — but the panel says `estimated`
+rather than `counted`, because "1,204 tokens" and "about 1,200 tokens" are different claims
+and only one of them can be checked against a provider's own dashboard.
+
+The budget is **Aether1's own**, not a quota anyone enforces. No provider API returns "tokens
+you have left" — that is a billing question answered on a dashboard, not in a response body —
+so the panel says *Budget left* rather than implying the number came from anywhere but here.
+
+**CAPACITY** — what a local model is and how fast it runs. Tokens per second, the context
+length, the parameter count and quantisation, and roughly how much context is left before the
+top of the conversation starts falling off the end.
+
+Throughput is measured from the **model's own generation time** where the server reports one
+(Ollama does), not from wall clock. Wall clock includes loading the model off disk and waiting
+behind another request, which makes a fast model look slow on its first reply and quicker on
+every one after — a cold start that reads like a fault.
+
+Nothing here is invented. A model that reports no context length shows `--` rather than a
+plausible default.
+
 ## Rearranging the HUD
 
 The main window is three columns of panels, and both what is in them and how wide
@@ -264,6 +362,30 @@ Magenta, Crimson and Night -- are the themes Aether1 used to ship as fixed choic
 and Midnight are Solar's and Eclipse's own. A preset is nothing more than a named set of those
 three colours and a mode, so anything a preset does you can do by hand -- including putting a
 Cyberpunk accent on Solar, or a colour of your own on any of them.
+
+**Two sliders adjust the tone** of whatever you have picked, without changing the picks
+themselves:
+
+- **Saturation** (0--100%) is how much colour the accents carry. Drag it down and the neon
+  calms without anything getting darker or lighter -- each colour is mixed toward the grey of
+  its own brightness, so only the chroma goes. At 0 the whole thing is greyscale.
+- **Depth** (-40 to +40) is how dark the ground sits. Left is deeper, right is lighter, and it
+  carries the panels, borders and the avatar bay with it rather than leaving them floating at
+  the old lightness.
+
+They are separate on purpose, because "the colours are too bright" and "Eclipse is not dark
+enough" are two different complaints. Draining the colour out of a background moves it toward
+grey at the same brightness, not toward black, so one slider could not have answered both.
+
+Depth stops at 40 rather than 100 because light-or-dark is *measured* from the background
+rather than declared by the mode. Dragged far enough, a background crosses the line and the
+whole shell inverts -- light text on what is still nominally the light theme. At 40 the darkest
+Solar is still light and the lightest Eclipse is still dark, so the slider cannot flip the
+window out from under you.
+
+Each mode remembers its own tone, the colour swatches keep showing the colours **as picked**
+rather than as painted -- which is what makes the sliders non-destructive -- and *Reset this
+mode's colours and tone* puts everything back.
 
 Each mode remembers its own colours, so switching to Solar to read something in daylight and
 back to Cyberpunk afterwards does not cost you the accent you had picked. **Reset this mode's
@@ -427,14 +549,16 @@ you tell it from a script is there next time you open the window.
 <http://localhost:8378> — the development flow, and the fallback if the native
 webview misbehaves. It listens on this machine only.
 
-That default matters, because the server has **no password of any kind**. Every part of it
-is open to whoever can reach the port: your conversation, the log of everything the
-companion has done, and the buttons that approve actions waiting for your permission.
+That default matters: reaching 127.0.0.1 already means being a process on this machine, so
+loopback mode needs no password of its own -- the operating system is the password.
 
 `aether1 --serve --lan` opens it to your whole network, for the case where you genuinely
-want the HUD on your phone. On a network you do not control — a cafe, a hotel, a shared
-office — that means anyone there can do all of the above. The app says so, every time you
-start it that way.
+want the HUD on your phone or another machine in the house. Unlike loopback mode, this
+*does* need a password: the first time you run it, AETHER1 prints a 12-word pairing phrase
+(shown once — write it down). Type that phrase into the other device's pairing prompt (or
+`POST` it as `{"phrase": "..."}` to `/api/pair`) to get back a token; without it, every
+route refuses — your conversation, the action log, everything. Run `aether1 pair` any time
+to generate a new phrase and revoke the old one.
 
 ## Project goals
 

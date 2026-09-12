@@ -24,6 +24,17 @@ mkdir -p "$BIN_DIR" "$SHARE_DIR/applications" "$SHARE_DIR/icons/hicolor/256x256/
 echo "📦 Installing the app..."
 install -m 755 bin/aether1 "$BIN_DIR/aether1"
 
+# If this machine previously had the *slim* bundle installed, its pip-installed piper-tts
+# and faster-whisper packages are dead weight here -- the offline bundle brings its own
+# Piper runtime and whisper.cpp below and never touches Python. Uninstalling is optional
+# (it needs no network, pip uninstall works fully offline) so a failure here -- no
+# python/pip on PATH, or nothing to uninstall -- is not fatal to the install.
+PYTHON="$(command -v python3 || command -v python || true)"
+if [ -n "$PYTHON" ] && "$PYTHON" -m pip show piper-tts >/dev/null 2>&1; then
+    echo "🧹 Removing leftover pip packages from a previous slim-bundle install..."
+    "$PYTHON" -m pip uninstall -y piper-tts faster-whisper >/dev/null 2>&1 || true
+fi
+
 echo "🔊 Installing Piper (local speech)..."
 rm -rf "$SHARE_DIR/piper/runtime"
 cp -r share/piper/runtime "$SHARE_DIR/piper/runtime"

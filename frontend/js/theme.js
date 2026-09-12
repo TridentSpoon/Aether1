@@ -97,6 +97,16 @@
         return toHex({ r: c.r * factor + floor, g: c.g * factor + floor, b: c.b * factor + floor });
     }
 
+    /* Drains the colour out of a hex without changing how bright it looks, by mixing it toward
+       the grey of its own perceived luminance. Mixing toward a fixed mid-grey instead would
+       darken pale colours and lighten deep ones on the way, so a slider that was meant to say
+       "less shouty" would also be saying "different brightness". */
+    function desaturate(hex, amount) {
+        if (!(amount > 0)) return hex;
+        const grey = Math.round(luminance(hex) * 255);
+        return mix(hex, toHex({ r: grey, g: grey, b: grey }), Math.min(1, amount));
+    }
+
     // ---- presets ------------------------------------------------------------------------
 
     function presets() {
@@ -130,7 +140,63 @@
        the same thing for the presets. Third-party avatar files read hex/hex2/hex3/r/g/b, so
        colours picked by hand have to arrive in exactly that shape. */
     function paletteFor(colours) {
-        return global.themePaletteFrom(colours.main, midToneFor(colours), colours.highlight);
+        const c = derive(colours);
+        return global.themePaletteFrom(c.main, c.mid, c.highlight);
+    }
+
+    // ---- the two tone controls ------------------------------------------------------------
+    /* Saturation and depth are separate axes, and the feedback that asked for them named both:
+       "the colours are too bright" is chroma, and "Solar and Eclipse are not dark enough" is
+       lightness. One slider cannot answer both -- draining the colour out of a background does
+       not move it toward black, it moves it toward grey at the same brightness.
+
+       Both are stored per mode alongside that mode's three colours, and both default to
+       "exactly as the preset was drawn", so an install that never touches them looks today
+       the way it looked yesterday. */
+
+    const SATURATION_DEFAULT = 100;   // 0 = greyscale, 100 = the colours as picked
+    /* Depth runs both ways from 0, and stops at 40 rather than 100 on purpose. isLight() is
+       measured from the background rather than declared by the mode, so a background dragged
+       far enough crosses the line and the whole theme inverts -- light text on what is still
+       nominally the light theme. At 40 the darkest Solar is still light and the lightest
+       Eclipse is still dark, so the slider cannot flip the shell out from under you. */
+    const DEPTH_LIMIT = 40;
+
+    function clampNumber(value, min, max, fallback) {
+        const n = Number(value);
+        if (!isFinite(n)) return fallback;
+        return Math.max(min, Math.min(max, Math.round(n)));
+    }
+
+    function saturationOf(colours) {
+        return clampNumber(colours.saturation, 0, 100, SATURATION_DEFAULT);
+    }
+
+    function depthOf(colours) {
+        return clampNumber(colours.depth, -DEPTH_LIMIT, DEPTH_LIMIT, 0);
+    }
+
+    /* The colours as they should actually be painted: the three that were picked, plus the
+       mid-tone, with both tone controls applied. Everything downstream -- every panel, border,
+       glow and wash, and the avatar's own palette -- is derived from what this returns, so the
+       sliders reach all of it without a single extra line anywhere else.
+
+       The mid-tone is worked out before desaturating rather than after, so a preset's
+       hand-tuned middle colour is the thing being drained rather than a fresh midpoint between
+       two already-drained ends. */
+    function derive(colours) {
+        const drop = 1 - saturationOf(colours) / 100;
+        const depth = depthOf(colours);
+        let background = desaturate(colours.background, drop);
+        if (depth !== 0) {
+            background = mix(background, depth < 0 ? '#000000' : '#ffffff', Math.abs(depth) / 100);
+        }
+        return {
+            background: background,
+            main: desaturate(colours.main, drop),
+            highlight: desaturate(colours.highlight, drop),
+            mid: desaturate(midToneFor(colours), drop)
+        };
     }
 
     // ---- deriving the stylesheet's variables ---------------------------------------------
@@ -139,8 +205,7 @@
        is the whole reason the eight CSS blocks could go: they were eight hand-written answers
        to this function. */
     function variablesFor(mode, colours) {
-        const { background, main, highlight } = colours;
-        const mid = midToneFor(colours);
+        const { background, main, highlight, mid } = derive(colours);
         const light = isLight(background);
         const ink = light ? mix('#000000', background, 0.10) : mix('#ffffff', main, 0.14);
 
@@ -219,7 +284,7 @@
         root.setAttribute('data-theme', mode);
         const vars = variablesFor(mode, colours);
         Object.keys(vars).forEach((name) => root.style.setProperty(name, vars[name]));
-        root.style.colorScheme = isLight(colours.background) ? 'light' : 'dark';
+        root.style.colorScheme = isLight(derive(colours).background) ? 'light' : 'dark';
     }
 
     // ---- what is stored -----------------------------------------------------------------
@@ -242,6 +307,8 @@
                 background: c.background,
                 main: c.main,
                 highlight: c.highlight,
+                saturation: clampNumber(c.saturation, 0, 100, SATURATION_DEFAULT),
+                depth: clampNumber(c.depth, -DEPTH_LIMIT, DEPTH_LIMIT, 0),
                 preset: preset(c.preset) ? c.preset : null
             };
         });
@@ -341,6 +408,24 @@
     /* One colour at a time, which is how the pickers in Settings send them. The mode's other
        two are left exactly as they are -- that is what makes the background stable while an
        accent is being tried out. */
+    /* Saturation and depth, which the two sliders in Settings send. Unlike a colour these do
+       not clear the selected preset: turning the neon down on Night City is still Night City,
+       and showing nothing as selected afterwards would imply a hand-mixed palette that is not
+       what happened. */
+    function setTone(slot, value) {
+        if (slot !== 'saturation' && slot !== 'depth') return current();
+        const now = current();
+        const state = readStored();
+        state.mode = now.mode;
+        const colours = state.colours[now.mode] || defaultColours(now.mode);
+        colours[slot] = slot === 'saturation'
+            ? clampNumber(value, 0, 100, SATURATION_DEFAULT)
+            : clampNumber(value, -DEPTH_LIMIT, DEPTH_LIMIT, 0);
+        state.colours[now.mode] = colours;
+        write(state);
+        return current();
+    }
+
     function setColour(slot, hex) {
         if (['background', 'main', 'highlight'].indexOf(slot) === -1 || !isColour(hex)) return current();
         const now = current();
@@ -392,6 +477,12 @@
         setMode: setMode,
         setPreset: setPreset,
         setColour: setColour,
+        setTone: setTone,
+        toneOf: function (colours) {
+            return { saturation: saturationOf(colours), depth: depthOf(colours) };
+        },
+        DEPTH_LIMIT: DEPTH_LIMIT,
+        SATURATION_DEFAULT: SATURATION_DEFAULT,
         resetColours: resetColours,
         followSystem: followSystem,
         isColour: isColour,

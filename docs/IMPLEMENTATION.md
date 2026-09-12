@@ -267,7 +267,7 @@ registered, so the consent path can't be bypassed by a future tool being added c
 A call refused on its name, its arguments, or the path guard never reaches the log as
 having happened; a call that runs and fails is logged as failed, with the reason.
 
-### Step 6: The consent path
+### Step 6: The consent path — **shipped**
 
 *This is the step that makes mutating tools safe, so it lands before any of them.*
 
@@ -435,15 +435,43 @@ opens the vault folder. Seeing *why* it said something matters more than another
 - **Verify:** a deliberately segfaulted test binary produces a notification whose
   conversation starts with the crash already in context.
 
-### Step 14: Honest AI telemetry
+### Step 14: Honest AI telemetry — **shipped**
 
-- **`src-tauri/src/llm/mod.rs`** — `estimate_tokens` is a 4-chars-per-token guess. Every
-  provider returns real usage counts; parse them in `providers.rs` and feed
-  `record_usage` actual numbers, falling back to the estimate only where a provider gives
-  nothing.
-- **`frontend/js/app.js`** — extend the existing token panel with provider, model, and
-  (for cloud providers) spend.
-- **Verify:** the counter matches the provider's own dashboard within rounding.
+Every provider returns real token counts, and every one of them was being thrown away and
+replaced with a four-characters-per-token guess. Now they are parsed where they arrive:
+Ollama's `prompt_eval_count`/`eval_count` on the final NDJSON object, the OpenAI-compatible
+`usage` object (behind `stream_options.include_usage`), Gemini's `usageMetadata`, and
+Anthropic's, split across `message_start` for the input and `message_delta` for the output.
+
+The estimate stays as the fallback -- a server that reports nothing still has to produce a
+number -- but it is never dressed up as a measurement. `measured_requests` against
+`total_requests` is what lets the panel say `counted`, `counted 2/3` or `estimated`, and that
+distinction is the whole point of the step: "1,204 tokens" and "about 1,200 tokens" are
+different claims, and only one of them can be checked against a provider's own dashboard.
+
+Three decisions worth keeping:
+
+**`include_usage` goes only to OpenAI and Groq.** Both document it. LM Studio does not get it,
+because it is the local one and the one most likely to be an older build or a look-alike
+server, and a request rejected for carrying an unknown field would cost a working setup to
+gain a count that matters less locally than throughput does.
+
+**Throughput comes from the model's own clock.** Ollama reports `eval_duration`, the time it
+actually spent generating. Wall clock includes loading the model off disk and queueing, which
+makes a fast model look half as fast on its first reply and quicker on every one after -- a
+cold start that reads like a fault.
+
+**The session budget is labelled as ours.** No provider API returns "tokens you have left";
+that is a billing question, answered on a dashboard rather than in a response body. Inventing
+one and calling it *Available* would have been a new fiction replacing the one being removed,
+so the panel says *Budget left* and the constant says what it is in its own doc comment.
+
+The panel became two views, because a cloud model and a local one raise different questions --
+what have I spent, versus how fast is this and how much can it hold. They alternate while idle
+and pin to whichever is in use once something is generating. `/api/show` fills in the local
+model's context length, parameter count and quantisation, fetched once per model at the end of
+a turn rather than on the one-second telemetry tick, because a getter that quietly does I/O on
+a timer is a getter that will one day be the reason the HUD stutters.
 
 ---
 
@@ -834,17 +862,62 @@ because Level 0 means "undefined" and providers use it for informational events.
 would have swept it into every filter, so "show me the errors" would have returned chatter.
 Event Viewer's own Information filter matches `Level=4 or Level=0`; this follows it.
 
+### Step 28: two sliders for tone, because it was two complaints — **shipped**
+
+Feedback on the themes said two things: the colours are too bright, and Solar and Eclipse are
+not dark enough. The request was for a saturation slider to fix both.
+
+Saturation alone cannot. Draining the colour out of a background moves it toward **grey at the
+same brightness**, not toward black — so it answers the first complaint exactly and the second
+not at all. They are two axes, so they are two sliders:
+
+- **Saturation** (0–100%) mixes each colour toward the grey of its own Rec. 601 luminance, so
+  chroma goes and brightness stays. Verified: Night City's `#fcee0a` at full is luminance
+  0.848, and fully drained it is 0.847.
+- **Depth** (−40…+40) mixes the background toward black or white, and everything derived from
+  it — panels, hover states, the avatar bay — follows, because they were already computed from
+  the background rather than written down separately.
+
+Both live in each mode's stored colours, both default to "as the preset was drawn", and both
+route through one new `derive()` that `variablesFor` and `paletteFor` call. That is why the
+sliders reach the neon glow and the avatar's own palette without a line of code in either.
+
+Depth stops at 40 for a reason worth keeping: `isLight()` measures the background rather than
+trusting the mode, so a background dragged far enough crosses 0.5 and the shell inverts. At the
+cap, Solar's darkest is luminance 0.573 and Eclipse's lightest is 0.475 — both still on their
+own side of the line, so the slider cannot flip the window out from under you.
+
+The colour swatches keep showing the colours **as picked**, not as painted. That is what makes
+the sliders non-destructive — otherwise nudging a picker after moving a slider would bake the
+adjustment in permanently — and since it means the swatch and the screen disagree, a note says
+so while the tone is off default.
+
 ## Where this stands
 
-Steps 1–5 are shipped: the companion is summonable by hotkey and from a terminal, replies
-stream and are spoken as they arrive, and with inspection switched on it can read files,
-list directories and check processes — every call logged, nothing able to change anything.
+*Rewritten. The list below had gone stale: it still named the consent path, local voice and
+the vault as what to do next, and all three shipped some time ago.*
 
-Next, in order:
+**Done.** Phase 1 entire (CLI, hotkey, streaming, local TTS and STT). Phase 2 entire (tool
+registry, the read-only loop, the consent path, mutating tools and undo). Phase 3's core (the
+vault, priming from it, and writing back). Plus local-only mode, the theme engine, the top
+bar, personas as specialities, per-persona access with per-request elevation, reading the
+Windows event log, and honest token telemetry.
 
-1. **Step 6, the consent path.** It has to exist before any tool that can change the
-   machine, and everything in phase 3 that writes to the vault is such a tool.
-2. **Steps 3a/3b, local voice.** The correction that makes the offline claim true, and the
-   change that most affects what using this feels like day to day.
-3. **Phase 3, the vault.** The largest change in direction, and the one that turns a
-   companion that answers well into one that knows you.
+**Outstanding, in the order they are worth doing:**
+
+1. **Step 8, native tool calling.** The text protocol works, but a model that supports real
+   `tool_use` blocks should get them — fewer parse failures, and the fallback stays for
+   everything else.
+2. **Step 11, retrieval and consolidation.** The vault primes from its index today, which is
+   fine at twenty notes and will not be at two hundred.
+3. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
+   screen. Seeing *why* it said something is worth more than another file browser.
+4. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+   a first responder rather than something you go to.
+5. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+   it changes what the thing feels like more than its cost suggests.
+6. **Step 19, several local models.** A stated core requirement, and still deliberately not
+   started.
+
+Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
+which is correct: what they should be depends on the six above.

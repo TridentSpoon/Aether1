@@ -18,7 +18,7 @@
          head rather than with the engine at the foot of the body: loaded down there, the page
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=3"></script>
+    <script src="js/theme.js?v=4"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
 </head>
@@ -146,8 +146,18 @@
                     <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">0.0 TPS</span>
                 </div>
 
-                <!-- Daily Budget / Availability Bar -->
-                <div class="space-y-1">
+                <!-- Two views, because a cloud model and a local one raise different
+                     questions. Against an API the question is what you have spent; on your
+                     own hardware nothing is being spent and the question is how fast it runs
+                     and how much it can hold. The tabs alternate while nothing is happening
+                     and pin to whichever is in use once something is. -->
+                <div id="telemetry-tabs" class="flex gap-1 text-[10px] font-mono">
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="usage" aria-pressed="true">USAGE</button>
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="capacity" aria-pressed="false">CAPACITY</button>
+                </div>
+
+                <!-- USAGE: what this session has spent. -->
+                <div class="space-y-1" data-telemetry-view="usage">
                     <div class="flex justify-between text-xs font-mono">
                         <span class="text-slate-300">SESSION TOKENS</span>
                         <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
@@ -157,14 +167,41 @@
                     </div>
                     <div class="flex justify-between text-[10px] font-mono text-slate-400">
                         <span>Used: <strong id="tokens-used-pct" class="text-purple-300">0%</strong></span>
-                        <span>Available: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
+                        <span>Budget left: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
                     </div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>In: <strong id="tokens-in-val" class="text-cyan-300">0</strong> · Out: <strong id="tokens-out-val" class="text-cyan-300">0</strong></span>
+                        <!-- Says whether the numbers above were reported by the provider or
+                             worked out from the length of the text. They are different
+                             claims and only one of them is checkable. -->
+                        <span id="tokens-accounting" class="text-slate-500">--</span>
+                    </div>
+                </div>
+
+                <!-- CAPACITY: what the local model is and what it can do. -->
+                <div class="space-y-1 hidden" data-telemetry-view="capacity">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">THROUGHPUT</span>
+                        <span id="capacity-tps" class="text-purple-300 font-bold">-- tok/s</span>
+                    </div>
+                    <div class="gauge-bar-track">
+                        <div id="capacity-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #00b3ff, #00f0ff); box-shadow: 0 0 8px rgba(0, 240, 255, 0.8);"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
+                        <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
+                    </div>
+                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="capacity-note">Nothing local is answering yet.</div>
                 </div>
 
                 <!-- Token History Graph / Canvas -->
                 <div class="space-y-1 pt-1">
                     <div class="text-[10px] font-mono text-slate-400 flex justify-between">
-                        <span>CONSUMPTION GRAPH</span>
+                        <!-- Sits outside both views because it is true of either: a history
+                             of how big each turn was. "Consumption" was only ever right for
+                             a metered provider, and on your own hardware nothing is being
+                             consumed. -->
+                        <span>TOKEN HISTORY</span>
                         <span>BURST SPARKLINE</span>
                     </div>
                     <div class="bg-black/60 p-1.5 rounded border border-purple-500/30">
@@ -451,7 +488,28 @@
                             <input type="color" id="theme-colour-highlight" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The companion colour, so the main one is not the only one on screen.">
                         </label>
                     </div>
-                    <button type="button" id="btn-theme-colours-reset" class="cyber-btn text-[10px] leading-tight py-1.5 px-2 justify-center w-full">↺ Reset this mode's colours</button>
+                    <!-- Two axes, not one. Saturation is how much colour the accents carry;
+                         depth is how dark the ground is. Draining the colour out of a
+                         background moves it toward grey at the same brightness, not toward
+                         black, so "too bright" and "not dark enough" need separate controls. -->
+                    <div class="space-y-1.5 mt-1.5">
+                        <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                            <span class="w-20 shrink-0">Saturation</span>
+                            <input type="range" id="theme-saturation" min="0" max="100" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How much colour the accents carry. Lower is calmer; 0 is greyscale. Brightness stays where it is.">
+                            <span id="theme-saturation-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">100%</span>
+                        </label>
+                        <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                            <span class="w-20 shrink-0">Depth</span>
+                            <input type="range" id="theme-depth" min="-40" max="40" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How dark the background sits. Left is deeper, right is lighter. It cannot go far enough to turn a light theme dark.">
+                            <span id="theme-depth-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">0</span>
+                        </label>
+                    </div>
+                    <!-- Only shown while the tone is off its default. The swatches above keep
+                         showing the colours as picked rather than as painted, which is what
+                         makes the sliders non-destructive -- but it also means the swatch and
+                         the screen disagree, and that is worth one sentence. -->
+                    <p id="theme-tone-note" class="text-[10px] font-mono text-slate-500 leading-snug"></p>
+                    <button type="button" id="btn-theme-colours-reset" class="cyber-btn text-[10px] leading-tight py-1.5 px-2 justify-center w-full">↺ Reset this mode's colours and tone</button>
                 </div>
 
                 <!-- Persona Selector -->
@@ -579,6 +637,12 @@
                     <div class="flex gap-2">
                         <button id="btn-check-update" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
                             🔄 Check for Updates
+                        </button>
+                        <!-- Shown only on Windows, only when the update check fails for lack of
+                             `gh` credentials -- see needs_gh_auth in main.rs and
+                             handleCheckForUpdate() in app.js. -->
+                        <button id="btn-install-gh" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">
+                            📦 Install gh via winget
                         </button>
                         <button id="btn-apply-update" class="hidden cyber-btn text-xs py-1 px-3 text-green-400 border-green-400 whitespace-nowrap">
                             ⬆ Update Now
@@ -765,7 +829,7 @@
     <script src="js/hologram/avatar-operator.js?v=2"></script>
     <script src="js/hologram/animate.js?v=37"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=28"></script>
+    <script src="js/app.js?v=30"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

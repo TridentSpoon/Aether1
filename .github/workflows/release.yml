@@ -1,8 +1,10 @@
-# Builds the offline-install bundles (see scripts/package_offline_linux.sh and
-# scripts/package_offline_windows.ps1) and attaches them to a GitHub Release. This is the
-# only place either packaging script normally runs -- they need internet access to fetch
-# Piper/whisper.cpp/their models, which is exactly what the *installers they produce* don't
-# need, so doing that fetching here rather than on someone's machine is the point.
+# Builds the install bundles and attaches them to a GitHub Release:
+#   - the fully-offline ones (scripts/package_offline_linux.sh,
+#     package_offline_windows.ps1), which fetch Piper/whisper.cpp/their models here so the
+#     *installers they produce* need no network at all
+#   - the slim Linux one (scripts/package_slim_linux.sh), which skips all of that and has
+#     install-slim-linux.sh pip-install Piper/Whisper on the target machine instead, trading
+#     offline-forever for a much smaller download
 #
 # Triggered by pushing a version tag (v1.2.3) or manually via workflow_dispatch for a test
 # run without cutting a real release.
@@ -60,6 +62,39 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  linux-slim-bundle:
+    name: Linux slim bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No cmake here (unlike linux-offline-bundle) -- this job never builds whisper.cpp,
+      # since install-slim-linux.sh pip-installs faster-whisper on the target machine
+      # instead.
+      - name: Install the Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libnotify-bin
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Package the slim bundle
+        run: ./scripts/package_slim_linux.sh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether1-slim-linux-x86_64
+          path: dist/aether1-slim-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   windows-installer:
     name: Windows offline installer
     runs-on: windows-latest
@@ -109,7 +144,7 @@ jobs:
     # Only for a real tag push -- workflow_dispatch is for testing the packaging itself
     # without also needing a release to exist to attach to.
     if: github.ref_type == 'tag'
-    needs: [linux-offline-bundle, windows-installer]
+    needs: [linux-offline-bundle, linux-slim-bundle, windows-installer]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -123,5 +158,6 @@ jobs:
         with:
           files: |
             dist/aether1-offline-linux-x86_64.tar.gz
+            dist/aether1-slim-linux-x86_64.tar.gz
             dist/Aether1-Setup.exe
           generate_release_notes: true
