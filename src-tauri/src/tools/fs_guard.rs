@@ -223,6 +223,14 @@ pub fn resolve_writable(path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+/// One lock for every test that swaps HOME or USERPROFILE out from under the process.
+///
+/// The environment is global to the whole test binary, not to a module, so a per-function
+/// lock does not exclude anything -- a test in another file resetting HOME while this one
+/// held its own lock is exactly how these went flaky. Shared so there is only ever one.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,8 +239,7 @@ mod tests {
     /// Point HOME at a scratch directory so these tests describe the rules rather than
     /// whatever happens to be in the runner's home.
     fn with_home<T>(body: impl FnOnce(&Path) -> T) -> T {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = super::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let home = std::env::temp_dir().join(format!("aether1_guard_{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
@@ -405,8 +412,7 @@ mod tests {
         let note = home.join("notes.txt");
         write(&note, "hello");
 
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = super::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous_home = std::env::var_os("HOME");
         let previous_profile = std::env::var_os("USERPROFILE");
         std::env::remove_var("HOME");

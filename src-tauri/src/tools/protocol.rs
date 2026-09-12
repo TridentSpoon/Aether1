@@ -53,6 +53,26 @@ pub fn instructions(catalog: &str, field: &str) -> String {
     )
 }
 
+/// Instructions appended to the system prompt when the provider carries the tool list in
+/// its own request format. The catalog is left out on purpose -- the provider already has
+/// every name, description and schema, and repeating them in prose is both wasted tokens
+/// and a second copy to drift out of date. What the provider cannot express is the part
+/// that matters here: which reads are free and what happens to everything else.
+pub fn native_instructions(field: &str) -> String {
+    format!(
+        "\n[AVAILABLE TOOLS]\nYou can inspect the operator's machine with the tools \
+         attached to this request.\n\n\
+         Your field is {field}. Reads inside it happen straight away. Anything else -- \
+         another tool, or a path outside it -- is shown to the operator first and runs only \
+         if they approve it, for that one call. Say what you want to look at and why, then \
+         wait; asking again does not make it happen faster.\n\n\
+         Rules:\n\
+         - Call a tool only when you actually need what it returns. Most questions need none.\n\
+         - Never claim you did something you did not call a tool to do.\n\
+         - Anything you say alongside a tool call is shown to the operator immediately."
+    )
+}
+
 /// Extracts every tool call in `text`, in order. Malformed blocks are skipped rather than
 /// reported: the model gets the same "no tool was called" path as if it had emitted prose,
 /// which it recovers from better than an error about its own syntax.
@@ -338,5 +358,17 @@ mod tests {
         ]);
         assert!(formatted.contains("read_file:\ncontents"));
         assert!(formatted.contains("list_dir FAILED: no such directory"));
+    }
+
+    /// The native path already has every name and schema in the request. Repeating the
+    /// catalog and the fenced-block ritual there would be wasted tokens and a second copy
+    /// to drift out of date -- but the part the provider cannot express, what runs without
+    /// asking, still has to be said.
+    #[test]
+    fn the_native_instructions_name_the_field_without_teaching_the_fence() {
+        let text = native_instructions("system logs and service state");
+        assert!(text.contains("system logs and service state"), "{text}");
+        assert!(text.contains("approve"), "{text}");
+        assert!(!text.contains(FENCE), "{text}");
     }
 }

@@ -500,6 +500,24 @@ decides what runs without a prompt, not what is possible. And the paths Aether1 
 all (SSH and GPG keys, cloud credentials, `/etc/shadow`, and the rest) stay off limits inside a
 persona's own field and after an approval alike: a field can only narrow.
 
+### How it asks for a tool
+
+Two ways, chosen by whichever provider you are pointed at, and you should not be able to tell
+the difference from the chat.
+
+**OpenAI, Groq, Gemini and Anthropic** are given the tool list as part of the request, in the
+format each of them documents, and ask for a tool through their own machinery. Nothing about
+the request appears in the reply text.
+
+**Ollama and LM Studio** use the original approach instead: the tools are described in the
+system prompt and the model asks for one by writing a small block of JSON, which Aether1
+recognises mid-stream and hides from you. This is on purpose. Ollama is driven through an
+endpoint that has no tools field at all, and LM Studio is the one most likely to be an older
+install that would reject the request outright — better the way that works everywhere than a
+failure you have to diagnose.
+
+Either way you see the same thing: a one-line trace of what actually ran, and then the answer.
+
 Because a persona now carries access, the companion cannot change its own persona, avatar or
 directive — those settings are out of reach of `set_aether_setting`, alongside API keys and its
 own permissions. "Switch persona to Security" is not something it may approve itself into.

@@ -619,8 +619,19 @@ impl LlmEngine {
             providers::Completion {
                 text,
                 usage: any_reported.then_some(total),
+                calls: Vec::new(),
             }
         };
+
+        /* Providers that take a tool list in their own request format get one, and answer
+        with structured calls. The rest stay on the fenced text protocol. The two paths
+        differ in three places and nowhere else: what goes into the request, where the
+        calls are read from, and how the round is carried into the next one -- a native
+        round becomes an Exchange, a text round becomes two more history messages. */
+        let native = config.provider.supports_native_tools();
+        let schemas = registry.schemas();
+        let none: Vec<crate::tools::ToolSchema> = Vec::new();
+        let mut exchanges: Vec<providers::Exchange> = Vec::new();
 
         for _round in 0..MAX_TOOL_ROUNDS {
             let ctx = ChatContext {
@@ -628,12 +639,20 @@ impl LlmEngine {
                 history: &history,
                 prompt: &current_prompt,
                 agent_name: &config.agent_name,
+                tools: if native { &schemas } else { &none },
+                exchanges: &exchanges,
             };
 
+            // Nothing to filter on the native path: the calls never appear in the text, so
+            // withholding a fence there could only swallow prose the operator should see.
             let mut filter = crate::tools::protocol::FenceFilter::new();
             let outcome = {
                 let mut round_sink = |delta: &str| {
-                    let shown = filter.push(delta);
+                    let shown = if native {
+                        delta.to_string()
+                    } else {
+                        filter.push(delta)
+                    };
                     if !shown.is_empty() {
                         visible.push_str(&shown);
                         sink(&shown);
@@ -642,15 +661,15 @@ impl LlmEngine {
                 self.call_provider(config, &ctx, &mut round_sink)
             };
             let tail = filter.finish();
-            if !tail.is_empty() {
+            if !native && !tail.is_empty() {
                 visible.push_str(&tail);
                 sink(&tail);
             }
 
-            let raw = match outcome {
+            let (raw, native_calls) = match outcome {
                 Ok(completion) => {
                     carry(completion.usage);
-                    completion.text
+                    (completion.text, completion.calls)
                 }
                 Err(failure) => {
                     eprintln!(
@@ -670,7 +689,22 @@ impl LlmEngine {
                 }
             };
 
-            let calls = crate::tools::protocol::parse_calls(&raw);
+            /* Both paths converge on the same list. A text-protocol call has no id of its
+            own, so it is given its position in the round -- nothing reads it back on that
+            path, and it keeps one shape for the executor to work from. */
+            let calls: Vec<providers::NativeCall> = if native {
+                native_calls
+            } else {
+                crate::tools::protocol::parse_calls(&raw)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, call)| providers::NativeCall {
+                        id: index.to_string(),
+                        tool: call.tool,
+                        arguments: call.arguments,
+                    })
+                    .collect()
+            };
             if calls.is_empty() {
                 return done(visible.trim().to_string(), any_reported, total);
             }
@@ -684,7 +718,10 @@ impl LlmEngine {
                     Some(tool) if tool.mutating() => {
                         crate::tools::protocol::trace_of(&tool.preview(&call.arguments))
                     }
-                    _ => crate::tools::protocol::trace_line(call),
+                    _ => crate::tools::protocol::trace_line(&crate::tools::protocol::ToolCall {
+                        tool: call.tool.clone(),
+                        arguments: call.arguments.clone(),
+                    }),
                 };
                 visible.push_str(&trace);
                 sink(&trace);
@@ -694,19 +731,40 @@ impl LlmEngine {
                 ));
             }
 
-            // Carry the round into the history so the next one can see what it asked for
-            // and what came back.
-            history.push(Message {
-                sender: "user".to_string(),
-                text: current_prompt,
-                timestamp: String::new(),
-            });
-            history.push(Message {
-                sender: "assistant".to_string(),
-                text: raw,
-                timestamp: String::new(),
-            });
-            current_prompt = crate::tools::protocol::format_results(&results);
+            if native {
+                /* The round goes back as the provider's own structures: the assistant turn
+                that asked, then one turn carrying every answer. The stored conversation
+                stays plain text -- these live only for the length of this turn, and
+                nothing reads them back afterwards. */
+                let returned = calls
+                    .iter()
+                    .zip(&results)
+                    .map(|(call, (tool, outcome))| providers::CallResult {
+                        id: call.id.clone(),
+                        tool: tool.clone(),
+                        output: match outcome {
+                            Ok(text) => text.clone(),
+                            Err(error) => format!("FAILED: {error}"),
+                        },
+                    })
+                    .collect();
+                exchanges.push(providers::Exchange::Called { text: raw, calls });
+                exchanges.push(providers::Exchange::Returned(returned));
+            } else {
+                // Carry the round into the history so the next one can see what it asked
+                // for and what came back.
+                history.push(Message {
+                    sender: "user".to_string(),
+                    text: current_prompt,
+                    timestamp: String::new(),
+                });
+                history.push(Message {
+                    sender: "assistant".to_string(),
+                    text: raw,
+                    timestamp: String::new(),
+                });
+                current_prompt = crate::tools::protocol::format_results(&results);
+            }
         }
 
         let notice = format!(
@@ -752,10 +810,12 @@ impl LlmEngine {
         let registry = crate::tools::registry();
         let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
         if tools_on {
-            system_prompt.push_str(&crate::tools::protocol::instructions(
-                &registry.prompt_catalog(),
-                &config.persona.domain().field(),
-            ));
+            let field = config.persona.domain().field();
+            system_prompt.push_str(&if config.provider.supports_native_tools() {
+                crate::tools::protocol::native_instructions(&field)
+            } else {
+                crate::tools::protocol::instructions(&registry.prompt_catalog(), &field)
+            });
         }
 
         // Local-only mode refuses the cloud rather than quietly routing around it. The
@@ -799,6 +859,8 @@ impl LlmEngine {
                 history: &history,
                 prompt,
                 agent_name: &config.agent_name,
+                tools: &[],
+                exchanges: &[],
             };
             match self.call_provider(&config, &ctx, sink) {
                 Ok(completion) => {

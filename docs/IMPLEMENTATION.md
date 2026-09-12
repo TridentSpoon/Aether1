@@ -241,7 +241,7 @@ that cannot yet do anything.
   non-mutating ones, append results to the context, call again. Start with a **prompt-level
   protocol** — the tool list rendered into the system prompt, the model replying with a
   fenced JSON block — because that works on every provider including small local models.
-  Native tool calling comes in step 8.
+  Native tool calling arrived in step 8; this stays as the fallback for Ollama and LM Studio.
 - **Path safety:** `read_file` and `list_dir` resolve and canonicalise against an allowed
   roots list (home directory and below by default, `/etc` read-only, never `~/.ssh` or the
   Aether1 database itself). This is the same class of check `server.rs`'s `get_audio`
@@ -326,14 +326,55 @@ HUD. Notes on what was decided:
 with a longer name once an allowlist exists, and it deserves its own guard rather than
 being tacked on here.
 
-### Step 8: Native tool calling
+### Step 8: Native tool calling ✅
 
-- **`src-tauri/src/llm/providers.rs`** — real `tools` / `tool_use` blocks for Anthropic,
-  the OpenAI-compatible shape, and Gemini, each with typed request/response structs the way
-  the existing calls are built. Keep the step-5 prompt protocol as the automatic fallback
-  for Ollama and any model that tool-calls badly.
-- **Verify:** the same conversation produces the same actions on a cloud provider and on a
-  local model, one through native tool calls and one through the text protocol.
+Built as planned. Four providers now carry the tool list in their own request format and
+answer with structured calls; the step-5 fenced text protocol stays exactly as it was and is
+what the two local providers still use.
+
+- **`src-tauri/src/llm/providers.rs`** — `ChatContext` gained `tools` (the registry's
+  schemas) and `exchanges` (this turn's rounds). A round is an `Exchange::Called { text,
+  calls }` followed by an `Exchange::Returned(Vec<CallResult>)`, and each provider bends
+  that into its own shape:
+  - **Anthropic** — `tools: [{name, description, input_schema}]`; the round replays as
+    assistant `tool_use` blocks and then *one* user message holding every `tool_result`.
+    Splitting the results across messages teaches the model to ask for one tool at a time,
+    so they stay together.
+  - **OpenAI-compatible** (OpenAI, Groq) — `tools: [{type:"function", function:{…}}]`; the
+    call rides on the assistant message and each result is its own `role:"tool"` message
+    quoting the `tool_call_id` it answers. Arguments go back as the JSON *string* they
+    arrived as.
+  - **Gemini** — `tools[0].functionDeclarations`; parts carry `functionCall` and
+    `functionResponse`, and `response` is an object rather than a bare string.
+- Streaming is where the work is. A call does not arrive whole: OpenAI sends fragments whose
+  only reliable field is `index`, and Anthropic spreads one call across
+  `content_block_start`, a run of `input_json_delta` fragments, and `content_block_stop`.
+  `OpenAiCallBuilder` and `AnthropicCallBuilder` reassemble them, both keyed by index so the
+  reassembly does not depend on blocks never interleaving. An empty argument buffer means
+  `{}` — an argument-less tool sends no fragments at all — rather than a parse failure.
+- **`Provider::supports_native_tools()`** is the switch, and the two local providers are
+  deliberately out. Ollama is driven through `/api/generate`, which has no tools field at
+  all — tools live on `/api/chat`, a different endpoint with a different shape. LM Studio's
+  server does accept tools on recent builds, but it is the provider most likely to be an
+  older install on someone's desktop, and a silent 400 there costs a working setup.
+- **`src-tauri/src/llm/mod.rs`** — `tool_loop` drives both paths from one list of calls. The
+  differences are three: what goes into the request, where the calls are read from, and how
+  the round is carried forward. A native round becomes an `Exchange`; a text round becomes
+  two more history messages, as before. The `FenceFilter` is skipped on the native path,
+  where withholding a fence could only swallow prose the operator should see. The system
+  prompt loses the fenced-block instructions and the catalog on that path — the provider
+  already has every name and schema, and repeating them is both wasted tokens and a second
+  copy to drift out of date.
+- Tool exchanges live only for the length of a turn. The SQLite message store stays plain
+  text: nothing reads these back afterwards, so there is no migration for scaffolding.
+- **Verified by unit tests against the published wire formats**, not against live providers
+  — this was built in a container with no API keys. The Anthropic shapes came from the
+  Messages API documentation, the OpenAI shapes from the official `openai-openapi` spec, and
+  the Gemini shapes from the API's own discovery document. What the tests cover: each
+  provider's tool declaration, each provider's replay of a completed round, fragment
+  reassembly for both streaming formats, an argument-less call, a text block closing without
+  being mistaken for a call, and a reply that is *only* a tool call not counting as an empty
+  stream. **First run against a real key is the real test.**
 
 ---
 
@@ -901,23 +942,20 @@ the vault as what to do next, and all three shipped some time ago.*
 registry, the read-only loop, the consent path, mutating tools and undo). Phase 3's core (the
 vault, priming from it, and writing back). Plus local-only mode, the theme engine, the top
 bar, personas as specialities, per-persona access with per-request elevation, reading the
-Windows event log, and honest token telemetry.
+Windows event log, honest token telemetry, and native tool calling.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Step 8, native tool calling.** The text protocol works, but a model that supports real
-   `tool_use` blocks should get them — fewer parse failures, and the fallback stays for
-   everything else.
-2. **Step 11, retrieval and consolidation.** The vault primes from its index today, which is
+1. **Step 11, retrieval and consolidation.** The vault primes from its index today, which is
    fine at twenty notes and will not be at two hundred.
-3. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
+2. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
    screen. Seeing *why* it said something is worth more than another file browser.
-4. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+3. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-5. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+4. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
-6. **Step 19, several local models.** A stated core requirement, and still deliberately not
+5. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
-which is correct: what they should be depends on the six above.
+which is correct: what they should be depends on the five above.
