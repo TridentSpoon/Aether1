@@ -447,15 +447,52 @@ operation with one fewer thing to explain.
 the session-close note. The index plus `read_file` is the whole retrieval mechanism today,
 which is enough while a vault is small and is the thing to measure before adding search.
 
-### Step 11: Retrieval, consolidation, decay
+*Since then:* step 11 landed the search and the archive. The session-close note is still
+unwritten — see step 12, which is where showing what was loaded belongs.
 
-- **Retrieval** — start with the index plus filename/heading search over the vault, since
-  that is what the priming design actually asks for. Add a real index (SQLite FTS over note
-  contents, or embeddings) only if the simple thing measurably fails.
-- **Consolidation** — daily notes fold into topic notes; a note that has stopped being true
-  gets edited or moved to `archive/` rather than silently contradicting a newer one.
-- **Verify:** with 200 notes, asking about one topic pulls that topic's notes and not the
-  ten most recent.
+### Step 11: Retrieval, consolidation, decay ✅
+
+Built as planned, and deliberately without an index.
+
+- **New `src-tauri/src/vault/search.rs`** — a scan, not an FTS table and not embeddings. A
+  vault is a few hundred markdown files totalling a couple of megabytes; scanning it costs
+  milliseconds, needs no index to keep in sync, no migration, and no second copy of the
+  operator's memory in a format they cannot open. The plan said to add a real index only if
+  the simple thing measurably fails, and it has not been measured failing yet.
+- **The ranking is the part that matters**, and it is written against one specific failure:
+  "asking about one topic pulls the ten most recent notes". Where a word appears is what
+  counts — the note's own path (8), a heading (4), a body line (1, and only the first three,
+  so a note cannot climb by repetition). A breadth bonus (5 per extra word matched) puts a
+  note matching *both* search words above one matching either word repeatedly. Recency is a
+  tiebreaker and never a reason to rank one note above a better-matching one.
+- **Function words are dropped from a query**, which exists only because of the breadth
+  bonus: almost every note contains "the", so without a stop list that bonus would go to
+  whichever notes are longest.
+- **`search_memory` now searches the vault** rather than the old key-value table. It keeps
+  its name and its shape — the shape was right, only what it searched was stale. The table is
+  still read when there is no vault at all, which is only true before the first run creates
+  one; after that `ensure` has copied those rows into `imported-memories.md` and the vault
+  search covers them, so reading both would answer the same fact twice under two names.
+- **`archive_note`** (mutating, reversible) — moves a note to `archive/`, preserving its
+  subpath, refusing the three always-loaded notes (those get *corrected* with `write_note`,
+  not filed away), and suffixing rather than overwriting on a name collision. The index line
+  is annotated `(archived)` rather than deleted: `[[wiki links]]` resolve by name, so the link
+  still works after the move, and silently removing a line from a file the operator writes in
+  themselves is not a thing a memory system should do.
+- **Consolidation is prompted, never automatic.** Folding a fortnight of dailies into a topic
+  note is a judgement about what mattered, and code that did it on its own would be rewriting
+  the operator's memory without being asked. What the code does is *notice*: past 14 notes in
+  `daily/`, priming carries one line telling the model to offer at a natural pause, not to
+  interrupt, and not to do it without asking. The line disappears once the pile is dealt with.
+- **`search_memory` added to the two machine-facing personas' domains.** `MINIMUM_TOOLS`
+  already called it something every persona keeps; leaving it off `INSPECTS_THE_MACHINE` meant
+  System Diagnosis and Security fell *below* the stated minimum, and "have I told you about
+  this box before?" became a proposal. Searching the operator's own notes is the least
+  dangerous read there is.
+- **Verify — done, as a test.** `with_two_hundred_notes_a_topic_question_finds_the_topic_note`
+  builds 200 daily notes written *after* the topic note, so every one of them is more recent
+  than the answer, and asserts the topic note still ranks first. If recency were doing any of
+  the ranking, that test fails.
 
 ### Step 12: Vault in the HUD *(reduced)*
 
@@ -939,23 +976,22 @@ so while the tone is off default.
 the vault as what to do next, and all three shipped some time ago.*
 
 **Done.** Phase 1 entire (CLI, hotkey, streaming, local TTS and STT). Phase 2 entire (tool
-registry, the read-only loop, the consent path, mutating tools and undo). Phase 3's core (the
-vault, priming from it, and writing back). Plus local-only mode, the theme engine, the top
-bar, personas as specialities, per-persona access with per-request elevation, reading the
-Windows event log, honest token telemetry, and native tool calling.
+registry, the read-only loop, the consent path, mutating tools and undo). Phase 3 bar its
+last step (the vault, priming from it, writing back, search and archiving). Plus local-only
+mode, the theme engine, the top bar, personas as specialities, per-persona access with
+per-request elevation, reading the Windows event log, honest token telemetry, and native tool
+calling.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Step 11, retrieval and consolidation.** The vault primes from its index today, which is
-   fine at twenty notes and will not be at two hundred.
-2. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
+1. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
    screen. Seeing *why* it said something is worth more than another file browser.
-3. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+2. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-4. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+3. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
-5. **Step 19, several local models.** A stated core requirement, and still deliberately not
+4. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
-which is correct: what they should be depends on the five above.
+which is correct: what they should be depends on the four above.
