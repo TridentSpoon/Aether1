@@ -166,8 +166,43 @@ A self-signed certificate does **not** work here, even installed into Trusted Ro
 Control judges signatures against Microsoft's own trust and reputation service, not against
 your machine's certificate store, so signing it yourself changes nothing.
 
-Nothing in `.github/workflows/release.yml` signs anything today, so every release carries this
-caveat. The signing step belongs there once a certificate exists.
+#### Signing releases
+
+`.github/workflows/release.yml` signs both the binary and the installer when — and only when
+— six repository secrets are set. With none of them set it builds exactly as before and warns
+in the job log that the release is unsigned, so a fork still builds.
+
+| Secret | What it is |
+|---|---|
+| `AZURE_SIGNING_TENANT_ID` | Directory (tenant) ID |
+| `AZURE_SIGNING_CLIENT_ID` | App registration's client ID |
+| `AZURE_SIGNING_CLIENT_SECRET` | That app registration's client secret |
+| `AZURE_SIGNING_ENDPOINT` | Regional endpoint, e.g. `https://eus.codesigning.azure.net/` |
+| `AZURE_SIGNING_ACCOUNT` | Signing account name |
+| `AZURE_SIGNING_CERT_PROFILE` | Certificate profile name |
+
+The app registration needs the **Trusted Signing Certificate Profile Signer** role on the
+certificate profile. The last three are configuration rather than secrets, but they live
+alongside the other three so there is one place to set signing up and one condition deciding
+whether it is on.
+
+Three things the workflow does deliberately:
+
+- **`aether1.exe` is signed before Inno Setup packages it**, not only the installer
+  afterwards. Smart App Control judges the binary that ends up running, so an installer
+  signed around an unsigned payload installs cleanly and is then blocked on launch — which is
+  exactly the failure above, one step later. The packaging script takes `-SignedExe` so the
+  signed binary is staged as-is and nothing relinks over the signature.
+- **Setting some of the six but not all fails the build.** Anyone who set four of them meant
+  to sign, and a release that quietly comes out unsigned is discovered by whoever downloads
+  it rather than by CI.
+- **Signatures are verified after the fact.** If signing was configured and a file came out
+  unsigned anyway, the job fails rather than publishing it. Only presence is asserted, not
+  chain validity — a runner that cannot build the chain would otherwise fail for a reason
+  unrelated to whether the release is signed.
+
+Signatures are timestamped (`timestamp.acs.microsoft.com`), so they stay valid after the
+certificate expires rather than every released installer going bad on the same day.
 
 ### Building from source
 
