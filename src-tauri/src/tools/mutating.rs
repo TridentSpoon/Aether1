@@ -431,8 +431,9 @@ mod tests {
 
     /// These tools write to real paths, and the guard resolves against $HOME.
     fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::tools::fs_guard::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let previous_home = std::env::var_os("HOME");
         let previous_profile = std::env::var_os("USERPROFILE");
         std::env::set_var("HOME", home);
