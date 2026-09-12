@@ -21,6 +21,11 @@
  * hand-modelled buildXAvatar() like these:
  * - "Singular Ascended Class": hAlcy (1), R.E.D. 9000 (4), A1ter_nul (6).
  * - "Trace Protocols": The Nexus (3), and the plugins Nexus Sent, White Rabbit and Operator.
+ *   The latter three are also hidden easter eggs, not just a group: they start absent from
+ *   the picker and only ever appear by being triggered from a chat message while The Nexus
+ *   is on screen (a greeting, an Alice/rabbit-hole reference, a security or diagnostic
+ *   question), unlocking permanently into the picker the first time that happens -- see
+ *   js/app.js's EASTER_EGG_RULES, checkEasterEggTriggers and flashEasterEgg.
  * - "The Umbrals": A.R.X.LIMES (2) and A.R.X.LOGOS (5), the A.R.X. name in general.
  *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).

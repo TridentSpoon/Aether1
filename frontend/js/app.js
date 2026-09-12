@@ -13,8 +13,58 @@ const AVATAR_DISPLAY_NAMES = {
     'arx-logos': 'A.R.X.LOGOS',
     red: 'R.E.D. 9000',
     crimson: 'R.E.D. 9000',
-    senti: 'NEXUS SENT'
+    senti: 'NEXUS SENT',
+    'white-rabbit': 'WHITE RABBIT',
+    operator: 'OPERATOR'
 };
+
+/* Trace Protocols' three hidden avatars -- Nexus Sent, White Rabbit and Operator never
+   start in the avatar menu (see their `hidden` pills in index.html). Each is a dormant
+   easter egg that only ever surfaces by being triggered from a chat message while The
+   Nexus is the active avatar (see checkEasterEggTriggers below): the first time a
+   trigger fires, that avatar is recorded as unlocked in localStorage and its pill stays
+   visible from then on, exactly like a normal manually-picked avatar. The workbench
+   (avatar-lab.html) deliberately ignores all of this and always lists everything --
+   there's no chat there to ever trigger a discovery, so hiding them would just make them
+   permanently unreachable in that tool. */
+const EASTER_EGG_UNLOCK_KEY = 'aether_avatar_unlocks';
+const EASTER_EGG_RULES = [
+    // Greeting the companion -- Operator, the "hello, is anyone listening" terminal.
+    { avatarId: 'operator', pattern: /^\s*(hi|hello|hey|hiya|yo|greetings|good (morning|afternoon|evening))\b/i },
+    // Chasing a lead, or anything Alice in Wonderland -- White Rabbit.
+    { avatarId: 'white-rabbit', pattern: /\b(rabbit\s*holes?|wonderland|curiouser|down the rabbit|alice in wonderland|white rabbit|mad hatter|cheshire cat)\b/i },
+    // Security or diagnostic questions -- Nexus Sent, the scout/sensor variant of The Nexus.
+    { avatarId: 'senti', pattern: /\b(security|vulnerab\w*|exploit\w*|hack(?:ed|ing)?|diagnostic\w*|debug\w*|system status|check the logs|is (?:this|it) safe|breach|malware|firewall|penetration test|pentest)\b/i },
+];
+
+function loadEasterEggUnlocks() {
+    try {
+        return JSON.parse(localStorage.getItem(EASTER_EGG_UNLOCK_KEY) || '{}');
+    } catch (err) {
+        return {};
+    }
+}
+
+/* Reveals the pill for every avatar unlocked so far. Called once at startup (so a
+   returning operator sees what they already found) and again after any new unlock. */
+function refreshEasterEggVisibility() {
+    const unlocks = loadEasterEggUnlocks();
+    EASTER_EGG_RULES.forEach(({ avatarId }) => {
+        document.querySelectorAll(`.avatar-pill[data-avatar-val="${avatarId}"]`).forEach((pill) => {
+            pill.classList.toggle('hidden', !unlocks[avatarId]);
+        });
+    });
+}
+
+/* Records a discovery. A no-op past the first time, since re-triggering an already-found
+   egg has nothing left to unlock. */
+function unlockEasterEgg(avatarId) {
+    const unlocks = loadEasterEggUnlocks();
+    if (unlocks[avatarId]) return;
+    unlocks[avatarId] = true;
+    localStorage.setItem(EASTER_EGG_UNLOCK_KEY, JSON.stringify(unlocks));
+    refreshEasterEggVisibility();
+}
 
 // When this page is loaded by the Tauri desktop shell, it's served from Tauri's own
 // local context (not http://localhost:8378), so API calls need an absolute base URL
@@ -139,6 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
+    let easterEggRevertTimer = null; // pending return-to-currentAvatar after a Trace Protocols flash
 
     /* The wordmark. Once the companion has a name of its own, that is what the top-left of
        the window should say -- it is the thing you are talking to. Turning over to
@@ -220,6 +271,25 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(updateClock, 1000);
     updateClock();
 
+    // The viewport's own "STRUCTURE:" caption -- shared by applyAvatar (a real, persisted
+    // selection) and flashEasterEgg (a transient Trace Protocols reveal), so both keep the
+    // caption in sync with whatever shape is actually on screen.
+    function structureLabelFor(avatarName) {
+        if (avatarName === 'red' || avatarName === 'crimson') return 'OPTICAL EYE // DUAL ORBITS';
+        if (avatarName === 'arx-limes') return 'ARCHIVAL VOXEL MATRIX';
+        if (avatarName === 'nexus' || avatarName === 'matrix') return 'SINGULARITY VORTEX';
+        if (avatarName === 'arx-logos') return 'JAGGED GEOMETRIC STAR';
+        if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') return 'CHROMATIC-GLITCH GHOST BUST';
+        if (avatarName === 'a1') return 'MONOGRAM WORDMARK';
+        // A registered avatar names itself, rather than borrowing hAlcy's label from the
+        // fallback below -- see js/hologram/README.md.
+        if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
+            const def = HologramAvatar.avatarPlugins.get(avatarName);
+            return (def.label || avatarName).toUpperCase();
+        }
+        return 'HARMONIC LATTICE';
+    }
+
     // Avatar Engine Handler (3D shape + optional linked persona identity)
     function applyAvatar(avatarName, updatePersona = false) {
         currentAvatar = avatarName;
@@ -232,21 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
             window.__TAURI__.event.emit('avatar-changed', { avatar: avatarName }).catch(() => {});
         }
 
-        if (avatarStructureLabel) {
-            if (avatarName === 'red' || avatarName === 'crimson') avatarStructureLabel.textContent = 'OPTICAL EYE // DUAL ORBITS';
-            else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
-            else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
-            else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
-            else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
-            else if (avatarName === 'a1') avatarStructureLabel.textContent = 'MONOGRAM WORDMARK';
-            // A registered avatar names itself, rather than borrowing hAlcy's label from
-            // the fallback below -- see js/hologram/README.md.
-            else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
-                const def = HologramAvatar.avatarPlugins.get(avatarName);
-                avatarStructureLabel.textContent = (def.label || avatarName).toUpperCase();
-            }
-            else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
-        }
+        if (avatarStructureLabel) avatarStructureLabel.textContent = structureLabelFor(avatarName);
 
         // The Customise button belongs to the custom avatar and nothing else -- it would
         // be a lie next to hAlcy, whose shape is fixed in code.
@@ -268,6 +324,35 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         applyAvatarPreset(avatarName, updatePersona);
+    }
+
+    /* A Trace Protocols avatar taking over the viewport for a few seconds -- not a real
+       selection, so it never touches currentAvatar, aether_avatar in localStorage, or the
+       sprite window: just the 3D shape and the chip naming it, both put back the moment the
+       timer runs out. Re-triggering restarts the clock rather than stacking timers. */
+    function flashEasterEgg(avatarId, durationMs = 6000) {
+        hologram.setAvatar(avatarId);
+        updateAvatarBadge(avatarId);
+        if (avatarStructureLabel) avatarStructureLabel.textContent = structureLabelFor(avatarId);
+        clearTimeout(easterEggRevertTimer);
+        easterEggRevertTimer = setTimeout(() => {
+            easterEggRevertTimer = null;
+            hologram.setAvatar(currentAvatar);
+            updateAvatarBadge(currentAvatar);
+            if (avatarStructureLabel) avatarStructureLabel.textContent = structureLabelFor(currentAvatar);
+        }, durationMs);
+    }
+
+    /* Checked against every outgoing chat message. Only fires while The Nexus is actually
+       on screen -- these are its hidden alter egos, not a shortcut for switching avatars
+       from any other one -- and only the first matching rule, so a message that happens to
+       greet and mention security doesn't fight over which egg gets to appear. */
+    function checkEasterEggTriggers(message) {
+        if (currentAvatar !== 'nexus' && currentAvatar !== 'matrix') return;
+        const rule = EASTER_EGG_RULES.find(({ pattern }) => pattern.test(message));
+        if (!rule) return;
+        unlockEasterEgg(rule.avatarId);
+        flashEasterEgg(rule.avatarId);
     }
 
     /* Each avatar comes with a persona, a voice and a greeting -- picking the face picks the
@@ -1297,6 +1382,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         chatInput.value = '';
         appendMessage('user', text);
+        checkEasterEggTriggers(text);
         voiceEngine.playSFX('click');
         voiceEngine.stopSpeech(); // a new question supersedes anything still being spoken
 
@@ -2228,6 +2314,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial Startup
     applyAvatar(currentAvatar, false);
     hologram.setZoom(currentZoom);
+    refreshEasterEggVisibility();
     paintTheme(currentTheme);
 
     /* Nothing chosen yet means the OS is still the authority, so a switch to dark mode while
