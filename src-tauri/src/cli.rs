@@ -38,11 +38,13 @@ USAGE:
     aether1 show | toggle          Summon (or dismiss) the HUD of a running instance
     aether1 --serve                Run headless as an HTTP/WebSocket server, reachable
                                    from this machine only
+    aether1 --serve --lan          Also announce on the LAN (mDNS) and accept connections
+                                   from your network, gated by a one-time pairing phrase
+    aether1 pair                   Generate a new --lan pairing phrase, revoking the old one
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
-    aether1 announce               Announce this machine on the LAN so `discover` can find
-                                   it (Ctrl+C to stop). A standalone prototype for now --
-                                   not wired into --serve until it has real authentication.
+    aether1 announce               Announce this machine on the LAN for testing `discover`
+                                   without starting the full server (Ctrl+C to stop)
 
 OPTIONS:
     prompt --session <ID>          Conversation to continue (default: \"default\",
@@ -50,9 +52,10 @@ OPTIONS:
     status --json                  Emit the raw telemetry JSON instead of a report
     say --voice <NAME>             Override the configured voice
     say --no-play                  Synthesize only; print the audio file path
-    --serve --lan                  Also accept connections from your network. There is no
-                                   password: anyone who can reach this machine can read
-                                   your conversation and approve pending actions.
+    --serve --lan                  The pairing phrase is shown once, the first time you run
+                                   this; run `aether1 pair` anytime for a new one. Without
+                                   the matching token, a request over the network gets
+                                   nothing -- no conversation, no tools, nothing to approve.
     discover --timeout <SECS>      How long to listen for (default: 3)
     announce --name <NAME>         Instance name other machines will see (default: this
                                    machine's hostname)
@@ -102,6 +105,7 @@ pub enum Invocation {
         name: Option<String>,
         port: Option<u16>,
     },
+    Pair,
     Help,
     Version,
     /// A recognized-shape invocation that can't be run: message printed to stderr,
@@ -226,6 +230,10 @@ pub fn parse(argv: &[String]) -> Invocation {
         }),
         "discover" => parse_discover(rest),
         "announce" => parse_announce(rest),
+        "pair" => free_text(rest).and_then(|extra| match extra {
+            Some(extra) => Err(format!("pair takes no arguments (got {extra:?})")),
+            None => Ok(Invocation::Pair),
+        }),
         "show" | "toggle" => free_text(rest.clone()).and_then(|extra| match extra {
             Some(extra) => Err(format!("{command} takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Window {
@@ -369,6 +377,16 @@ fn run_announce(name: Option<String>, port: Option<u16>) -> Result<String, Strin
     }
 }
 
+fn run_pair() -> Result<String, String> {
+    let phrase = crate::serve_auth::rotate()?;
+    Ok(format!(
+        "New --lan pairing phrase (shown once -- write it down now):\n\n    {phrase}\n\n\
+         Any phrase paired before this no longer works. Type this one into another AETHER1 \
+         instance's pairing prompt, or POST it as {{\"phrase\": ...}} to /api/pair, to let it \
+         reach this machine."
+    ))
+}
+
 /// Runs a headless invocation and returns the process exit code. `App` and `Serve` are
 /// handled by main() and are a no-op here.
 pub fn run(invocation: Invocation) -> i32 {
@@ -385,6 +403,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Say { text, voice, play } => run_say(text, voice, play),
         Invocation::Discover { timeout_secs } => run_discover(timeout_secs),
         Invocation::Announce { name, port } => run_announce(name, port),
+        Invocation::Pair => run_pair(),
         Invocation::Invalid(message) => {
             eprintln!("aether1: {message}\n\n{}", USAGE.trim_end());
             return 2;
