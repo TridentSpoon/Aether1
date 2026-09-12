@@ -1,6 +1,7 @@
 # Runtime data — machine-specific, may contain API keys pasted into Settings
 backend/aether1_memory.db
 backend/audio_cache/
+backend/serve_token.hash
 logs/
 *.pid
 *.log

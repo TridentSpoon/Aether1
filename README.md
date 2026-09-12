@@ -500,14 +500,16 @@ you tell it from a script is there next time you open the window.
 <http://localhost:8378> — the development flow, and the fallback if the native
 webview misbehaves. It listens on this machine only.
 
-That default matters, because the server has **no password of any kind**. Every part of it
-is open to whoever can reach the port: your conversation, the log of everything the
-companion has done, and the buttons that approve actions waiting for your permission.
+That default matters: reaching 127.0.0.1 already means being a process on this machine, so
+loopback mode needs no password of its own -- the operating system is the password.
 
 `aether1 --serve --lan` opens it to your whole network, for the case where you genuinely
-want the HUD on your phone. On a network you do not control — a cafe, a hotel, a shared
-office — that means anyone there can do all of the above. The app says so, every time you
-start it that way.
+want the HUD on your phone or another machine in the house. Unlike loopback mode, this
+*does* need a password: the first time you run it, AETHER1 prints a 12-word pairing phrase
+(shown once — write it down). Type that phrase into the other device's pairing prompt (or
+`POST` it as `{"phrase": "..."}` to `/api/pair`) to get back a token; without it, every
+route refuses — your conversation, the action log, everything. Run `aether1 pair` any time
+to generate a new phrase and revoke the old one.
 
 ## Project goals
 

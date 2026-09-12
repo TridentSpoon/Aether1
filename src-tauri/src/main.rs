@@ -25,6 +25,7 @@ mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod serve_auth;
 mod server;
 mod tools;
 mod vault;
