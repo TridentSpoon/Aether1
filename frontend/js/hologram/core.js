@@ -171,6 +171,15 @@ class HologramAvatar {
         this.dragDistance = 0;
         this.viewSpinVelocity = 0; // radians/frame, decays via damping once released
 
+        // Manual zoom -- independent of the auto-fit below, which only ever widens the
+        // camera's FOV to keep an avatar from clipping the frame. This is a deliberate
+        // override on top of that: how big the avatar reads on screen, picked by hand
+        // (see setZoom). Applied as a uniform scale on avatarZoomGroup (see init()), which
+        // holds every avatar except the custom one's own tier-4 effect/background layer --
+        // that layer is excluded on purpose, see avatar-custom.js.
+        this.zoomScale = 1;
+        this.avatarZoomGroup = null;
+
         // Pointer tracking -- only The Nexus consumes these (mouse-manipulated head that
         // autonomously "hunts" when the pointer isn't actively directing it); other avatars
         // stay front-facing/static and simply don't read them.
@@ -223,6 +232,15 @@ class HologramAvatar {
         this.container.appendChild(this.renderer.domElement);
 
         this.clock = new THREE.Clock();
+
+        // Every avatar except the custom one's tier-4 effect layer is built straight into
+        // this group (see the avatar-*.js buildXAvatar() methods and buildRegisteredAvatars
+        // below) instead of directly into the scene, purely so setZoom has one uniform scale
+        // to apply no matter which avatar is active -- it composes for free with each
+        // avatar's own rotation/position/local scale since it's just another ancestor in
+        // the transform chain.
+        this.avatarZoomGroup = new THREE.Group();
+        this.scene.add(this.avatarZoomGroup);
 
         // Build all avatar architectures
         this.buildHalcyAvatar();
@@ -359,8 +377,23 @@ class HologramAvatar {
     // it's already the one on screen.
     updateContentFit(objects) {
         if (!objects || !objects.length) return;
+
+        // Measured at zoomScale's identity, not whatever it currently is -- auto-fit exists
+        // to keep an avatar's own resting geometry inside the frame; a manual zoom is a
+        // deliberate override on top of that, not something auto-fit should immediately
+        // widen the FOV to undo. avatarZoomGroup is the only thing setZoom ever touches, so
+        // resetting it here and restoring it after is exact, not an approximation.
+        const zoomed = this.avatarZoomGroup && this.avatarZoomGroup.scale.x !== 1;
+        if (zoomed) {
+            this.avatarZoomGroup.scale.setScalar(1);
+            this.avatarZoomGroup.updateMatrixWorld(true);
+        }
         const box = new THREE.Box3();
         objects.forEach(obj => box.expandByObject(obj));
+        if (zoomed) {
+            this.avatarZoomGroup.scale.setScalar(this.zoomScale);
+            this.avatarZoomGroup.updateMatrixWorld(true);
+        }
         if (box.isEmpty()) return;
 
         // Half-extent in each axis, not assuming the group is centred on the origin -- a1's
@@ -368,6 +401,17 @@ class HologramAvatar {
         this.contentHalfWidth = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
         this.contentHalfHeight = Math.max(Math.abs(box.min.y), Math.abs(box.max.y));
         this.applyContentFit();
+    }
+
+    // Manual zoom -- how big the avatar reads on screen, picked by hand rather than derived
+    // from its geometry. 0.5-2.5x; clamped so the slider driving this can't scale an avatar
+    // down to nothing or blow it up past the point of reading as anything. Custom avatar's
+    // tier-4 effect/background layer is deliberately outside avatarZoomGroup (see
+    // zoomParentFor and avatar-custom.js) so this only ever resizes the avatar itself, tiers
+    // 1-3, never its background.
+    setZoom(scale) {
+        this.zoomScale = Math.min(2.5, Math.max(0.5, Number(scale) || 1));
+        if (this.avatarZoomGroup) this.avatarZoomGroup.scale.setScalar(this.zoomScale);
     }
 
     // Widens the camera's (vertical) field of view just far enough that the active avatar's
@@ -509,12 +553,20 @@ class HologramAvatar {
                     return;
                 }
                 model.group.visible = false;
-                this.scene.add(model.group);
+                this.zoomParentFor(id).add(model.group);
                 this.plugins.set(id, { def, model });
             } catch (err) {
                 console.error(`Avatar "${id}" failed to build and was skipped:`, err);
             }
         });
+    }
+
+    // Where a registered avatar's top-level group belongs: inside avatarZoomGroup for the
+    // uniform manual-zoom treatment every other avatar gets, or straight into the scene for
+    // the custom avatar, which scales only its own tier-1-3 parts (see avatar-custom.js) and
+    // must keep its tier-4 effect/background layer out of setZoom's reach.
+    zoomParentFor(id) {
+        return id === 'custom' ? this.scene : this.avatarZoomGroup;
     }
 
     /* Throw away a registered avatar's model and build it again from its definition.
@@ -528,7 +580,7 @@ class HologramAvatar {
 
         const wasVisible = entry.model.group ? entry.model.group.visible : false;
         if (entry.model.group) {
-            this.scene.remove(entry.model.group);
+            if (entry.model.group.parent) entry.model.group.parent.remove(entry.model.group);
             disposeObject3D(entry.model.group);
         }
 
@@ -539,7 +591,7 @@ class HologramAvatar {
                 return false;
             }
             model.group.visible = wasVisible;
-            this.scene.add(model.group);
+            this.zoomParentFor(id).add(model.group);
             /* broken is cleared: the rebuild may be the very fix for whatever threw. */
             this.plugins.set(id, { def: entry.def, model });
         } catch (err) {

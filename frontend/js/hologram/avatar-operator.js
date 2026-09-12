@@ -6,6 +6,13 @@
  * at the end of a line perpetually typing itself out, and a field of digit glyphs that
  * never stops sliding from the clear centre out past the edges of the screen.
  *
+ * The field sits inside a deep box of depth (see OPERATOR_Z_NEAR/FAR below) rather than
+ * a thin shell close to one plane, so the parallax that used to only read clearly when
+ * the hologram was dragged to an angle -- near glyphs large and fast against far ones
+ * small and dim -- now reads head-on too. And the box is locked to the camera, not to
+ * the hologram's own drag-to-spin: see the rotation counter at the top of animate()
+ * below. A tunnel that spun with every drag stopped reading as a tunnel at all.
+ *
  * No obsidian core, no fixed hot accent: like A1 and White Rabbit, this reads as a
  * projection rather than a physical creature, so it's fully theme-tinted throughout.
  *
@@ -19,6 +26,15 @@
 const OPERATOR_RING_INNER = 24;
 const OPERATOR_RING_OUTER = 260;
 const OPERATOR_RING_SPAN = OPERATOR_RING_OUTER - OPERATOR_RING_INNER;
+
+// The depth box each glyph's fixed z sits somewhere inside -- near enough to the camera
+// (which sits at world z=240, see core.js) that the closest glyphs read as passing right
+// by the viewer, far enough back that the furthest ones sit well behind the prompt and
+// dim into the distance. Wide on purpose: this range, not view angle, is what should now
+// carry the depth-of-field look.
+const OPERATOR_Z_NEAR = 95;
+const OPERATOR_Z_FAR = -240;
+const OPERATOR_Z_SPAN = OPERATOR_Z_NEAR - OPERATOR_Z_FAR;
 
 // A short vertical dash on a transparent square canvas, soft-edged top and bottom, for
 // use as a point-sprite map. A field of round glyph dots reads as scattered static; the
@@ -84,7 +100,7 @@ function buildOperatorStream(texture, count, color, pointSize, baseOpacity) {
             angle: Math.random() * Math.PI * 2,
             speed: 40 + Math.random() * 65,
             offset: Math.random() * OPERATOR_RING_SPAN,
-            z: -14 + Math.random() * 40,
+            z: OPERATOR_Z_FAR + Math.random() * OPERATOR_Z_SPAN,
             nextFlicker: Math.random() * 2,
             brightness,
         };
@@ -227,6 +243,12 @@ HologramAvatar.registerAvatar({
     },
 
     animate(model, ctx) {
+        // The tunnel is a fixed box in front of the camera, not something that spins when
+        // the hologram is dragged -- countering the scene's own drag-yaw here keeps it
+        // facing the viewer no matter how far the view has been turned. See core.js's
+        // pointermove handler for where ctx.viewRotationY comes from.
+        model.group.rotation.y = -ctx.viewRotationY;
+
         const isThinking = ctx.state === 'THINKING';
         const isListening = ctx.state === 'LISTENING';
         const isSpeaking = ctx.state === 'SPEAKING';

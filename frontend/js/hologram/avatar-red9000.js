@@ -108,5 +108,5 @@ HologramAvatar.prototype.buildRed9000Avatar = function() {
     this.redCyanCircle.position.z = 18;
     this.redGroup.add(this.redCyanCircle);
 
-    this.scene.add(this.redGroup);
+    this.avatarZoomGroup.add(this.redGroup);
 };

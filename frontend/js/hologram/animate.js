@@ -55,6 +55,14 @@ HologramAvatar.prototype.animate = function() {
                     click: clickPulse,
                     state: this.state,
                     palette: this.activePalette,
+                    // The scene's current drag-yaw and the manual zoom level (see core.js's
+                    // pointermove handler and setZoom) -- most avatars don't need either
+                    // (their group sits inside avatarZoomGroup, which already gets both for
+                    // free), but one that wants to counter-rotate itself static against a
+                    // drag (Operator) or scale only part of itself (the custom avatar's
+                    // tiers 1-3, never its tier-4 effect) needs them directly.
+                    viewRotationY: this.scene.rotation.y,
+                    zoom: this.zoomScale,
                     THREE,
                 });
             } catch (err) {

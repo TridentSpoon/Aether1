@@ -139,5 +139,5 @@ HologramAvatar.prototype.buildArxLogosAvatar = function() {
     }
     this.arxLogosGroup.add(this.arxLogosSwarmGroup);
 
-    this.scene.add(this.arxLogosGroup);
+    this.avatarZoomGroup.add(this.arxLogosGroup);
 };

@@ -62,5 +62,5 @@ HologramAvatar.prototype.buildArxLimesAvatar = function() {
     addPlate(wingShapeLeft, this.arxLimesWingFillMat, 165, 'wing', 26);
     addPlate(wingShapeLeft, this.arxLimesWingFillMat, -165, 'wing', 26);
 
-    this.scene.add(this.arxLimesGroup);
+    this.avatarZoomGroup.add(this.arxLimesGroup);
 };
