@@ -426,9 +426,11 @@
                 </h3>
 
                 <!-- Avatar + Color Theme Selectors, condensed into one card: avatar row, theme row
-                     below it. The avatar row runs one column wider than the theme row below (7
-                     presets vs. 6 themes) since A1 -- the default placeholder shown before an
-                     operator has picked a persona/avatar -- has no matching theme of its own. -->
+                     below it. The main avatar row runs one column wider than the theme row below
+                     it (7 presets vs. 6 themes) since A1 -- the default placeholder shown before
+                     an operator has picked a persona/avatar -- has no matching theme of its own.
+                     Senti, White Rabbit and Operator sit in a second row below rather than
+                     stretching the grid past 7 columns. -->
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-3 rounded-md space-y-1.5">
                     <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🎭 AVATAR</label>
                     <div class="grid grid-cols-7 gap-1">
@@ -441,9 +443,20 @@
                         <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-yellow-300 border-yellow-300" data-avatar="alt">⚠️ A1ter</button>
                     </div>
 
-                    <!-- The avatar you design yourself sits on its own row rather than as an
-                         eighth column -- it's a different kind of thing anyway, and comes with
-                         the button that opens the workbench. -->
+                    <!-- Senti, White Rabbit and Operator get their own row rather than an eighth
+                         through tenth column -- the grid above is fixed at 7 wide, and these three
+                         read theme-tinted with no fixed accent colour of their own (see
+                         js/hologram/avatar-senti.js, avatar-white-rabbit.js, avatar-operator.js),
+                         same as hAlcy above. -->
+                    <div class="grid grid-cols-3 gap-1">
+                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-avatar="senti">🛸 Nexus Sent</button>
+                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-avatar="white-rabbit">🐇 White Rabbit</button>
+                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-avatar="operator">📟 Operator</button>
+                    </div>
+
+                    <!-- The avatar you design yourself sits on its own row rather than as another
+                         column -- it's a different kind of thing anyway, and comes with the button
+                         that opens the workbench. -->
                     <div class="grid grid-cols-2 gap-1">
                         <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-200" data-avatar="custom">✨ Your own</button>
                         <button id="btn-open-avatar-lab" type="button" class="cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-cyan-300">🛠️ Design your own</button>
