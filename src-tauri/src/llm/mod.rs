@@ -577,6 +577,82 @@ impl LlmEngine {
         }
     }
 
+    /// Tries the given provider/model/endpoint/key with one trivial call, bypassing
+    /// history, persona and token accounting entirely -- this is a connectivity probe run
+    /// from Settings before Save, not a chat turn. Reuses explain_failure so a bad key or a
+    /// wrong model name reads exactly the same here as it would mid-conversation.
+    pub fn test_connection(
+        &self,
+        provider_key: &str,
+        model: &str,
+        endpoint: &str,
+        api_key: &str,
+    ) -> Result<String, String> {
+        let provider = Provider::from_key(provider_key);
+
+        if provider == Provider::Offline {
+            return Ok(
+                "Offline mode needs no connection -- it never leaves this machine.".to_string(),
+            );
+        }
+
+        // Same rule Config::reaches_the_internet applies to a real turn: Ollama/LM Studio
+        // are judged by where their endpoint actually points, every other provider always
+        // leaves the machine. A test click is not an exemption from local-only mode.
+        let reaches_the_internet = !matches!(provider, Provider::Ollama | Provider::LmStudio)
+            || !crate::local_only::is_local_endpoint(endpoint);
+        if reaches_the_internet && crate::local_only::enabled(&self.db) {
+            return Err(crate::local_only::refusal(
+                "the test connection was not attempted",
+            ));
+        }
+
+        let ctx = ChatContext {
+            system_prompt: "",
+            history: &[],
+            prompt: "Reply with just the word OK.",
+            agent_name: "",
+            // No tools offered and no prior rounds to replay -- this is a bare connectivity
+            // probe, not a real turn, so there is nothing native tool-calling needs to see.
+            tools: &[],
+            exchanges: &[],
+        };
+
+        let started = Instant::now();
+        let result = match provider {
+            Provider::Ollama => providers::call_ollama(endpoint, model, &ctx),
+            Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                providers::call_openai_compatible(provider, endpoint, api_key, model, &ctx)
+            }
+            Provider::Gemini => providers::call_gemini(api_key, model, &ctx),
+            Provider::Anthropic => providers::call_anthropic(api_key, model, &ctx),
+            Provider::Offline => unreachable!("handled above"),
+        };
+
+        match result {
+            Ok(completion) => Ok(format!(
+                "{provider} replied in {:.1}s: \"{}\"",
+                started.elapsed().as_secs_f64(),
+                Self::truncate_reply(&completion.text)
+            )),
+            Err(e) => Err(providers::explain_failure(provider, endpoint, &e)),
+        }
+    }
+
+    /// Keeps a chatty test model's reply from blowing up the status box -- this only needs
+    /// to prove the round trip worked, not display the whole thing.
+    fn truncate_reply(text: &str) -> String {
+        const LIMIT: usize = 160;
+        if text.len() <= LIMIT {
+            return text.to_string();
+        }
+        let mut end = LIMIT;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &text[..end])
+    }
+
     /// Runs rounds of model call -> tool calls -> results until the model answers without
     /// asking for a tool, and returns what the operator saw.
     ///

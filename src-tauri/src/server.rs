@@ -93,6 +93,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/static-info", get(static_info))
         .route("/api/chat", post(chat))
         .route("/api/agent/genesis", post(genesis))
+        .route("/api/llm/test-connection", post(test_llm_connection))
         .route("/api/scanner/status", get(scanner_status))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/tools", get(get_tools))
@@ -385,6 +386,30 @@ async fn set_always_allowed(
     commands::set_always_allowed(&state.engine, req.tool, req.allowed)
         .map(|()| StatusCode::NO_CONTENT)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize)]
+struct TestConnectionRequest {
+    provider: String,
+    model: String,
+    endpoint: String,
+    api_key: String,
+}
+
+/// The browser-flow counterpart of test_llm_connection_rust -- same unsaved-form-values
+/// probe, reached over HTTP instead of Tauri IPC.
+async fn test_llm_connection(
+    State(state): State<AppState>,
+    Json(req): Json<TestConnectionRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        commands::test_llm_connection(&engine, req.provider, req.model, req.endpoint, req.api_key)
+    })
+    .await
+    .map_err(internal_error)?
+    .map(|message| Json(serde_json::json!({ "message": message })))
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 #[derive(Deserialize)]

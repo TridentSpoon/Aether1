@@ -94,6 +94,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectLocalModel = document.getElementById('select-local-model');
     const scannerResultsBox = document.getElementById('scanner-results-box');
 
+    // LLM Test Connection Elements
+    const btnTestConnection = document.getElementById('btn-test-connection');
+    const testConnectionStatus = document.getElementById('test-connection-status');
+
     // Version & Update Elements (native desktop app only -- see IS_TAURI below)
     const versionBadge = document.getElementById('version-badge');
     const updateSection = document.getElementById('update-section');
@@ -1525,6 +1529,54 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /// Tries whatever is currently typed into the Provider/Model/Endpoint/API Key fields --
+    /// not what's saved -- with one real message, so a mistake is caught here instead of
+    /// discovered later in chat. Never touches conversation history or token telemetry: this
+    /// is a probe, not a turn.
+    async function handleTestConnection() {
+        const provider = document.getElementById('setting-provider').value;
+        const model = document.getElementById('setting-model').value.trim();
+        const endpoint = document.getElementById('setting-endpoint').value.trim();
+        const apiKey = document.getElementById('setting-apikey').value;
+
+        if (btnTestConnection) btnTestConnection.disabled = true;
+        if (testConnectionStatus) {
+            testConnectionStatus.classList.remove('hidden', 'border-green-500/40', 'border-red-500/40', 'text-green-400', 'text-red-400');
+            testConnectionStatus.classList.add('text-cyan-300', 'animate-pulse');
+            testConnectionStatus.textContent = `Testing ${provider}...`;
+        }
+
+        try {
+            const args = { provider, model, endpoint, apiKey };
+            const message = IS_TAURI
+                ? await tauriInvoke('test_llm_connection_rust', args)
+                : await (async () => {
+                    const resp = await apiFetch('/api/llm/test-connection', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ provider, model, endpoint, api_key: apiKey })
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    if (!resp.ok) throw new Error(data.error || `test failed: ${resp.status}`);
+                    return data.message;
+                })();
+
+            if (testConnectionStatus) {
+                testConnectionStatus.classList.remove('animate-pulse', 'text-cyan-300');
+                testConnectionStatus.classList.add('text-green-400', 'border-green-500/40');
+                testConnectionStatus.textContent = `✔ ${message}`;
+            }
+        } catch (e) {
+            if (testConnectionStatus) {
+                testConnectionStatus.classList.remove('animate-pulse', 'text-cyan-300');
+                testConnectionStatus.classList.add('text-red-400', 'border-red-500/40');
+                testConnectionStatus.textContent = `⚠ ${e.message || e}`;
+            }
+        } finally {
+            if (btnTestConnection) btnTestConnection.disabled = false;
+        }
+    }
+
     /// Choosing a server is the setup: provider, endpoint and the model list all follow
     /// from it, so the operator never has to know which API shape their server speaks or
     /// whether its URL needs a /v1 on the end.
@@ -2166,6 +2218,13 @@ document.addEventListener('DOMContentLoaded', () => {
     btnScanSystem.addEventListener('click', () => {
         handleScanSystem();
     });
+
+    if (btnTestConnection) {
+        btnTestConnection.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            handleTestConnection();
+        });
+    }
 
     const providerSelect = document.getElementById('setting-provider');
     if (providerSelect) {

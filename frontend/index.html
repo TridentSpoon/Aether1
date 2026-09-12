@@ -716,6 +716,18 @@
                     </div>
                 </div>
 
+                <div class="space-y-1.5">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-[11px] font-mono text-slate-500">
+                            Tries the provider/model/key above with one real message -- before Save, so a mistake is caught here instead of in chat.
+                        </span>
+                        <button id="btn-test-connection" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                            📡 Test Connection
+                        </button>
+                    </div>
+                    <div id="test-connection-status" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-500/20"></div>
+                </div>
+
                 <div class="space-y-1">
                     <label class="text-xs font-mono text-cyan-300 block">NEURAL VOICE SYNTHESIS</label>
                     <select id="setting-voice" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
