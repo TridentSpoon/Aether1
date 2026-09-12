@@ -42,6 +42,19 @@ pub fn generate_response_streamed(
     Ok(serde_json::json!({ "reply": reply, "agent_name": agent_name }))
 }
 
+/// Tries a provider/model/endpoint/key combination with one trivial call before it's ever
+/// saved -- the values come straight from the Settings form, not from what's persisted, so
+/// a mistake is caught before Save rather than discovered on the next real chat message.
+pub fn test_llm_connection(
+    engine: &LlmEngine,
+    provider: String,
+    model: String,
+    endpoint: String,
+    api_key: String,
+) -> Result<String, String> {
+    engine.test_connection(&provider, &model, &endpoint, &api_key)
+}
+
 pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, String> {
     if purpose.trim().is_empty() {
         return Err("Please provide a purpose description".to_string());

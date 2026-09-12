@@ -603,6 +603,17 @@ fn agent_genesis_rust(
     commands::agent_genesis(&engine, purpose)
 }
 
+#[tauri::command]
+fn test_llm_connection_rust(
+    engine: tauri::State<LlmEngine>,
+    provider: String,
+    model: String,
+    endpoint: String,
+    api_key: String,
+) -> Result<String, String> {
+    commands::test_llm_connection(&engine, provider, model, endpoint, api_key)
+}
+
 /// Rust-native equivalent of GET /api/scanner/status (backend/main.py) -- cloud API key
 /// detection plus Ollama/LM Studio probes. Blocking (matches this file's existing
 /// synchronous command style); each probe has its own short timeout so this can't hang.
@@ -941,6 +952,7 @@ fn main() {
             generate_response_rust,
             generate_response_streaming_rust,
             agent_genesis_rust,
+            test_llm_connection_rust,
             scan_models_rust,
             pull_model_rust,
             get_static_info_rust,
