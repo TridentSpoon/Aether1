@@ -53,6 +53,12 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
             "{provider} refused the API key -- it may lack access to this model, or be for the wrong account."
         );
     }
+    // 400 is the provider saying the request was wrong rather than the key or the network,
+    // and its body says which part. That body is worth more than anything that could be
+    // written here, so this passes it through instead of paraphrasing it away.
+    if lowered.contains("400") || lowered.contains("invalid_request") {
+        return format!("{provider} rejected the request itself: {raw}");
+    }
     if lowered.contains("404") || lowered.contains("not found") {
         return format!(
             "{provider} has no model by that name -- check MODEL NAME / ID in Settings."
@@ -127,6 +133,42 @@ fn role_for(sender: &str, model_role: &str) -> String {
     } else {
         model_role.to_string()
     }
+}
+
+/// How much of a provider's error body to keep. Enough for the sentence that says what is
+/// wrong, short of pasting a wall of JSON into the chat.
+const MAX_ERROR_BODY: usize = 600;
+
+/// Turns a non-2xx response into an error that carries what the provider actually said.
+///
+/// Every request here is built with `http_status_as_error(false)` so a 400 arrives as a
+/// response with a readable body rather than as a bare status code. That body is the whole
+/// point: "http status: 400" tells an operator nothing, while the same failure with the
+/// body attached says `messages: roles must alternate between "user" and "assistant"`, or
+/// names the model that does not exist, or the max_tokens that is too high for it. The
+/// status stays in the string too, because `explain_failure` matches on it.
+fn checked(
+    response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let mut response = response.map_err(|e| e.to_string())?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .unwrap_or_else(|_| String::new());
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(format!("http status: {}", status.as_u16()));
+    }
+    let mut shown = body.chars().take(MAX_ERROR_BODY).collect::<String>();
+    if body.chars().count() > MAX_ERROR_BODY {
+        shown.push_str("...");
+    }
+    Err(format!("http status: {} -- {shown}", status.as_u16()))
 }
 
 // ------------------------------------------------------------- stream plumbing
@@ -274,15 +316,17 @@ fn ollama_url(endpoint: &str) -> String {
 }
 
 pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
-    let response: OllamaResponse = ureq::post(&ollama_url(endpoint))
-        .config()
-        .timeout_global(Some(CALL_TIMEOUT))
-        .build()
-        .send_json(ollama_payload(model, ctx, false))
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: OllamaResponse = checked(
+        ureq::post(&ollama_url(endpoint))
+            .config()
+            .timeout_global(Some(CALL_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(ollama_payload(model, ctx, false)),
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     Ok(Completion {
         text: response.response.trim().to_string(),
@@ -298,12 +342,14 @@ pub fn stream_ollama(
     ctx: &ChatContext,
     sink: Sink,
 ) -> Result<Completion, String> {
-    let response = ureq::post(&ollama_url(endpoint))
-        .config()
-        .timeout_global(Some(STREAM_TIMEOUT))
-        .build()
-        .send_json(ollama_payload(model, ctx, true))
-        .map_err(|e| e.to_string())?;
+    let response = checked(
+        ureq::post(&ollama_url(endpoint))
+            .config()
+            .timeout_global(Some(STREAM_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(ollama_payload(model, ctx, true)),
+    )?;
 
     let mut full = String::new();
     let mut usage = None;
@@ -330,7 +376,7 @@ pub fn stream_ollama(
 
 // -------------------------------------------------- OpenAI-compatible (OpenAI, Groq, LM Studio)
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 struct ChatMessage {
     role: String,
     content: String,
@@ -567,6 +613,7 @@ fn openai_request(
     let mut request = ureq::post(url)
         .config()
         .timeout_global(Some(timeout))
+        .http_status_as_error(false)
         .build()
         .header("Content-Type", "application/json");
     if !api_key.is_empty() {
@@ -584,12 +631,11 @@ pub fn call_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
 
-    let response: OpenAiResponse = openai_request(&url, api_key, CALL_TIMEOUT)
-        .send_json(&payload)
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: OpenAiResponse =
+        checked(openai_request(&url, api_key, CALL_TIMEOUT).send_json(&payload))?
+            .into_body()
+            .read_json()
+            .map_err(|e| e.to_string())?;
 
     let usage = response.usage.map(TokenUsage::from);
     response
@@ -613,9 +659,7 @@ pub fn stream_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response = openai_request(&url, api_key, STREAM_TIMEOUT)
-        .send_json(&payload)
-        .map_err(|e| e.to_string())?;
+    let response = checked(openai_request(&url, api_key, STREAM_TIMEOUT).send_json(&payload))?;
 
     let mut full = String::new();
     let mut usage = None;
@@ -755,15 +799,17 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Comp
         gemini_model(model)
     );
 
-    let response: GeminiResponse = ureq::post(&url)
-        .config()
-        .timeout_global(Some(CALL_TIMEOUT))
-        .build()
-        .send_json(gemini_payload(ctx))
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: GeminiResponse = checked(
+        ureq::post(&url)
+            .config()
+            .timeout_global(Some(CALL_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(gemini_payload(ctx)),
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     let usage = response.usage_metadata.map(TokenUsage::from);
     response
@@ -791,12 +837,14 @@ pub fn stream_gemini(
         gemini_model(model)
     );
 
-    let response = ureq::post(&url)
-        .config()
-        .timeout_global(Some(STREAM_TIMEOUT))
-        .build()
-        .send_json(gemini_payload(ctx))
-        .map_err(|e| e.to_string())?;
+    let response = checked(
+        ureq::post(&url)
+            .config()
+            .timeout_global(Some(STREAM_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(gemini_payload(ctx)),
+    )?;
 
     let mut full = String::new();
     let mut usage = None;
@@ -899,6 +947,35 @@ struct AnthropicError {
     message: String,
 }
 
+/// Bends a conversation into the shape the Messages API insists on: the first message is
+/// from the user, and roles strictly alternate after that.
+///
+/// Nothing else here needs this. OpenAI and Gemini accept a transcript as it happened, so
+/// the history was handed over untouched -- and a real transcript is full of sequences that
+/// are not alternating. Two replies in a row whenever the companion answers and then posts
+/// a status line; an assistant message first whenever the eight-message window happens to
+/// open on one. Anthropic answers both with a 400 that never reaches the operator as
+/// anything but a number.
+///
+/// Consecutive turns from the same side are joined rather than dropped, because they are
+/// what was actually said and losing them would change the conversation to make it fit.
+fn alternating(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::with_capacity(messages.len());
+    for message in messages {
+        match out.last_mut() {
+            // Leading assistant turns have nothing to answer, so the window starts at the
+            // first thing the operator said.
+            None if message.role != "user" => continue,
+            Some(previous) if previous.role == message.role => {
+                previous.content.push_str("\n\n");
+                previous.content.push_str(&message.content);
+            }
+            _ => out.push(message),
+        }
+    }
+    out
+}
+
 fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicRequest {
     let mut messages = Vec::new();
     for msg in ctx.history {
@@ -911,6 +988,7 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
         role: "user".to_string(),
         content: ctx.prompt.to_string(),
     });
+    let messages = alternating(messages);
 
     AnthropicRequest {
         model: if model.is_empty() {
@@ -933,6 +1011,7 @@ fn anthropic_request(
     ureq::post("https://api.anthropic.com/v1/messages")
         .config()
         .timeout_global(Some(timeout))
+        .http_status_as_error(false)
         .build()
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
@@ -940,12 +1019,12 @@ fn anthropic_request(
 }
 
 pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
-    let response: AnthropicResponse = anthropic_request(api_key, CALL_TIMEOUT)
-        .send_json(anthropic_payload(model, ctx, false))
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: AnthropicResponse = checked(
+        anthropic_request(api_key, CALL_TIMEOUT).send_json(anthropic_payload(model, ctx, false)),
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     let usage = response.usage.map(|u| TokenUsage {
         prompt_tokens: u.input_tokens,
@@ -969,9 +1048,9 @@ pub fn stream_anthropic(
     ctx: &ChatContext,
     sink: Sink,
 ) -> Result<Completion, String> {
-    let response = anthropic_request(api_key, STREAM_TIMEOUT)
-        .send_json(anthropic_payload(model, ctx, true))
-        .map_err(|e| e.to_string())?;
+    let response = checked(
+        anthropic_request(api_key, STREAM_TIMEOUT).send_json(anthropic_payload(model, ctx, true)),
+    )?;
 
     let mut full = String::new();
     // Input arrives once at the top, output as a running total near the end, so the two
@@ -1033,6 +1112,129 @@ pub fn stream_anthropic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    /// The exact shape that produced a 400 in the field: the companion answered, then
+    /// posted a status line, so two assistant turns ran together.
+    #[test]
+    fn two_replies_in_a_row_become_one_turn() {
+        let out = alternating(vec![
+            msg("user", "Claude?"),
+            msg("assistant", "[HUD Alert: ...]"),
+            msg("assistant", "Cognitive Core updated."),
+            msg("user", "Claude you there?"),
+        ]);
+        let roles: Vec<&str> = out.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+        // Joined rather than dropped -- both were really said.
+        assert!(out[1].content.contains("HUD Alert"));
+        assert!(out[1].content.contains("Cognitive Core updated."));
+    }
+
+    /// The other half of the same failure: the eight-message window can open on a reply,
+    /// and the Messages API requires the first message to be the user's.
+    #[test]
+    fn a_window_opening_on_a_reply_starts_at_the_first_thing_the_operator_said() {
+        let out = alternating(vec![
+            msg("assistant", "...earlier reply"),
+            msg("assistant", "and another"),
+            msg("user", "now this"),
+            msg("assistant", "answer"),
+            msg("user", "and this"),
+        ]);
+        let roles: Vec<&str> = out.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+        assert_eq!(out[0].content, "now this");
+    }
+
+    #[test]
+    fn a_conversation_that_already_alternates_is_left_alone() {
+        let original = vec![
+            msg("user", "one"),
+            msg("assistant", "two"),
+            msg("user", "three"),
+        ];
+        assert_eq!(alternating(original.clone()), original);
+    }
+
+    /// A fresh session is one user message and nothing else, which is already valid.
+    #[test]
+    fn the_first_turn_of_a_session_survives() {
+        let out = alternating(vec![msg("user", "hello")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+
+        // And a history of nothing but replies leaves nothing to send rather than an
+        // invalid request.
+        assert!(alternating(vec![msg("assistant", "a"), msg("assistant", "b")]).is_empty());
+    }
+
+    /// Through the real payload builder, not just the helper: the failure this fixes came
+    /// back if anyone removed the one call, and a test on `alternating` alone would not
+    /// have noticed.
+    #[test]
+    fn the_anthropic_payload_is_always_in_a_shape_the_api_accepts() {
+        let history = vec![
+            Message {
+                sender: "user".to_string(),
+                text: "Claude?".to_string(),
+                timestamp: String::new(),
+            },
+            Message {
+                sender: "assistant".to_string(),
+                text: "[HUD Alert: ...]".to_string(),
+                timestamp: String::new(),
+            },
+            Message {
+                sender: "assistant".to_string(),
+                text: "Cognitive Core updated.".to_string(),
+                timestamp: String::new(),
+            },
+        ];
+        let ctx = ChatContext {
+            system_prompt: "be useful",
+            history: &history,
+            prompt: "Claude you there?",
+            agent_name: "R.E.D. 9000",
+        };
+        let payload = anthropic_payload("claude-opus-5", &ctx, true);
+
+        assert_eq!(
+            payload.messages[0].role, "user",
+            "must open on the operator"
+        );
+        for pair in payload.messages.windows(2) {
+            assert_ne!(
+                pair[0].role, pair[1].role,
+                "roles have to alternate: {:?}",
+                payload.messages
+            );
+        }
+    }
+
+    /// A 400 means the request was wrong, not the key or the network, and the provider's
+    /// own body says which part. Paraphrasing that away is what left an operator reading
+    /// "http status: 400" with nothing to act on.
+    #[test]
+    fn a_rejected_request_keeps_what_the_provider_said_about_it() {
+        let raw = "http status: 400 -- {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages: roles must alternate between \\\"user\\\" and \\\"assistant\\\"\"}}";
+        let explained = explain_failure(Provider::Anthropic, "", raw);
+        assert!(
+            explained.contains("rejected the request itself"),
+            "{explained}"
+        );
+        assert!(explained.contains("roles must alternate"), "{explained}");
+
+        // Still distinct from the key being wrong, which is a different fix.
+        let unauthorized = explain_failure(Provider::Anthropic, "", "http status: 401");
+        assert!(unauthorized.contains("API KEY"), "{unauthorized}");
+    }
 
     /// Each provider reports its token counts in a different shape and a different place.
     /// These parse the real ones -- the counts were being thrown away and replaced with a
