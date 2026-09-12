@@ -15,11 +15,13 @@
  *    an operator has actually picked a persona/avatar
  * 8. Real-time Audio Frequency and State deformation.
  *
- * A.R.X.LIMES (2) and A.R.X.LOGOS (5) are "The Umbrals" -- a family sharing the A.R.X.
- * name, grouped together (not scattered through the list above) in index.html's
- * avatar-menu and js/avatar-lab.js's BUILT_IN. A new A.R.X. avatar joins the same group in
- * both places; see registerAvatar's optional def.group if it's built as a plugin rather
- * than a hand-modelled buildXAvatar() like these two.
+ * Three of the avatars above belong to named families, grouped together (not scattered
+ * through the list above) in index.html's avatar-menu and js/avatar-lab.js's BUILT_IN --
+ * see registerAvatar's optional def.group if a new one joins as a plugin rather than a
+ * hand-modelled buildXAvatar() like these:
+ * - "Singular Ascended Class": hAlcy (1), R.E.D. 9000 (4), A1ter_nul (6).
+ * - "Trace Protocols": The Nexus (3), and the plugins Nexus Sent, White Rabbit and Operator.
+ * - "The Umbrals": A.R.X.LIMES (2) and A.R.X.LOGOS (5), the A.R.X. name in general.
  *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).
  * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,

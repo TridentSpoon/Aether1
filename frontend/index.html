@@ -68,10 +68,22 @@
                 <div id="avatar-menu" class="hud-slideout hidden" role="menu" aria-labelledby="btn-avatar-menu">
                     <div class="grid grid-cols-2 gap-1">
                         <button class="avatar-pill" data-avatar-val="a1">🅰️ A1</button>
+                    </div>
+
+                    <!-- Singular Ascended Class. Kept together, and meant to stay together as
+                         more join it -- a new avatar in this family's pill goes in this grid. -->
+                    <div class="avatar-group-label">SINGULAR ASCENDED CLASS</div>
+                    <div class="grid grid-cols-2 gap-1">
                         <button class="avatar-pill" data-avatar-val="halcy">🔷 hAlcy</button>
-                        <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
                         <button class="avatar-pill" data-avatar-val="red">🔴 R.E.D. 9000</button>
                         <button class="avatar-pill" data-avatar-val="alt">⚠️ A1ter_nul</button>
+                    </div>
+
+                    <!-- Trace Protocols. Same idea: a new avatar in this family's pill goes in
+                         this grid, not scattered elsewhere in the menu. -->
+                    <div class="avatar-group-label">TRACE PROTOCOLS</div>
+                    <div class="grid grid-cols-2 gap-1">
+                        <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
                         <button class="avatar-pill" data-avatar-val="senti">🛸 Nexus Sent</button>
                         <button class="avatar-pill" data-avatar-val="white-rabbit">🐇 White Rabbit</button>
                         <button class="avatar-pill" data-avatar-val="operator">📟 Operator</button>
@@ -79,7 +91,7 @@
 
                     <!-- The Umbrals: the A.R.X. line. Kept together, and meant to stay together
                          as more join it -- a new A.R.X. avatar's pill goes in this grid, not the
-                         one above, so the family reads as one group rather than scattered entries
+                         ones above, so the family reads as one group rather than scattered entries
                          that happen to share a naming prefix. -->
                     <div class="avatar-group-label">THE UMBRALS</div>
                     <div class="grid grid-cols-2 gap-1">
@@ -821,7 +833,7 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/core.js?v=39"></script>
+    <script src="js/hologram/core.js?v=40"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
     <script src="js/hologram/avatar-halcy.js?v=17"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=17"></script>
@@ -835,9 +847,9 @@
     <script src="js/hologram/parts.js?v=1"></script>
     <script src="js/hologram/avatar-custom.js?v=2"></script>
     <script src="js/hologram/avatar-a1.js?v=1"></script>
-    <script src="js/hologram/avatar-senti.js?v=1"></script>
-    <script src="js/hologram/avatar-white-rabbit.js?v=1"></script>
-    <script src="js/hologram/avatar-operator.js?v=2"></script>
+    <script src="js/hologram/avatar-senti.js?v=2"></script>
+    <script src="js/hologram/avatar-white-rabbit.js?v=2"></script>
+    <script src="js/hologram/avatar-operator.js?v=3"></script>
     <script src="js/hologram/animate.js?v=37"></script>
     <script src="js/voice.js?v=17"></script>
     <script src="js/app.js?v=30"></script>

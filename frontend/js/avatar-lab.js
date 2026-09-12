@@ -8,10 +8,15 @@
     'use strict';
 
     const BUILT_IN = [
-        { id: 'halcy', label: 'hAlcy' },
-        { id: 'nexus', label: 'The Nexus' },
-        { id: 'red', label: 'R.E.D. 9000' },
-        { id: 'alt', label: 'A1ter_nul' },
+        // Singular Ascended Class.
+        { id: 'halcy', label: 'hAlcy', group: 'Singular Ascended Class' },
+        { id: 'red', label: 'R.E.D. 9000', group: 'Singular Ascended Class' },
+        { id: 'alt', label: 'A1ter_nul', group: 'Singular Ascended Class' },
+        // Trace Protocols. Nexus Sent, White Rabbit and Operator are plugins, not
+        // hand-built like this one -- their half of the group lives on their own
+        // registerAvatar defs (group: 'Trace Protocols' in avatar-senti.js,
+        // avatar-white-rabbit.js and avatar-operator.js) rather than here.
+        { id: 'nexus', label: 'The Nexus', group: 'Trace Protocols' },
         // The Umbrals: the A.R.X. line. group clusters these under one <optgroup> in the
         // picker below (see fillAvatarPicker) instead of scattering them through the flat
         // list -- add a new A.R.X. avatar here with the same group name, or give it
