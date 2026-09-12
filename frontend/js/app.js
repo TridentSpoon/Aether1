@@ -1498,6 +1498,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // The placeholder shown for a fresh install (see get_settings_rust's defaults) -- fine
+    // for the Offline provider, which never sends it anywhere, but a guaranteed "model not
+    // found" the moment a cloud/local provider is selected without also retyping this field.
+    // Matches the defaults each provider's own Rust code falls back to on an empty model
+    // name (see openai_defaults/gemini_model/anthropic_payload in providers.rs), so picking
+    // a provider here and what actually gets sent never disagree.
+    const PLACEHOLDER_MODEL = 'halcy-core';
+    const DEFAULT_MODEL_FOR_PROVIDER = {
+        openai: 'gpt-4o-mini',
+        groq: 'llama-3.3-70b-versatile',
+        gemini: 'gemini-2.0-flash',
+        anthropic: 'claude-opus-5',
+    };
+
+    /// Switching to a real provider with the untouched placeholder (or nothing) still in the
+    /// model box would silently send that placeholder as the model name and fail -- this
+    /// fills in a model that actually exists for the newly chosen provider instead. Leaves a
+    /// model the operator typed themselves alone, for any other provider, on purpose.
+    function applyDefaultModelForProvider(providerKey) {
+        const defaultModel = DEFAULT_MODEL_FOR_PROVIDER[providerKey];
+        if (!defaultModel) return; // ollama/lmstudio/offline: no one-size-fits-all default
+        const model = document.getElementById('setting-model');
+        if (!model.value.trim() || model.value.trim() === PLACEHOLDER_MODEL) {
+            model.value = defaultModel;
+        }
+    }
+
     /// Choosing a server is the setup: provider, endpoint and the model list all follow
     /// from it, so the operator never has to know which API shape their server speaks or
     /// whether its URL needs a /v1 on the end.
@@ -2139,6 +2166,13 @@ document.addEventListener('DOMContentLoaded', () => {
     btnScanSystem.addEventListener('click', () => {
         handleScanSystem();
     });
+
+    const providerSelect = document.getElementById('setting-provider');
+    if (providerSelect) {
+        providerSelect.addEventListener('change', (e) => {
+            applyDefaultModelForProvider(e.target.value);
+        });
+    }
 
     const localServerSelect = document.getElementById('setting-local-server');
     if (localServerSelect) {
