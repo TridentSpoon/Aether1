@@ -33,8 +33,8 @@
     }
 
     /* Returns true only when this call is what unlocked it -- false if it was already
-       unlocked, or the write failed -- so a caller can tell a real transition (reveal the
-       picker entry) apart from a trigger firing again on an avatar already unlocked. */
+       unlocked, or the write failed -- so a caller can tell a genuine first unlock (reveal
+       the picker entry) apart from a trigger firing again on an avatar already unlocked. */
     function unlock(id) {
         const flags = load();
         if (flags[id] === true) return false;
