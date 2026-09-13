@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::llm::MemoryDb;
 
+pub mod consulted;
 pub mod search;
 
 /// Cuts `text` to at most `limit` *characters*, adding an ellipsis when it does.
@@ -357,6 +358,7 @@ pub fn prime(db: &MemoryDb) -> String {
             contents
         };
         block.push_str(&format!("\n--- {name} ---\n{contents}"));
+        consulted::record(name, consulted::How::Primed);
     }
 
     block.push_str(&consolidation_note(&root));
@@ -504,6 +506,19 @@ fn collect_notes(root: &Path, dir: &Path, into: &mut Vec<String>, depth: usize) 
     }
 }
 
+/// The note's name if `path` is inside the vault, and nothing if it is anywhere else.
+///
+/// Both sides are canonicalised before they are compared, because the vault path is a
+/// setting the operator typed and the path being checked has been through `fs_guard`: one
+/// may have a symlink or a `..` in it that the other does not, and a string comparison
+/// would answer "not in the vault" for a file plainly in the vault.
+pub fn note_in_vault(db: &MemoryDb, path: &Path) -> Option<String> {
+    let root = vault_path(db).canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
+    let name = path.strip_prefix(&root).ok()?;
+    Some(name.to_string_lossy().to_string())
+}
+
 /// A note's path relative to the vault, for reporting which notes were consulted.
 pub fn relative_name(db: &MemoryDb, path: &Path) -> String {
     path.strip_prefix(vault_path(db))
@@ -527,6 +542,45 @@ mod tests {
         )
         .unwrap();
         (db, dir.join("vault"))
+    }
+
+    /// What the HUD says under an answer starts here: every note priming pasted in is a note
+    /// that was in front of the model, whether or not it used it.
+    #[test]
+    fn priming_reports_the_notes_it_loaded() {
+        let (db, _root) = fixture("consulted");
+        ensure(&db).unwrap();
+
+        consulted::begin();
+        let block = prime(&db);
+        let notes = consulted::taken();
+
+        let names: Vec<&str> = notes.iter().map(|c| c.note.as_str()).collect();
+        assert_eq!(names, ALWAYS_LOADED.to_vec());
+        assert!(
+            notes.iter().all(|c| c.how == consulted::How::Primed),
+            "priming is the reason these are here: {notes:?}"
+        );
+        assert!(
+            block.contains("profile.md"),
+            "and they really were pasted in"
+        );
+    }
+
+    /// The check that keeps read_file's report honest: only files actually under the vault
+    /// count as memory, and the answer must not depend on how the path was spelled.
+    #[test]
+    fn a_file_outside_the_vault_is_not_a_note() {
+        let (db, root) = fixture("in_vault");
+        ensure(&db).unwrap();
+        let outside = root.parent().unwrap().join("memory.db");
+
+        assert_eq!(
+            note_in_vault(&db, &root.join("projects").join("..").join("profile.md")),
+            Some("profile.md".to_string())
+        );
+        assert_eq!(note_in_vault(&db, &outside), None);
+        assert_eq!(note_in_vault(&db, Path::new("/etc/hostname")), None);
     }
 
     #[test]

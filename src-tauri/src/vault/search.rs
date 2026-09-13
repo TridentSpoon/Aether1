@@ -279,6 +279,12 @@ pub fn search(db: &MemoryDb, query: &str) -> Results {
     });
     hits.truncate(MAX_HITS);
 
+    // What comes back is what the model was offered, so it is what the HUD reports -- as
+    // candidates, not as notes that were read. The model may well ignore every one of them.
+    for hit in &hits {
+        super::consulted::record(&hit.note, super::consulted::How::Found);
+    }
+
     Results {
         hits,
         scanned: names.len(),

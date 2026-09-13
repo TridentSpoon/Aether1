@@ -494,11 +494,49 @@ Built as planned, and deliberately without an index.
   than the answer, and asserts the topic note still ranks first. If recency were doing any of
   the ranking, that test fails.
 
-### Step 12: Vault in the HUD *(reduced)*
+### Step 12: Vault in the HUD ✅
 
-Not a memory browser any more — the browser is the operator's editor. What is still worth
-building is small: show which notes were loaded for the current answer, and a button that
-opens the vault folder. Seeing *why* it said something matters more than another file list.
+Built as reduced: no memory browser — the operator's own editor is the memory browser. What
+was worth building was the citation, and the one click that gets to the folder.
+
+- **New `src-tauri/src/vault/consulted.rs`** — a per-turn record of which notes reached the
+  answer, and by which of the three routes. A note can be `Primed` (pasted into the system
+  prompt because it is always loaded), `Read` (fetched by name with `read_file`) or `Found`
+  (offered by search, and possibly ignored). Those are not the same claim and the HUD does
+  not render them as one: ● loaded, ◆ read, ○ found.
+- **A thread-local, not a field on the engine.** A turn *is* a thread here —
+  `generate_response_streamed` runs to completion on one blocking thread, and priming, the
+  provider call and the whole tool loop run inside it. So two operators on the LAN cannot
+  bleed into each other's footer, and none of the three recording sites needs a handle
+  threaded down to it through code with no interest in reporting. Recording is off unless a
+  turn opened it, so an approval executed from the HUD ten minutes later leaves nothing
+  behind for the next answer to claim.
+- **Three call sites**: `vault::prime` records each always-loaded note it actually pasted;
+  `vault::search::search` records its shortlist; `ReadFile` records the path *if* it is
+  inside the vault, which is what the new `vault::note_in_vault` decides — canonicalising
+  both sides first, because the vault path is typed by the operator and the read path has
+  been through `fs_guard`, and a string comparison would answer "not in the vault" for a
+  file plainly in it.
+- **`commands::generate_response_streamed`** opens the record and drains it around the one
+  call that reads the vault, and returns it as `notes` on the reply. Both transports carry
+  it for free: the Tauri command returns that value, and the WebSocket's `done` frame is
+  that value.
+- **`commands::open_vault_folder`** hands the folder to the operator's own file manager
+  (`xdg-open`/`explorer`/`open`, spawned with no shell), creating the vault first if this is
+  the first run. Reachable **only** from the desktop app's Settings pane: there is no HTTP
+  route, because a phone on the LAN asking a desktop in another room to pop open a file
+  manager is not a feature anyone asked for. The browser fallback copies the path and says
+  why it cannot do more. The path comes from the vault setting, which is not in `SETTABLE`,
+  so nothing a model says can steer it.
+- **Verify — done, as tests.** Six on the record itself (nothing recorded outside a turn;
+  a note found and then read reports the reading; draining ends the turn; the footer is
+  capped at twelve), plus one that primes a real vault and asserts the footer names exactly
+  the always-loaded set, and one that reads a vault note and `/etc/hostname` in the same
+  turn and asserts only the note appears.
+
+What is **not** tested is the part that matters most: whether the notes it names are the
+notes that actually shaped the answer. That is a judgement about a live model, and it needs
+a real conversation against a real vault to make.
 
 ## Phase 4 — Situation
 
@@ -984,14 +1022,12 @@ calling.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
-   screen. Seeing *why* it said something is worth more than another file browser.
-2. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+1. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-3. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+2. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
-4. **Step 19, several local models.** A stated core requirement, and still deliberately not
+3. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
-which is correct: what they should be depends on the four above.
+which is correct: what they should be depends on the three above.

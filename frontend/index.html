@@ -742,6 +742,10 @@
                 <div class="space-y-1">
                     <label class="text-xs font-mono text-cyan-300 block">MEMORY VAULT</label>
                     <input id="setting-vault-path" type="text" placeholder="~/Aether1Vault" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    <div class="flex items-center gap-2">
+                        <button id="open-vault-folder" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Open Folder</button>
+                        <span id="vault-folder-status" class="text-[10px] font-mono text-slate-400"></span>
+                    </div>
                     <p class="text-[10px] font-mono text-slate-400 leading-snug">
                         A folder of markdown notes &mdash; what the AI remembers about you. Open it in
                         any editor or in Obsidian, where the <span class="text-cyan-300">[[links]]</span>

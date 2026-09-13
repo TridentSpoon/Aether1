@@ -474,6 +474,16 @@ them into topic notes at a natural pause. It will not interrupt you to do it and
 it without asking, because a fact worth keeping belongs in the note about its subject, and
 deciding which facts those are is a judgement you should get a say in.
 
+**How you can tell.** Under an answer that used the vault, the HUD lists the notes behind it:
+● a note that is loaded every turn, ◆ one it went and fetched while answering, ○ one
+search offered it as a candidate and which it may not have used at all. Those three are
+deliberately not the same claim. A companion that quotes something about you should be able to
+say where it got it, because otherwise recall and invention look identical from the outside.
+Settings has an **Open Folder** button next to the vault path, so the notes it names are one
+click from being open in your own editor. (In a browser tab it copies the path instead --
+a tab on your phone cannot open a folder on your desktop, and pretending otherwise would be
+worse than saying so.)
+
 Writing to the vault always shows you an approval card first — what it wants to record, and
 where. The one exception is `remember that …`, which writes straight through: that is your own
 instruction, and asking you to approve your own sentence would be ceremony rather than consent.
