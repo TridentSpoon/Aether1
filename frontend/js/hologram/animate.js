@@ -77,7 +77,7 @@ HologramAvatar.prototype.animate = function() {
     } else if (this.currentAvatar === 'nexus' || this.currentAvatar === 'matrix') {
         this.animateNexus(elapsedTime, audioIntensity, clickPulse);
     } else if (this.currentAvatar === 'arx-limes') {
-        this.animateArxLimes(elapsedTime, audioIntensity, clickPulse);
+        this.animateArxLimes(elapsedTime, audioIntensity, clickPulse, clickAge);
     } else if (this.currentAvatar === 'alt' || this.currentAvatar === 'cunningham' || this.currentAvatar === 'a1ter_nul') {
         this.animateAlt(elapsedTime, audioIntensity, clickPulse);
     } else {
@@ -525,7 +525,7 @@ HologramAvatar.prototype.animateNexus = function(elapsedTime, audioIntensity, cl
 // ==========================================
 // A.R.X.LIMES: FLOATING HUB + FRACTURED DOME PLATES
 // ==========================================
-HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity, clickPulse) {
+HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity, clickPulse, clickAge) {
     const isThinking = this.state === 'THINKING';
     const isSpeaking = this.state === 'SPEAKING';
 
@@ -560,15 +560,72 @@ HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity,
         }
     }
 
-    // A click makes it blink -- the side wing plates flutter shut and open again,
-    // like eyelashes blinking. Top/bottom "eyelids" stay still. No idle auto-blink.
-    const blinkScale = 1.0 - clickPulse * 0.9;
+    // The accretion disc: two static tilted rings (a torus is rotationally symmetric, so
+    // spinning it changes nothing) that brighten with speech/thought, plus a handful of
+    // hotspots actually orbiting the inner ring so the disc visibly swirls.
+    if (this.arxLimesAccretionRing1) {
+        let glow = 1.0;
+        if (isSpeaking) {
+            glow = 1.0 + audioIntensity * 0.6;
+        } else if (isThinking) {
+            glow = 1.0 + Math.abs(Math.sin(elapsedTime * 10)) * 0.3;
+        }
+        glow += clickPulse * 0.5;
+        this.arxLimesAccretionRing1Mat.opacity = Math.min(0.75 * glow, 1);
+        this.arxLimesAccretionRing2Mat.opacity = Math.min(0.45 * glow, 1);
+        const discScale = 1 + clickPulse * 0.15;
+        this.arxLimesAccretionGroup.scale.set(discScale, discScale, discScale);
+
+        this.arxLimesAccretionHotspots.forEach((h) => {
+            h.angle += h.speed;
+            h.mesh.position.set(Math.cos(h.angle) * h.radius, Math.sin(h.angle) * h.radius, 0);
+        });
+        this.arxLimesAccretionHotspotsMat.opacity = 0.7 + (glow - 1) * 0.3;
+    }
+
+    // A click sends the wing plates diving toward the black hole and flinging back out
+    // past their resting radius before settling, like grazing infalling matter -- rather
+    // than a plain squash-to-sliver blink. clickPulse can't drive this directly: it's a
+    // symmetric rise-then-decay bell curve (see the main animate() loop), so the same
+    // value occurs once on the way up and once on the way down and can't tell "falling
+    // in" apart from "shooting out". clickAge (seconds since the click, monotonic) does.
+    // Keyframed radius multiplier: rest -> sucked toward the hub -> overshoot outward
+    // past rest -> settled back to rest, cosine-eased between each pair so the direction
+    // reversals aren't abrupt.
+    const WING_REACT_DURATION = 0.7;
+    const WING_RADIUS_KEYS = [
+        { at: 0.0, v: 1.0 },
+        { at: 0.32, v: 0.15 },
+        { at: 0.62, v: 1.35 },
+        { at: 1.0, v: 1.0 },
+    ];
+    let wingRadiusMult = 1.0;
+    let wingScaleMult = 1.0;
+    if (clickAge >= 0 && clickAge < WING_REACT_DURATION) {
+        const t = clickAge / WING_REACT_DURATION;
+        for (let i = 0; i < WING_RADIUS_KEYS.length - 1; i++) {
+            const a = WING_RADIUS_KEYS[i], b = WING_RADIUS_KEYS[i + 1];
+            if (t >= a.at && t <= b.at) {
+                const localT = (t - a.at) / (b.at - a.at);
+                const eased = 0.5 - 0.5 * Math.cos(localT * Math.PI);
+                wingRadiusMult = a.v + (b.v - a.v) * eased;
+                break;
+            }
+        }
+        // Thins toward a sliver as it nears the hub (getting swallowed edge-on), then
+        // swells past full width on the outward launch before settling back to normal.
+        wingScaleMult = wingRadiusMult < 1.0
+            ? Math.max(0.12, wingRadiusMult)
+            : 1.0 + (wingRadiusMult - 1.0) * 0.4;
+    }
 
     // Plates stay put -- static, floating in fixed position -- with only a faint
-    // audio-reactive nudge while speaking, or a faint pop on click.
+    // audio-reactive nudge while speaking, or the dive-and-launch above on click.
     this.arxLimesPlates.forEach((plate, idx) => {
         let radiusMult = 1.0;
-        if (isSpeaking) {
+        if (plate.tier === 'wing') {
+            radiusMult = wingRadiusMult;
+        } else if (isSpeaking) {
             const fVal = (this.audioData[idx % 16] || 0) / 255;
             radiusMult = 1.0 + fVal * 0.06;
         } else if (clickPulse > 0) {
@@ -578,9 +635,7 @@ HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity,
         plate.group.position.set(Math.cos(plate.baseAngle) * r, Math.sin(plate.baseAngle) * r, 0);
 
         if (plate.tier === 'wing') {
-            // Collapse to a thin sliver and back -- closer to how a blinking eyelash
-            // reads than shrinking the whole blade toward the hub.
-            plate.group.scale.set(blinkScale, 1, 1);
+            plate.group.scale.set(wingScaleMult, wingScaleMult, wingScaleMult);
         }
     });
 };

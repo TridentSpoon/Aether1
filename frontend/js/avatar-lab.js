@@ -8,12 +8,21 @@
     'use strict';
 
     const BUILT_IN = [
-        { id: 'halcy', label: 'hAlcy' },
-        { id: 'arx-limes', label: 'A.R.X.LIMES' },
-        { id: 'nexus', label: 'The Nexus' },
-        { id: 'red', label: 'R.E.D. 9000' },
-        { id: 'arx-logos', label: 'A.R.X.LOGOS' },
-        { id: 'alt', label: 'A1ter_nul' },
+        // Singular Ascended Class.
+        { id: 'halcy', label: 'hAlcy', group: 'Singular Ascended Class' },
+        { id: 'red', label: 'R.E.D. 9000', group: 'Singular Ascended Class' },
+        { id: 'alt', label: 'A1ter_nul', group: 'Singular Ascended Class' },
+        // Trace Protocols. Nexus Sent, White Rabbit and Operator are plugins, not
+        // hand-built like this one -- their half of the group lives on their own
+        // registerAvatar defs (group: 'Trace Protocols' in avatar-senti.js,
+        // avatar-white-rabbit.js and avatar-operator.js) rather than here.
+        { id: 'nexus', label: 'The Nexus', group: 'Trace Protocols' },
+        // The Umbrals: the A.R.X. line. group clusters these under one <optgroup> in the
+        // picker below (see fillAvatarPicker) instead of scattering them through the flat
+        // list -- add a new A.R.X. avatar here with the same group name, or give it
+        // group: 'The Umbrals' on its own registerAvatar def if it's built as a plugin.
+        { id: 'arx-limes', label: 'A.R.X.LIMES', group: 'The Umbrals' },
+        { id: 'arx-logos', label: 'A.R.X.LOGOS', group: 'The Umbrals' },
     ];
 
     const $ = (id) => document.getElementById(id);
@@ -54,11 +63,25 @@
         const picker = $('lab-avatar');
         const registered = HologramAvatar.registeredAvatars();
         picker.innerHTML = '';
-        BUILT_IN.concat(registered).forEach(({ id, label }) => {
+        // Anything carrying a group (see BUILT_IN's A.R.X. entries and registerAvatar's
+        // optional def.group) gets clustered into that <optgroup> instead of sitting flat
+        // in the picker -- built-in and plugin avatars can join the same family this way.
+        const groups = new Map();
+        BUILT_IN.concat(registered).forEach(({ id, label, group }) => {
             const option = document.createElement('option');
             option.value = id;
             option.textContent = registered.some((r) => r.id === id) ? `${label}  (yours)` : label;
-            picker.appendChild(option);
+            if (group) {
+                if (!groups.has(group)) {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = group;
+                    groups.set(group, optgroup);
+                    picker.appendChild(optgroup);
+                }
+                groups.get(group).appendChild(option);
+            } else {
+                picker.appendChild(option);
+            }
         });
         picker.value = currentAvatar;
     }

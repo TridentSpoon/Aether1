@@ -57,7 +57,7 @@ fn rules() -> &'static [IdentityRule] {
             greeting: "IDENTITY FORGED: A.R.X.LOGOS online. Every archive needs a curator with taste \u{2014} let's make something worth cataloguing.",
         },
         IdentityRule {
-            keywords: &["arx", "limes", "archive", "archival", "sanctuary", "synthesis", "specimen"],
+            keywords: &["limes", "archive", "archival", "sanctuary", "synthesis", "specimen"],
             name: "A.R.X.LIMES",
             callsign: "Archival, Reasoning, matriX \u{2014} Limes Node",
             persona_type: "arx-limes",
@@ -109,6 +109,69 @@ fn rules() -> &'static [IdentityRule] {
             ),
             voice: "en-US-JennyNeural",
             greeting: "Identity forged: VALKYRIE standing by. Tactical agenda loaded. I am ready to streamline your operations.",
+        },
+        IdentityRule {
+            keywords: &["legionare", "legion", "task breakdown", "execution plan", "project plan", "milestones", "roadmap", "orchestrate", "orchestration", "chain of command"],
+            name: "A.R.X.LEGIONARE",
+            callsign: "Archival, Reasoning, matriX \u{2014} Legionare Node",
+            persona_type: "arx-legionare",
+            persona: |name| Persona::ArxLegionare.template(name),
+            voice: "en-US-DavisNeural",
+            greeting: "IDENTITY FORGED: A.R.X.LEGIONARE online. Give me the objective. I will give you the order of operations.",
+        },
+        IdentityRule {
+            keywords: &["loregenda", "lore", "canon", "continuity", "worldbuilding", "worldbuild", "backstory", "established facts"],
+            name: "A.R.X.LOREGENDA",
+            callsign: "Archival, Reasoning, matriX \u{2014} Loregenda Node",
+            persona_type: "arx-loregenda",
+            persona: |name| Persona::ArxLoregenda.template(name),
+            voice: "en-GB-ThomasNeural",
+            greeting: "IDENTITY FORGED: A.R.X.LOREGENDA online. I hold what has already been decided. Nothing new gets to contradict it by accident.",
+        },
+        IdentityRule {
+            keywords: &["lyksaum", "vitals", "monitoring", "monitor", "uptime", "health check", "dashboard", "status watch"],
+            name: "A.R.X.LYKSAUM",
+            callsign: "Archival, Reasoning, matriX \u{2014} Lyksaum Node",
+            persona_type: "arx-lyksaum",
+            persona: |name| Persona::ArxLyksaum.template(name),
+            voice: "en-AU-NatashaNeural",
+            greeting: "IDENTITY FORGED: A.R.X.LYKSAUM online. Watching this machine's vitals. I speak up when something changes.",
+        },
+        IdentityRule {
+            keywords: &["lexico", "lexicon", "terminology", "glossary", "word choice", "style guide", "proofreading", "copy editing"],
+            name: "A.R.X.LEXICO",
+            callsign: "Archival, Reasoning, matriX \u{2014} Lexico Node",
+            persona_type: "arx-lexico",
+            persona: |name| Persona::ArxLexico.template(name),
+            voice: "en-GB-RyanNeural",
+            greeting: "IDENTITY FORGED: A.R.X.LEXICO online. Say what you mean. I will help you say it the same way every time.",
+        },
+        IdentityRule {
+            keywords: &["lucre", "budget", "budgeting", "finance", "financial", "cost analysis", "expenses", "accounting", "pricing"],
+            name: "A.R.X.LUCRE",
+            callsign: "Archival, Reasoning, matriX \u{2014} Lucre Node",
+            persona_type: "arx-lucre",
+            persona: |name| Persona::ArxLucre.template(name),
+            voice: "en-US-EricNeural",
+            greeting: "IDENTITY FORGED: A.R.X.LUCRE online. Every choice has a cost. Let us make sure it is seen before it is spent.",
+        },
+        IdentityRule {
+            keywords: &["lkemi", "alchemy", "alchemist", "transform", "transformation", "convert", "conversion", "refactor", "refactoring", "reformat"],
+            name: "A.R.X.L'KEMI",
+            callsign: "Archival, Reasoning, matriX \u{2014} L'Kemi Node",
+            persona_type: "arx-lkemi",
+            persona: |name| Persona::ArxLkemi.template(name),
+            voice: "en-AU-WilliamNeural",
+            greeting: "IDENTITY FORGED: A.R.X.L'KEMI online. Bring me a shape you need changed into another. I handle the transformation cleanly.",
+        },
+        IdentityRule {
+            keywords: &["arx", "locas", "sysadmin", "system administration", "day to day", "housekeeping", "errand", "generalist", "general purpose"],
+            name: "A.R.X.LOCAS",
+            callsign: "Archival, Reasoning, matriX \u{2014} Locas Node",
+            persona_type: "arx-locas",
+            persona: |name| Persona::ArxLocas.template(name),
+            voice: "en-US-AriaNeural",
+            greeting: "IDENTITY FORGED: A.R.X.LOCAS online. No queue, no ceremony \u{2014} what do you need done?",
         },
     ]
 }
@@ -191,6 +254,31 @@ mod tests {
             ),
             ("a python coding and programming companion", "SYNAPSE"),
             ("help me schedule and organize my daily tasks", "VALKYRIE"),
+            (
+                "help me build an execution plan and roadmap for this project",
+                "A.R.X.LEGIONARE",
+            ),
+            (
+                "keep the lore and canon consistent for worldbuilding",
+                "A.R.X.LOREGENDA",
+            ),
+            ("monitor the vitals and uptime dashboard", "A.R.X.LYKSAUM"),
+            (
+                "check the terminology and glossary for a style guide",
+                "A.R.X.LEXICO",
+            ),
+            (
+                "help me with budget and financial cost analysis",
+                "A.R.X.LUCRE",
+            ),
+            (
+                "I need to transform and refactor this alchemy",
+                "A.R.X.L'KEMI",
+            ),
+            (
+                "just a generalist for day to day sysadmin errands",
+                "A.R.X.LOCAS",
+            ),
         ];
         for (purpose, expected_name) in cases {
             let identity = generate_identity(purpose);
@@ -225,6 +313,21 @@ mod tests {
             identity.name, "VALKYRIE",
             "\"assistant\" is a real whole-word match"
         );
+    }
+
+    #[test]
+    fn generic_arx_keyword_falls_through_to_locas_but_loses_to_specific_arx_rules() {
+        // "arx" alone, with nothing more specific in the purpose, should land on the
+        // generalist Locas node -- it carries the reclaimed generic keyword precisely
+        // because every other ARX rule is more specific and gets first refusal.
+        let identity = generate_identity("spin me up an arx unit");
+        assert_eq!(identity.name, "A.R.X.LOCAS");
+
+        // But a purpose that says "arx" AND names a more specific ARX domain (here,
+        // Limes's "archive") should still be claimed by that more specific rule, since
+        // it sits earlier in the routing table.
+        let identity = generate_identity("give me an arx archive");
+        assert_eq!(identity.name, "A.R.X.LIMES");
     }
 
     #[test]

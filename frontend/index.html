@@ -69,20 +69,51 @@
                 <div id="avatar-menu" class="hud-slideout hidden" role="menu" aria-labelledby="btn-avatar-menu">
                     <div class="grid grid-cols-2 gap-1">
                         <button class="avatar-pill" data-avatar-val="a1">🅰️ A1</button>
+                    </div>
+
+                    <!-- Singular Ascended Class. Kept together, and meant to stay together as
+                         more join it -- a new avatar in this family's pill goes in this grid. -->
+                    <div class="avatar-group-label">SINGULAR ASCENDED CLASS</div>
+                    <div class="grid grid-cols-2 gap-1">
                         <button class="avatar-pill" data-avatar-val="halcy">🔷 hAlcy</button>
-                        <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
-                        <button class="avatar-pill" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
-                        <button class="avatar-pill" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
                         <button class="avatar-pill" data-avatar-val="red">🔴 R.E.D. 9000</button>
                         <button class="avatar-pill" data-avatar-val="alt">⚠️ A1ter_nul</button>
-                        <!-- Trace Protocols: hidden until discovered via a trigger phrase typed
-                             while The Nexus is active -- see refreshTraceProtocolVisibility in
-                             app.js, which reveals whichever of these localStorage already has
-                             recorded as unlocked, and stays hidden by default here so there is
-                             no flash of a button that then disappears. -->
+                    </div>
+
+                    <!-- Trace Protocols. The Nexus is the host and always shown; the other three
+                         are hidden easter eggs that only ever surface by being triggered from a
+                         chat message while The Nexus is active (see app.js's AVATAR_TRIGGER_RULES
+                         and flashTraceProtocolAvatar) -- each starts with the `hidden` class below
+                         and app.js's refreshTraceProtocolVisibility() removes it permanently the
+                         first time that avatar's trigger fires, recording the unlock via
+                         js/avatar-unlocks.js. A new avatar in this family's pill goes in this grid
+                         either way. -->
+                    <div class="avatar-group-label">TRACE PROTOCOLS</div>
+                    <div class="grid grid-cols-2 gap-1">
+                        <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
                         <button class="avatar-pill hidden" data-avatar-val="senti">🛸 Nexus Sent</button>
                         <button class="avatar-pill hidden" data-avatar-val="white-rabbit">🐇 White Rabbit</button>
                         <button class="avatar-pill hidden" data-avatar-val="operator">📟 Operator</button>
+                    </div>
+
+                    <!-- The Umbrals: the A.R.X. line. Kept together, and meant to stay together
+                         as more join it -- a new A.R.X. avatar's pill goes in this grid, not the
+                         ones above, so the family reads as one group rather than scattered entries
+                         that happen to share a naming prefix. -->
+                    <div class="avatar-group-label">THE UMBRALS</div>
+                    <div class="grid grid-cols-2 gap-1">
+                        <button class="avatar-pill" data-avatar-val="arx-locas">🔵 A.R.X.LOCAS</button>
+                        <button class="avatar-pill" data-avatar-val="arx-legionare">🔴 A.R.X.LEGIONARE</button>
+                        <button class="avatar-pill" data-avatar-val="arx-loregenda">🔷 A.R.X.LOREGENDA</button>
+                        <button class="avatar-pill" data-avatar-val="arx-lyksaum">🩵 A.R.X.LYKSAUM</button>
+                        <button class="avatar-pill" data-avatar-val="arx-limes">🔶 A.R.X.LIMES</button>
+                        <button class="avatar-pill" data-avatar-val="arx-logos">🟣 A.R.X.LOGOS</button>
+                        <button class="avatar-pill" data-avatar-val="arx-lexico">🧊 A.R.X.LEXICO</button>
+                        <button class="avatar-pill" data-avatar-val="arx-lucre">💰 A.R.X.LUCRE</button>
+                        <button class="avatar-pill" data-avatar-val="arx-lkemi">🔻 A.R.X.L'KEMI</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-1 mt-1">
                         <button class="avatar-pill" data-avatar-val="custom" title="An avatar you design yourself">✨ Your own</button>
                     </div>
                     <!-- Only shown while "Your own" is the selected avatar: the way to change it
@@ -1137,13 +1168,20 @@
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
          prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/core.js?v=38"></script>
+    <script src="js/hologram/core.js?v=41"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
     <script src="js/hologram/avatar-halcy.js?v=17"></script>
     <script src="js/hologram/avatar-arx-limes.js?v=17"></script>
     <script src="js/hologram/avatar-nexus.js?v=29"></script>
     <script src="js/hologram/avatar-red9000.js?v=19"></script>
     <script src="js/hologram/avatar-arx-logos.js?v=18"></script>
+    <script src="js/hologram/avatar-arx-locas.js?v=2"></script>
+    <script src="js/hologram/avatar-arx-legionare.js?v=1"></script>
+    <script src="js/hologram/avatar-arx-loregenda.js?v=1"></script>
+    <script src="js/hologram/avatar-arx-lyksaum.js?v=1"></script>
+    <script src="js/hologram/avatar-arx-lexico.js?v=1"></script>
+    <script src="js/hologram/avatar-arx-lucre.js?v=1"></script>
+    <script src="js/hologram/avatar-arx-lkemi.js?v=1"></script>
     <script src="js/hologram/avatar-alt.js?v=3"></script>
     <!-- The parts kit and the avatar assembled from a saved recipe (see
          frontend/avatar-lab.html). Any hand-written avatar file goes here too:
@@ -1151,12 +1189,12 @@
     <script src="js/hologram/parts.js?v=1"></script>
     <script src="js/hologram/avatar-custom.js?v=2"></script>
     <script src="js/hologram/avatar-a1.js?v=1"></script>
-    <script src="js/hologram/avatar-senti.js?v=1"></script>
-    <script src="js/hologram/avatar-white-rabbit.js?v=1"></script>
-    <script src="js/hologram/avatar-operator.js?v=2"></script>
+    <script src="js/hologram/avatar-senti.js?v=2"></script>
+    <script src="js/hologram/avatar-white-rabbit.js?v=2"></script>
+    <script src="js/hologram/avatar-operator.js?v=3"></script>
     <script src="js/hologram/animate.js?v=37"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=34"></script>
+    <script src="js/app.js?v=37"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

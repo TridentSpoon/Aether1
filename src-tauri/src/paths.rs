@@ -122,6 +122,25 @@ pub fn suppress_console_window(cmd: &mut std::process::Command) {
 #[cfg(not(target_os = "windows"))]
 pub fn suppress_console_window(_cmd: &mut std::process::Command) {}
 
+/// Opens `path` in the OS's own file manager -- Explorer, Finder, or whichever handler
+/// `xdg-open` resolves to on Linux. Fire-and-forget: this only has to confirm the file
+/// manager *launched*, the same way a desktop icon double-click does not wait around for
+/// the window it opened.
+pub fn open_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    let mut cmd = if cfg!(target_os = "windows") {
+        std::process::Command::new("explorer")
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    cmd.arg(path);
+    suppress_console_window(&mut cmd);
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open {}: {e}", path.display()))
+}
+
 /// A path as a lowercase, forward-slashed string, for comparing against the deny lists.
 ///
 /// Windows paths arrive with backslashes and arbitrary case, so `"/.ssh/"` would never

@@ -51,37 +51,6 @@ pub fn generate_response_streamed(
     }))
 }
 
-/// Opens the vault folder in the operator's own file manager.
-///
-/// The point of keeping memory as markdown is that it can be opened without us, and a
-/// folder you have to go and find is a promise half kept. Creates the vault first if it
-/// isn't there yet: a button that opens nothing would be a worse answer than a button that
-/// shows you the empty room it made.
-///
-/// Deliberately not exposed over HTTP and not a tool. It is reachable only from the desktop
-/// app's own Settings pane, by the person sitting at the machine -- a browser on the LAN
-/// asking a computer in another room to pop open a file manager is not a feature. The path
-/// comes from the vault setting rather than from any argument, and the launcher is spawned
-/// with no shell, so there is nothing here for a prompt to steer.
-pub fn open_vault_folder(engine: &LlmEngine) -> Result<String, String> {
-    let root = crate::vault::ensure(engine.db())?;
-
-    let launcher = if cfg!(target_os = "windows") {
-        "explorer"
-    } else if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-
-    std::process::Command::new(launcher)
-        .arg(&root)
-        .spawn()
-        .map_err(|e| format!("could not open {} with {launcher}: {e}", root.display()))?;
-
-    Ok(root.to_string_lossy().to_string())
-}
-
 /// Tries a provider/model/endpoint/key combination with one trivial call before it's ever
 /// saved -- the values come straight from the Settings form, not from what's persisted, so
 /// a mistake is caught before Save rather than discovered on the next real chat message.
@@ -348,6 +317,15 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
 /// on so the UI and the prompt renderer can both be built against it.
 pub fn tool_catalog(engine: &LlmEngine) -> Value {
     tools::catalog(engine.db(), tools::registry())
+}
+
+/// Opens the vault folder in the file manager on the machine actually running Aether1 --
+/// the HUD's "which notes were loaded" caption exists precisely so there's somewhere to
+/// point a click at. Over `--lan`, that's the server's machine, same as everything else
+/// under [Local host] in IMPLEMENTATION.md's vocabulary table -- there is no way to hand a
+/// folder-manager window to a remote browser, only to the desktop this process is on.
+pub fn open_vault_folder(engine: &LlmEngine) -> Result<(), String> {
+    crate::vault::open_folder(engine.db())
 }
 
 /// The record of what the companion has actually done, newest first.

@@ -538,6 +538,26 @@ What is **not** tested is the part that matters most: whether the notes it names
 notes that actually shaped the answer. That is a judgement about a live model, and it needs
 a real conversation against a real vault to make.
 
+Landed as a one-line trace, the same idiom a tool call already gets (see
+`tools/protocol.rs`'s `trace_of`): `LlmEngine::vault_trace` names whichever of
+`INDEX.md`/`profile.md`/`machine.md` actually exist right now — exactly the list
+`vault::prime` loaded into this turn's system prompt, via the new `vault::primed_notes` —
+and it's prepended to the reply in the two code paths that actually send that prompt to a
+model (`tool_loop` and the plain-provider branch). The offline and local-only-refusal
+replies never see it, on purpose: neither ever reads `system_prompt`, so claiming the vault
+either would be exactly the kind of dressed-up-as-a-measurement claim step 14 already
+refuses to make elsewhere. An ad hoc `read_file` mid-turn still gets its own trace line as
+before — this just covers what silent priming never surfaced at all.
+
+The folder button (`vault::open_folder`, `paths::open_in_file_manager`) shells out to
+Explorer, Finder, or `xdg-open` — no new Tauri plugin dependency, matching how `winget` and
+`git`/`cargo` invocations already work in `main.rs`. It creates the starter vault first if
+this is the very first thing to touch it, so the button never opens a folder that isn't
+there yet. Wired through both transports (`POST /api/vault/open` and
+`open_vault_folder_rust`) per the two-transport rule, even though `--lan` opens it on the
+server's own desktop rather than the requester's -- there is no way to hand a remote
+browser a file-manager window, only the machine this process is actually running on.
+
 ## Phase 4 — Situation
 
 ### Step 13: Crash and log capture

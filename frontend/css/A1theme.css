@@ -265,6 +265,19 @@
   border-color: var(--border-neon);
 }
 
+/* A small heading inside the avatar picker, for a family of avatars shown together (The
+   Umbrals' A.R.X. line, currently) rather than scattered through the flat list. A thin
+   top border reads as a divider from whatever pills came before it. */
+.avatar-group-label {
+  margin-top: 4px;
+  padding: 4px 6px 2px;
+  border-top: 1px solid var(--border-neon);
+  color: var(--text-dim);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
 /* Visible only to a screen reader: the menu button is an icon, and an icon with no name is
    an unlabelled button to anything that is not looking at it. */
 .sr-only {

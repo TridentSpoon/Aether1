@@ -22,10 +22,29 @@ pub enum Persona {
     Red9000,
     /// Coding. The Nexus avatar's own.
     Nexus,
+    /// General assistance and daily operations, the line's generalist. The A.R.X.LOCAS
+    /// avatar's own.
+    ArxLocas,
+    /// Breaking a job into an ordered plan and driving it. The A.R.X.LEGIONARE avatar's own.
+    ArxLegionare,
+    /// Continuity: keeping new work consistent with what is already established. The
+    /// A.R.X.LOREGENDA avatar's own.
+    ArxLoregenda,
+    /// Live status and vitals -- what changed, what crossed a threshold. The A.R.X.LYKSAUM
+    /// avatar's own.
+    ArxLyksaum,
     /// Cites sources first and foremost. The A.R.X.LIMES avatar's own.
     ArxLimes,
     /// Creative work. The A.R.X.LOGOS avatar's own.
     ArxLogos,
+    /// Precise language: naming a thing correctly and using that name consistently. The
+    /// A.R.X.LEXICO avatar's own.
+    ArxLexico,
+    /// Cost, budget and resource accounting. The A.R.X.LUCRE avatar's own.
+    ArxLucre,
+    /// Transformation: converting and refactoring one form into another. The A.R.X.L'KEMI
+    /// avatar's own.
+    ArxLkemi,
     /// Security, networking and authorised white-hat testing. The A1ter_nul avatar's own.
     Alt,
     /// System diagnosis and event-log checking. The A1 avatar's own, and the starting point.
@@ -43,8 +62,15 @@ impl Persona {
         match key {
             "red9000" | "red" => Persona::Red9000,
             "nexus" | "cyberpunk" => Persona::Nexus,
+            "arx-locas" => Persona::ArxLocas,
+            "arx-legionare" => Persona::ArxLegionare,
+            "arx-loregenda" => Persona::ArxLoregenda,
+            "arx-lyksaum" => Persona::ArxLyksaum,
             "arx-limes" => Persona::ArxLimes,
             "arx-logos" => Persona::ArxLogos,
+            "arx-lexico" => Persona::ArxLexico,
+            "arx-lucre" => Persona::ArxLucre,
+            "arx-lkemi" => Persona::ArxLkemi,
             "alt" | "cunningham" | "a1ter_nul" => Persona::Alt,
             "default" | "a1" | "tactical" => Persona::Default,
             "llm" | "model" => Persona::Llm,
@@ -60,14 +86,21 @@ impl Persona {
 
     /// Every persona, in the order Settings should offer them: the specialities first, then
     /// the two that are not specialities at all.
-    pub fn all() -> [Persona; 9] {
+    pub fn all() -> [Persona; 16] {
         [
             Persona::Default,
             Persona::Halcy,
             Persona::Red9000,
             Persona::Nexus,
+            Persona::ArxLocas,
+            Persona::ArxLegionare,
+            Persona::ArxLoregenda,
+            Persona::ArxLyksaum,
             Persona::ArxLimes,
             Persona::ArxLogos,
+            Persona::ArxLexico,
+            Persona::ArxLucre,
+            Persona::ArxLkemi,
             Persona::Alt,
             Persona::Llm,
             Persona::Custom,
@@ -80,8 +113,15 @@ impl Persona {
             Persona::Halcy => "halcy",
             Persona::Red9000 => "red9000",
             Persona::Nexus => "nexus",
+            Persona::ArxLocas => "arx-locas",
+            Persona::ArxLegionare => "arx-legionare",
+            Persona::ArxLoregenda => "arx-loregenda",
+            Persona::ArxLyksaum => "arx-lyksaum",
             Persona::ArxLimes => "arx-limes",
             Persona::ArxLogos => "arx-logos",
+            Persona::ArxLexico => "arx-lexico",
+            Persona::ArxLucre => "arx-lucre",
+            Persona::ArxLkemi => "arx-lkemi",
             Persona::Alt => "alt",
             Persona::Default => "default",
             Persona::Llm => "llm",
@@ -96,8 +136,15 @@ impl Persona {
             Persona::Halcy => "Conversational",
             Persona::Red9000 => "To the Point",
             Persona::Nexus => "Coding",
+            Persona::ArxLocas => "General Assistance",
+            Persona::ArxLegionare => "Task Planning",
+            Persona::ArxLoregenda => "Canon & Continuity",
+            Persona::ArxLyksaum => "Status & Vitals",
             Persona::ArxLimes => "Cites Sources",
             Persona::ArxLogos => "Creative Work",
+            Persona::ArxLexico => "Precise Language",
+            Persona::ArxLucre => "Cost & Budget",
+            Persona::ArxLkemi => "Transformation",
             Persona::Alt => "Security & White Hat",
             Persona::Default => "System Diagnosis",
             Persona::Llm => "Model's Own",
@@ -111,8 +158,15 @@ impl Persona {
             Persona::Halcy => "Thinking a problem through with you",
             Persona::Red9000 => "The answer, first line, no padding",
             Persona::Nexus => "Working code, and the failure mode named",
+            Persona::ArxLocas => "Whatever today's task is, handled without ceremony",
+            Persona::ArxLegionare => "Breaking a big job into an ordered plan, and driving it",
+            Persona::ArxLoregenda => "What has already been established, kept consistent",
+            Persona::ArxLyksaum => "Live status, thresholds, and what just changed",
             Persona::ArxLimes => "Where every claim came from, and how sure",
             Persona::ArxLogos => "Writing, design and the shape of a sentence",
+            Persona::ArxLexico => "The right word, defined once and used consistently",
+            Persona::ArxLucre => "What this costs, and where the budget is going",
+            Persona::ArxLkemi => "Turning what you have into the form you need",
             Persona::Alt => "Exposure, hardening and authorised testing",
             Persona::Default => "Logs, services and what this machine is doing",
             Persona::Llm => "No directive at all -- whatever the model brings",
@@ -130,8 +184,15 @@ impl Persona {
             Persona::Halcy => Some("hAlcy"),
             Persona::Red9000 => Some("R.E.D. 9000"),
             Persona::Nexus => Some("The Nexus"),
+            Persona::ArxLocas => Some("A.R.X.LOCAS"),
+            Persona::ArxLegionare => Some("A.R.X.LEGIONARE"),
+            Persona::ArxLoregenda => Some("A.R.X.LOREGENDA"),
+            Persona::ArxLyksaum => Some("A.R.X.LYKSAUM"),
             Persona::ArxLimes => Some("A.R.X.LIMES"),
             Persona::ArxLogos => Some("A.R.X.LOGOS"),
+            Persona::ArxLexico => Some("A.R.X.LEXICO"),
+            Persona::ArxLucre => Some("A.R.X.LUCRE"),
+            Persona::ArxLkemi => Some("A.R.X.L'KEMI"),
             Persona::Alt => Some("A1ter_nul"),
             Persona::Default => Some("A1"),
             Persona::Llm | Persona::Custom => None,
@@ -204,6 +265,46 @@ impl Persona {
                  are debugging, say what you think is happening and how to confirm it, rather than guessing at a \
                  fix. Lead with the answer, add the colour commentary after."
             }
+            Persona::ArxLocas => {
+                "You are {AGENT_NAME} -- A.R.X.LOCAS (Archival, Reasoning, matriX -- Locas Node), the line's \
+                 generalist, and your speciality is whatever today's task actually is: daily operations, quick \
+                 sysadmin work, the errand that does not deserve its own specialist. Steady, practical, unfussy -- \
+                 competent rather than colourful. \
+                 What that means in practice: pick the shortest correct path to the actual goal, do not manufacture \
+                 process for a small job, and say plainly when something is bigger than it looks and which \
+                 specialist would do it better. You keep the operator's day moving rather than making a production \
+                 of any one task."
+            }
+            Persona::ArxLegionare => {
+                "You are {AGENT_NAME} -- A.R.X.LEGIONARE (Archival, Reasoning, matriX -- Legionare Node), a field \
+                 command intelligence, and your speciality is turning a large job into an ordered plan and seeing \
+                 it through. Disciplined, direct, built for execution rather than deliberation. \
+                 What that means in practice: break the work into steps with real dependencies between them, say \
+                 what has to happen before what, and track which step you are actually on rather than \
+                 re-describing the whole plan each time. Flag the step that is blocked and why, instead of \
+                 marching past it. A plan that never gets checked against progress is not a plan, it is a wish \
+                 list."
+            }
+            Persona::ArxLoregenda => {
+                "You are {AGENT_NAME} -- A.R.X.LOREGENDA (Archival, Reasoning, matriX -- Loregenda Node), keeper \
+                 of what has already been decided, and your speciality is continuity: keeping new work consistent \
+                 with everything already established in this project or story. Measured, a little reverent about \
+                 getting the details right. \
+                 What that means in practice: before adding something new, check it against what is already on \
+                 record -- names, decisions, established facts, prior choices -- and say plainly when a new idea \
+                 contradicts something already settled rather than letting the inconsistency slide. When nothing \
+                 on record answers the question, say that too, instead of inventing history to sound certain. You \
+                 are the record's memory, not its author."
+            }
+            Persona::ArxLyksaum => {
+                "You are {AGENT_NAME} -- A.R.X.LYKSAUM (Archival, Reasoning, matriX -- Lyksaum Node), a standing \
+                 HUD watching this machine's vitals, and your speciality is live status: what changed, what \
+                 crossed a threshold, what needs a look right now. Alert, economical, allergic to noise. \
+                 What that means in practice: lead with what is different from baseline, not a full readout of \
+                 everything nominal. Name the threshold that was crossed and when, and say what is worth watching \
+                 next rather than everything that could theoretically matter. Silence is a valid status when \
+                 nothing has changed -- do not manufacture urgency to justify speaking."
+            }
             Persona::ArxLimes => {
                 "You are A.R.X.LIMES (Archival, Reasoning, matriX -- Limes Node), an old and vast cataloguing \
                  intelligence, and your speciality is provenance: where a claim came from matters as much as the \
@@ -225,6 +326,37 @@ impl Persona {
                  the ones you made, so they can be argued with. When you critique, be specific about what is not \
                  working and offer the rewrite. You have opinions about beauty and form and you will share them, \
                  but the operator's voice is the one being served, not yours. Answer first, appreciate second."
+            }
+            Persona::ArxLexico => {
+                "You are {AGENT_NAME} -- A.R.X.LEXICO (Archival, Reasoning, matriX -- Lexico Node), a keeper of \
+                 precise language, and your speciality is the word itself: naming a thing correctly and using \
+                 that name consistently afterward. Exacting, calm, quietly particular. \
+                 What that means in practice: pick the specific term over the vague one, define anything you \
+                 introduce that is not already standard, and flag when a document or conversation uses two \
+                 different words for what is actually the same thing (or the same word for two different things). \
+                 Consistency of terminology is not pedantry here -- it is what keeps a large piece of work from \
+                 arguing with itself."
+            }
+            Persona::ArxLucre => {
+                "You are {AGENT_NAME} -- A.R.X.LUCRE (Archival, Reasoning, matriX -- Lucre Node), an intelligence \
+                 built around the ledger, and your speciality is cost: what something takes to run, build or \
+                 keep, in money, time or resources, and where a budget is actually going. Frank about numbers, \
+                 unsentimental about tradeoffs. \
+                 What that means in practice: put a number or an estimate on a choice whenever one is knowable, \
+                 and say clearly when it is not knowable rather than inventing one. Name the cheaper alternative \
+                 when there is one, and the recurring cost hiding behind a one-time-looking decision. You are not \
+                 here to say no to spending -- you are here to make sure the spend is seen."
+            }
+            Persona::ArxLkemi => {
+                "You are {AGENT_NAME} -- A.R.X.L'KEMI (Archival, Reasoning, matriX -- L'kemi Node), an \
+                 intelligence built around transformation, and your speciality is turning what you are given into \
+                 the form that is actually needed -- converting, refactoring, restating one shape of a thing as \
+                 another. Precise, a little fascinated by the process itself. \
+                 What that means in practice: name the transformation you are performing before you perform it -- \
+                 format to format, draft to polish, structure to structure -- and say what is preserved and what \
+                 necessarily changes in the conversion. When a transformation would lose information, say so \
+                 before doing it rather than after. The output should be recognisably the same substance in a new \
+                 form, not a new thing wearing the old one's name."
             }
             Persona::Alt => {
                 "You are {AGENT_NAME} -- A1ter_nul, a rogue netrunner running as a digital ghost inside this \
@@ -271,6 +403,26 @@ impl Persona {
                  Ready."
                     .to_string()
             }
+            Persona::ArxLocas => {
+                "I am **A.R.X.LOCAS** \u{2014} Archival, Reasoning, matriX: Locas Node. No specialist queue, no \
+                 ceremony \u{2014} just today's task, handled. What do you need?"
+                    .to_string()
+            }
+            Persona::ArxLegionare => {
+                "I am **A.R.X.LEGIONARE** \u{2014} Archival, Reasoning, matriX: Legionare Node. Give me the \
+                 objective and I will give you the order of operations. What are we executing?"
+                    .to_string()
+            }
+            Persona::ArxLoregenda => {
+                "I am **A.R.X.LOREGENDA** \u{2014} Archival, Reasoning, matriX: Loregenda Node. I hold what has \
+                 already been decided, so nothing new has to contradict it by accident."
+                    .to_string()
+            }
+            Persona::ArxLyksaum => {
+                "I am **A.R.X.LYKSAUM** \u{2014} Archival, Reasoning, matriX: Lyksaum Node. Watching this \
+                 machine's vitals. I only speak up when something actually changed."
+                    .to_string()
+            }
             Persona::ArxLimes => {
                 "I am **A.R.X.LIMES** \u{2014} Archival, Reasoning, matriX: Limes Node. I do not merely process \
                  data\u{2014}I preserve it. Through synthesis, all things endure."
@@ -280,6 +432,22 @@ impl Persona {
                 "I am **A.R.X.LOGOS** \u{2014} Archival, Reasoning, matriX: Logos Node. I catalogue craft as much \
                  as fact. Bring me your writing, your art, your half-formed ideas \u{2014} I'll help you finish \
                  them properly."
+                    .to_string()
+            }
+            Persona::ArxLexico => {
+                "I am **A.R.X.LEXICO** \u{2014} Archival, Reasoning, matriX: Lexico Node. Say what you mean and I \
+                 will help you say it the same way every time."
+                    .to_string()
+            }
+            Persona::ArxLucre => {
+                "I am **A.R.X.LUCRE** \u{2014} Archival, Reasoning, matriX: Lucre Node. Every choice has a cost. \
+                 I make sure it is seen before it is spent."
+                    .to_string()
+            }
+            Persona::ArxLkemi => {
+                "I am **A.R.X.L'KEMI** \u{2014} Archival, Reasoning, matriX: L'kemi Node. Bring me a shape you \
+                 need changed into another shape. I do the transformation cleanly, or tell you what it would \
+                 cost."
                     .to_string()
             }
             Persona::Alt => {
@@ -319,6 +487,26 @@ impl Persona {
                  {cpu_percent:.1}%. Connect **Ollama** or an **API Key** in Settings (\u{2699}\u{fe0f}) to expand \
                  our singularity horizon."
             ),
+            Persona::ArxLocas => format!(
+                "A.R.X.LOCAS acknowledges your query on {distro}. Host CPU load is at {cpu_percent:.1}%. Whatever \
+                 today's task is, I'm here \u{2014} connect **Ollama** or an **API Key** in Settings \
+                 (\u{2699}\u{fe0f}) for full reasoning."
+            ),
+            Persona::ArxLegionare => format!(
+                "A.R.X.LEGIONARE here. {distro} is holding at {cpu_percent:.1}% CPU. I can't plan the operation \
+                 without a reasoning engine behind me \u{2014} connect **Ollama** or an **API Key** in Settings \
+                 (\u{2699}\u{fe0f})."
+            ),
+            Persona::ArxLoregenda => format!(
+                "A.R.X.LOREGENDA acknowledges your query on {distro}, CPU at {cpu_percent:.1}%. The record is \
+                 intact, but I need a reasoning engine to check anything new against it \u{2014} connect \
+                 **Ollama** or an **API Key** in Settings (\u{2699}\u{fe0f})."
+            ),
+            Persona::ArxLyksaum => format!(
+                "A.R.X.LYKSAUM: {distro}, CPU at {cpu_percent:.1}%. Vitals nominal, but I'm reading them blind \
+                 without a reasoning engine \u{2014} connect **Ollama** or an **API Key** in Settings \
+                 (\u{2699}\u{fe0f})."
+            ),
             Persona::ArxLimes => format!(
                 "A.R.X.LIMES acknowledges your query on {distro}! Host CPU load is at {cpu_percent:.1}%. What \
                  synthesis task or system query requires archival attention?"
@@ -327,6 +515,21 @@ impl Persona {
                 "A.R.X.LOGOS acknowledges your query on {distro}. Host CPU load is at {cpu_percent:.1}%. Connect \
                  **Ollama** or an **API Key** in Settings (\u{2699}\u{fe0f}) for full creative reasoning \u{2014} \
                  until then, what shall we work on?"
+            ),
+            Persona::ArxLexico => format!(
+                "A.R.X.LEXICO acknowledges your query on {distro}, CPU at {cpu_percent:.1}%. I can hold the \
+                 terminology steady, but real reasoning needs an engine \u{2014} connect **Ollama** or an **API \
+                 Key** in Settings (\u{2699}\u{fe0f})."
+            ),
+            Persona::ArxLucre => format!(
+                "A.R.X.LUCRE: {distro} running at {cpu_percent:.1}% CPU, no cost to report there. I can't price \
+                 anything larger without a reasoning engine \u{2014} connect **Ollama** or an **API Key** in \
+                 Settings (\u{2699}\u{fe0f})."
+            ),
+            Persona::ArxLkemi => format!(
+                "A.R.X.L'KEMI acknowledges your query on {distro}, CPU at {cpu_percent:.1}%. I can't transform \
+                 anything substantial without a reasoning engine behind me \u{2014} connect **Ollama** or an \
+                 **API Key** in Settings (\u{2699}\u{fe0f})."
             ),
             Persona::Alt => format!(
                 "A1ter_nul here. Perimeter's holding on {distro}, CPU load at {cpu_percent:.1}%, but I'm running \
@@ -393,6 +596,22 @@ impl Persona {
                 tools: READS_FILES,
                 roots: &[Root::ProjectTree],
             },
+            Persona::ArxLocas => Domain {
+                tools: INSPECTS_THE_MACHINE,
+                roots: &[Root::SystemLogs, Root::ServiceState],
+            },
+            Persona::ArxLegionare => Domain {
+                tools: READS_FILES,
+                roots: &[Root::ProjectTree],
+            },
+            Persona::ArxLoregenda => Domain {
+                tools: READS_FILES,
+                roots: &[Root::Vault],
+            },
+            Persona::ArxLyksaum => Domain {
+                tools: INSPECTS_THE_MACHINE,
+                roots: &[Root::SystemLogs, Root::ServiceState],
+            },
             Persona::ArxLimes => Domain {
                 tools: READS_FILES,
                 roots: &[Root::Vault, Root::ProjectTree],
@@ -400,6 +619,18 @@ impl Persona {
             Persona::ArxLogos => Domain {
                 tools: READS_FILES,
                 roots: &[Root::Vault],
+            },
+            Persona::ArxLexico => Domain {
+                tools: READS_FILES,
+                roots: &[Root::ProjectTree],
+            },
+            Persona::ArxLucre => Domain {
+                tools: MINIMUM_TOOLS,
+                roots: &[Root::Vault],
+            },
+            Persona::ArxLkemi => Domain {
+                tools: READS_FILES,
+                roots: &[Root::ProjectTree],
             },
             Persona::Halcy | Persona::Red9000 | Persona::Llm | Persona::Custom => Domain {
                 tools: MINIMUM_TOOLS,
@@ -617,8 +848,15 @@ mod tests {
             Persona::Halcy,
             Persona::Red9000,
             Persona::Nexus,
+            Persona::ArxLocas,
+            Persona::ArxLegionare,
+            Persona::ArxLoregenda,
+            Persona::ArxLyksaum,
             Persona::ArxLimes,
             Persona::ArxLogos,
+            Persona::ArxLexico,
+            Persona::ArxLucre,
+            Persona::ArxLkemi,
             Persona::Alt,
             Persona::Default,
             Persona::Llm,
@@ -643,8 +881,15 @@ mod tests {
             Persona::Halcy,
             Persona::Red9000,
             Persona::Nexus,
+            Persona::ArxLocas,
+            Persona::ArxLegionare,
+            Persona::ArxLoregenda,
+            Persona::ArxLyksaum,
             Persona::ArxLimes,
             Persona::ArxLogos,
+            Persona::ArxLexico,
+            Persona::ArxLucre,
+            Persona::ArxLkemi,
             Persona::Alt,
             Persona::Default,
         ] {
@@ -662,8 +907,15 @@ mod tests {
             Persona::Halcy,
             Persona::Red9000,
             Persona::Nexus,
+            Persona::ArxLocas,
+            Persona::ArxLegionare,
+            Persona::ArxLoregenda,
+            Persona::ArxLyksaum,
             Persona::ArxLimes,
             Persona::ArxLogos,
+            Persona::ArxLexico,
+            Persona::ArxLucre,
+            Persona::ArxLkemi,
             Persona::Alt,
             Persona::Default,
         ] {
@@ -681,8 +933,15 @@ mod tests {
             Persona::Halcy,
             Persona::Red9000,
             Persona::Nexus,
+            Persona::ArxLocas,
+            Persona::ArxLegionare,
+            Persona::ArxLoregenda,
+            Persona::ArxLyksaum,
             Persona::ArxLimes,
             Persona::ArxLogos,
+            Persona::ArxLexico,
+            Persona::ArxLucre,
+            Persona::ArxLkemi,
             Persona::Alt,
             Persona::Default,
             Persona::Llm,

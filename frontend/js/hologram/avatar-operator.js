@@ -154,6 +154,10 @@ function updateOperatorStream(stream, ctx, speedMult, zoomPulse, blink) {
 HologramAvatar.registerAvatar({
     id: 'operator',
     label: 'Operator',
+    // Trace Protocols: grouped with The Nexus, Nexus Sent and White Rabbit in the HUD's
+    // avatar menu and the workbench dropdown -- see registerAvatar's optional def.group
+    // in js/hologram/README.md.
+    group: 'Trace Protocols',
 
     build(api) {
         const group = new THREE.Group();

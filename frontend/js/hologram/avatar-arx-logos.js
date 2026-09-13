@@ -7,8 +7,15 @@
 HologramAvatar.prototype.buildArxLogosAvatar = function() {
     this.arxLogosGroup = new THREE.Group();
 
-    // --- Centerpiece: large regular hexagon, flat top/bottom, pointy left/right ---
+    // --- Centerpiece: large regular hexagon, flat top/bottom, pointy left/right -- a real
+    // extruded prism (buildHexPrism) rather than a single-sided flat pane, so the core
+    // reads as a solid gem with actual depth and doesn't vanish when viewed from behind
+    // (e.g. after a drag-rotate of the scene). Front cap sits at the same z=0 the old flat
+    // fill used, so the pupil/catchlight in front of it don't need to move; the depth
+    // recedes backward, away from the viewer. Edges of the whole prism (not just the front
+    // face) trace the outline so the vertical side edges show the depth too.
     const centralRadius = 26;
+    const centralThickness = 12;
     const centralFillMat = new THREE.MeshBasicMaterial({
         color: 0xe024c3,
         transparent: true,
@@ -20,8 +27,9 @@ HologramAvatar.prototype.buildArxLogosAvatar = function() {
         transparent: true,
         opacity: 0.95
     });
-    this.arxLogosCentralFill = this.buildHexFill(centralRadius, 0, centralFillMat);
-    this.arxLogosCentralOutline = this.buildHexOutline(centralRadius, 0, centralOutlineMat);
+    this.arxLogosCentralFill = this.buildHexPrism(centralRadius, 0, centralFillMat, centralThickness);
+    const centralEdges = new THREE.EdgesGeometry(this.arxLogosCentralFill.geometry, 12);
+    this.arxLogosCentralOutline = new THREE.LineSegments(centralEdges, centralOutlineMat);
     this.arxLogosGroup.add(this.arxLogosCentralFill);
     this.arxLogosGroup.add(this.arxLogosCentralOutline);
 
