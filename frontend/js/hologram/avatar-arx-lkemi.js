@@ -50,7 +50,7 @@ HologramAvatar.registerAvatar({
         // Each corner is cut back a fixed distance along its two edges, leaving a
         // hexagonal centre panel -- the wedge cut off each corner is exactly what
         // the corner pyramid below fills back in.
-        const CUT = 25;
+        const CUT = 31;
         const towards = (from, to, dist) => from.clone().add(to.clone().sub(from).normalize().multiplyScalar(dist));
         const panelPoints = [
             towards(A, B, CUT), towards(B, A, CUT),
@@ -130,7 +130,7 @@ HologramAvatar.registerAvatar({
         // the panel where all three cut corners would have met. ---
         const coreFillMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending });
         const coreWireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
-        const coreGeo = new THREE.OctahedronGeometry(9, 0);
+        const coreGeo = new THREE.OctahedronGeometry(14, 0);
         coreGeo.scale(1, 0.6, 0.32);
         const corePos = new THREE.Vector3(0, -1, PANEL_THICKNESS + 3);
         const coreMesh = new THREE.Mesh(coreGeo, coreFillMat);
@@ -141,7 +141,7 @@ HologramAvatar.registerAvatar({
         spinGroup.add(coreWire);
 
         const pupilMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 });
-        const pupil = new THREE.Mesh(new THREE.SphereGeometry(2.2, 14, 14), pupilMat);
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(3.4, 14, 14), pupilMat);
         pupil.position.copy(corePos).setZ(corePos.z + 1.5);
         spinGroup.add(pupil);
 
@@ -149,7 +149,7 @@ HologramAvatar.registerAvatar({
         // to move as spinGroup tumbles, only ever glow brighter or dimmer in place
         // (see A.R.X.LEXICO/A.R.X.LUCRE for the same reasoning).
         const coreGlowMat = new THREE.SpriteMaterial({ map: api.helpers.radialGlowTexture(64, '#d4fff0', '#33ffb2'), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
-        const coreGlowScale = 28;
+        const coreGlowScale = 40;
         const coreGlow = new THREE.Sprite(coreGlowMat);
         coreGlow.position.copy(corePos);
         coreGlow.scale.set(coreGlowScale, coreGlowScale, 1);
