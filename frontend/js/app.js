@@ -16,6 +16,23 @@ const AVATAR_DISPLAY_NAMES = {
     senti: 'NEXUS SENT'
 };
 
+/* Trace Protocols: Nexus Sent, White Rabbit and Operator are hidden easter eggs that surface
+   on The Nexus, discovered by what you type rather than picked from a list up front (see
+   js/avatar-unlocks.js for the "seen once, selectable forever" half of this). Simple client-side
+   keyword matching on the outgoing message -- no LLM/backend signal -- checked in this order,
+   first match wins. Deliberately a flat, ordered list rather than a rules engine: three eggs is
+   not a case for one. */
+const AVATAR_TRIGGER_RULES = [
+    { avatarId: 'operator', pattern: /\b(hi|hello|hey)\b/i },
+    { avatarId: 'white-rabbit', pattern: /(rabbit hole|wonderland|curiouser|down the rabbit)/i },
+    { avatarId: 'senti', pattern: /(is this safe|vulnerabilit|exploit|diagnostic|debug|check the logs|system status)/i }
+];
+
+function matchAvatarTrigger(text) {
+    const rule = AVATAR_TRIGGER_RULES.find((r) => r.pattern.test(text));
+    return rule ? rule.avatarId : null;
+}
+
 // When this page is loaded by the Tauri desktop shell, it's served from Tauri's own
 // local context (not http://localhost:8378), so API calls need an absolute base URL
 // pointing at the backend the Rust shell launches. Under the plain browser/FastAPI
@@ -224,33 +241,48 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(updateClock, 1000);
     updateClock();
 
-    // Avatar Engine Handler (3D shape + optional linked persona identity)
-    function applyAvatar(avatarName, updatePersona = false) {
-        currentAvatar = avatarName;
-        localStorage.setItem('aether_avatar', avatarName);
+    // The "STRUCTURE: ..." readout overlaid on the viewport names whatever shape is actually
+    // on screen -- it has no notion of a "pick", so setHologramAvatar keeps it in sync on every
+    // shape change, a Trace Protocols flash included.
+    function setAvatarStructureLabel(avatarName) {
+        if (!avatarStructureLabel) return;
+        if (avatarName === 'red' || avatarName === 'crimson') avatarStructureLabel.textContent = 'OPTICAL EYE // DUAL ORBITS';
+        else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
+        else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
+        else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
+        else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
+        else if (avatarName === 'a1') avatarStructureLabel.textContent = 'MONOGRAM WORDMARK';
+        // A registered avatar names itself, rather than borrowing hAlcy's label from
+        // the fallback below -- see js/hologram/README.md.
+        else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
+            const def = HologramAvatar.avatarPlugins.get(avatarName);
+            avatarStructureLabel.textContent = (def.label || avatarName).toUpperCase();
+        }
+        else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
+    }
+
+    /* Shows a shape on the hologram (plus its structure label) and mirrors it to the desktop
+       sprite window, if open -- nothing else. A Trace Protocols trigger's transient flash (see
+       flashTraceProtocolAvatar below) needs exactly this and no more: it is not a change of
+       selection, so it must not touch localStorage, currentAvatar, or anything that reads as
+       "this is now picked" (the HUD chip, the pill highlight, the persona/greeting). applyAvatar
+       -- a real, persisted pick -- builds on top of this for the parts a flash must skip. */
+    function setHologramAvatar(avatarName) {
         hologram.setAvatar(avatarName);
-        updateAvatarBadge(avatarName);
+        setAvatarStructureLabel(avatarName);
         // Push the change straight to the desktop sprite window (if open) instead of making
         // it discover this by polling localStorage -- see sprite.js's 'avatar-changed' listener.
         if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
             window.__TAURI__.event.emit('avatar-changed', { avatar: avatarName }).catch(() => {});
         }
+    }
 
-        if (avatarStructureLabel) {
-            if (avatarName === 'red' || avatarName === 'crimson') avatarStructureLabel.textContent = 'OPTICAL EYE // DUAL ORBITS';
-            else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
-            else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
-            else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
-            else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
-            else if (avatarName === 'a1') avatarStructureLabel.textContent = 'MONOGRAM WORDMARK';
-            // A registered avatar names itself, rather than borrowing hAlcy's label from
-            // the fallback below -- see js/hologram/README.md.
-            else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
-                const def = HologramAvatar.avatarPlugins.get(avatarName);
-                avatarStructureLabel.textContent = (def.label || avatarName).toUpperCase();
-            }
-            else avatarStructureLabel.textContent = 'HARMONIC LATTICE';
-        }
+    // Avatar Engine Handler (3D shape + optional linked persona identity)
+    function applyAvatar(avatarName, updatePersona = false) {
+        currentAvatar = avatarName;
+        localStorage.setItem('aether_avatar', avatarName);
+        setHologramAvatar(avatarName);
+        updateAvatarBadge(avatarName);
 
         // The Customise button belongs to the custom avatar and nothing else -- it would
         // be a lie next to hAlcy, whose shape is fixed in code.
@@ -329,6 +361,49 @@ document.addEventListener('DOMContentLoaded', () => {
         saveSettings(false);
         appendMessage(preset.name, preset.greeting);
     }
+
+    /* Trace Protocols: Nexus Sent, White Rabbit and Operator start absent from both avatar
+       pickers -- the HUD's avatar-menu slideout and the matching row in Settings -- until their
+       trigger phrase (see AVATAR_TRIGGER_RULES above) fires once with The Nexus active. Once
+       unlocked (see js/avatar-unlocks.js) an egg joins its row for good, so this only ever
+       reveals a button, never hides one back. */
+    const TRACE_PROTOCOL_AVATAR_IDS = ['senti', 'white-rabbit', 'operator'];
+    function refreshTraceProtocolVisibility() {
+        TRACE_PROTOCOL_AVATAR_IDS.forEach((id) => {
+            const unlocked = Aether1AvatarUnlocks.isUnlocked(id);
+            document.querySelectorAll(`.avatar-pill[data-avatar-val="${id}"], .avatar-btn[data-avatar="${id}"]`)
+                .forEach((btn) => btn.classList.toggle('hidden', !unlocked));
+        });
+    }
+
+    // A few seconds to tens of seconds, matching "pops up" -- long enough to actually notice
+    // and register what it is, short enough to still read as a flash rather than a switch.
+    const TRACE_PROTOCOL_FLASH_MS = 12000;
+    let traceProtocolFlashTimer = null;
+
+    /* The transient swap a Trace Protocols trigger pops up: shows the egg on top of whatever
+       avatar is actually selected via setHologramAvatar (never applyAvatar, which would persist
+       it as the pick) and reverts after TRACE_PROTOCOL_FLASH_MS. Reverts to currentAvatar read
+       fresh at that moment rather than a value captured now, so a manual avatar change made
+       while the flash is showing is not clobbered when it ends. */
+    function flashTraceProtocolAvatar(avatarId) {
+        if (Aether1AvatarUnlocks.unlock(avatarId)) refreshTraceProtocolVisibility();
+
+        if (traceProtocolFlashTimer) clearTimeout(traceProtocolFlashTimer);
+        setHologramAvatar(avatarId);
+        traceProtocolFlashTimer = setTimeout(() => {
+            traceProtocolFlashTimer = null;
+            setHologramAvatar(currentAvatar);
+        }, TRACE_PROTOCOL_FLASH_MS);
+    }
+
+    // A pick already sitting in currentAvatar -- restored from localStorage on load -- is
+    // discovered by definition, whether that's because its trigger fired in an earlier
+    // session (before this browser's unlock flags existed) or it was chosen back when these
+    // three were still plain, unhidden entries in the picker. Recording the unlock keeps its
+    // button from vanishing out from under an avatar that is still the active one.
+    if (TRACE_PROTOCOL_AVATAR_IDS.includes(currentAvatar)) Aether1AvatarUnlocks.unlock(currentAvatar);
+    refreshTraceProtocolVisibility();
 
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
@@ -1337,6 +1412,14 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleSendMessage(customPrompt = null) {
         const text = customPrompt || chatInput.value.trim();
         if (!text || isWaitingForResponse) return;
+
+        // Trace Protocols: a hidden egg only ever surfaces on top of The Nexus, never from
+        // any other avatar -- see AVATAR_TRIGGER_RULES above. Checked before the brain
+        // gate below, because an egg is a piece of the HUD and needs no model to fire.
+        if (currentAvatar === 'nexus' || currentAvatar === 'matrix') {
+            const triggeredAvatar = matchAvatarTrigger(text);
+            if (triggeredAvatar) flashTraceProtocolAvatar(triggeredAvatar);
+        }
 
         /* Nothing is connected. The old behaviour was to send anyway and let a canned
            reply come back, which reads exactly like an answer -- so the missing piece
