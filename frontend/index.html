@@ -1167,34 +1167,20 @@
     <!-- Scripts -->
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
-         prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/core.js?v=41"></script>
+         prototype methods, and all of them must finish before app.js instantiates it. The
+         avatar files themselves are the exception -- they attach the same way, but arrive
+         later, on demand. -->
+    <script src="js/hologram/core.js?v=42"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
-    <script src="js/hologram/avatar-halcy.js?v=17"></script>
-    <script src="js/hologram/avatar-arx-limes.js?v=17"></script>
-    <script src="js/hologram/avatar-nexus.js?v=29"></script>
-    <script src="js/hologram/avatar-red9000.js?v=19"></script>
-    <script src="js/hologram/avatar-arx-logos.js?v=18"></script>
-    <script src="js/hologram/avatar-arx-locas.js?v=2"></script>
-    <script src="js/hologram/avatar-arx-legionare.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-loregenda.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lyksaum.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lexico.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lucre.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lkemi.js?v=1"></script>
-    <script src="js/hologram/avatar-alt.js?v=3"></script>
-    <!-- The parts kit and the avatar assembled from a saved recipe (see
-         frontend/avatar-lab.html). Any hand-written avatar file goes here too:
-         after core.js, before app.js. -->
-    <script src="js/hologram/parts.js?v=1"></script>
-    <script src="js/hologram/avatar-custom.js?v=2"></script>
-    <script src="js/hologram/avatar-a1.js?v=1"></script>
-    <script src="js/hologram/avatar-senti.js?v=2"></script>
-    <script src="js/hologram/avatar-white-rabbit.js?v=2"></script>
-    <script src="js/hologram/avatar-operator.js?v=3"></script>
-    <script src="js/hologram/animate.js?v=37"></script>
+    <!-- Which avatar lives in which file, and fetching it the first time it is asked for.
+         Every one of the nineteen avatar files used to be listed here and loaded at launch,
+         about 195 KB of geometry, to put one of them on screen. See
+         js/hologram/avatar-loader.js -- the list of files now lives there, once, instead of
+         being repeated in this page, sprite.html and avatar-lab.html. -->
+    <script src="js/hologram/avatar-loader.js?v=1"></script>
+    <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=37"></script>
+    <script src="js/app.js?v=38"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

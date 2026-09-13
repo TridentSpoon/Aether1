@@ -48,9 +48,17 @@ outside its reach on purpose -- see `avatar-custom.js`.
 | `parts.js` | A kit of cores, bodies and equalisers to assemble an avatar from. |
 | `avatar-custom.js` | The avatar built from a saved recipe — what the workbench produces. |
 | `avatar-template.js` | Not loaded. A working example to copy when writing your own. |
+| `avatar-loader.js` | Which avatar lives in which file, and fetching it when it is picked. |
 
 Load order matters and is fixed in `index.html`: `core.js` defines the class, everything
 else attaches to it, and `app.js` runs last.
+
+The `avatar-*.js` files are the exception. They attach to the class the same way, but they
+are not in the page at launch: `avatar-loader.js` names them, and each one is fetched the
+first time its avatar is actually asked for. Loading all nineteen to show one cost about
+195 KB and eighteen file loads at every startup, for avatars most people never pick. The
+workbench is the one page that still asks for all of them at once, because listing every
+avatar is its whole job.
 
 ## Two ways to make an avatar
 
@@ -122,9 +130,10 @@ does not take the HUD down with it.
 
 - **While working on it:** the workbench's *Load someone's avatar file* button. Reload
   as often as you like; re-registering the same id replaces it.
-- **To install it:** put the file in this folder, add a `<script>` line in
-  `index.html` after `core.js` and before `app.js`, and add a picker button with
-  `data-avatar-val="your-id"`.
+- **To install it:** put the file in this folder, add a line for it to the `AVATARS` list
+  in `avatar-loader.js` (`'your-id': { file: 'avatar-your-id.js', v: 1 }`), and add a picker
+  button with `data-avatar-val="your-id"`. Bump that `v` whenever you change the file, so
+  browsers fetch the new one rather than the copy they already have.
 
 **An avatar file is a program.** It runs with the same access as the rest of the page.
 Load files you wrote or trust — the same care you would give any script. A recipe is

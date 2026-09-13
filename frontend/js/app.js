@@ -286,6 +286,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function setHologramAvatar(avatarName) {
         hologram.setAvatar(avatarName);
         setAvatarStructureLabel(avatarName);
+        /* A registered avatar names itself, and it can only do that once its file is here --
+           they arrive on demand now (see js/hologram/avatar-loader.js). Labelled twice rather
+           than waiting: the label for everything hand-modelled is right immediately above, and
+           the handful that name themselves correct a moment later instead of the whole HUD
+           pausing on a file fetch. */
+        if (window.HologramAvatar && HologramAvatar.loadAvatar) {
+            HologramAvatar.loadAvatar(avatarName).then(() => setAvatarStructureLabel(avatarName));
+        }
         // Push the change straight to the desktop sprite window (if open) instead of making
         // it discover this by polling localStorage -- see sprite.js's 'avatar-changed' listener.
         if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {

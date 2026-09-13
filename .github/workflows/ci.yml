@@ -134,3 +134,17 @@ jobs:
             git diff --stat -- frontend/vendor/tailwind.css
             exit 1
           fi
+
+      # The three.js bundle contains only the parts the frontend asked for when it was
+      # built. A new THREE.Something added since is not a missing feature -- it is an
+      # avatar that throws the moment somebody picks it. Checked rather than rebuilt:
+      # the bundle is byte-identical only on the same esbuild version, so comparing it
+      # the way the stylesheet is compared would fail on an unrelated toolchain bump.
+      - name: Check the vendored three.js covers what the frontend uses
+        run: ./scripts/check_vendor_three.sh
+
+      # Avatar files are fetched by name when somebody picks one, so an avatar missing from
+      # the loader's list is not a broken build -- it is a button that does nothing, which
+      # nobody notices until they press it.
+      - name: Check every avatar file is reachable
+        run: ./scripts/check_avatar_loader.sh
