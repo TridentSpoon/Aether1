@@ -359,18 +359,29 @@ pub fn pull_model(model_name: &str) -> PullResult {
         })
         .is_ok();
 
+    // A pull that answers inside five seconds did not download several gigabytes -- it is
+    // Ollama saying it already has this model. That is the only case this branch can
+    // honestly call finished, and it is worth having: re-picking a model you already
+    // downloaded should be instant, not another wait.
     if http_ok {
         return PullResult {
             status: PullStatus::Success,
-            message: format!("Successfully pulled {model_name}"),
+            message: format!("{model_name} is already on this machine and ready to use."),
         };
     }
 
     if which::which("ollama").is_ok() {
         return match Command::new("ollama").args(["pull", model_name]).spawn() {
+            // Started, not finished: nothing here waits for it, and a several-gigabyte
+            // download does not fit in any timeout worth holding a thread for. Whoever asked
+            // for this finds out it landed by asking the server what models it has -- which
+            // is what the setup wizard does, every few seconds, until this one appears.
             Ok(_child) => PullResult {
                 status: PullStatus::Started,
-                message: format!("Started pulling {model_name} in background via Ollama CLI."),
+                message: format!(
+                    "Downloading {model_name}. This takes a few minutes and continues in the \
+                     background."
+                ),
             },
             Err(e) => PullResult {
                 status: PullStatus::Error,

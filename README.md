@@ -285,11 +285,37 @@ Nothing is deleted by turning it on. Untick it and your cloud settings are exact
 left them. To nail it on for good — a shared machine, a locked-down install — set
 `AETHER1_LOCAL_ONLY=1` in the environment and the checkbox can no longer switch it off.
 
+## Giving it a brain
+
+A fresh install has no AI behind it: it talks, reads out your system stats and answers
+with a handful of canned lines, because `llm_provider` starts at `offline`. Nothing is
+broken — there is simply no model yet.
+
+Press **🧠 Set up the AI** in the HUD menu. It looks at the machine, works out
+which of four things is true (nothing installed / installed but not running / running
+with no models / a model is there), and asks for exactly one thing at a time. It sizes
+the model list to the memory this computer actually has, marks one **Best for this
+computer**, downloads it, and fills the settings in for you. Until that is done, the
+dialogue stream itself says so, with a button to start.
+
+The same journey written out, per operating system, is in
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — written for someone who has never
+installed a developer tool in their life.
+
 ## Choosing a model
 
-Open **Settings** and Aether1 looks for model servers already running on this machine. Any
-that answer appear in **LOCAL SERVERS FOUND ON THIS MACHINE**; picking one fills in the
-provider, the address and the list of models it can run, so there is nothing to look up.
+Once there is a brain, the rest of this is for changing it. Open **Settings** and
+Aether1 looks for model servers already running on this machine. Any
+that answer appear under **AI SERVERS FOUND ON THIS COMPUTER**, inside the
+**🧠 The Brain** group; picking one fills in the provider, the address and the list
+of models it can run, so there is nothing to look up.
+
+The **Agent & System** tab is grouped by the question you came in with rather than by
+which module implements it: **🧠 The Brain**, **🗣 Voice & Sound**,
+**📓 Memory**, **🛡 What it may do**, **🌐 Network** and
+**⚙ The app itself**. Each group is collapsed until you open it, and the things
+almost nobody needs — the Piper voice file, the Whisper model file — are nested one level
+further inside the group they belong to.
 
 The scan probes the loopback ports these tools tend to use and identifies them by the API
 they speak, not by which program they are — so it finds the popular runners, most of the

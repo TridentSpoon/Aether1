@@ -1479,6 +1479,439 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ---- The setup wizard -------------------------------------------------------
+     * The way from a fresh install to a model that answers.
+     *
+     * Aether1 ships with no model, and until this existed the only route out of
+     * "offline standby" was already knowing what Ollama is. The HUD looked finished
+     * and thought nothing.
+     *
+     * Every stage shown here is re-derived from a live probe of the machine (Rust:
+     * src-tauri/src/setup.rs). There is no step counter and no remembered position:
+     * "Check again" re-asks, and the page redraws as whatever is now true. A stage
+     * therefore cannot be skipped past, and cannot be claimed without being the case
+     * -- which is the only kind of progress bar worth showing someone who cannot
+     * verify it themselves.
+     */
+
+    const setupModal = document.getElementById('setup-modal');
+    const setupHeadline = document.getElementById('setup-headline');
+    const setupProgress = document.getElementById('setup-progress');
+    const setupSteps = document.getElementById('setup-steps');
+    const setupModelsWrap = document.getElementById('setup-models-wrap');
+    const setupModels = document.getElementById('setup-models');
+    const setupStatus = document.getElementById('setup-status');
+    const btnSetupRecheck = document.getElementById('btn-setup-recheck');
+    const btnSetupDownload = document.getElementById('btn-setup-download');
+    const btnSetupFinish = document.getElementById('btn-setup-finish');
+
+    // The stages in order, so a dot can be filled for every one already behind us.
+    const SETUP_STAGES = ['nothing-installed', 'installed-not-running', 'running-no-model', 'ready-to-select'];
+
+    // The last advice fetched, so the buttons act on what is on screen rather than
+    // re-probing to find out what they were just drawn from.
+    let setupAdvice = null;
+    // The poll watching for a model download to land, so opening and closing the
+    // wizard can't leave two of them running.
+    let setupPollTimer = null;
+
+    async function fetchSetupAdvice() {
+        if (IS_TAURI) return tauriInvoke('setup_advice_rust');
+        const resp = await apiFetch('/api/setup/advice');
+        if (!resp.ok) throw new Error(`setup check failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    function setSetupStatus(text, tone = 'info') {
+        if (!setupStatus) return;
+        setupStatus.classList.remove('hidden', 'text-cyan-300', 'text-green-400', 'text-red-400', 'text-slate-300', 'animate-pulse');
+        if (!text) { setupStatus.classList.add('hidden'); return; }
+        const tones = { info: 'text-slate-300', busy: 'text-cyan-300', good: 'text-green-400', bad: 'text-red-400' };
+        setupStatus.classList.add(tones[tone] || tones.info);
+        if (tone === 'busy') setupStatus.classList.add('animate-pulse');
+        setupStatus.textContent = text;
+    }
+
+    /* One step. At most one thing to press, because a step offering both a command to
+       paste and a page to open has not decided what it is asking for -- the Rust side
+       refuses to build one, and this draws whichever it carries. */
+    function renderSetupStep(step, index) {
+        const li = document.createElement('li');
+        li.className = 'setup-step';
+
+        const title = document.createElement('div');
+        title.className = 'text-sm font-mono text-cyan-200';
+        title.textContent = `${index + 1}. ${step.title}`;
+        li.appendChild(title);
+
+        const detail = document.createElement('div');
+        detail.className = 'text-[11px] font-mono text-slate-400 leading-snug mt-1';
+        detail.textContent = step.detail;
+        li.appendChild(detail);
+
+        if (step.command) {
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-2 mt-2';
+
+            const code = document.createElement('code');
+            code.className = 'flex-1 min-w-0 text-[11px] font-mono text-cyan-300 bg-slate-950/80 border border-cyan-500/30 rounded px-2 py-1.5 overflow-x-auto whitespace-pre';
+            code.textContent = step.command;
+            row.appendChild(code);
+
+            const copy = document.createElement('button');
+            copy.type = 'button';
+            copy.className = 'cyber-btn text-[11px] py-1 px-2.5 whitespace-nowrap';
+            copy.textContent = '📋 Copy';
+            copy.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(step.command);
+                    copy.textContent = '✔ Copied';
+                    setTimeout(() => { copy.textContent = '📋 Copy'; }, 1500);
+                } catch {
+                    // A clipboard the browser refuses is not a dead end: the text is on
+                    // screen and selectable, so say so rather than failing silently.
+                    copy.textContent = 'Select it and copy';
+                }
+            });
+            row.appendChild(copy);
+            li.appendChild(row);
+        }
+
+        if (step.url) {
+            const open = document.createElement('a');
+            open.href = step.url;
+            open.target = '_blank';
+            open.rel = 'noopener noreferrer';
+            open.className = 'inline-block cyber-btn text-[11px] py-1 px-2.5 mt-2 text-cyan-300';
+            open.textContent = `🔗 Open ${new URL(step.url).hostname}`;
+            li.appendChild(open);
+        }
+
+        return li;
+    }
+
+    function renderSetupModels(advice) {
+        if (!setupModels) return;
+        setupModels.innerHTML = '';
+
+        const installed = new Set(advice.installed_models || []);
+        for (const model of advice.models || []) {
+            const label = document.createElement('label');
+            label.className = 'setup-model';
+
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = 'setup-model';
+            radio.value = model.name;
+            radio.className = 'mt-1 bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0';
+            // Something already downloaded beats the recommendation: it needs no wait,
+            // and a recommendation is only a guess about a machine this already fits.
+            radio.checked = installed.size ? installed.has(model.name) && [...installed][0] === model.name : !!model.recommended;
+            label.appendChild(radio);
+
+            const body = document.createElement('div');
+            body.className = 'min-w-0 flex-1';
+
+            const head = document.createElement('div');
+            head.className = 'flex items-center gap-2 flex-wrap';
+            const name = document.createElement('span');
+            name.className = 'text-xs font-mono text-cyan-200';
+            name.textContent = model.label;
+            head.appendChild(name);
+            if (model.recommended) {
+                const badge = document.createElement('span');
+                badge.className = 'text-[9px] font-mono text-green-400 border border-green-500/40 rounded px-1.5 py-0.5';
+                badge.textContent = 'Best for this computer';
+                head.appendChild(badge);
+            }
+            if (installed.has(model.name)) {
+                const badge = document.createElement('span');
+                badge.className = 'text-[9px] font-mono text-cyan-300 border border-cyan-500/40 rounded px-1.5 py-0.5';
+                badge.textContent = 'Already downloaded';
+                head.appendChild(badge);
+            }
+            body.appendChild(head);
+
+            const blurb = document.createElement('div');
+            blurb.className = 'text-[11px] font-mono text-slate-400 leading-snug';
+            blurb.textContent = installed.has(model.name)
+                ? model.blurb
+                : `${model.blurb} Download: ${model.download}.`;
+            body.appendChild(blurb);
+
+            label.appendChild(body);
+            setupModels.appendChild(label);
+        }
+
+        // Models the server has that this list has never heard of -- someone else pulled
+        // them, or they came from another tool. Offering them is free and hiding them
+        // would mean telling someone to download what they already have.
+        for (const name of installed) {
+            if ((advice.models || []).some(m => m.name === name)) continue;
+            const label = document.createElement('label');
+            label.className = 'setup-model';
+            const radio = document.createElement('input');
+            radio.type = 'radio';
+            radio.name = 'setup-model';
+            radio.value = name;
+            radio.className = 'mt-1 bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0';
+            label.appendChild(radio);
+            // Built as nodes rather than markup: a model name is whatever the server
+            // said it was, and it is going onto the page either way.
+            const body = document.createElement('div');
+            body.className = 'min-w-0 flex-1';
+            const title = document.createElement('div');
+            title.className = 'text-xs font-mono text-cyan-200';
+            title.textContent = name;
+            const note = document.createElement('div');
+            note.className = 'text-[11px] font-mono text-slate-400 leading-snug';
+            note.textContent = 'Already on this computer.';
+            body.appendChild(title);
+            body.appendChild(note);
+            label.appendChild(body);
+            setupModels.appendChild(label);
+        }
+
+        // Nothing was pre-selected -- everything installed is unknown to the catalogue.
+        // Leaving no radio checked means Finish has nothing to save.
+        if (setupModels.querySelector('input[name="setup-model"]') && !setupModels.querySelector('input[name="setup-model"]:checked')) {
+            setupModels.querySelector('input[name="setup-model"]').checked = true;
+        }
+    }
+
+    function renderSetupAdvice(advice) {
+        setupAdvice = advice;
+        if (setupHeadline) setupHeadline.textContent = advice.headline || '';
+
+        if (setupProgress) {
+            setupProgress.innerHTML = '';
+            const reached = advice.stage === 'configured'
+                ? SETUP_STAGES.length
+                : SETUP_STAGES.indexOf(advice.stage);
+            SETUP_STAGES.forEach((_, i) => {
+                const dot = document.createElement('div');
+                dot.className = 'setup-dot';
+                if (i < reached) dot.dataset.done = 'true';
+                if (i === reached) dot.dataset.current = 'true';
+                setupProgress.appendChild(dot);
+            });
+        }
+
+        if (setupSteps) {
+            setupSteps.innerHTML = '';
+            (advice.steps || []).forEach((step, i) => setupSteps.appendChild(renderSetupStep(step, i)));
+        }
+
+        // Models are only worth choosing once there is a server to put one in.
+        const choosing = advice.stage === 'running-no-model'
+            || advice.stage === 'ready-to-select'
+            || advice.stage === 'configured';
+        if (setupModelsWrap) setupModelsWrap.classList.toggle('hidden', !choosing);
+        if (choosing) renderSetupModels(advice);
+
+        // A download button that cannot download is worse than no button: without the
+        // ollama command there is nothing here to drive, and the steps above say so.
+        const canDownload = choosing && advice.can_install_from_here;
+        if (btnSetupDownload) btnSetupDownload.classList.toggle('hidden', !canDownload);
+        if (btnSetupFinish) btnSetupFinish.classList.toggle('hidden', !choosing);
+
+        if (advice.stage === 'configured') {
+            setSetupStatus('A model is connected and answering. Nothing to do here.', 'good');
+        } else if (advice.cloud_key_found) {
+            setSetupStatus('A cloud API key was found in this computer’s environment. You can use that instead of downloading anything — see the cloud option above.', 'info');
+        } else {
+            setSetupStatus('', 'info');
+        }
+    }
+
+    async function refreshSetupAdvice({ quiet = false } = {}) {
+        if (!quiet) {
+            if (setupHeadline) setupHeadline.textContent = 'Checking this computer...';
+            setSetupStatus('Looking for an AI server on this machine.', 'busy');
+        }
+        try {
+            const advice = await fetchSetupAdvice();
+            renderSetupAdvice(advice);
+            return advice;
+        } catch (e) {
+            if (setupHeadline) setupHeadline.textContent = 'Could not check this computer.';
+            setSetupStatus(`${e.message || e}`, 'bad');
+            return null;
+        }
+    }
+
+    function stopSetupPoll() {
+        if (setupPollTimer) { clearInterval(setupPollTimer); setupPollTimer = null; }
+    }
+
+    function selectedSetupModel() {
+        const picked = setupModels && setupModels.querySelector('input[name="setup-model"]:checked');
+        return picked ? picked.value : '';
+    }
+
+    /* Starting a download is all the backend can do synchronously: several gigabytes do
+       not fit in any timeout worth holding a connection open for, so `ollama pull` is
+       spawned and returns immediately. Finding out it landed therefore means asking the
+       server what models it has, over and over, until this one is among them. That is
+       slower than a progress bar and it is true, which a progress bar over a spawn that
+       reports nothing would not be. */
+    async function handleSetupDownload() {
+        const modelName = selectedSetupModel();
+        if (!modelName) { setSetupStatus('Pick one of the models above first.', 'bad'); return; }
+
+        if ((setupAdvice?.installed_models || []).includes(modelName)) {
+            setSetupStatus(`${modelName} is already on this computer. Press Finish to use it.`, 'good');
+            return;
+        }
+
+        voiceEngine.playSFX('click');
+        btnSetupDownload.disabled = true;
+        setSetupStatus(`Starting the download of ${modelName}...`, 'busy');
+
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('pull_model_rust', { modelName })
+                : await (async () => {
+                    const resp = await apiFetch(`/api/scanner/pull-model?model_name=${encodeURIComponent(modelName)}`, { method: 'POST' });
+                    return resp.json();
+                })();
+
+            if (data.status === 'error') {
+                setSetupStatus(`⚠ ${data.message}`, 'bad');
+                btnSetupDownload.disabled = false;
+                return;
+            }
+
+            if (data.status === 'success') {
+                setSetupStatus(data.message, 'good');
+                btnSetupDownload.disabled = false;
+                await refreshSetupAdvice({ quiet: true });
+                return;
+            }
+
+            // Started. Watch for it to appear, and say plainly that this is a wait.
+            const since = Date.now();
+            setSetupStatus(`Downloading ${modelName}. This can take several minutes -- you can leave this open.`, 'busy');
+            stopSetupPoll();
+            setupPollTimer = setInterval(async () => {
+                const advice = await fetchSetupAdvice().catch(() => null);
+                if (!advice) return;
+                const minutes = Math.round((Date.now() - since) / 60000);
+                if ((advice.installed_models || []).includes(modelName)) {
+                    stopSetupPoll();
+                    btnSetupDownload.disabled = false;
+                    renderSetupAdvice(advice);
+                    setSetupStatus(`✔ ${modelName} is downloaded and ready. Press Finish to use it.`, 'good');
+                    voiceEngine.playSFX('incoming');
+                } else {
+                    setSetupStatus(
+                        `Downloading ${modelName} -- still going${minutes >= 1 ? ` (${minutes} min so far)` : ''}. You can leave this open.`,
+                        'busy'
+                    );
+                }
+            }, 5000);
+        } catch (e) {
+            setSetupStatus(`⚠ ${e.message || e}`, 'bad');
+            btnSetupDownload.disabled = false;
+        }
+    }
+
+    /* Finishing is writing the four fields the wizard has worked out into the settings
+       the rest of the app already reads. It goes through saveSettings rather than
+       around it, so there is exactly one path by which a provider is chosen. */
+    async function handleSetupFinish() {
+        const modelName = selectedSetupModel();
+        if (!modelName) { setSetupStatus('Pick one of the models above first.', 'bad'); return; }
+        if (!(setupAdvice?.installed_models || []).includes(modelName)) {
+            setSetupStatus(`${modelName} has not been downloaded yet. Press Download first.`, 'bad');
+            return;
+        }
+
+        document.getElementById('setting-provider').value = setupAdvice.provider || 'ollama';
+        if (setupAdvice.endpoint) document.getElementById('setting-endpoint').value = setupAdvice.endpoint;
+        document.getElementById('setting-model').value = modelName;
+
+        setSetupStatus('Saving...', 'busy');
+        await saveSettings(false);
+        stopSetupPoll();
+        voiceEngine.playSFX('boot');
+        setupModal.classList.add('hidden');
+        document.getElementById('no-brain-card')?.remove();
+        appendMessage(currentAgentName, `✅ **Set up.** I'm thinking with \`${modelName}\`, running on this computer. Ask me something.`);
+        chatInput.focus();
+        refreshBrainStatus();
+    }
+
+    function openSetupWizard() {
+        if (!setupModal) return;
+        voiceEngine.playSFX('click');
+        setupModal.classList.remove('hidden');
+        refreshSetupAdvice();
+    }
+
+    document.getElementById('btn-setup')?.addEventListener('click', openSetupWizard);
+    if (btnSetupRecheck) btnSetupRecheck.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshSetupAdvice(); });
+    if (btnSetupDownload) btnSetupDownload.addEventListener('click', handleSetupDownload);
+    if (btnSetupFinish) btnSetupFinish.addEventListener('click', handleSetupFinish);
+    document.getElementById('btn-close-setup')?.addEventListener('click', () => {
+        stopSetupPoll();
+        setupModal.classList.add('hidden');
+    });
+    document.getElementById('btn-open-setup-settings')?.addEventListener('click', () => {
+        settingsModal.classList.add('hidden');
+        openSetupWizard();
+    });
+
+    /* The line at the top of The Brain saying what is actually connected. Settings that
+       name a provider are not evidence that anything answers, and the difference is the
+       whole reason someone opens this panel. */
+    async function refreshBrainStatus() {
+        const box = document.getElementById('brain-status');
+        if (!box) return;
+        box.className = 'text-[11px] font-mono p-2 rounded border border-slate-600/40 bg-slate-900/60 text-slate-400';
+        box.textContent = 'Checking what is connected...';
+        const advice = await fetchSetupAdvice().catch(() => null);
+        if (!advice) { box.textContent = 'Could not check this computer.'; return; }
+        if (advice.stage === 'configured') {
+            box.className = 'text-[11px] font-mono p-2 rounded border border-green-500/40 bg-green-950/20 text-green-400';
+            box.textContent = `✔ ${advice.headline}`;
+        } else {
+            box.className = 'text-[11px] font-mono p-2 rounded border border-amber-500/40 bg-amber-950/20 text-amber-300';
+            box.textContent = `⚠ ${advice.headline} Press "Set it up for me" above.`;
+        }
+    }
+
+    /* The first thing anyone sees in the dialogue stream if nothing is thinking behind
+       it. Shown once, on load, and only when it is true -- an app that greets a working
+       install with a setup nag teaches people to close things without reading them. */
+    async function announceIfNoBrain() {
+        const advice = await fetchSetupAdvice().catch(() => null);
+        if (!advice || !advice.needs_attention) return;
+
+        const card = document.createElement('div');
+        // Identified so finishing the wizard can take it away again: a warning that a
+        // brain is missing, still sitting above the reply from the brain you just
+        // connected, would be its own small lie.
+        card.id = 'no-brain-card';
+        card.className = 'p-3 rounded my-2 text-sm msg-agent self-start mr-8 border border-amber-500/50 bg-amber-950/20';
+        const head = document.createElement('div');
+        head.className = 'text-xs font-mono text-amber-300 mb-1';
+        head.textContent = '⚠ No AI is connected yet';
+        card.appendChild(head);
+        const body = document.createElement('div');
+        body.className = 'text-xs font-mono text-slate-300 leading-snug';
+        body.textContent = `${advice.headline} Until one is, I can only give canned replies -- there is nothing behind them. Setting one up takes a few minutes and costs nothing.`;
+        card.appendChild(body);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'cyber-btn cyber-btn-active text-xs py-1.5 px-3 mt-2';
+        btn.textContent = '🧠 Set it up for me';
+        btn.addEventListener('click', openSetupWizard);
+        card.appendChild(btn);
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
     // --- Local server discovery ------------------------------------------------------
     // What the scan found last, so the two dropdowns can be rebuilt without probing
     // again. Deliberately not persisted: a server that was up ten minutes ago is not
@@ -1969,6 +2402,12 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
             document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
+            // Empty is the normal, working value for these two: it means "find Piper and
+            // Whisper yourself". They are here so a machine where that search fails has a
+            // way out that isn't editing the database by hand.
+            document.getElementById('setting-tts-local-voice').value = s.tts_local_voice || '';
+            document.getElementById('setting-stt-model').value = s.stt_model_path || '';
+            document.getElementById('setting-stt-language').value = s.stt_language || 'en';
             document.getElementById('setting-vault-path').value = s.vault_path || '';
             document.getElementById('setting-local-only').checked = s.local_only === true;
             // After the checkbox is set, not before: loadVoiceStatus is what discovers an
@@ -1979,6 +2418,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
             autoSpeak = s.auto_speak !== false;
+            // enable_sfx has been a stored setting -- and one the companion itself is
+            // allowed to change -- since before anything read it: the HUD beeped either
+            // way. Now the saved value reaches the engine that does the beeping.
+            applySfx(s.enable_sfx !== false);
+            // Likewise color_theme: set_aether_setting has been able to write it all
+            // along, and the HUD only ever read the browser's own copy, so asking the
+            // companion to change its colours changed nothing anyone could see.
+            // Only when it disagrees with what this window is already wearing. The browser's
+            // own copy is what paints the page before any request finishes and stays
+            // authoritative for this window; a difference means something else wrote the
+            // setting, and the only thing that can is the companion itself.
+            if (s.color_theme && s.color_theme !== Aether1Theme.current().colours.preset) {
+                paintTheme(Aether1Theme.setPreset(s.color_theme));
+            }
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
             if (spriteModeToggle) spriteModeToggle.checked = s.desktop_sprite_enabled === true;
         } catch (e) {
@@ -2067,6 +2520,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
                 tts_engine: document.getElementById('setting-tts-engine').value,
+                tts_local_voice: document.getElementById('setting-tts-local-voice').value.trim(),
+                stt_model_path: document.getElementById('setting-stt-model').value.trim(),
+                // Falls back rather than saving an empty language: transcribe_audio passes
+                // this straight to the recognizer, which wants a code, not nothing.
+                stt_language: document.getElementById('setting-stt-language').value.trim() || 'en',
                 local_only: document.getElementById('setting-local-only').checked,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 // Sent only from the native app: the browser fallback has no window for the
@@ -2077,10 +2535,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 command_allowlist: document.getElementById('setting-command-allowlist').value
                     .split(',').map(p => p.trim()).filter(Boolean),
                 auto_speak: document.getElementById('setting-autospeak').checked,
+                enable_sfx: document.getElementById('setting-sfx')?.checked !== false,
+                // The theme lives in the browser's own storage, which is where it has to
+                // live for the page to paint before any request completes. Saved here as
+                // well so the two agree -- otherwise the companion's own writes to it are
+                // overwritten by whatever this window last had.
+                // Empty when the colours have been hand-mixed rather than chosen from a
+                // preset -- there is no preset name to save, and loadSettings ignores an
+                // empty value rather than repainting over the mix.
+                color_theme: Aether1Theme.current().colours.preset || '',
                 desktop_sprite_enabled: spriteModeToggle ? spriteModeToggle.checked : false
             }
         };
         autoSpeak = payload.settings.auto_speak;
+        applySfx(payload.settings.enable_sfx);
         updateAgentNameDisplay(payload.settings.agent_name);
 
         try {
@@ -2242,6 +2710,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // The scan waits for the settings: it preselects whichever found server matches
         // the configured endpoint, and that field has to be filled in before it looks.
         loadSettings().then(handleScanSystem);
+        refreshBrainStatus();
         showSettingsTab('customisation');
         settingsModal.classList.remove('hidden');
     });
@@ -2358,10 +2827,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    /* Sound effects are reachable from two places -- this menu button and the checkbox in
+       Settings under Voice & Sound -- and both are the same switch. Before this the menu
+       button only flipped a field on the engine: it forgot on reload, and `enable_sfx`,
+       stored and writable by the companion itself, was read by nothing at all. */
+    function applySfx(on) {
+        voiceEngine.sfxEnabled = on;
+        if (btnSfxToggle) btnSfxToggle.textContent = on ? '🔊 SFX: ON' : '🔇 SFX: OFF';
+        const box = document.getElementById('setting-sfx');
+        if (box) box.checked = on;
+    }
+
     btnSfxToggle.addEventListener('click', () => {
-        voiceEngine.sfxEnabled = !voiceEngine.sfxEnabled;
-        btnSfxToggle.textContent = voiceEngine.sfxEnabled ? '🔊 SFX: ON' : '🔇 SFX: OFF';
+        applySfx(!voiceEngine.sfxEnabled);
         voiceEngine.playSFX('click');
+        // Saved without closing anything or announcing it: this is a menu toggle, and the
+        // one thing it must do that it did not before is survive a restart.
+        saveSettings(false);
+    });
+
+    document.getElementById('setting-sfx')?.addEventListener('change', (e) => {
+        applySfx(e.target.checked);
     });
 
     document.querySelectorAll('.quick-chip').forEach(chip => {
@@ -2405,7 +2891,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // when its own fetch returns, so starting both at once is a race the cards lose about
     // as often as they win -- and losing it means an approval waiting on the operator is
     // erased from the screen while the action stays pending in the database.
-    loadChatHistory().then(refreshPendingApprovals);
+    // Strictly after the approvals, for the same reason they come after the history: the
+    // banner is appended to the chat container, and loadChatHistory empties it.
+    loadChatHistory().then(refreshPendingApprovals).then(announceIfNoBrain);
     connectTelemetry();
     initVersionAndUpdates();
     initSpriteMode();

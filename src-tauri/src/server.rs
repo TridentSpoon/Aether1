@@ -95,6 +95,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/agent/genesis", post(genesis))
         .route("/api/llm/test-connection", post(test_llm_connection))
         .route("/api/scanner/status", get(scanner_status))
+        .route("/api/setup/advice", get(setup_advice))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
@@ -461,6 +462,16 @@ async fn scanner_status() -> Json<model_scanner::ScanResult> {
         tokio::task::spawn_blocking(model_scanner::scan_all)
             .await
             .expect("scan_all panicked"),
+    )
+}
+
+/// Where this machine is on the road to having a model. Read-only probes plus two settings
+/// lookups -- nothing here changes anything, so it is a GET and needs no approval.
+async fn setup_advice(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::setup_advice(&state.engine))
+            .await
+            .expect("setup_advice panicked"),
     )
 }
 

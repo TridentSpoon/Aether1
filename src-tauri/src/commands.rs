@@ -111,6 +111,26 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
     }))
 }
 
+/// Where this machine is on the road to having a model, and the single next thing to do.
+///
+/// The three facts the advisor needs are gathered here rather than inside it: a fresh probe
+/// of the machine, how much memory it has, and whether the settings already name a real
+/// provider and model. Keeping `setup::advise` a pure function of those three is what lets
+/// every case it can land in be tested without a model server anywhere near the test.
+pub fn setup_advice(engine: &LlmEngine) -> Value {
+    let scan = model_scanner::scan_all();
+    let ram_total_gb = llm::Telemetry::snapshot().ram_total_gb;
+
+    // "Configured" means both halves are filled in. A provider with no model is the state a
+    // half-finished pass through the wizard leaves behind, and it answers nothing.
+    let provider = engine.db().get_setting_string("llm_provider", "offline");
+    let model = engine.db().get_setting_string("llm_model", "");
+    let configured = provider != "offline" && !model.trim().is_empty();
+
+    serde_json::to_value(crate::setup::advise(&scan, ram_total_gb, configured))
+        .unwrap_or_else(|_| serde_json::json!({}))
+}
+
 /// Downloads a model through the local Ollama, which fetches it from Ollama's registry --
 /// the one deliberate internet round trip left in the app, and the reason local-only mode
 /// has to have an opinion about it. Refusing is the honest answer: the mode says nothing
@@ -185,6 +205,10 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "stt_model_path": "",
         "stt_language": "en",
         "vault_path": "",
+        // The HUD saves this alongside its own browser copy so the two agree; without a
+        // default the key simply wouldn't come back on a fresh install, and the page would
+        // have nothing to reconcile against.
+        "color_theme": "",
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
         "desktop_sprite_enabled": false,
         "local_only": false,

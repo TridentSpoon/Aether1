@@ -27,6 +27,7 @@ mod model_scanner;
 mod paths;
 mod serve_auth;
 mod server;
+mod setup;
 mod tools;
 mod vault;
 
@@ -622,6 +623,13 @@ fn scan_models_rust() -> model_scanner::ScanResult {
     model_scanner::scan_all()
 }
 
+/// Where this machine is on the road to having a model, and what to do about it. Drives
+/// the setup wizard; safe to call as often as the wizard likes, since it is only probes.
+#[tauri::command]
+fn setup_advice_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::setup_advice(&engine)
+}
+
 /// Rust-native equivalent of POST /api/scanner/pull-model (backend/main.py).
 #[tauri::command]
 fn pull_model_rust(
@@ -961,6 +969,7 @@ fn main() {
             agent_genesis_rust,
             test_llm_connection_rust,
             scan_models_rust,
+            setup_advice_rust,
             pull_model_rust,
             get_static_info_rust,
             get_tools_rust,

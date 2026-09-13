@@ -1008,6 +1008,65 @@ the sliders non-destructive — otherwise nudging a picker after moving a slider
 adjustment in permanently — and since it means the swatch and the screen disagree, a note says
 so while the tone is off default.
 
+### Step 29: a fresh install has no brain, and nothing said so — **shipped**
+
+The report was "a good looking app with no substance". It was accurate, and the cause was
+not the chat path — streaming, deltas, TTS chunking and history all worked. It was that a
+fresh install defaults to `llm_provider = "offline"`, so every answer came from
+`Persona::offline_reply`: canned text with nothing thinking behind it, and no route from
+that state to a working model that a non-technical person could find.
+
+`setup.rs` answers one question — *where is this machine, and what is the single next
+thing to do?* — from a live probe, as five stages: `NothingInstalled`,
+`InstalledNotRunning`, `RunningNoModel`, `ReadyToSelect`, `Configured`. Two properties
+make it honest:
+
+- **The stage is derived, never counted.** There is no step counter anywhere; the wizard
+  re-asks the backend after every action. A stage cannot be skipped past or claimed
+  falsely, and closing the app mid-way loses nothing.
+- **A finished download is a model the server reports.** `ollama pull` is spawned and
+  returns immediately, so "done" cannot come from the pull. The wizard polls
+  `/api/setup/advice` every five seconds and watches `installed_models` for the chosen
+  name to appear — true by construction, and it survives Aether1 being closed, because
+  the download was never Aether1's job.
+
+`models_for(ram_total_gb)` sizes the offer to the machine: usable memory is 70% of total,
+and the largest model that fits is marked recommended, so 4 GB is offered a 1B, 8 GB a 3B,
+16 GB Mistral and 32 GB+ a 14B. The whole catalogue is always listed — the recommendation
+is a default, not a gate.
+
+Two things are deliberately *not* automatic. The cloud route is offered and never taken,
+because it means the words you type leave the machine and that is a decision. And the
+download button is hidden outright when `can_install_from_here` is false, rather than
+shown as a button that cannot work.
+
+Falling out of the same work: `pull_model`'s HTTP branch has a five-second timeout, so it
+can never complete a real download — it always fell through to the CLI and reported
+"Started in background" with no further signal. Both messages now say what actually
+happened.
+
+### Step 30: the settings panel, grouped by the question you arrived with — **shipped**
+
+`Agent & System` was one flat column. It is now six `<details>` groups — The Brain, Voice
+& Sound, Memory, What it may do, Network, The app itself — with the things almost nobody
+needs nested one level further inside the group they belong to. `<details>` rather than
+swapping panels for a concrete reason: a closed group still has all of its inputs in the
+DOM, so `loadSettings` and `saveSettings` address fields by id and need to know nothing
+about the grouping.
+
+Auditing every field against both halves of that round trip found four settings that were
+stored, some of them writable by the companion itself, and read by nothing or settable
+from nowhere:
+
+- `enable_sfx` — stored and AI-writable, but `voice.js` hardcoded `sfxEnabled = true` and
+  the menu toggle forgot on reload. Now one switch in two places, both saving.
+- `color_theme` — AI-writable, but the HUD only ever read the browser's own copy, so
+  asking the companion to change its colours changed nothing visible. Now reconciled on
+  load, and given a default in `get_settings` so the key comes back at all.
+- `tts_local_voice`, `stt_model_path`, `stt_language` — all three read by `voice_status`
+  and `transcribe_audio`, none settable from the HUD. Now three fields nested under Voice
+  & Sound, where empty means "find them yourself", which is the working default.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1027,7 +1086,8 @@ calling.
 2. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
 3. **Step 19, several local models.** A stated core requirement, and still deliberately not
-   started.
+   started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
+   download path it would need already exist in `setup.rs`.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
 which is correct: what they should be depends on the three above.
