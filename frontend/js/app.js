@@ -14,6 +14,7 @@ const AVATAR_DISPLAY_NAMES = {
     'arx-locas': 'A.R.X.LOCAS',
     'arx-legionare': 'A.R.X.LEGIONARE',
     'arx-loregenda': 'A.R.X.LOREGENDA',
+    'arx-lyksaum': 'A.R.X.LYKSAUM',
     red: 'R.E.D. 9000',
     crimson: 'R.E.D. 9000',
     senti: 'NEXUS SENT',
