@@ -1,10 +1,13 @@
 /* Avatar: A.R.X.LEGIONARE -- an inverted four-sided pyramid frame hanging apex-down,
  * split into three tiered shells -- a pointed tip, a middle band, and a wide top band
- * -- each its own translucent frustum with a bright wireframe overlay, separated from
- * its neighbours by a clear air gap, so the frame reads as three plates stacked around
- * a shared taper rather than one solid mass. A small crystalline core (an icosahedron)
- * tumbles on its own fast independent spin inside the middle band, lit from within by
- * a pulsing hot-red glow standing in for the reference's point light.
+ * -- each its own translucent frustum, separated from its neighbours by a clear
+ * horizontal air gap. Each tier is further split into its four flat wall panels, each
+ * pulled back from its neighbours by a vertical air gap, so the four gaps run the
+ * shape's full height like a cross of open slits -- the frame reads as loose plates
+ * hovering around a shared taper rather than one solid mass, and the crystal core
+ * shows through the slits instead of being sealed inside. A small crystalline core
+ * (an icosahedron) tumbles on its own fast independent spin at the centre, lit from
+ * within by a pulsing hot-red glow standing in for the reference's point light.
  *
  * Loosely inspired by faceted low-poly sci-fi companion-drone motifs in general --
  * an inverted pyramid shell around a spinning crystalline core -- not a copy of any
@@ -60,9 +63,14 @@ HologramAvatar.registerAvatar({
 
         // Three tiered shells sliced from one ideal cone's silhouette (apex at
         // +PYRAMID_HEIGHT/2, base radius PYRAMID_RADIUS at -PYRAMID_HEIGHT/2), each
-        // shrunk toward its own slot's centre so a clear air gap separates it from its
-        // neighbours -- their radii still line up with that shared taper, so the three
-        // pieces read as one pyramid's silhouette even with the gaps carved out of it.
+        // shrunk toward its own slot's centre so a clear horizontal air gap separates
+        // it from its neighbours -- their radii still line up with that shared taper,
+        // so the three pieces read as one pyramid's silhouette even with the gaps
+        // carved out of it. Each tier is in turn built as four flat wall panels (one
+        // per side of the four-sided pyramid) instead of one solid shell, each panel
+        // shrunk toward its own face's centre the same way, so a vertical air gap
+        // opens at every corner and the four gaps line up tier to tier into a
+        // continuous cross of open slits down the whole shape.
         const pyramidFillMat = new THREE.MeshBasicMaterial({ color: api.palette.hex, side: THREE.DoubleSide, transparent: true, opacity: 0.32 });
         const wireframeMat = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.85 });
 
@@ -70,24 +78,50 @@ HologramAvatar.registerAvatar({
         const tierHeight = slotHeight * TIER_FILL;
         const radiusAt = (y) => PYRAMID_RADIUS * (PYRAMID_HEIGHT / 2 - y) / PYRAMID_HEIGHT;
 
+        const FACE_COUNT = 4;
+        const FACE_FILL = 0.74; // fraction of each face's angular slot actually built -- the rest is the vertical air gap
+        const angleStep = (Math.PI * 2) / FACE_COUNT;
+
+        // Builds one flat wall panel as a trapezoid (or, when radiusTop is 0, a
+        // triangle) between two angles -- the same flat quad a low-poly cylinder's
+        // side face already is, just carved out on its own so it can be shrunk and
+        // gapped independently of its neighbours.
+        function buildPanelGeometry(angleStart, angleEnd, radiusTop, radiusBottom, topY, bottomY) {
+            const x0t = Math.cos(angleStart) * radiusTop, z0t = Math.sin(angleStart) * radiusTop;
+            const x1t = Math.cos(angleEnd) * radiusTop, z1t = Math.sin(angleEnd) * radiusTop;
+            const x0b = Math.cos(angleStart) * radiusBottom, z0b = Math.sin(angleStart) * radiusBottom;
+            const x1b = Math.cos(angleEnd) * radiusBottom, z1b = Math.sin(angleEnd) * radiusBottom;
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+                x0b, bottomY, z0b, x1b, bottomY, z1b, x1t, topY, z1t,
+                x0b, bottomY, z0b, x1t, topY, z1t, x0t, topY, z0t,
+            ]), 3));
+            geo.computeVertexNormals();
+            return geo;
+        }
+
         for (let i = 0; i < TIER_COUNT; i++) {
             const center = -PYRAMID_HEIGHT / 2 + (i + 0.5) * slotHeight;
             const topY = center + tierHeight / 2;
             const bottomY = center - tierHeight / 2;
             const isTip = i === TIER_COUNT - 1; // the slot nearest the apex -- built as a point
+            const rTop = isTip ? 0 : radiusAt(topY);
+            const rBottom = radiusAt(bottomY);
 
-            const tierGeo = isTip
-                ? new THREE.ConeGeometry(radiusAt(bottomY), tierHeight, 4)
-                : new THREE.CylinderGeometry(radiusAt(topY), radiusAt(bottomY), tierHeight, 4);
+            for (let f = 0; f < FACE_COUNT; f++) {
+                const faceMid = f * angleStep + angleStep / 2;
+                const halfSpan = (angleStep / 2) * FACE_FILL;
+                const a0 = faceMid - halfSpan;
+                const a1 = faceMid + halfSpan;
 
-            const tierMesh = new THREE.Mesh(tierGeo, pyramidFillMat);
-            tierMesh.position.y = center;
-            spinGroup.add(tierMesh);
+                const panelGeo = buildPanelGeometry(a0, a1, rTop, rBottom, topY, bottomY);
+                const panelMesh = new THREE.Mesh(panelGeo, pyramidFillMat);
+                spinGroup.add(panelMesh);
 
-            const tierWire = new THREE.LineSegments(new THREE.EdgesGeometry(tierGeo), wireframeMat);
-            tierWire.scale.set(1.01, 1.01, 1.01);
-            tierWire.position.y = center;
-            spinGroup.add(tierWire);
+                const panelWire = new THREE.LineSegments(new THREE.EdgesGeometry(panelGeo), wireframeMat);
+                panelWire.scale.set(1.01, 1.01, 1.01);
+                spinGroup.add(panelWire);
+            }
         }
 
         const crystalMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending });
