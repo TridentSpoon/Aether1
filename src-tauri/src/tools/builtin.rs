@@ -52,7 +52,7 @@ impl Tool for ReadFile {
         false
     }
 
-    fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
         let path = fs_guard::resolve_readable(string_arg(args, "path")?)?;
         if path.is_dir() {
             return Err(format!(
@@ -78,6 +78,13 @@ impl Tool for ReadFile {
                 )))
             }
         };
+
+        // A note fetched by name is the strongest form of "this is where the answer came
+        // from", so it is worth reporting to the HUD. Only vault files: the rest of the
+        // filesystem is not the operator's memory and does not belong in that footer.
+        if let Some(note) = crate::vault::note_in_vault(ctx.db, &path) {
+            crate::vault::consulted::record(&note, crate::vault::consulted::How::Read);
+        }
 
         Ok(Outcome::text(if truncated {
             format!(
@@ -381,6 +388,51 @@ mod tests {
         .unwrap();
         let root = crate::vault::ensure(&db).unwrap();
         (db, root)
+    }
+
+    /// The HUD's footer, at the two call sites in this file: a note the model went and
+    /// fetched is reported as read, and one search merely offered is reported as found.
+    /// The distinction is the point -- a shortlist is not a citation.
+    #[test]
+    fn reading_a_vault_note_reports_it_and_searching_reports_the_shortlist() {
+        let (db, root) = db_with_vault("consulted");
+        std::fs::write(
+            root.join("projects/editors.md"),
+            "# Editors\n\nThey moved from vim to helix in 2025.\n",
+        )
+        .unwrap();
+        let ctx = ToolContext::new(&db);
+
+        // read_file only reaches what fs_guard allows, and the vault's real home is the
+        // operator's home directory -- so the fixture's has to be one too.
+        let notes = crate::tools::fs_guard::with_home(root.parent().unwrap(), || {
+            crate::vault::consulted::begin();
+            SearchMemory
+                .call(&json!({"query": "editors"}), &ctx)
+                .unwrap();
+            ReadFile
+                .call(
+                    &json!({"path": root.join("projects/editors.md").to_string_lossy()}),
+                    &ctx,
+                )
+                .unwrap();
+            // Outside the vault, and so none of the operator's memory: not in the footer.
+            ReadFile
+                .call(&json!({"path": "/etc/hostname"}), &ctx)
+                .unwrap();
+            crate::vault::consulted::taken()
+        });
+        assert_eq!(
+            notes.len(),
+            1,
+            "only the vault note belongs in the footer: {notes:?}"
+        );
+        assert_eq!(notes[0].note, "projects/editors.md");
+        assert_eq!(
+            notes[0].how,
+            crate::vault::consulted::How::Read,
+            "a note that was found and then read is reported as read"
+        );
     }
 
     /// search_memory searches the vault now, not the old key-value table.

@@ -700,6 +700,13 @@ fn get_settings_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::get_settings(&engine)
 }
 
+/// Opens the memory vault in the operator's file manager. Desktop only, by design -- see
+/// commands::open_vault_folder.
+#[tauri::command]
+fn open_vault_folder_rust(engine: tauri::State<LlmEngine>) -> Result<String, String> {
+    commands::open_vault_folder(&engine)
+}
+
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
 #[tauri::command]
 fn save_settings_rust(
@@ -967,6 +974,7 @@ fn main() {
             clear_messages_rust,
             get_settings_rust,
             save_settings_rust,
+            open_vault_folder_rust,
             generate_speech_rust,
             transcribe_rust,
             voice_status_rust,

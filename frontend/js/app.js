@@ -867,6 +867,40 @@ document.addEventListener('DOMContentLoaded', () => {
         return msgDiv;
     }
 
+    /* Which notes went into the answer, written under it.
+       The vault is markdown you can open, but an answer that quotes it has so far given no
+       way to tell recall from invention -- this is that. "loaded" is a note primed into
+       every turn, "read" is one it went and fetched, "found" is one search offered it and
+       which it may well have ignored, which is why they do not read the same. */
+    const NOTE_HOW = {
+        loaded: { mark: '\u25cf', hint: 'Always loaded -- this note is in front of it every turn.' },
+        read: { mark: '\u25c6', hint: 'Fetched deliberately while answering this.' },
+        found: { mark: '\u25cb', hint: 'Offered by search as a candidate. It may not have used it.' }
+    };
+
+    function attachConsultedNotes(msgDiv, notes) {
+        if (!Array.isArray(notes) || notes.length === 0) return;
+
+        const row = document.createElement('div');
+        row.className = 'mt-2 pt-1 border-t border-cyan-500/10 flex flex-wrap items-center gap-1 text-[10px] font-mono text-slate-400';
+
+        const label = document.createElement('span');
+        label.textContent = 'memory:';
+        label.className = 'text-cyan-400/60';
+        row.appendChild(label);
+
+        notes.forEach(note => {
+            const how = NOTE_HOW[note.how] || NOTE_HOW.found;
+            const chip = document.createElement('span');
+            chip.className = 'border border-cyan-500/20 rounded px-1.5 py-0.5 bg-cyan-950/30 text-cyan-200/80';
+            chip.textContent = `${how.mark} ${note.note}`;
+            chip.title = how.hint;
+            row.appendChild(chip);
+        });
+
+        msgDiv.appendChild(row);
+    }
+
     // A streamed reply has no single audio file to replay: it was spoken sentence by
     // sentence as it arrived. Synthesize the whole thing on demand instead, the first time
     // the operator actually asks for it.
@@ -1367,6 +1401,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // deltas, which also repairs the display if any delta was dropped.
             replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
             replyDiv.classList.remove('typing-cursor');
+            attachConsultedNotes(replyDiv, data.notes);
             voiceEngine.playSFX('incoming');
 
             // Speak whatever never reached a sentence boundary (the tail of the reply).
@@ -2218,6 +2253,40 @@ document.addEventListener('DOMContentLoaded', () => {
     btnScanSystem.addEventListener('click', () => {
         handleScanSystem();
     });
+
+    /* Open Folder. The desktop app can hand the folder to the operator's own file manager;
+       a browser cannot, and shouldn't -- a phone on the LAN asking the desktop to pop open a
+       window is not a feature anybody wanted, so there is no HTTP route behind this. There
+       the button reports the path and copies it instead, which is the whole of what a
+       browser can honestly do. */
+    const btnOpenVault = document.getElementById('open-vault-folder');
+    const vaultFolderStatus = document.getElementById('vault-folder-status');
+    if (btnOpenVault) {
+        btnOpenVault.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            const say = (text, ok = true) => {
+                if (!vaultFolderStatus) return;
+                vaultFolderStatus.textContent = text;
+                vaultFolderStatus.className = `text-[10px] font-mono ${ok ? 'text-cyan-300' : 'text-amber-300'}`;
+            };
+            if (IS_TAURI) {
+                try {
+                    say(`opened ${await tauriInvoke('open_vault_folder_rust')}`);
+                } catch (e) {
+                    say(`could not open it: ${e.message || e}`, false);
+                }
+                return;
+            }
+            const typed = document.getElementById('setting-vault-path').value.trim();
+            const path = typed || '~/Aether1Vault';
+            try {
+                await navigator.clipboard.writeText(path);
+                say(`${path} -- copied; open it yourself, this tab is not on that machine`);
+            } catch (e) {
+                say(`${path} -- open it yourself, this tab is not on that machine`);
+            }
+        });
+    }
 
     if (btnTestConnection) {
         btnTestConnection.addEventListener('click', () => {
