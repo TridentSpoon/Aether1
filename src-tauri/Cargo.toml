@@ -42,3 +42,6 @@ panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = "s"
+# Debug symbols are about two megabytes of the shipped binary and are of no use to anyone
+# running it -- a backtrace from a release build is read from the source, not from these.
+strip = true

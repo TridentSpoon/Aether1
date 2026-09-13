@@ -164,6 +164,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvasCtx = canvas ? canvas.getContext('2d') : null;
 
     let isWaitingForResponse = false;
+    /* True once an answer has actually come back in this run of the app. The only thing it
+       is used for is deciding whether to explain the first-run wait -- see
+       startWaitFeedback below. */
+    let hasAnsweredThisSession = false;
     let autoSpeak = true;
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
@@ -1461,6 +1465,86 @@ document.addEventListener('DOMContentLoaded', () => {
        re-probed before anything is refused. */
     let brainNeedsAttention = false;
 
+    /* The stream carries two different things down one pipe: the answer, and the trace
+       lines that say what the machine did on the way to it -- `\u2699 vault notes loaded: ...`,
+       `\u2699 read_file ...`. A vault trace goes out the instant the turn starts, before the
+       model has been asked anything, so treating it as "the answer has begun" retires the
+       waiting state while the wait is entirely ahead of you. Everything below asks this
+       instead of asking whether any delta arrived at all. */
+    const TRACE_LINE = /`\u2699[^`]*`/g;
+
+    function withoutTraceLines(text) {
+        return text.replace(TRACE_LINE, '').trim();
+    }
+
+    /* How long a wait has to get before the HUD stops just spinning and says something
+       about it. Thirty seconds is roughly where a person stops believing the machine is
+       working and starts believing it has hung. */
+    const WAIT_NUDGE_SECONDS = 30;
+
+    /* What an unanswered question looks like while it is unanswered.
+       Until now the entire answer to "is it doing anything?" was a blinking cursor on an
+       empty line, which says the same thing at two seconds and at two minutes. It is a
+       local model on somebody's own desktop: two minutes is a perfectly normal cold start
+       on a large model and a slow disk, and it is also exactly what a crash looks like.
+       Three things, in the order somebody needs them:
+         - a counter, so the wait is a number rather than a feeling;
+         - on the first question of the session, why this one is slow -- the model is being
+           read off disk into memory, once, and every answer after it is faster. Without
+           that line the first impression of the app is the slowest it will ever be;
+         - past thirty seconds, that this is still normal.
+       It lives in its own node under the reply body rather than in it, so the streamed
+       text that replaces the body's contents cannot wipe it, and so removing it is one
+       call. Returns the function that stops it, which is safe to call more than once --
+       it is called from the first delta and again from the finally block. */
+    function startWaitFeedback(replyDiv) {
+        const note = document.createElement('div');
+        note.className = 'wait-note';
+
+        const timer = document.createElement('div');
+        timer.className = 'wait-note-timer';
+        note.appendChild(timer);
+
+        if (!hasAnsweredThisSession) {
+            const first = document.createElement('div');
+            first.className = 'wait-note-line';
+            first.textContent = 'First question since launch. The model is being loaded into '
+                + 'memory, which only happens once -- this answer is always the slowest one.';
+            note.appendChild(first);
+        }
+
+        replyDiv.appendChild(note);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+
+        const started = Date.now();
+        let nudged = false;
+        let handle = null;
+
+        const tick = () => {
+            const seconds = Math.floor((Date.now() - started) / 1000);
+            timer.textContent = `thinking... ${seconds}s`;
+            if (seconds >= WAIT_NUDGE_SECONDS && !nudged) {
+                nudged = true;
+                const nudge = document.createElement('div');
+                nudge.className = 'wait-note-line';
+                nudge.textContent = 'Still working. A big model on a slow disk can take a '
+                    + 'minute or more to get its first word out -- nothing has gone wrong.';
+                note.appendChild(nudge);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        };
+
+        tick();
+        handle = setInterval(tick, 1000);
+
+        return function stop() {
+            if (handle === null) return;
+            clearInterval(handle);
+            handle = null;
+            note.remove();
+        };
+    }
+
     async function handleSendMessage(customPrompt = null) {
         const text = customPrompt || chatInput.value.trim();
         if (!text || isWaitingForResponse) return;
@@ -1501,7 +1585,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // The reply's own message node, created empty and filled in as deltas arrive --
         // the cursor class marks it as still being written.
         const replyDiv = appendMessage(currentAgentName, '');
-        replyDiv.classList.add('typing-cursor');
+        /* No typing cursor yet. It means "words are arriving", and while the wait note is
+           up no words are arriving -- two different claims about the same moment, one of
+           them false. The cursor goes on when the first real text does, below. */
+        const stopWaiting = startWaitFeedback(replyDiv);
 
         let rendered = '';
         let spoken = '';        // text already handed to TTS
@@ -1529,12 +1616,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const onDelta = (delta) => {
             if (!delta) return;
-            if (firstDelta) {
-                // Generation has actually started; stop pretending to think.
+            rendered += delta;
+            if (firstDelta && withoutTraceLines(rendered)) {
+                // The model has said an actual word -- not just a trace line about what is
+                // being loaded for it. Stop pretending to think, and stop counting: from
+                // here the arriving text is the feedback.
                 firstDelta = false;
+                stopWaiting();
+                replyDiv.classList.add('typing-cursor');
                 hologram.setState('IDLE');
             }
-            rendered += delta;
             replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
@@ -1549,6 +1640,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const data = await streamChat(text, 'default', onDelta);
+            // Something came back, so whatever loading was going to happen has happened:
+            // no later question in this session gets the first-run explanation.
+            hasAnsweredThisSession = true;
             const reply = data.reply;
             const agentName = data.agent_name;
 
@@ -1584,6 +1678,9 @@ document.addEventListener('DOMContentLoaded', () => {
             hologram.setState('IDLE');
             if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
         } finally {
+            // A reply that never streamed a delta -- an error, or a non-streaming
+            // transport -- leaves the counter running. This is the backstop.
+            stopWaiting();
             isWaitingForResponse = false;
         }
     }

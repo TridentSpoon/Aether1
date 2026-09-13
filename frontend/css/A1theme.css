@@ -21,6 +21,12 @@
   --neon-red: #ff3366;
   --text-main: #e2f1ff;
   --text-dim: #7da5c9;
+  /* The two accents in their readable-as-text form. js/theme.js recomputes these from
+     whatever colours the theme is actually wearing; these are the fallbacks that hold the
+     first paint, and on this near-black ground the accents already read, so they are the
+     accents unchanged. */
+  --text-accent: #00f0ff;
+  --text-highlight: #bc47ff;
   --glow-cyan: 0 0 15px rgba(0, 240, 255, 0.5), 0 0 30px rgba(0, 240, 255, 0.2);
   --glow-purple: 0 0 15px rgba(176, 38, 255, 0.5), 0 0 30px rgba(176, 38, 255, 0.2);
   --glow-green: 0 0 15px rgba(0, 255, 170, 0.5), 0 0 30px rgba(0, 255, 170, 0.2);
@@ -352,14 +358,17 @@
   border-color: var(--border-neon);
 }
 
-/* Headings and links: the main colour. */
+/* Headings and links: the main colour -- in its readable form. --neon-cyan is the accent
+   exactly as picked, which is right for a border or a glow and is not always right for a
+   word: see readable() in js/theme.js. */
 [data-theme] :is(.text-cyan-300, .text-cyan-400,
   .text-cyan-500):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
-  color: var(--neon-cyan);
+  color: var(--text-accent);
 }
 
 /* Body copy. */
-[data-theme] :is(.text-cyan-100, .text-slate-100, .text-slate-200, .text-purple-100,
+[data-theme] :is(.text-cyan-100, .text-cyan-200, .text-slate-100, .text-slate-200,
+  .text-purple-100,
   .text-purple-200):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
   color: var(--text-main);
 }
@@ -388,7 +397,7 @@
 
 [data-theme] :is(.text-purple-400, .text-pink-400,
   .text-blue-300):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
-  color: var(--neon-purple);
+  color: var(--text-highlight);
 }
 
 /* bg-cyan-400 marks live indicators -- a filled dot, not a surface, so it follows the accent
@@ -986,6 +995,32 @@ body {
     .setup-bar-fill[data-state="unknown"] { animation: none; width: 100%; opacity: 0.4; }
 }
 
+/* ---- Waiting for the first word --------------------------------------------
+   Deliberately quiet. This is scaffolding around an answer that has not arrived, so it
+   should read as the app talking about itself rather than as the answer starting -- hence
+   the dim ink and the rule above it. The counter is tabular so the line does not twitch
+   sideways every second as the digits change. */
+
+.wait-note {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-neon);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+.wait-note-timer {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+}
+
+.wait-note-line {
+    margin-top: 0.25rem;
+    max-width: 46ch;
+}
+
 /* ---- "Nothing is connected" ------------------------------------------------
    The one notice in this app that is allowed to shout. Everything else can be
    missed without consequence; this cannot. */
@@ -1015,4 +1050,59 @@ body {
     font-size: 0.8125rem;
     line-height: 1.5;
     color: #fde68a;
+}
+
+/* The card above is written for a dark ground: pale amber ink on a translucent dark brown.
+   Solar is a near-white page, so that brown composites to a muddy grey and the pale text
+   on top of it lands around 1.5:1 -- legible only if you already know what it says, which
+   is the opposite of what the one notice allowed to shout needs to do. Same card, inverted
+   for daylight: a warm pale wash with dark amber ink on it, which measures past 7:1. The
+   amber border and the glow stay, so it still reads as the same alarm.
+
+   Only Solar needs this. Eclipse is dark, and the default is already right there. */
+[data-theme="solar"] .no-brain-card {
+    border-color: #b45309;
+    background: #fff4e0;
+    box-shadow: 0 0 18px rgba(180, 83, 9, 0.18);
+}
+
+[data-theme="solar"] .no-brain-head {
+    color: #7c2d12;
+}
+
+[data-theme="solar"] .no-brain-body {
+    color: #78350f;
+}
+
+/* ==========================================================================
+   .hidden must actually hide
+   ==========================================================================
+   Tailwind's `.hidden { display: none }` arrives in vendor/tailwind.css, which is
+   loaded before this file. Any component rule here that sets its own display --
+   `.cyber-btn { display: inline-flex }`, `.hud-slideout-action { display: flex }` --
+   has exactly the same specificity as it: one class each. CSS settles a tie by
+   source order, and this file is later, so `hidden` on one of those elements did
+   nothing whatsoever. Ten elements were sitting visible on screen that the code
+   believed it had hidden, three of them the locked Trace Protocols avatars, which
+   meant the unlock they are supposed to be waiting for had already been given away
+   to everybody.
+
+   Fixed once, here, rather than in each component: repeating the class lifts
+   `.hidden` clear of any single-class rule, whichever file that rule is in and
+   whatever it is called, so a component written next year cannot quietly bring the
+   bug back.
+
+   Tailwind's responsive display utilities are single-class too, and those are meant
+   to beat `.hidden` -- `hidden md:block` is "hidden on a narrow window, shown on a
+   wide one", which the HUD's clock uses and which must keep working. Each pairing
+   the markup actually uses is restored below; scripts/check_hidden_utilities.sh
+   fails the build if a new one appears up there without a line down here. */
+.hidden.hidden {
+    display: none;
+}
+
+@media (min-width: 768px) {
+    .hidden.hidden.md\:block {
+        display: block;
+    }
 }

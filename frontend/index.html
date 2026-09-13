@@ -11,14 +11,14 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=24">
+    <link rel="stylesheet" href="css/A1theme.css?v=26">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=4"></script>
+    <script src="js/theme.js?v=5"></script>
     <script src="js/avatar-unlocks.js?v=1"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
@@ -364,9 +364,12 @@
 
             <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent">
                 <div class="flex items-center gap-2 mb-1.5" title="Manual zoom -- how big the avatar reads on screen">
-                    <span class="text-[9px] font-mono text-cyan-400/80 tracking-wider">ZOOM</span>
+                    <!-- viewport-label, not the page's own dim ink: these two sit on the
+                         dark projection bay, and --text-dim is mixed for the page behind it.
+                         On Solar that put a mid grey meant for white on a near-black bay. -->
+                    <span class="viewport-label text-[9px] font-mono tracking-wider">ZOOM</span>
                     <input id="avatar-zoom" type="range" min="50" max="250" value="100" class="cyber-range flex-1" aria-label="Avatar zoom">
-                    <span id="avatar-zoom-readout" class="text-[9px] font-mono text-slate-400 w-9 text-right">100%</span>
+                    <span id="avatar-zoom-readout" class="viewport-label text-[9px] font-mono w-9 text-right">100%</span>
                 </div>
                 <canvas id="audio-waveform" width="360" height="36" class="w-full"></canvas>
             </div>
@@ -1180,7 +1183,7 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=38"></script>
+    <script src="js/app.js?v=41"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

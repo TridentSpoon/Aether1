@@ -148,3 +148,14 @@ jobs:
       # nobody notices until they press it.
       - name: Check every avatar file is reachable
         run: ./scripts/check_avatar_loader.sh
+
+      # `hidden` on an element that a component stylesheet also gives a display to is a
+      # silent no-op -- the element stays on screen and only a person looking at it notices.
+      - name: Check the responsive hidden utilities still work
+        run: ./scripts/check_hidden_utilities.sh
+
+      # Tailwind's text colours are hard-coded for a dark ground. One that is never remapped
+      # to a theme variable is unreadable on the light theme and perfectly fine on the dark
+      # one the work was done in, so nobody sees it.
+      - name: Check every text colour follows the theme
+        run: ./scripts/check_theme_remap.sh

@@ -1192,6 +1192,88 @@ spoke" is as useful as "why none did". The frontend plays it back through
 `voiceEngine.playTTSAudio`, the same function a real reply uses, on purpose: a test that
 passes through a private code path proves only that the private code path works.
 
+### Step 33: making it small, and making the wait honest — **shipped**
+
+*"The goal is for the actual app to be small (only dependencies are large). The interactions
+need to be quick and responsive with good feedback if that is not the case."*
+
+The app itself was never the weight. The measuring found two things carrying it and one
+thing lying about it.
+
+**three.js, 589 KB of which the HUD uses about forty functions.** The vendored bundle was
+the whole library. `scripts/build_vendor_three.sh` rebuilds it from the same pinned r128
+source with only the exports the frontend actually names, 603,445 bytes down to 435,994.
+The revision stays r128 on purpose: r152 changed colour management in a way that visibly
+alters what is already on screen, and how the avatar looks is close to the point of the
+project. `scripts/check_vendor_three.sh` greps the frontend for `THREE.Something` at
+CI time and fails if the bundle does not export it — so an avatar that reaches for a part
+that was trimmed is a failed check, not a button that throws when somebody presses it.
+
+**Nineteen avatar files loaded to show one.** Every page listed all of them in `<script>`
+tags: about 195 KB and eighteen requests, at launch, to put a single avatar on screen.
+`frontend/js/hologram/avatar-loader.js` is now the one place that says which avatar lives
+in which file, and fetches it the first time it is asked for. `core.js` gained
+`materialiseAvatar`, which builds an avatar if its file is present, starts the fetch if it
+is not, and rebuilds when it lands. The workbench still asks for all of them, because it
+is a picker over all of them. Repeating the list in three HTML files had already drifted —
+the same avatar was pinned to three different cache-busting versions — and one list cannot
+drift from itself. `scripts/check_avatar_loader.sh` globs the folder and fails on any file
+the manifest does not name, and any name with no file.
+
+Startup payload: **1317 KB across 39 files → 963 KB across 20**.
+
+**Debug symbols in the shipped binary.** `strip = true`, plus `opt-level = "s"`,
+`lto`, one codegen unit and `panic = "abort"` in the release profile. A backtrace from a
+release build is read from the source anyway. **12.98 MB → 10.54 MB.**
+
+**Drawing a window nobody is looking at.** The render loop ran sixty times a second while
+minimised, in the tray, or behind another window. One line in `animate.js` returns early
+when `document.hidden`, after the next frame is already requested, so it resumes on the
+frame after the window comes back with nothing to restart.
+
+**The wait.** A local model's first answer after launch takes as long as it takes to read
+the model off disk, and the entire feedback for that was a blinking cursor on an empty
+line — which says exactly the same thing at two seconds and at two minutes, one of which
+is normal and the other of which is a crash. `startWaitFeedback` in `app.js` puts three
+things under the unanswered question: a counter, so the wait is a number; on the first
+question of the session, the one sentence that explains it (*the model is being loaded into
+memory, which only happens once*); and past thirty seconds, that this is still normal.
+
+The subtlety is when to stop counting. The stream carries trace lines as well as the
+answer — `⚙ vault notes loaded: ...` goes out the instant the turn starts, before the model
+has been asked anything — so "a delta arrived" was already the wrong test, and the hologram
+had been leaving its THINKING state on it too. `withoutTraceLines` is the test now: the
+counter and the thinking state end when the model says a word of its own.
+
+**Three bugs found while looking.**
+
+`.hidden` did nothing to ten elements. Tailwind's `.hidden { display: none }` is one class;
+so is `.cyber-btn { display: inline-flex }` in A1theme.css, which loads after it. CSS
+settles a tie of equal specificity by source order, so the later file won and the element
+stayed on screen — including the three locked Trace Protocols avatars, which gave away the
+unlock they exist to wait for. `.hidden.hidden` is two classes and wins; the one responsive
+pairing in use is restored with a third. `scripts/check_hidden_utilities.sh` reads the
+`hidden <breakpoint>:<display>` pairings out of the markup and fails on one with no rule.
+
+Telemetry printed `23.456789012` in the HUD and `23.5` in the CLI, from the same reading.
+The rounding lived in the CLI's formatter. It now lives in `to_wire_json`, so both ends of
+the app agree about what the machine is doing.
+
+And the light theme was not readable. A proper WCAG audit of every text-bearing element,
+with the themes actually applied, found **34 failures on Solar** — almost all of them one
+cause: `--text-dim` was the ink mixed 62% towards the ground, which on a near-white page
+is `#a0a0a0`, about 2:1. 36% is the same idea at a readable weight. The rest were an
+alert card written for a dark ground (pale amber on translucent brown, which over white
+composites to a muddy grey), two bay controls wearing the page's ink instead of the
+projection bay's, and a heading in an accent colour that missed the line by a
+twentieth. Accents are now emitted twice: `--neon-*` as picked, for borders, fills and
+glows where contrast does not apply, and `--text-accent` / `--text-highlight` walked
+towards the ink until they read, for accents that are words. Any colour somebody mixes
+themselves gets the same treatment. **Solar, Eclipse and Cyberpunk now all measure zero
+failures**, and `scripts/check_theme_remap.sh` fails on a Tailwind text colour added to the
+markup and never mapped onto a theme variable — the exact mistake that is invisible in the
+dark theme the work is usually done in.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
