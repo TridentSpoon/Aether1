@@ -95,7 +95,12 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/agent/genesis", post(genesis))
         .route("/api/llm/test-connection", post(test_llm_connection))
         .route("/api/scanner/status", get(scanner_status))
+        .route("/api/setup/advice", get(setup_advice))
         .route("/api/scanner/pull-model", post(pull_model))
+        .route("/api/setup/download", post(start_download))
+        .route("/api/setup/downloads", get(download_status))
+        .route("/api/setup/download/forget", post(forget_download))
+        .route("/api/setup/start-server", post(start_local_server))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
         .route("/api/actions/pending", get(get_pending_actions))
@@ -464,6 +469,16 @@ async fn scanner_status() -> Json<model_scanner::ScanResult> {
     )
 }
 
+/// Where this machine is on the road to having a model. Read-only probes plus two settings
+/// lookups -- nothing here changes anything, so it is a GET and needs no approval.
+async fn setup_advice(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::setup_advice(&state.engine))
+            .await
+            .expect("setup_advice panicked"),
+    )
+}
+
 #[derive(Deserialize)]
 struct PullQuery {
     model_name: Option<String>,
@@ -479,6 +494,49 @@ async fn pull_model(
         tokio::task::spawn_blocking(move || commands::pull_model(&engine, name))
             .await
             .expect("pull_model panicked"),
+    )
+}
+
+#[derive(Deserialize)]
+struct DownloadQuery {
+    model_name: Option<String>,
+    endpoint: Option<String>,
+}
+
+async fn start_download(
+    State(state): State<AppState>,
+    Query(q): Query<DownloadQuery>,
+) -> Json<serde_json::Value> {
+    let engine = state.engine.clone();
+    let name = q.model_name.unwrap_or_default();
+    let endpoint = q.endpoint.unwrap_or_default();
+    Json(
+        tokio::task::spawn_blocking(move || commands::start_download(&engine, name, endpoint))
+            .await
+            .expect("start_download panicked"),
+    )
+}
+
+// Read-only, and the one route here polled on a timer -- it reads a map in memory and
+// touches neither the database nor the network, so a bar on screen costs nothing.
+async fn download_status() -> Json<serde_json::Value> {
+    Json(commands::download_status())
+}
+
+async fn forget_download(Query(q): Query<DownloadQuery>) -> Json<serde_json::Value> {
+    Json(commands::forget_download(q.model_name.unwrap_or_default()))
+}
+
+// Spawns the `ollama` already installed on this machine, with a fixed argument and no
+// shell. Exposed here as well as over IPC because the browser fallback hits the same dead
+// end as the native app does -- a server that is installed, not running, and nothing able
+// to start it. Same class of action as pull-model, which has spawned that binary all along.
+async fn start_local_server(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let engine = state.engine.clone();
+    Json(
+        tokio::task::spawn_blocking(move || commands::start_local_server(&engine))
+            .await
+            .expect("start_local_server panicked"),
     )
 }
 

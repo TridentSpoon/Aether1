@@ -285,11 +285,51 @@ Nothing is deleted by turning it on. Untick it and your cloud settings are exact
 left them. To nail it on for good — a shared machine, a locked-down install — set
 `AETHER1_LOCAL_ONLY=1` in the environment and the checkbox can no longer switch it off.
 
+## Giving it a brain
+
+A fresh install has no AI behind it: it talks, reads out your system stats and answers
+with a handful of canned lines, because `llm_provider` starts at `offline`. Nothing is
+broken — there is simply no model yet.
+
+Press **🧠 Set up the AI** in the HUD menu. It looks at the machine, works out
+which of four things is true (nothing installed / installed but not running / running
+with no models / a model is there), and asks for exactly one thing at a time. It sizes
+the model list to the memory this computer actually has, marks one **Best for this
+computer**, downloads it, and fills the settings in for you.
+
+The list is the nineteen most-used local models — Llama, Gemma, Qwen, Mistral, Phi and
+DeepSeek R1 — across five memory tiers, from a 400 MB one that runs on almost anything
+to a 43 GB one for a machine with 64 GB of memory. What this computer can run is listed
+straight away; the rest is one click away behind **Show N bigger models**, because the
+recommendation is a default and not a gate.
+
+Downloads show a real progress bar — the percentage and the byte count the model server
+itself reports, not a spinner — and up to three can run at once. If the model server is
+installed but not running, **▶ Start it for me** starts it; that is the one gap Aether1
+can close by itself rather than describe.
+
+Until a brain is connected the wizard opens on launch, the dialogue stream carries a
+notice you cannot miss, and sending a message says plainly that nothing is behind it
+rather than returning a canned line that looks like an answer.
+
+The same journey written out, per operating system, is in
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — written for someone who has never
+installed a developer tool in their life.
+
 ## Choosing a model
 
-Open **Settings** and Aether1 looks for model servers already running on this machine. Any
-that answer appear in **LOCAL SERVERS FOUND ON THIS MACHINE**; picking one fills in the
-provider, the address and the list of models it can run, so there is nothing to look up.
+Once there is a brain, the rest of this is for changing it. Open **Settings** and
+Aether1 looks for model servers already running on this machine. Any
+that answer appear under **AI SERVERS FOUND ON THIS COMPUTER**, inside the
+**🧠 The Brain** group; picking one fills in the provider, the address and the list
+of models it can run, so there is nothing to look up.
+
+The **Agent & System** tab is grouped by the question you came in with rather than by
+which module implements it: **🧠 The Brain**, **🗣 Voice & Sound**,
+**📓 Memory**, **🛡 What it may do**, **🌐 Network** and
+**⚙ The app itself**. Each group is collapsed until you open it, and the things
+almost nobody needs — the Piper voice file, the Whisper model file — are nested one level
+further inside the group they belong to.
 
 The scan probes the loopback ports these tools tend to use and identifies them by the API
 they speak, not by which program they are — so it finds the popular runners, most of the

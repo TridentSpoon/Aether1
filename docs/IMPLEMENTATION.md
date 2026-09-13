@@ -1008,6 +1008,114 @@ the sliders non-destructive — otherwise nudging a picker after moving a slider
 adjustment in permanently — and since it means the swatch and the screen disagree, a note says
 so while the tone is off default.
 
+### Step 29: a fresh install has no brain, and nothing said so — **shipped**
+
+The report was "a good looking app with no substance". It was accurate, and the cause was
+not the chat path — streaming, deltas, TTS chunking and history all worked. It was that a
+fresh install defaults to `llm_provider = "offline"`, so every answer came from
+`Persona::offline_reply`: canned text with nothing thinking behind it, and no route from
+that state to a working model that a non-technical person could find.
+
+`setup.rs` answers one question — *where is this machine, and what is the single next
+thing to do?* — from a live probe, as five stages: `NothingInstalled`,
+`InstalledNotRunning`, `RunningNoModel`, `ReadyToSelect`, `Configured`. Two properties
+make it honest:
+
+- **The stage is derived, never counted.** There is no step counter anywhere; the wizard
+  re-asks the backend after every action. A stage cannot be skipped past or claimed
+  falsely, and closing the app mid-way loses nothing.
+- **A finished download is a model the server reports.** `ollama pull` is spawned and
+  returns immediately, so "done" cannot come from the pull. The wizard polls
+  `/api/setup/advice` every five seconds and watches `installed_models` for the chosen
+  name to appear — true by construction, and it survives Aether1 being closed, because
+  the download was never Aether1's job.
+
+`models_for(ram_total_gb)` sizes the offer to the machine: usable memory is 70% of total,
+and the largest model that fits is marked recommended, so 4 GB is offered a 1B, 8 GB a 3B,
+16 GB `llama3.1:8b`, 32 GB a 14B and 64 GB+ `llama3.3:70b`. The catalogue is nineteen
+models across five memory tiers — the popular Llama, Gemma, Qwen, Mistral, Phi and
+DeepSeek R1 sizes — grouped ascending by `needs_gb`, with the intended recommendation
+*last* inside each tier, because the pick is `rposition(|m| m.needs_gb <= usable)`. That
+makes intra-tier ordering load-bearing rather than cosmetic, so
+`catalogue_is_ordered_by_memory` pins the ascent as a test.
+
+The whole catalogue is always listed — the recommendation is a default, not a gate — but
+nineteen radio buttons is its own kind of unhelpful, so each `ModelChoice` now carries
+`fits`, and the HUD folds the ones this machine has no memory for behind a `<details>`
+("Show N bigger models"). Already-downloaded models count as fitting whatever the memory
+says: they are on the disk, and hiding one would mean offering a download instead.
+
+Two things are deliberately *not* automatic. The cloud route is offered and never taken,
+because it means the words you type leave the machine and that is a decision. And the
+download button is hidden outright when `can_install_from_here` is false, rather than
+shown as a button that cannot work.
+
+Falling out of the same work: `pull_model`'s HTTP branch has a five-second timeout, so it
+can never complete a real download — it always fell through to the CLI and reported
+"Started in background" with no further signal. Both messages now say what actually
+happened.
+
+### Step 30: the settings panel, grouped by the question you arrived with — **shipped**
+
+`Agent & System` was one flat column. It is now six `<details>` groups — The Brain, Voice
+& Sound, Memory, What it may do, Network, The app itself — with the things almost nobody
+needs nested one level further inside the group they belong to. `<details>` rather than
+swapping panels for a concrete reason: a closed group still has all of its inputs in the
+DOM, so `loadSettings` and `saveSettings` address fields by id and need to know nothing
+about the grouping.
+
+Auditing every field against both halves of that round trip found four settings that were
+stored, some of them writable by the companion itself, and read by nothing or settable
+from nowhere:
+
+- `enable_sfx` — stored and AI-writable, but `voice.js` hardcoded `sfxEnabled = true` and
+  the menu toggle forgot on reload. Now one switch in two places, both saving.
+- `color_theme` — AI-writable, but the HUD only ever read the browser's own copy, so
+  asking the companion to change its colours changed nothing visible. Now reconciled on
+  load, and given a default in `get_settings` so the key comes back at all.
+- `tts_local_voice`, `stt_model_path`, `stt_language` — all three read by `voice_status`
+  and `transcribe_audio`, none settable from the HUD. Now three fields nested under Voice
+  & Sound, where empty means "find them yourself", which is the working default.
+
+### Step 31: a download you can watch, and a missing piece you cannot miss — **shipped**
+
+Two complaints from the first person to use Step 29 in anger, and they turn out to be the
+same complaint: *the app knows something is wrong and says so too quietly to hear.*
+
+**The progress bar.** Step 29's download spawned `ollama pull` as a child process and
+returned. A child process reports nothing, so the wizard polled the model list every five
+seconds and said "still going" until the name appeared — true, and for four minutes
+indistinguishable from a hang. `downloads.rs` replaces it: `POST /api/pull` with
+`{"stream": true}` returns newline-delimited JSON, one line per progress tick, and a
+thread per download reads it into a registry the HUD polls once a second.
+
+The one thing that needed care is that a model is several blobs, and the stream reports
+`completed`/`total` for whichever layer is moving. A bar wired straight to those numbers
+drops to zero at every layer boundary. `Tracker` keeps the last figure *per digest* and
+sums them, so the bar only ever goes forwards. Ten tests cover the shape of that stream:
+a second layer adding rather than replacing, `verifying sha256 digest` not throwing the
+bar away, `success` finishing it even when the final line carries no numbers.
+
+Because the registry is a map with a thread per entry, several downloads at once fell out
+for free. It is capped at three, and the refusal past that says why: *they share one
+connection, so starting more would not make any of them finish sooner.*
+
+**The notice.** The "no AI connected" card was a small amber line in the chat stream, and
+sending a message with nothing configured returned a canned offline reply — which reads
+exactly like an answer. So the app looked like it worked, badly. Now: the card is a
+full-width bordered block with an Orbitron headline; the wizard opens by itself on launch
+when `needs_attention` is set (once per launch — re-opening a window somebody just closed
+teaches people to close windows without reading them); and the send path re-probes and
+refuses rather than answering, because a canned reply in place of a real one is the app
+lying about its own state.
+
+**The one thing it can fix itself.** Four of the five setup stages are things Aether1 can
+only describe. `installed-not-running` is not: the binary is there and nothing is using
+it. `start_local_server` spawns it — no shell, no caller-supplied argument, the binary
+`which` finds under exactly the name `ollama`, so the whole of what it can be made to run
+is "the ollama already installed here, serving". It is not a tool, so nothing the
+companion says in a conversation can reach it.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1027,7 +1135,8 @@ calling.
 2. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
 3. **Step 19, several local models.** A stated core requirement, and still deliberately not
-   started.
+   started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
+   download path it would need already exist in `setup.rs`.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
 which is correct: what they should be depends on the three above.

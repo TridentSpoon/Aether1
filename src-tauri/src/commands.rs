@@ -111,6 +111,131 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
     }))
 }
 
+/// Where this machine is on the road to having a model, and the single next thing to do.
+///
+/// The three facts the advisor needs are gathered here rather than inside it: a fresh probe
+/// of the machine, how much memory it has, and whether the settings already name a real
+/// provider and model. Keeping `setup::advise` a pure function of those three is what lets
+/// every case it can land in be tested without a model server anywhere near the test.
+pub fn setup_advice(engine: &LlmEngine) -> Value {
+    let scan = model_scanner::scan_all();
+    let ram_total_gb = llm::Telemetry::snapshot().ram_total_gb;
+
+    // "Configured" means both halves are filled in. A provider with no model is the state a
+    // half-finished pass through the wizard leaves behind, and it answers nothing.
+    let provider = engine.db().get_setting_string("llm_provider", "offline");
+    let model = engine.db().get_setting_string("llm_model", "");
+    let configured = provider != "offline" && !model.trim().is_empty();
+
+    serde_json::to_value(crate::setup::advise(&scan, ram_total_gb, configured))
+        .unwrap_or_else(|_| serde_json::json!({}))
+}
+
+/// Starts a model download and returns immediately with its first state.
+///
+/// Unlike `pull_model`, which spawns the CLI and can only say "started", this drives
+/// Ollama's own streaming pull on a background thread and records what it reports, so
+/// `download_status` has real bytes to show. Several can run at once; `downloads::start`
+/// decides how many is too many.
+pub fn start_download(engine: &LlmEngine, model_name: String, endpoint: String) -> Value {
+    if crate::local_only::enabled(engine.db()) {
+        return serde_json::json!({
+            "ok": false,
+            "message": crate::local_only::refusal("no model was downloaded"),
+        });
+    }
+
+    // An empty endpoint means the caller had no server to name, which is the state the
+    // wizard is in before it has found one. The default port is the only guess worth
+    // making, and a wrong guess surfaces as a connection error rather than a silent stall.
+    let endpoint = if endpoint.trim().is_empty() {
+        "http://localhost:11434".to_string()
+    } else {
+        endpoint
+    };
+
+    match crate::downloads::start(&endpoint, &model_name) {
+        Ok(download) => serde_json::json!({ "ok": true, "download": download }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    }
+}
+
+/// Every download this session knows about, running and finished alike.
+///
+/// Read-only and cheap by design: the HUD asks for this about once a second while a bar is
+/// on screen, and it must never be the reason a download slows down.
+pub fn download_status() -> Value {
+    serde_json::json!({
+        "downloads": crate::downloads::snapshot(),
+        "max_concurrent": crate::downloads::MAX_CONCURRENT,
+    })
+}
+
+/// Clears one finished or failed row out of the list. Never touches a running one.
+pub fn forget_download(model_name: String) -> Value {
+    serde_json::json!({ "ok": crate::downloads::forget(&model_name) })
+}
+
+/// Starts the local model server when it is installed but not running.
+///
+/// This is the one case where the app can fix a missing dependency itself rather than
+/// telling someone to go and fix it: `ollama serve` is what the service would have run, it
+/// needs no administrator, and it is already on this machine or this does nothing.
+///
+/// Deliberately narrow. There is no shell, no argument comes from the caller, and the
+/// binary is the one `which` finds under exactly the name `ollama` -- so the whole of what
+/// this can be made to run is "the ollama already installed here, serving". It is reachable
+/// from the HUD and from the setup wizard; it is not a tool, so nothing the companion says
+/// in a conversation can reach it.
+pub fn start_local_server(engine: &LlmEngine) -> Value {
+    // Starting a server that then talks to a registry is not itself a network trip, but
+    // local-only mode is about what the operator has asked the app not to do on their
+    // behalf, and starting daemons uninvited is squarely in that spirit.
+    if crate::local_only::enabled(engine.db()) {
+        return serde_json::json!({
+            "ok": false,
+            "message": crate::local_only::refusal("no server was started"),
+        });
+    }
+
+    let Ok(binary) = which::which("ollama") else {
+        return serde_json::json!({
+            "ok": false,
+            "message": "There is no `ollama` command on this machine to start. It needs \
+                        installing first.",
+        });
+    };
+
+    // If something already answers, starting a second one would fail on the port and look
+    // like a broken button. Saying so is the more useful answer.
+    if model_scanner::scan_all().has_local_provider {
+        return serde_json::json!({
+            "ok": true,
+            "message": "A model server is already running on this computer.",
+        });
+    }
+
+    match std::process::Command::new(&binary)
+        .arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        // Started, not proven: it takes a moment to bind the port, and whoever called this
+        // confirms by probing rather than by trusting this answer. That is the same rule
+        // the rest of the setup path follows -- the machine is asked, never assumed.
+        Ok(_child) => serde_json::json!({
+            "ok": true,
+            "message": "Starting the model server. Give it a few seconds.",
+        }),
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "message": format!("Could not start the model server: {e}"),
+        }),
+    }
+}
+
 /// Downloads a model through the local Ollama, which fetches it from Ollama's registry --
 /// the one deliberate internet round trip left in the app, and the reason local-only mode
 /// has to have an opinion about it. Refusing is the honest answer: the mode says nothing
@@ -185,6 +310,10 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "stt_model_path": "",
         "stt_language": "en",
         "vault_path": "",
+        // The HUD saves this alongside its own browser copy so the two agree; without a
+        // default the key simply wouldn't come back on a fresh install, and the page would
+        // have nothing to reconcile against.
+        "color_theme": "",
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
         "desktop_sprite_enabled": false,
         "local_only": false,
