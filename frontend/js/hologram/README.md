@@ -69,9 +69,13 @@ updates the moment you save, with no reload.
 
 Some of the options in each tier are generic, built for the kit. Others are adapted
 pieces of the hand-built avatars whose designs are open for reuse this way -- White
-Rabbit, Operator, hAlcy, R.E.D. 9000, A.R.X.LIMES, A.R.X.LOGOS and A1ter_nul. (The Nexus
-/ Nexus Sent and A1 are not sources for the kit -- their designs stay theirs alone.) See
-`js/hologram/parts.js` for the full catalogue.
+Rabbit, Operator, hAlcy, R.E.D. 9000, A.R.X.LIMES, A.R.X.LOGOS, A1ter_nul, A.R.X.LOCAS,
+A.R.X.LEGIONARE, A.R.X.LOREGENDA, A.R.X.LYKSAUM, A.R.X.LEXICO, A.R.X.LUCRE and
+A.R.X.L'KEMI. (The Nexus / Nexus Sent and A1 are not sources for the kit -- their
+designs stay theirs alone. `avatar-senti.js` is the Nexus Sent avatar under a different
+filename -- id `senti`, label "Nexus Sent" -- so it falls under this same exception, not
+a separate avatar left out by mistake.) See `js/hologram/parts.js` for the full
+catalogue.
 
 What is saved is a *recipe* — a few lines of settings, not code. A recipe can be pasted
 to someone else safely, because settings cannot do anything.
