@@ -87,10 +87,22 @@ Roughly:
 
 | Your computer's memory | What is recommended | Download size |
 | --- | --- | --- |
+| 2 GB | Qwen 2.5 (tiny) | about 400 MB |
 | 4 GB | Llama 3.2 (small) | about 1.3 GB |
 | 8 GB | Llama 3.2 (medium) | about 2 GB |
-| 16 GB | Mistral (large) | about 4.1 GB |
-| 32 GB or more | Qwen 2.5 (very large) | about 9 GB |
+| 16 GB | Llama 3.1 (large) | about 4.9 GB |
+| 32 GB | Qwen 2.5 (very large) | about 9 GB |
+| 64 GB or more | Llama 3.3 (huge) | about 43 GB |
+
+There are nineteen models on the list in all — the popular ones from Meta (Llama),
+Google (Gemma), Alibaba (Qwen), Mistral, Microsoft (Phi) and DeepSeek. The ones your
+machine has the memory for are listed straight away; the bigger ones are one click
+away, behind a line that reads **Show N bigger models**. Nothing is hidden from you —
+if you know your machine better than the guess does, pick past the recommendation.
+
+A note on the DeepSeek R1 models: they think a problem through before answering, so
+they are slower but much better at puzzles, maths and code. They are worth trying if
+the answers from an ordinary model are not quite good enough.
 
 **In the wizard:** choose one and press **📥 Download this brain**. A progress bar appears
 under **DOWNLOADING** showing the real percentage and how many gigabytes have arrived

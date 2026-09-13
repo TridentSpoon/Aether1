@@ -1032,8 +1032,18 @@ make it honest:
 
 `models_for(ram_total_gb)` sizes the offer to the machine: usable memory is 70% of total,
 and the largest model that fits is marked recommended, so 4 GB is offered a 1B, 8 GB a 3B,
-16 GB Mistral and 32 GB+ a 14B. The whole catalogue is always listed — the recommendation
-is a default, not a gate.
+16 GB `llama3.1:8b`, 32 GB a 14B and 64 GB+ `llama3.3:70b`. The catalogue is nineteen
+models across five memory tiers — the popular Llama, Gemma, Qwen, Mistral, Phi and
+DeepSeek R1 sizes — grouped ascending by `needs_gb`, with the intended recommendation
+*last* inside each tier, because the pick is `rposition(|m| m.needs_gb <= usable)`. That
+makes intra-tier ordering load-bearing rather than cosmetic, so
+`catalogue_is_ordered_by_memory` pins the ascent as a test.
+
+The whole catalogue is always listed — the recommendation is a default, not a gate — but
+nineteen radio buttons is its own kind of unhelpful, so each `ModelChoice` now carries
+`fits`, and the HUD folds the ones this machine has no memory for behind a `<details>`
+("Show N bigger models"). Already-downloaded models count as fitting whatever the memory
+says: they are on the disk, and hiding one would mean offering a download instead.
 
 Two things are deliberately *not* automatic. The cloud route is offered and never taken,
 because it means the words you type leave the machine and that is a decision. And the

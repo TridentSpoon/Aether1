@@ -137,45 +137,106 @@ pub struct ModelChoice {
     /// Free RAM this wants, in gigabytes. Never shown; used to filter the list.
     #[serde(skip)]
     pub needs_gb: f64,
+    /// Whether this machine has the memory to run it comfortably.
+    ///
+    /// The list is long enough now that showing every entry at once is its own kind of
+    /// unhelpful, so the HUD folds the ones that do not fit away behind a "show the
+    /// bigger ones" line. They are still offered -- someone who knows their hardware
+    /// better than a heuristic does gets to pick past it -- just not shouted.
+    pub fits: bool,
     /// The one pre-selected for this machine.
     pub recommended: bool,
 }
 
-/// Every model the guided install offers, smallest first.
+/// Every model the guided install offers, grouped by the memory a machine needs for it
+/// and, inside each group, ending with the one worth recommending there.
+///
+/// Two rules hold this list together and `catalogue_is_ordered_by_memory` enforces the
+/// first of them:
+///
+/// 1. `needs_gb` never decreases down the list, because `models_for` picks the *last*
+///    entry that fits.
+/// 2. So the last entry of each memory group is the recommendation for that class of
+///    machine. Ordering inside a group is a decision, not a formatting choice.
 ///
 /// The RAM figures are deliberately generous. A model that technically loads in its
 /// theoretical minimum and then swaps for forty seconds per sentence is, to the person
 /// who followed this wizard, a broken program -- and they will blame Aether1, correctly.
 /// Better to recommend something small that answers immediately.
 const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
+    // Runs on almost anything, including an old laptop or a mini PC.
+    (
+        "qwen2.5:0.5b",
+        "Qwen 2.5 (tiny)",
+        "The smallest thing here that still holds a conversation. For machines with very little memory.",
+        "about 400 MB",
+        2.0,
+    ),
+    (
+        "gemma3:1b",
+        "Gemma 3 (tiny)",
+        "Google's small one. Writes more naturally than its size suggests.",
+        "about 815 MB",
+        2.0,
+    ),
+    (
+        "qwen2.5:1.5b",
+        "Qwen 2.5 (small)",
+        "Fast, and noticeably better at following instructions than most models this size.",
+        "about 1 GB",
+        2.0,
+    ),
+    (
+        "deepseek-r1:1.5b",
+        "DeepSeek R1 (small)",
+        "Thinks a problem through before answering, so it is slower but better at puzzles and maths.",
+        "about 1.1 GB",
+        2.0,
+    ),
     (
         "llama3.2:1b",
         "Llama 3.2 (small)",
         "Quick and light. Good for chatting and simple questions; it will get hard facts wrong sometimes.",
         "about 1.3 GB",
-        3.0,
+        2.0,
     ),
-    (
-        "qwen2.5:1.5b",
-        "Qwen 2.5 (small)",
-        "About as fast as the one above and noticeably better at following instructions.",
-        "about 1 GB",
-        3.0,
-    ),
+    // The ordinary 8 GB desktop or laptop.
     (
         "gemma2:2b",
         "Gemma 2 (medium)",
-        "A step up in writing quality for a small step up in size. A good middle choice.",
+        "A step up in writing quality for a small step up in size.",
         "about 1.6 GB",
+        5.0,
+    ),
+    (
+        "qwen2.5:3b",
+        "Qwen 2.5 (medium)",
+        "Careful with instructions and good at code for something this small.",
+        "about 1.9 GB",
+        5.0,
+    ),
+    (
+        "phi4-mini",
+        "Phi 4 (mini)",
+        "Microsoft's small one. Strong at reasoning and maths for its size.",
+        "about 2.5 GB",
+        5.0,
+    ),
+    (
+        "gemma3:4b",
+        "Gemma 3 (medium)",
+        "The best writing of the medium models, and a little slower for it.",
+        "about 3.3 GB",
         5.0,
     ),
     (
         "llama3.2:3b",
         "Llama 3.2 (medium)",
-        "Handles longer conversations and keeps track of what was said. The best all-rounder here.",
+        "Handles longer conversations and keeps track of what was said. The best all-rounder at this size.",
         "about 2 GB",
         5.0,
     ),
+    // A 16 GB machine.
     (
         "mistral",
         "Mistral (large)",
@@ -184,11 +245,62 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         10.0,
     ),
     (
-        "qwen2.5:14b",
-        "Qwen 2.5 (very large)",
-        "The best answers on this list by some distance. Needs a serious machine.",
+        "qwen2.5:7b",
+        "Qwen 2.5 (large)",
+        "Very good at code and at doing exactly what it was asked.",
+        "about 4.7 GB",
+        10.0,
+    ),
+    (
+        "deepseek-r1:8b",
+        "DeepSeek R1 (large)",
+        "Works through its reasoning before answering. Slow, and hard to beat on tricky questions.",
+        "about 5.2 GB",
+        10.0,
+    ),
+    (
+        "llama3.1:8b",
+        "Llama 3.1 (large)",
+        "The most widely used model on this list, and a dependable all-rounder. The best pick for an ordinary gaming PC.",
+        "about 4.9 GB",
+        10.0,
+    ),
+    // A 32 GB workstation.
+    (
+        "gemma3:12b",
+        "Gemma 3 (very large)",
+        "Writes about as well as anything you can run at home. Needs a serious machine.",
+        "about 8.1 GB",
+        20.0,
+    ),
+    (
+        "deepseek-r1:14b",
+        "DeepSeek R1 (very large)",
+        "The reasoning one, at a size where the reasoning really shows. Takes its time.",
         "about 9 GB",
         20.0,
+    ),
+    (
+        "qwen2.5:14b",
+        "Qwen 2.5 (very large)",
+        "The best all-round answers you can get without a workstation-class machine.",
+        "about 9 GB",
+        20.0,
+    ),
+    // 64 GB and up, or a machine with a lot of video memory.
+    (
+        "mixtral:8x7b",
+        "Mixtral (huge)",
+        "Splits the work between several smaller experts, so it answers faster than its size suggests.",
+        "about 26 GB",
+        48.0,
+    ),
+    (
+        "llama3.3:70b",
+        "Llama 3.3 (huge)",
+        "As close to a commercial cloud assistant as a home machine gets. Only for very large amounts of memory.",
+        "about 43 GB",
+        48.0,
     ),
 ];
 
@@ -213,6 +325,7 @@ pub fn models_for(ram_total_gb: f64) -> Vec<ModelChoice> {
             blurb: blurb.to_string(),
             download: download.to_string(),
             needs_gb: *needs_gb,
+            fits: *needs_gb <= usable,
             recommended: false,
         })
         .collect();
@@ -569,6 +682,15 @@ mod tests {
         assert_eq!(pick.name, "qwen2.5:14b");
     }
 
+    /// 16 GB is the ordinary gaming PC, and the class of machine most likely to be running
+    /// a HUD with a 3D avatar in it. It should land on an 8B model.
+    #[test]
+    fn a_gaming_pc_is_recommended_a_large_model() {
+        let models = models_for(16.0);
+        let pick = models.iter().find(|m| m.recommended).unwrap();
+        assert_eq!(pick.name, "llama3.1:8b");
+    }
+
     /// A machine below every threshold still gets one pick. "Nothing here will run" is not a
     /// next step, and the smallest model on the list is worth trying anyway.
     #[test]
@@ -576,7 +698,66 @@ mod tests {
         let models = models_for(1.0);
         let picked: Vec<_> = models.iter().filter(|m| m.recommended).collect();
         assert_eq!(picked.len(), 1);
-        assert_eq!(picked[0].name, "llama3.2:1b");
+        assert_eq!(picked[0].name, "qwen2.5:0.5b");
+    }
+
+    /// `models_for` picks the *last* entry that fits, which is only the largest fitting one
+    /// while the list stays sorted by memory. Adding a model in the wrong place would
+    /// silently recommend it to machines that cannot run it, so the order is a test.
+    #[test]
+    fn catalogue_is_ordered_by_memory() {
+        let mut previous = 0.0;
+        for (name, _, _, _, needs_gb) in CATALOGUE {
+            assert!(
+                *needs_gb >= previous,
+                "{name} needs {needs_gb} GB, less than the entry above it ({previous} GB) -- \
+                 the catalogue must not go backwards",
+            );
+            previous = *needs_gb;
+        }
+    }
+
+    /// Every model is offered, but the HUD folds away the ones this machine cannot run, so
+    /// `fits` has to be honest about which is which.
+    #[test]
+    fn only_models_the_machine_can_run_are_marked_as_fitting() {
+        let models = models_for(8.0);
+        assert!(models.iter().any(|m| m.fits), "8 GB fits something");
+        assert!(
+            models.iter().any(|m| !m.fits),
+            "8 GB does not fit the big ones"
+        );
+        // The recommendation is always one of the ones that fit.
+        let pick = models.iter().find(|m| m.recommended).unwrap();
+        assert!(pick.fits);
+        // And nothing below the pick is marked as not fitting: fits is a prefix of the list.
+        let last_fitting = models.iter().rposition(|m| m.fits).unwrap();
+        assert!(models[..=last_fitting].iter().all(|m| m.fits));
+    }
+
+    /// The blurb and the download size are the only things a first-timer reads, and a model
+    /// with a name but no explanation is a dead end in the one place that cannot afford one.
+    #[test]
+    fn every_model_explains_itself() {
+        for (name, label, blurb, download, _) in CATALOGUE {
+            assert!(!label.is_empty(), "{name} has no label");
+            assert!(blurb.len() > 30, "{name} has no real blurb");
+            assert!(
+                download.contains("GB") || download.contains("MB"),
+                "{name} has no size"
+            );
+        }
+    }
+
+    /// Two entries with the same ollama name would draw two radio buttons that do the same
+    /// thing, and one of them would be wrong.
+    #[test]
+    fn no_model_is_listed_twice() {
+        let mut names: Vec<&str> = CATALOGUE.iter().map(|(name, ..)| *name).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "a model is listed twice");
     }
 
     /// The whole catalogue is always offered, whatever the machine: the list is advice, not

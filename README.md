@@ -297,6 +297,12 @@ with no models / a model is there), and asks for exactly one thing at a time. It
 the model list to the memory this computer actually has, marks one **Best for this
 computer**, downloads it, and fills the settings in for you.
 
+The list is the nineteen most-used local models — Llama, Gemma, Qwen, Mistral, Phi and
+DeepSeek R1 — across five memory tiers, from a 400 MB one that runs on almost anything
+to a 43 GB one for a machine with 64 GB of memory. What this computer can run is listed
+straight away; the rest is one click away behind **Show N bigger models**, because the
+recommendation is a default and not a gate.
+
 Downloads show a real progress bar — the percentage and the byte count the model server
 itself reports, not a spinner — and up to three can run at once. If the model server is
 installed but not running, **▶ Start it for me** starts it; that is the one gap Aether1

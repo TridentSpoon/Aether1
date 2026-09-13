@@ -1702,7 +1702,10 @@ document.addEventListener('DOMContentLoaded', () => {
         setupModels.innerHTML = '';
 
         const installed = new Set(advice.installed_models || []);
-        for (const model of advice.models || []) {
+
+        // Built as nodes rather than markup throughout: a model name is whatever the
+        // server said it was, and it is going onto the page either way.
+        function modelCard(model) {
             const label = document.createElement('label');
             label.className = 'setup-model';
 
@@ -1747,14 +1750,39 @@ document.addEventListener('DOMContentLoaded', () => {
             body.appendChild(blurb);
 
             label.appendChild(body);
-            setupModels.appendChild(label);
+            return label;
+        }
+
+        // The catalogue is long enough that showing all of it at once is its own kind of
+        // unhelpful. What this machine can run goes up top; the rest is one line away.
+        // Anything already downloaded counts as fitting whatever the memory says -- it is
+        // on the disk, and hiding it would mean offering a download instead.
+        const all = advice.models || [];
+        const roomy = all.filter(m => m.fits !== false || installed.has(m.name));
+        const heavy = all.filter(m => !(m.fits !== false || installed.has(m.name)));
+
+        for (const model of roomy) setupModels.appendChild(modelCard(model));
+
+        if (heavy.length) {
+            const more = document.createElement('details');
+            more.className = 'setup-more';
+            const summary = document.createElement('summary');
+            summary.textContent = heavy.length === 1
+                ? 'Show 1 bigger model (more memory than this computer has)'
+                : `Show ${heavy.length} bigger models (more memory than this computer has)`;
+            more.appendChild(summary);
+            const list = document.createElement('div');
+            list.className = 'setup-more-list';
+            for (const model of heavy) list.appendChild(modelCard(model));
+            more.appendChild(list);
+            setupModels.appendChild(more);
         }
 
         // Models the server has that this list has never heard of -- someone else pulled
         // them, or they came from another tool. Offering them is free and hiding them
         // would mean telling someone to download what they already have.
         for (const name of installed) {
-            if ((advice.models || []).some(m => m.name === name)) continue;
+            if (all.some(m => m.name === name)) continue;
             const label = document.createElement('label');
             label.className = 'setup-model';
             const radio = document.createElement('input');
@@ -1763,8 +1791,6 @@ document.addEventListener('DOMContentLoaded', () => {
             radio.value = name;
             radio.className = 'mt-1 bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0';
             label.appendChild(radio);
-            // Built as nodes rather than markup: a model name is whatever the server
-            // said it was, and it is going onto the page either way.
             const body = document.createElement('div');
             body.className = 'min-w-0 flex-1';
             const title = document.createElement('div');
@@ -1784,6 +1810,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (setupModels.querySelector('input[name="setup-model"]') && !setupModels.querySelector('input[name="setup-model"]:checked')) {
             setupModels.querySelector('input[name="setup-model"]').checked = true;
         }
+        // A pre-selection folded away inside the "bigger models" section would look like
+        // nothing is selected at all, so open the section when that happens.
+        const chosen = setupModels.querySelector('input[name="setup-model"]:checked');
+        const folded = chosen && chosen.closest('details');
+        if (folded) folded.open = true;
     }
 
     function renderSetupAdvice(advice) {
