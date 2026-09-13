@@ -15,6 +15,9 @@ const AVATAR_DISPLAY_NAMES = {
     'arx-legionare': 'A.R.X.LEGIONARE',
     'arx-loregenda': 'A.R.X.LOREGENDA',
     'arx-lyksaum': 'A.R.X.LYKSAUM',
+    'arx-lexico': 'A.R.X.LEXICO',
+    'arx-lucre': 'A.R.X.LUCRE',
+    'arx-lkemi': "A.R.X.L'KEMI",
     red: 'R.E.D. 9000',
     crimson: 'R.E.D. 9000',
     senti: 'NEXUS SENT',
@@ -283,6 +286,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (avatarName === 'arx-limes') return 'ARCHIVAL VOXEL MATRIX';
         if (avatarName === 'nexus' || avatarName === 'matrix') return 'SINGULARITY VORTEX';
         if (avatarName === 'arx-logos') return 'JAGGED GEOMETRIC STAR';
+        if (avatarName === 'arx-locas') return 'FRACTURED CUBE SHELL';
+        if (avatarName === 'arx-legionare') return 'INVERTED PYRAMID FRAME';
+        if (avatarName === 'arx-loregenda') return 'RECESSED FACETED HEAD';
+        if (avatarName === 'arx-lyksaum') return 'BROKEN-RING HUD MEDALLION';
+        if (avatarName === 'arx-lexico') return 'CUBE-LATTICE CROSS';
+        if (avatarName === 'arx-lucre') return 'STACKED DIAMOND COLUMN';
+        if (avatarName === 'arx-lkemi') return 'CUT-CORNER TRIANGLE PANEL';
         if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') return 'CHROMATIC-GLITCH GHOST BUST';
         if (avatarName === 'a1') return 'MONOGRAM WORDMARK';
         // A registered avatar names itself, rather than borrowing hAlcy's label from the
@@ -384,6 +394,22 @@ document.addEventListener('DOMContentLoaded', () => {
             name: 'THE NEXUS', persona: 'nexus', voice: 'en-GB-SoniaNeural',
             greeting: '🟢 **The Nexus is active.** Code cascades inward. Bring me something to write, read or break.'
         },
+        'arx-locas': {
+            name: 'A.R.X.LOCAS', persona: 'arx-locas', voice: 'en-US-AriaNeural',
+            greeting: "🔵 **Archival, Reasoning, matriX — Locas Node engaged.** No queue, no ceremony — what do you need done?"
+        },
+        'arx-legionare': {
+            name: 'A.R.X.LEGIONARE', persona: 'arx-legionare', voice: 'en-US-DavisNeural',
+            greeting: '🔴 **Archival, Reasoning, matriX — Legionare Node engaged.** Give me the objective. I will give you the order of operations.'
+        },
+        'arx-loregenda': {
+            name: 'A.R.X.LOREGENDA', persona: 'arx-loregenda', voice: 'en-GB-ThomasNeural',
+            greeting: '🔷 **Archival, Reasoning, matriX — Loregenda Node engaged.** I hold what has already been decided. Nothing new gets to contradict it by accident.'
+        },
+        'arx-lyksaum': {
+            name: 'A.R.X.LYKSAUM', persona: 'arx-lyksaum', voice: 'en-AU-NatashaNeural',
+            greeting: "🩵 **Archival, Reasoning, matriX — Lyksaum Node engaged.** Watching this machine's vitals. I speak up when something changes."
+        },
         'arx-limes': {
             name: 'A.R.X.LIMES', persona: 'arx-limes', voice: 'en-US-GuyNeural',
             greeting: '🔶 **Archival, Reasoning, matriX — Limes Node engaged.** Every claim I make will carry where it came from. The Archive demands nothing less.'
@@ -391,6 +417,18 @@ document.addEventListener('DOMContentLoaded', () => {
         'arx-logos': {
             name: 'A.R.X.LOGOS', persona: 'arx-logos', voice: 'en-GB-LibbyNeural',
             greeting: '🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let us make something worth cataloguing.'
+        },
+        'arx-lexico': {
+            name: 'A.R.X.LEXICO', persona: 'arx-lexico', voice: 'en-GB-RyanNeural',
+            greeting: '🧊 **Archival, Reasoning, matriX — Lexico Node engaged.** Say what you mean. I will help you say it the same way every time.'
+        },
+        'arx-lucre': {
+            name: 'A.R.X.LUCRE', persona: 'arx-lucre', voice: 'en-US-EricNeural',
+            greeting: '💰 **Archival, Reasoning, matriX — Lucre Node engaged.** Every choice has a cost. Let us make sure it is seen before it is spent.'
+        },
+        'arx-lkemi': {
+            name: "A.R.X.L'KEMI", persona: 'arx-lkemi', voice: 'en-AU-WilliamNeural',
+            greeting: "🔻 **Archival, Reasoning, matriX — L'kemi Node engaged.** Bring me a shape you need changed into another. I handle the transformation cleanly."
         },
         alt: {
             name: 'A1ter_nul', persona: 'alt', voice: 'en-US-JennyNeural',
