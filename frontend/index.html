@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=23">
+    <link rel="stylesheet" href="css/A1theme.css?v=24">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
@@ -160,6 +160,7 @@
                 <div id="hud-menu" class="hud-slideout hud-slideout-right hidden" role="menu" aria-labelledby="btn-hud-menu">
                     <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
                     <button id="btn-setup" class="hud-slideout-action" role="menuitem">🧠 Set up the AI</button>
+                    <button id="btn-voice-setup" class="hud-slideout-action" role="menuitem">🗣 Set up the voice</button>
                     <button id="btn-activity" class="hud-slideout-action" role="menuitem">📜 Activity</button>
                     <button id="btn-clear-chat" class="hud-slideout-action" role="menuitem">🗑️ Clear conversation</button>
                     <button id="btn-settings" class="hud-slideout-action" role="menuitem">⚙️ Settings</button>
@@ -505,6 +506,61 @@
                 <button id="btn-setup-start-server" class="hidden cyber-btn cyber-btn-active text-xs py-2 px-4">▶ Start it for me</button>
                 <button id="btn-setup-download" class="hidden cyber-btn text-xs py-2 px-4 text-cyan-300">📥 Download this brain</button>
                 <button id="btn-setup-finish" class="hidden cyber-btn cyber-btn-active text-xs py-2 px-5">✔ Use this and finish</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GIVE IT A VOICE -- the twin of the brain wizard above, for the half of the
+         companion that talks and listens. Same shape on purpose: probe the machine, say
+         the one next thing, re-ask after every action. -->
+    <div id="voice-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    🗣 GIVE IT A VOICE
+                </h2>
+                <button id="btn-close-voice" class="text-slate-400 hover:text-cyan-300 font-bold text-lg" title="Close">✕</button>
+            </div>
+
+            <p class="text-xs font-mono text-slate-400 leading-snug">
+                Talking and listening are two separate things, and either can be missing without
+                the other. This page tests both, out loud, and tells you exactly what happened
+                &mdash; including which voice actually did the speaking.
+            </p>
+
+            <div class="bg-slate-900/80 border border-cyan-500/30 rounded p-3">
+                <div id="voice-headline" class="text-sm font-mono text-cyan-200">Checking this computer...</div>
+            </div>
+
+            <!-- Speaking. Rendered from the probe; the test button below is the real proof. -->
+            <div class="space-y-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">🔊 SPEAKING OUT LOUD</h3>
+                <div id="voice-speaking" class="voice-half"></div>
+                <ol id="voice-speaking-steps" class="space-y-2"></ol>
+            </div>
+
+            <!-- Listening. No fallback engine exists for this half, so missing is a fault. -->
+            <div class="space-y-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">🎤 HEARING YOU</h3>
+                <div id="voice-listening" class="voice-half"></div>
+                <ol id="voice-listening-steps" class="space-y-2"></ol>
+            </div>
+
+            <!-- What the test actually found, engine by engine. -->
+            <div id="voice-report" class="hidden space-y-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">WHAT HAPPENED</h3>
+                <div id="voice-attempts" class="space-y-1.5"></div>
+            </div>
+
+            <div id="voice-wizard-status" class="hidden text-xs font-mono p-2.5 rounded border border-cyan-500/20 bg-slate-900/80 leading-snug"></div>
+
+            <div class="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-cyan-500/30">
+                <span class="mr-auto text-[10px] font-mono text-slate-500">The written guide is in docs/GETTING_STARTED.md</span>
+                <button id="btn-voice-recheck" class="cyber-btn text-xs py-2 px-4">🔄 Check again</button>
+                <!-- Shown only when speaking is switched off: the one thing here Aether1
+                     can fix itself rather than describe. -->
+                <button id="btn-voice-enable" class="hidden cyber-btn cyber-btn-active text-xs py-2 px-4">🔊 Turn speaking on</button>
+                <button id="btn-voice-test" class="cyber-btn cyber-btn-active text-xs py-2 px-5">▶ Say something</button>
             </div>
         </div>
     </div>
@@ -871,6 +927,16 @@
                     <span class="settings-group-hint">how it speaks, and whether it beeps</span>
                 </summary>
                 <div class="settings-group-body">
+                    <!-- The same offer the brain group makes, for the same reason: a list
+                         of engine names is no use to somebody whose companion will not
+                         talk, and the wizard is the thing that says why. -->
+                    <div class="flex items-center justify-between gap-3 flex-wrap border border-cyan-500/25 rounded p-2.5 bg-slate-900/60">
+                        <span class="text-[11px] font-mono text-slate-300 leading-snug flex-1 min-w-0">
+                            Can't hear it, or can't be heard? This checks both, out loud.
+                        </span>
+                        <button id="btn-open-voice-settings" type="button" class="cyber-btn cyber-btn-active text-xs py-2 px-3 whitespace-nowrap">🗣 Test &amp; fix the voice</button>
+                    </div>
+
                     <div class="space-y-1">
                         <label for="setting-tts-engine" class="text-xs font-mono text-cyan-300 block">WHAT DOES THE SPEAKING</label>
                         <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
@@ -1128,7 +1194,7 @@
     <script src="js/hologram/avatar-operator.js?v=3"></script>
     <script src="js/hologram/animate.js?v=37"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=36"></script>
+    <script src="js/app.js?v=37"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

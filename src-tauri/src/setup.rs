@@ -99,7 +99,7 @@ pub struct Step {
 }
 
 impl Step {
-    fn say(title: &str, detail: &str) -> Step {
+    pub(crate) fn say(title: &str, detail: &str) -> Step {
         Step {
             title: title.to_string(),
             detail: detail.to_string(),
@@ -108,14 +108,14 @@ impl Step {
         }
     }
 
-    fn run(title: &str, detail: &str, command: &str) -> Step {
+    pub(crate) fn run(title: &str, detail: &str, command: &str) -> Step {
         Step {
             command: Some(command.to_string()),
             ..Step::say(title, detail)
         }
     }
 
-    fn open(title: &str, detail: &str, url: &str) -> Step {
+    pub(crate) fn open(title: &str, detail: &str, url: &str) -> Step {
         Step {
             url: Some(url.to_string()),
             ..Step::say(title, detail)

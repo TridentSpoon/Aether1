@@ -2230,6 +2230,230 @@ document.addEventListener('DOMContentLoaded', () => {
         openSetupWizard();
     });
 
+    /* ====================== GIVE IT A VOICE =============================
+     * The brain wizard's twin, for the half of the companion that talks and listens.
+     *
+     * The reason it exists is narrower than the brain's. A missing model announces
+     * itself -- nothing answers. Voice fails silently: synthesis threw, the catch wrote
+     * to a console nobody has open, and the companion simply did not say anything. So
+     * the centrepiece here is not the status fields, it is the "Say something" button:
+     * it makes a real attempt and reports what every engine said on the way, because
+     * "Piper: not installed. Microsoft's online voice: timed out. Windows Speech:
+     * spoke." is a diagnosis and silence is not.
+     */
+
+    const voiceModal = document.getElementById('voice-modal');
+    const voiceHeadline = document.getElementById('voice-headline');
+    const voiceSpeaking = document.getElementById('voice-speaking');
+    const voiceListening = document.getElementById('voice-listening');
+    const voiceSpeakingSteps = document.getElementById('voice-speaking-steps');
+    const voiceListeningSteps = document.getElementById('voice-listening-steps');
+    const voiceReport = document.getElementById('voice-report');
+    const voiceAttempts = document.getElementById('voice-attempts');
+    const voiceWizardStatus = document.getElementById('voice-wizard-status');
+    const btnVoiceRecheck = document.getElementById('btn-voice-recheck');
+    const btnVoiceTest = document.getElementById('btn-voice-test');
+    const btnVoiceEnable = document.getElementById('btn-voice-enable');
+
+    function setVoiceStatus(text, tone = 'info') {
+        if (!voiceWizardStatus) return;
+        voiceWizardStatus.classList.remove('hidden', 'text-cyan-300', 'text-green-400', 'text-red-400', 'text-slate-300', 'animate-pulse');
+        if (!text) { voiceWizardStatus.classList.add('hidden'); return; }
+        const tones = { info: 'text-slate-300', busy: 'text-cyan-300', good: 'text-green-400', bad: 'text-red-400' };
+        voiceWizardStatus.classList.add(tones[tone] || tones.info);
+        if (tone === 'busy') voiceWizardStatus.classList.add('animate-pulse');
+        voiceWizardStatus.textContent = text;
+    }
+
+    async function fetchVoiceAdvice() {
+        if (IS_TAURI) return tauriInvoke('voice_advice_rust');
+        const resp = await apiFetch('/api/voice/advice');
+        if (!resp.ok) throw new Error(`voice check failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* One half of the voice, drawn as a single verdict line plus the detail under it.
+       `working` decides the colour, and it is deliberately not the same question as
+       "is there anything to do": the basic OS voice works and is still worth improving,
+       and telling somebody their computer cannot speak when it can is how a wizard
+       sends them off installing things for no reason. */
+    function renderVoiceHalf(target, half) {
+        if (!target) return;
+        target.innerHTML = '';
+        if (!half) return;
+
+        const head = document.createElement('div');
+        head.className = 'flex items-start gap-2';
+
+        const mark = document.createElement('span');
+        mark.className = half.working ? 'text-green-400' : 'text-red-400';
+        mark.textContent = half.working ? '✔' : '✕';
+        head.appendChild(mark);
+
+        const line = document.createElement('span');
+        line.className = 'text-xs font-mono text-cyan-100 flex-1 min-w-0';
+        line.textContent = half.headline;
+        head.appendChild(line);
+        target.appendChild(head);
+
+        if (half.engine) {
+            const engine = document.createElement('div');
+            engine.className = 'text-[10px] font-mono text-cyan-400 mt-1';
+            engine.textContent = `Using: ${half.engine}`;
+            target.appendChild(engine);
+        }
+
+        if (half.detail) {
+            const detail = document.createElement('div');
+            detail.className = 'text-[11px] font-mono text-slate-400 leading-snug mt-1';
+            detail.textContent = half.detail;
+            target.appendChild(detail);
+        }
+    }
+
+    function renderVoiceAdvice(advice) {
+        if (voiceHeadline) voiceHeadline.textContent = advice.headline || '';
+
+        renderVoiceHalf(voiceSpeaking, advice.speaking);
+        renderVoiceHalf(voiceListening, advice.listening);
+
+        // The steps are the same shape the brain wizard uses, so they draw with the same
+        // function -- one command or one link each, never both.
+        if (voiceSpeakingSteps) {
+            voiceSpeakingSteps.innerHTML = '';
+            (advice.speaking?.steps || []).forEach((step, i) => voiceSpeakingSteps.appendChild(renderSetupStep(step, i)));
+        }
+        if (voiceListeningSteps) {
+            voiceListeningSteps.innerHTML = '';
+            (advice.listening?.steps || []).forEach((step, i) => voiceListeningSteps.appendChild(renderSetupStep(step, i)));
+        }
+
+        // Replies not being spoken at all is the one fault here Aether1 can fix itself,
+        // so it offers to rather than describing a checkbox somewhere else.
+        if (btnVoiceEnable) btnVoiceEnable.classList.toggle('hidden', advice.auto_speak !== false);
+
+        if (advice.auto_speak === false) {
+            setVoiceStatus('Everything below is switched off until speaking is turned back on.', 'info');
+        } else if (advice.local_only && advice.chosen_engine === 'cloud') {
+            setVoiceStatus('Local-only mode is on, so the cloud voice you picked is being overruled -- Piper or nothing.', 'info');
+        } else {
+            setVoiceStatus('');
+        }
+    }
+
+    async function refreshVoiceAdvice() {
+        if (voiceHeadline) voiceHeadline.textContent = 'Checking this computer...';
+        try {
+            const advice = await fetchVoiceAdvice();
+            renderVoiceAdvice(advice);
+            return advice;
+        } catch (e) {
+            if (voiceHeadline) voiceHeadline.textContent = 'Could not check this computer.';
+            setVoiceStatus(`${e.message || e}`, 'bad');
+            return null;
+        }
+    }
+
+    /* The report. Every engine that was asked, in the order it was asked, with its own
+       words about what happened -- including the one that worked. */
+    function renderVoiceAttempts(attempts) {
+        if (!voiceAttempts || !voiceReport) return;
+        voiceAttempts.innerHTML = '';
+        if (!attempts || !attempts.length) { voiceReport.classList.add('hidden'); return; }
+        voiceReport.classList.remove('hidden');
+        for (const attempt of attempts) {
+            const row = document.createElement('div');
+            row.className = 'flex items-start gap-2 text-[11px] font-mono leading-snug';
+            const mark = document.createElement('span');
+            mark.className = attempt.ok ? 'text-green-400' : 'text-slate-500';
+            mark.textContent = attempt.ok ? '✔' : '—';
+            row.appendChild(mark);
+            const name = document.createElement('span');
+            name.className = attempt.ok ? 'text-green-300' : 'text-slate-400';
+            name.textContent = `${attempt.engine}:`;
+            row.appendChild(name);
+            const why = document.createElement('span');
+            why.className = 'text-slate-400 flex-1 min-w-0';
+            why.textContent = attempt.detail;
+            row.appendChild(why);
+            voiceAttempts.appendChild(row);
+        }
+    }
+
+    async function handleVoiceTest() {
+        if (!btnVoiceTest) return;
+        btnVoiceTest.disabled = true;
+        setVoiceStatus('Speaking...', 'busy');
+        renderVoiceAttempts(null);
+        try {
+            let report;
+            let url = null;
+            if (IS_TAURI) {
+                report = await tauriInvoke('test_speech_rust');
+                if (report.path) url = window.__TAURI__.core.convertFileSrc(report.path);
+            } else {
+                const resp = await apiFetch('/api/voice/test', { method: 'POST' });
+                if (!resp.ok) throw new Error(`voice test failed: ${resp.status}`);
+                report = await resp.json();
+                if (report.audio_url) url = API_BASE + report.audio_url;
+            }
+
+            renderVoiceAttempts(report.attempts);
+            if (report.ok && url) {
+                // Played through the same queue everything else uses, so a test that is
+                // audible here is proof the reply path is audible too -- a separate
+                // player would only prove that a separate player works.
+                await voiceEngine.playTTSAudio(url);
+                setVoiceStatus(`It spoke, using ${report.engine}. If you heard nothing, the problem is this computer's sound rather than Aether1 -- check the volume and which output device is selected.`, 'good');
+            } else {
+                setVoiceStatus(`Nothing could speak. ${report.why || 'No engine reported a reason.'}`, 'bad');
+            }
+        } catch (e) {
+            setVoiceStatus(`The test could not run: ${e.message || e}`, 'bad');
+        } finally {
+            btnVoiceTest.disabled = false;
+        }
+    }
+
+    /* Turning speaking back on. Saved through the ordinary settings path so the checkbox
+       in Settings and this button can never disagree about what is stored. */
+    async function handleVoiceEnable() {
+        setVoiceStatus('Turning speaking on...', 'busy');
+        try {
+            // Through the settings form rather than around it, the same way the brain
+            // wizard finishes: the checkbox in Settings and this button then cannot end
+            // up disagreeing about what is stored.
+            const autoSpeakBox = document.getElementById('setting-autospeak');
+            if (autoSpeakBox) autoSpeakBox.checked = true;
+            await saveSettings(false);
+            autoSpeak = true;
+            await refreshVoiceAdvice();
+            setVoiceStatus('Speaking is on. Press "Say something" to hear it.', 'good');
+        } catch (e) {
+            setVoiceStatus(`Could not save that: ${e.message || e}`, 'bad');
+        }
+    }
+
+    function openVoiceWizard() {
+        if (!voiceModal) return;
+        voiceEngine.playSFX('click');
+        voiceModal.classList.remove('hidden');
+        renderVoiceAttempts(null);
+        refreshVoiceAdvice();
+    }
+
+    document.getElementById('btn-voice-setup')?.addEventListener('click', openVoiceWizard);
+    if (btnVoiceRecheck) btnVoiceRecheck.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshVoiceAdvice(); });
+    if (btnVoiceTest) btnVoiceTest.addEventListener('click', handleVoiceTest);
+    if (btnVoiceEnable) btnVoiceEnable.addEventListener('click', handleVoiceEnable);
+    document.getElementById('btn-close-voice')?.addEventListener('click', () => {
+        voiceModal.classList.add('hidden');
+    });
+    document.getElementById('btn-open-voice-settings')?.addEventListener('click', () => {
+        settingsModal.classList.add('hidden');
+        openVoiceWizard();
+    });
+
     /* The line at the top of The Brain saying what is actually connected. Settings that
        name a provider are not evidence that anything answers, and the difference is the
        whole reason someone opens this panel. */
@@ -2613,8 +2837,49 @@ document.addEventListener('DOMContentLoaded', () => {
             return data.audio_url ? API_BASE + data.audio_url : null;
         } catch (e) {
             console.warn('TTS synthesis failed', e);
+            showVoiceFailedCard(e);
             return null;
         }
+    }
+
+    /* Said once per launch, and only when speech was actually attempted and actually
+       failed. The old behaviour was a console warning nobody opens: the app simply went
+       quiet, and the only symptom was silence -- which is indistinguishable from a
+       reply that had nothing to say. */
+    let voiceFailureAnnounced = false;
+    function showVoiceFailedCard(err) {
+        if (voiceFailureAnnounced) return;
+        voiceFailureAnnounced = true;
+
+        document.getElementById('voice-failed-card')?.remove();
+
+        const card = document.createElement('div');
+        card.id = 'voice-failed-card';
+        card.className = 'no-brain-card';
+
+        const head = document.createElement('div');
+        head.className = 'no-brain-head';
+        head.textContent = '⚠ I COULD NOT SPEAK THAT';
+        card.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'no-brain-body';
+        const why = err && err.message ? String(err.message) : String(err || 'no reason given');
+        body.textContent = `The words are on screen, but no voice came out. The reason given was: ${why}. The voice setup can test each voice in turn and tell you which one is missing.`;
+        card.appendChild(body);
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'cyber-btn cyber-btn-active text-sm py-2.5 px-5 mt-3 w-full sm:w-auto';
+        btn.textContent = '🗣 FIX THE VOICE';
+        btn.addEventListener('click', () => {
+            card.remove();
+            openVoiceWizard();
+        });
+        card.appendChild(btn);
+
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
     async function loadVersionInfo() {

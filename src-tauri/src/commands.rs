@@ -405,6 +405,70 @@ pub fn synthesize_speech(
     })
 }
 
+/// Where the voice stands: what can speak, what can listen, and what to do about either.
+/// Settings are read here so both transports get the same answer from the same source.
+pub fn voice_advice(engine: &LlmEngine) -> crate::voice_setup::VoiceAdvice {
+    let db = engine.db();
+    let local_only = crate::local_only::enabled(db);
+    crate::voice_setup::advise(
+        db.get_setting_bool("auto_speak", true),
+        &db.get_setting_string("tts_engine", "auto"),
+        &db.get_setting_string("tts_local_voice", ""),
+        &db.get_setting_string("stt_model_path", ""),
+        local_only,
+    )
+}
+
+/// The sentence the voice test speaks. Short enough to be quick, long enough that a voice
+/// which is technically producing audio but producing rubbish is audibly rubbish.
+pub const VOICE_TEST_SENTENCE: &str =
+    "Voice check. If you can hear this, speech is working correctly.";
+
+/// Actually says something out loud, and reports every engine it tried on the way.
+///
+/// The point is the report. A status field can say Piper is installed and the operator can
+/// still hear nothing, because "installed" and "produces audio on this machine right now"
+/// are different claims and only one of them is the one they care about. So this makes the
+/// real attempt and hands back what each engine said -- including on success, because
+/// "it spoke, but with the basic voice" is the answer to the most common complaint.
+pub fn test_speech(engine: &LlmEngine) -> Result<(PathBuf, Value), Value> {
+    let db = engine.db();
+    let cache_dir = project_root().join("backend").join("audio_cache");
+    let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);
+    let local_voice = db.get_setting_string("tts_local_voice", "");
+    let local_only = crate::local_only::enabled(db);
+    let tts_engine =
+        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
+
+    match llm::generate_speech_reporting(
+        &cache_dir,
+        VOICE_TEST_SENTENCE,
+        tts_engine,
+        Some(&configured_voice),
+        Some(&local_voice),
+    ) {
+        Ok(speech) => {
+            let report = serde_json::json!({
+                "ok": true,
+                "engine": speech.engine,
+                "attempts": speech.attempts,
+                "spoken": VOICE_TEST_SENTENCE,
+            });
+            Ok((speech.path, report))
+        }
+        Err(attempts) => Err(serde_json::json!({
+            "ok": false,
+            "attempts": attempts,
+            // Nothing spoke, so the operator is owed the reason in one line rather than a
+            // list they have to read backwards.
+            "why": attempts
+                .last()
+                .map(|a| format!("{}: {}", a.engine, a.detail))
+                .unwrap_or_else(|| "nothing tried to speak".to_string()),
+        })),
+    }
+}
+
 /// Transcribes a recording made in the page. The audio is written to the same cache
 /// directory the synthesized speech lives in, transcribed, and deleted -- a recording of
 /// the operator's voice is not something to leave lying around after it has been read.

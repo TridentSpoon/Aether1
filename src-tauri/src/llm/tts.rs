@@ -20,8 +20,13 @@ use std::sync::LazyLock;
 
 use msedge_tts::tts::client::connect;
 use msedge_tts::tts::SpeechConfig;
+use serde::Serialize;
 
 pub const DEFAULT_VOICE: &str = "en-US-AriaNeural";
+/// How the two named engines are referred to when Aether1 is explaining itself. Piper and
+/// msedge-tts are the names in the code; these are the names a person can act on.
+pub const LOCAL_NAME: &str = "Piper (the good offline voice)";
+pub const CLOUD_NAME: &str = "Microsoft's online voice";
 /// Binaries that are Piper, in the order they are tried. The project has renamed its CLI
 /// over time and distributions disagree, so all three are worth looking for.
 const PIPER_BINARIES: &[&str] = &["piper", "piper-tts", "piper_tts"];
@@ -338,19 +343,29 @@ fn synthesize_cloud(voice_name: &str, text: &str, output_path: &Path) -> Result<
 /// `engine` chooses; `voice` is the cloud voice name, `local_voice` the path to an ONNX
 /// model. The two engines produce different audio for the same text, so the engine is part
 /// of the cache key -- otherwise switching engines would keep replaying the old voice.
-pub fn generate_speech_with(
+pub fn generate_speech_reporting(
     cache_dir: &Path,
     text: &str,
     engine: Engine,
     voice: Option<&str>,
     local_voice: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<Speech, Vec<Attempt>> {
     let clean_text = sanitize_text(text);
     if clean_text.trim().is_empty() {
-        return Err("nothing to synthesize after stripping markdown".to_string());
+        return Err(vec![Attempt {
+            engine: "nothing to say",
+            ok: false,
+            detail: "there was no speakable text left after the formatting was stripped out"
+                .to_string(),
+        }]);
     }
-    std::fs::create_dir_all(cache_dir)
-        .map_err(|e| format!("could not create {}: {e}", cache_dir.display()))?;
+    if let Err(e) = std::fs::create_dir_all(cache_dir) {
+        return Err(vec![Attempt {
+            engine: "the audio folder",
+            ok: false,
+            detail: format!("could not create {}: {e}", cache_dir.display()),
+        }]);
+    }
 
     let voice_name = voice.filter(|v| !v.is_empty()).unwrap_or(DEFAULT_VOICE);
 
@@ -395,10 +410,37 @@ pub fn generate_speech_with(
         Ok(output_path)
     };
 
-    match engine {
-        Engine::Local => try_local(),
-        Engine::Cloud => try_cloud(),
-        Engine::Os => try_os(),
+    // Every attempt is recorded, successful or not, because "it did not speak" is the one
+    // report nobody can act on. What the operator needs to see is which engines were tried
+    // and what each one said -- "Piper: not installed. Microsoft online voice: timed out.
+    // Windows Speech: spoke." is a diagnosis; silence is not.
+    let mut attempts: Vec<Attempt> = Vec::new();
+    let mut run =
+        |name: &'static str, f: &dyn Fn() -> Result<PathBuf, String>| -> Option<PathBuf> {
+            match f() {
+                Ok(path) => {
+                    attempts.push(Attempt {
+                        engine: name,
+                        ok: true,
+                        detail: "spoke".to_string(),
+                    });
+                    Some(path)
+                }
+                Err(why) => {
+                    attempts.push(Attempt {
+                        engine: name,
+                        ok: false,
+                        detail: why,
+                    });
+                    None
+                }
+            }
+        };
+
+    let spoken = match engine {
+        Engine::Local => run(LOCAL_NAME, &try_local),
+        Engine::Cloud => run(CLOUD_NAME, &try_cloud),
+        Engine::Os => run(os_engine_name(), &try_os),
         // Auto is the whole point: try each in turn and fall through on failure, not just
         // on "not installed" -- a Piper binary that crashes or a cloud call that times out
         // gets the same treatment as not having them at all, because either way the
@@ -406,8 +448,68 @@ pub fn generate_speech_with(
         // Windows (SAPI can't be "not installed"); on Linux it still needs espeak-ng,
         // which is the one thing among all three engines setup.sh actually installs by
         // default, but an existing checkout that predates that change could still lack it.
-        Engine::Auto => try_local().or_else(|_| try_cloud()).or_else(|_| try_os()),
+        Engine::Auto => run(LOCAL_NAME, &try_local)
+            .or_else(|| run(CLOUD_NAME, &try_cloud))
+            .or_else(|| run(os_engine_name(), &try_os)),
+    };
+
+    match spoken {
+        Some(path) => {
+            let engine = attempts
+                .last()
+                .map(|a| a.engine)
+                .unwrap_or_else(os_engine_name);
+            Ok(Speech {
+                path,
+                engine,
+                attempts,
+            })
+        }
+        None => Err(attempts),
     }
+}
+
+/// What one engine was asked to do and what came back. `detail` is the engine's own words
+/// on failure, so it is the thing worth putting in front of somebody whose companion will
+/// not talk.
+#[derive(Debug, Clone, Serialize)]
+pub struct Attempt {
+    pub engine: &'static str,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// A successful synthesis, and the record of how it got there.
+#[derive(Debug, Clone)]
+pub struct Speech {
+    pub path: PathBuf,
+    /// The engine that actually produced the audio, in words a person recognises.
+    pub engine: &'static str,
+    pub attempts: Vec<Attempt>,
+}
+
+/// The everyday entry point: the audio, or the last engine's complaint.
+///
+/// Callers that want to *show* somebody why nothing was said want
+/// `generate_speech_reporting` instead -- this one flattens the whole chain down to one
+/// string, which is the right shape for a caller that is going to play the audio and the
+/// wrong shape for one that is going to explain the silence.
+pub fn generate_speech_with(
+    cache_dir: &Path,
+    text: &str,
+    engine: Engine,
+    voice: Option<&str>,
+    local_voice: Option<&str>,
+) -> Result<PathBuf, String> {
+    generate_speech_reporting(cache_dir, text, engine, voice, local_voice)
+        .map(|speech| speech.path)
+        .map_err(|attempts| {
+            attempts
+                .iter()
+                .map(|a| format!("{}: {}", a.engine, a.detail))
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
 }
 
 #[cfg(test)]

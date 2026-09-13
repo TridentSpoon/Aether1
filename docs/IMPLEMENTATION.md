@@ -1136,6 +1136,62 @@ it. `start_local_server` spawns it — no shell, no caller-supplied argument, th
 is "the ollama already installed here, serving". It is not a tool, so nothing the
 companion says in a conversation can reach it.
 
+### Step 32: the window stopped answering, and the voice failed silently — **shipped**
+
+Three reports from the same sitting, and two of them turned out to be one bug.
+
+**"8 seconds when I click Status. Any request freezes the app to 'not responding'."**
+Every `#[tauri::command]` in `main.rs` was synchronous. A synchronous Tauri command runs
+*on the main thread* — the same thread that draws the window and answers the operating
+system when it asks whether the app is alive. So every command that blocked (ureq for
+HTTP, rusqlite for the database, a WebSocket to Microsoft for the cloud voice, a spawned
+`ollama`) blocked the window for exactly as long as it took. The first token of a reply
+is not instant, so the window was dead for the whole of that wait, and Windows painted it
+"Not responding". Nothing was slow; the wait was simply happening in the one place it
+must not.
+
+The fix is one annotation: `#[tauri::command(async)]` on a function that is *not* itself
+`async fn` makes Tauri run it on a thread pool instead of the main thread
+(`ExecutionContext::Async` → `sync_threadpool` in `tauri-macros`). 32 commands were
+converted. Four are deliberately left synchronous — `toggle_sprite_window_rust`,
+`open_avatar_lab_rust`, `show_main_window_rust`, `start_window_drag_rust` — because they
+create, show and drag windows, which *must* happen on the main thread and never block.
+
+Because "somebody adds a command and forgets" is how this comes back, `mod
+ipc_thread_tests` reads `main.rs` with `include_str!` and fails if any command is
+synchronous without being on that four-name allow-list — and fails the other way too, if
+a name on the list no longer exists. It was verified by reverting one command and
+watching the test catch it.
+
+**"Still no voice."** `synthesizeSpeechUrl` caught its own exception, wrote
+`console.warn` and returned null. So the entire evidence available to the person using it
+was silence — which is indistinguishable from a reply that had nothing to say. Two
+changes. `tts.rs` grew `generate_speech_reporting`, which records an `Attempt { engine,
+ok, detail }` for every tier of the Auto chain rather than only reporting the last error;
+`generate_speech_with` is now a thin wrapper over it, so the existing path is unchanged.
+And the frontend shows a card in the chat stream, once per launch, saying speech was
+attempted and failed, with the reason and a button into the voice wizard.
+
+**"Can I have a similar settings flow for the voice side."** `voice_setup.rs` is the brain
+wizard's twin, and deliberately the same shape: a stage derived from probing the machine
+rather than from a step counter, one command or one link per step, never both. It reports
+the two halves separately — `Speaking { Silent, BasicVoice, GoodVoice }` and `Listening {
+Deaf, ModelMissing, Ready }` — because either can be broken while the other is fine, and
+a single "voice: not working" line for both is how you spend an evening reinstalling the
+half that already worked.
+
+The one judgement call in it: **the OS voice counts as working.** `BasicVoice` is
+`working: true` and still `needs_attention()`. It really does speak, so calling it broken
+would be a lie that sends people installing Piper to fix a problem they do not have; but
+it sounds like a robot, so saying nothing would leave the better voice undiscovered. Both
+are true, and the type says both.
+
+`POST /api/voice/test` and `test_speech_rust` synthesize the test sentence and return the
+per-engine attempt list either way — on success *and* on failure, because "which one
+spoke" is as useful as "why none did". The frontend plays it back through
+`voiceEngine.playTTSAudio`, the same function a real reply uses, on purpose: a test that
+passes through a private code path proves only that the private code path works.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
