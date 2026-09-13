@@ -15,7 +15,7 @@ HologramAvatar.prototype.buildArxLimesAvatar = function() {
     this.arxLimesWingFillMat = new THREE.MeshBasicMaterial({
         color: 0xff5500, side: THREE.DoubleSide, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending
     });
-    const PLATE_THICKNESS = 6;
+    const PLATE_THICKNESS = 10;
 
     // --- Central Hub: a black hole. A near-opaque void (no additive blending -- an
     // additive near-black is invisible against the HUD's dark backdrop, and this needs
@@ -35,26 +35,33 @@ HologramAvatar.prototype.buildArxLimesAvatar = function() {
     this.arxLimesGroup.add(this.arxLimesHubMesh);
     this.arxLimesGroup.add(this.arxLimesHubOutline);
 
-    // --- Accretion disc: two thin rings tilted off-axis around the hub, plus a handful
-    // of bright hotspots orbiting the inner one so the disc visibly swirls rather than
-    // just glowing in place. Real torus/sphere geometry, not sprites -- a Sprite always
-    // faces the camera regardless of its parent's rotation, so it can't be tilted; the
-    // tilt is the whole point here. A fixed hot-accent colour like the rim, not
-    // theme-tinted -- it's meant to read as glowing infalling matter, not a UI element. ---
+    // --- Accretion disc: two soft glowing bands tilted off-axis around the hub, plus a
+    // handful of bright hotspots orbiting the inner one so the disc visibly swirls rather
+    // than just glowing in place. Flat RingGeometry annuli textured with a soft radial-fade
+    // gradient (createRadialBandTexture), not solid-shaded TorusGeometry tubes -- an unlit
+    // tube reads as painted plastic, while a feathered gradient band reads as actual light.
+    // Real mesh geometry, not sprites -- a Sprite always faces the camera regardless of its
+    // parent's rotation, so it can't be tilted; the tilt is the whole point here. A fixed
+    // hot-accent colour like the rim, not theme-tinted -- it's meant to read as glowing
+    // infalling matter, not a UI element. ---
     this.arxLimesAccretionGroup = new THREE.Group();
     this.arxLimesAccretionGroup.rotation.x = 1.15;
     this.arxLimesGroup.add(this.arxLimesAccretionGroup);
 
+    this.arxLimesAccretionBandTexture = this.createRadialBandTexture();
+
     this.arxLimesAccretionRing1Mat = new THREE.MeshBasicMaterial({
-        color: 0xffb347, side: THREE.DoubleSide, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false
+        map: this.arxLimesAccretionBandTexture, color: 0xffb347, side: THREE.DoubleSide,
+        transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false
     });
-    this.arxLimesAccretionRing1 = new THREE.Mesh(new THREE.TorusGeometry(16, 1.0, 10, 48), this.arxLimesAccretionRing1Mat);
+    this.arxLimesAccretionRing1 = new THREE.Mesh(new THREE.RingGeometry(13, 19, 64), this.arxLimesAccretionRing1Mat);
     this.arxLimesAccretionGroup.add(this.arxLimesAccretionRing1);
 
     this.arxLimesAccretionRing2Mat = new THREE.MeshBasicMaterial({
-        color: 0xff6a1a, side: THREE.DoubleSide, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false
+        map: this.arxLimesAccretionBandTexture, color: 0xff6a1a, side: THREE.DoubleSide,
+        transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false
     });
-    this.arxLimesAccretionRing2 = new THREE.Mesh(new THREE.TorusGeometry(21, 1.3, 10, 48), this.arxLimesAccretionRing2Mat);
+    this.arxLimesAccretionRing2 = new THREE.Mesh(new THREE.RingGeometry(18.5, 26, 64), this.arxLimesAccretionRing2Mat);
     this.arxLimesAccretionGroup.add(this.arxLimesAccretionRing2);
 
     this.arxLimesAccretionHotspotsMat = new THREE.MeshBasicMaterial({

@@ -51,6 +51,29 @@ HologramAvatar.prototype.createRingSpriteTexture = function(size = 64, thickness
     return new THREE.CanvasTexture(canvas);
 };
 
+// A soft radial-fade band on a transparent canvas, meant for a flat THREE.RingGeometry
+// annulus (used by A.R.X.LIMES's accretion disc) rather than a solid-shaded tube -- an
+// unlit MeshBasicMaterial on a torus reads as flat painted plastic, not light. A ring's
+// UV.v runs radially (inner edge to outer edge) and UV.u runs around the angle, so a
+// gradient that only varies down the canvas's height produces a soft glowing band with a
+// bright core and feathered inner/outer edges, tiling seamlessly around the angle since
+// nothing varies horizontally. Rendered white so material.color/opacity still tint it.
+HologramAvatar.prototype.createRadialBandTexture = function(size = 128) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 8;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, size);
+    gradient.addColorStop(0, 'rgba(255,255,255,0)');
+    gradient.addColorStop(0.35, 'rgba(255,255,255,0.9)');
+    gradient.addColorStop(0.5, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.65, 'rgba(255,255,255,0.9)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 8, size);
+    return new THREE.CanvasTexture(canvas);
+};
+
 // A faint tiled grid on a transparent canvas (used by The Nexus's CRT-radar backdrop) --
 // rendered white so material.color can tint it per the active color theme.
 HologramAvatar.prototype.createGridSpriteTexture = function(size = 256, divisions = 10) {
