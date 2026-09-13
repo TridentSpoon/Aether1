@@ -897,6 +897,19 @@ body {
     margin-top: 0.5rem;
 }
 
+/* ---- Voice wizard ---------------------------------------------------------
+   One box per half (speaking, listening). Both halves are always drawn, even
+   when one is fine, because "the half you cannot see" is exactly the half
+   people assume is working. */
+.voice-half {
+    padding: 0.65rem 0.75rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.25rem;
+    background: var(--bg-panel);
+}
+
+.voice-half:empty { display: none; }
+
 /* ---- Download progress ----------------------------------------------------
    One block per model being pulled. A model is several gigabytes over somebody's
    home connection, so this shows the real figure the model server reports rather

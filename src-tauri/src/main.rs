@@ -31,6 +31,7 @@ mod server;
 mod setup;
 mod tools;
 mod vault;
+mod voice_setup;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -279,7 +280,7 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
 /// does -- lets the HUD show the same real version check instead of only being visible via
 /// the taskbar icon. Does not itself update `update_available`/the tray UI; those stay
 /// tray-only state (see run_update_check).
-#[tauri::command]
+#[tauri::command(async)]
 fn check_for_update_rust(app: tauri::AppHandle) -> UpdateStatus {
     compute_update_status(local_only_enabled(&app))
 }
@@ -290,7 +291,7 @@ fn check_for_update_rust(app: tauri::AppHandle) -> UpdateStatus {
 /// have accepted its Store agreement at least once (Windows' own one-time step, not
 /// something this can do for them) -- a failure here says so via winget's own stderr rather
 /// than trying to paper over it.
-#[tauri::command]
+#[tauri::command(async)]
 fn install_gh_via_winget_rust() -> Result<String, String> {
     if !cfg!(target_os = "windows") {
         return Err("winget is only available on Windows".to_string());
@@ -328,7 +329,7 @@ fn install_gh_via_winget_rust() -> Result<String, String> {
 
 /// Rust-native equivalent for the frontend of get_version_info -- current version string
 /// plus the exact commit this build came from, for display in the HUD.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_version_info() -> serde_json::Value {
     serde_json::json!({
         "version": APP_VERSION,
@@ -556,7 +557,7 @@ fn perform_update<R: tauri::Runtime>(
 /// (a rebuild can take over a minute) -- the frontend should show a "working" state while
 /// this call is in flight. On success this process exits before ever returning a response,
 /// so the frontend only ever observes this call either hang (app about to exit) or reject.
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
     perform_update_core(&app).map_err(|(_, msg)| msg)
 }
@@ -565,7 +566,7 @@ fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
 /// the frontend calls generate_speech_rust separately for that, matching the two-command
 /// split the rest of this file already uses instead of one do-everything endpoint. Body
 /// lives in commands::generate_response, shared with the axum server's /api/chat handler.
-#[tauri::command]
+#[tauri::command(async)]
 fn generate_response_rust(
     engine: tauri::State<LlmEngine>,
     prompt: String,
@@ -581,7 +582,7 @@ fn generate_response_rust(
 /// `chat-delta` events (each tagged with the caller's stream_id so two in-flight turns can't
 /// interleave in the UI), and the whole reply still comes back as the return value. The
 /// frontend renders the deltas and uses the return value as the authoritative final text.
-#[tauri::command]
+#[tauri::command(async)]
 fn generate_response_streaming_rust(
     app: tauri::AppHandle,
     engine: tauri::State<LlmEngine>,
@@ -597,7 +598,7 @@ fn generate_response_streaming_rust(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
     purpose: String,
@@ -605,7 +606,7 @@ fn agent_genesis_rust(
     commands::agent_genesis(&engine, purpose)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn test_llm_connection_rust(
     engine: tauri::State<LlmEngine>,
     provider: String,
@@ -619,19 +620,19 @@ fn test_llm_connection_rust(
 /// Rust-native equivalent of GET /api/scanner/status (backend/main.py) -- cloud API key
 /// detection plus Ollama/LM Studio probes. Blocking (matches this file's existing
 /// synchronous command style); each probe has its own short timeout so this can't hang.
-#[tauri::command]
+#[tauri::command(async)]
 fn scan_models_rust() -> model_scanner::ScanResult {
     model_scanner::scan_all()
 }
 
 /// Where this machine is on the road to having a model, and what to do about it. Drives
 /// the setup wizard; safe to call as often as the wizard likes, since it is only probes.
-#[tauri::command]
+#[tauri::command(async)]
 fn setup_advice_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::setup_advice(&engine)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn start_download_rust(
     engine: tauri::State<LlmEngine>,
     model_name: String,
@@ -640,23 +641,23 @@ fn start_download_rust(
     commands::start_download(&engine, model_name, endpoint.unwrap_or_default())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn download_status_rust() -> serde_json::Value {
     commands::download_status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn forget_download_rust(model_name: String) -> serde_json::Value {
     commands::forget_download(model_name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn start_local_server_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::start_local_server(&engine)
 }
 
 /// Rust-native equivalent of POST /api/scanner/pull-model (backend/main.py).
-#[tauri::command]
+#[tauri::command(async)]
 fn pull_model_rust(
     engine: tauri::State<LlmEngine>,
     model_name: String,
@@ -667,28 +668,28 @@ fn pull_model_rust(
 /// Rust-native equivalent of GET /api/static-info (backend/main.py) -- just the OS/arch
 /// badge in the header, so a full Telemetry::snapshot() (which briefly sleeps to sample CPU
 /// usage) would be needlessly slow for something this static; read it directly instead.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_static_info_rust() -> serde_json::Value {
     commands::static_info()
 }
 
 /// Rust-native equivalent of GET /api/messages (backend/main.py).
-#[tauri::command]
+#[tauri::command(async)]
 fn get_tools_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::tool_catalog(&engine)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_actions_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::ActionRecord> {
     commands::recent_actions(&engine, limit)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn pending_actions_rust(engine: tauri::State<LlmEngine>) -> Vec<llm::ActionRecord> {
     commands::pending_actions(&engine)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn approve_action_rust(
     engine: tauri::State<LlmEngine>,
     id: i64,
@@ -696,17 +697,17 @@ fn approve_action_rust(
     commands::approve_action(&engine, id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn undo_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<serde_json::Value, String> {
     commands::undo_action(&engine, id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn reject_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<(), String> {
     commands::reject_action(&engine, id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_always_allowed_rust(
     engine: tauri::State<LlmEngine>,
     tool: String,
@@ -715,33 +716,33 @@ fn set_always_allowed_rust(
     commands::set_always_allowed(&engine, tool, allowed)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_messages_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::Message> {
     commands::get_messages(&engine, limit)
 }
 
 /// Rust-native equivalent of DELETE /api/messages (backend/main.py).
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_messages_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
     commands::clear_messages(&engine)
 }
 
 /// Rust-native equivalent of GET /api/settings (backend/main.py) -- same default-filling
 /// behavior, so a fresh install (no settings rows yet) still gets sensible values.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_settings_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::get_settings(&engine)
 }
 
 /// Opens the memory vault in the operator's file manager. Desktop only, by design -- see
 /// commands::open_vault_folder.
-#[tauri::command]
+#[tauri::command(async)]
 fn open_vault_folder_rust(engine: tauri::State<LlmEngine>) -> Result<String, String> {
     commands::open_vault_folder(&engine)
 }
 
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
-#[tauri::command]
+#[tauri::command(async)]
 fn save_settings_rust(
     app: tauri::AppHandle,
     engine: tauri::State<LlmEngine>,
@@ -767,22 +768,44 @@ fn save_settings_rust(
 /// into a playable URL via Tauri's convertFileSrc (see frontend/js/app.js). The axum
 /// server's /api/chat and /api/agent/genesis handlers call commands::synthesize_speech
 /// directly instead, since they need a URL string rather than a raw path.
-#[tauri::command]
+#[tauri::command(async)]
 fn transcribe_rust(engine: tauri::State<LlmEngine>, wav: Vec<u8>) -> Result<String, String> {
     commands::transcribe_audio(&engine, &wav)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn voice_status_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::voice_status(&engine)
 }
 
-#[tauri::command]
+/// Rust-native equivalent of GET /api/voice/advice -- what can speak, what can listen, and
+/// what to do about either. See voice_setup for why this is a probe rather than a wizard
+/// page number.
+#[tauri::command(async)]
+fn voice_advice_rust(engine: tauri::State<LlmEngine>) -> voice_setup::VoiceAdvice {
+    commands::voice_advice(&engine)
+}
+
+/// Rust-native equivalent of POST /api/voice/test. Speaks a fixed sentence and returns the
+/// report with the audio path folded in, so the HUD can both play it and say which engine
+/// managed it.
+#[tauri::command(async)]
+fn test_speech_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    match commands::test_speech(&engine) {
+        Ok((path, mut report)) => {
+            report["path"] = serde_json::json!(path.to_string_lossy());
+            report
+        }
+        Err(report) => report,
+    }
+}
+
+#[tauri::command(async)]
 fn list_personas_rust() -> serde_json::Value {
     commands::list_personas()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn generate_speech_rust(
     engine: tauri::State<LlmEngine>,
     text: String,
@@ -1016,6 +1039,8 @@ fn main() {
             generate_speech_rust,
             transcribe_rust,
             voice_status_rust,
+            voice_advice_rust,
+            test_speech_rust,
             list_personas_rust,
             get_version_info,
             check_for_update_rust,
@@ -1205,4 +1230,79 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, _event| {});
+}
+
+#[cfg(test)]
+mod ipc_thread_tests {
+    /// The freeze, pinned as a test.
+    ///
+    /// Tauri runs a synchronous `#[tauri::command]` **on the main thread** -- the same
+    /// thread that draws the window and answers the operating system. Every command here
+    /// was synchronous, and most of them block: ureq waits on a socket, rusqlite waits on
+    /// a file, the speech engines wait on a subprocess or a WebSocket to Microsoft. So
+    /// pressing a button that asks the model anything froze the HUD until the answer came
+    /// back, and Windows put "(Not Responding)" in the title bar -- not a slow model, a
+    /// blocked event loop.
+    ///
+    /// `#[tauri::command(async)]` on a synchronous function runs it on a thread pool
+    /// instead (see tauri-macros: `ExecutionContext::Async` with no `asyncness` resolves
+    /// to `sync_threadpool`), which is what every command that touches the network, the
+    /// disk, the database or a subprocess needs.
+    ///
+    /// Reading our own source is a blunt instrument, but the alternative is a rule that
+    /// lives only in somebody's memory -- and the cost of forgetting it is the whole app
+    /// locking up, which is exactly the kind of thing that comes back.
+    const SOURCE: &str = include_str!("main.rs");
+
+    /// The commands that must stay on the main thread: they create, show or drag windows.
+    /// None of them blocks on anything, so none of them can freeze the HUD.
+    const MAIN_THREAD_ONLY: &[&str] = &[
+        "toggle_sprite_window_rust",
+        "open_avatar_lab_rust",
+        "show_main_window_rust",
+        "start_window_drag_rust",
+    ];
+
+    #[test]
+    fn no_command_blocks_the_window() {
+        let mut offenders = Vec::new();
+        for (i, line) in SOURCE.lines().enumerate() {
+            if line.trim() != "#[tauri::command]" {
+                continue;
+            }
+            // The declaration is the next line that starts a function.
+            let name = SOURCE
+                .lines()
+                .skip(i + 1)
+                .find_map(|l| l.trim().strip_prefix("fn ").map(|rest| rest.trim_end()))
+                .map(|rest| {
+                    rest.split(['(', '<'])
+                        .next()
+                        .unwrap_or(rest)
+                        .trim()
+                        .to_string()
+                })
+                .unwrap_or_else(|| format!("the command on line {}", i + 1));
+            if !MAIN_THREAD_ONLY.contains(&name.as_str()) {
+                offenders.push(name);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these commands run on the main thread and will freeze the window if they \
+             ever block -- use #[tauri::command(async)], or add them to MAIN_THREAD_ONLY \
+             if they genuinely must run there: {offenders:?}",
+        );
+    }
+
+    /// The allow-list only means anything while the names in it are real.
+    #[test]
+    fn the_main_thread_list_is_not_stale() {
+        for name in MAIN_THREAD_ONLY {
+            assert!(
+                SOURCE.contains(&format!("fn {name}(")),
+                "{name} is allowed on the main thread but no longer exists",
+            );
+        }
+    }
 }

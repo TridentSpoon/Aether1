@@ -257,6 +257,12 @@ what's missing for the rest, and lets you pin a specific tier instead of Auto (e
 only" to guarantee nothing ever leaves the machine, refusing to speak rather than silently
 falling back to the cloud).
 
+**🗣 Set up the voice** (in the HUD menu, and at the top of Settings → Voice & Sound) is
+the guided version of all of that: it checks speaking and listening separately, gives the
+install steps for this operating system, and its **Say something** button makes a real
+attempt out loud and then lists every engine it tried and why each one did or didn't work.
+A voice that fails during a reply now says so in the chat rather than going quiet.
+
 ## Running with no internet at all
 
 Most of Aether1 already works with the cable out: it finds model servers by probing your

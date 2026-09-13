@@ -96,6 +96,8 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/llm/test-connection", post(test_llm_connection))
         .route("/api/scanner/status", get(scanner_status))
         .route("/api/setup/advice", get(setup_advice))
+        .route("/api/voice/advice", get(voice_advice))
+        .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
         .route("/api/setup/downloads", get(download_status))
@@ -477,6 +479,33 @@ async fn setup_advice(State(state): State<AppState>) -> Json<serde_json::Value> 
             .await
             .expect("setup_advice panicked"),
     )
+}
+
+/// Browser-transport twin of voice_advice_rust.
+async fn voice_advice(State(state): State<AppState>) -> Json<crate::voice_setup::VoiceAdvice> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::voice_advice(&state.engine))
+            .await
+            .expect("voice_advice panicked"),
+    )
+}
+
+/// Browser-transport twin of test_speech_rust. The page has no file paths, so the audio
+/// comes back as a URL under /api/audio like every other piece of speech here.
+async fn test_speech(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let outcome = tokio::task::spawn_blocking(move || commands::test_speech(&state.engine))
+        .await
+        .expect("test_speech panicked");
+    Json(match outcome {
+        Ok((path, mut report)) => {
+            if let Some(file_name) = path.file_name() {
+                report["audio_url"] =
+                    serde_json::json!(format!("/api/audio/{}", file_name.to_string_lossy()));
+            }
+            report
+        }
+        Err(report) => report,
+    })
 }
 
 #[derive(Deserialize)]
