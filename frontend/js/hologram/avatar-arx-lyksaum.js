@@ -1,11 +1,14 @@
-/* Avatar: A.R.X.LYKSAUM -- a flat circular HUD medallion rather than a spinning solid: a
- * translucent disc plate with a glowing rim, carrying a broken-ring glyph on its face (a
- * wide collar arc below, two shorter shoulder arcs above, with gaps between them) around a
- * small bright core node. Two thin rings orbit the disc in opposite directions, and a soft
- * scan bar sweeps up and down across the face. The whole thing only wobbles gently in place
- * -- it never turns away from the viewer, since the medallion's whole point is the glyph
- * printed on its face, and hiding that would defeat the design the same way an early build
- * of A.R.X.LOREGENDA once hid its own face behind a rotating shell (see that file's history).
+/* Avatar: A.R.X.LYKSAUM -- a HUD medallion built as an actual 3D disc: a tilted, slowly
+ * spinning cylindrical housing (thick enough, and turned far enough off-axis, that its rim
+ * and edge read as real depth rather than a flat sprite) carrying a glowing border, an
+ * inset structural ring, a sweeping scan bar and three accent dots on its surface. Fixed in
+ * front of that turning housing -- never tilting or spinning with it -- sits the avatar's
+ * one constant: a small bright core node ringed by a broken 3-piece circle (a wide collar
+ * arc below, two shorter shoulder arcs above, with gaps between all three). That core
+ * cluster is this avatar's face in every sense the engine cares about, so it stays fixed
+ * the same way A.R.X.LOREGENDA's face does -- an early build of that avatar hid its face by
+ * rotating it along with its shell, and this file avoids repeating that mistake by never
+ * spinning the one thing that has to stay legible.
  *
  * Loosely inspired by circular sci-fi HUD-medallion / broken-ring insignia motifs in
  * general -- a disc with a glowing cutout glyph and orbiting rings -- not a copy of any one
@@ -36,8 +39,9 @@ HologramAvatar.registerAvatar({
         const CORE_HOT = 0x00e8ff;
 
         const DISC_RADIUS = 42;
-        const DISC_THICKNESS = 5;
-        const GLYPH_Z = DISC_THICKNESS / 2 + 1.2;
+        const DISC_THICKNESS = 10;
+        const BASE_TILT = -0.5; // ~29 degrees off-axis, enough to show the rim as an ellipse
+        const CORE_Z = DISC_THICKNESS / 2 + 3; // fixed, in front of the disc regardless of its tilt/spin
 
         // --- Ambient bloom behind everything. ---
         const ambientGlowMat = new THREE.SpriteMaterial({ map: api.helpers.radialGlowTexture(64, '#eafeff', '#66d9ff'), color: api.palette.hex, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false });
@@ -46,27 +50,27 @@ HologramAvatar.registerAvatar({
         ambientGlow.position.z = -18;
         group.add(ambientGlow);
 
-        // A slow wobble carries the whole medallion, but never a full turn -- the glyph on
-        // its face has to stay legible from the one viewing angle this avatar is meant to
-        // be read from.
-        const wobbleGroup = new THREE.Group();
-        group.add(wobbleGroup);
+        // The disc housing: tilted off-axis and slowly spun in animate() so its thickness
+        // and rim actually read as a 3D object instead of a flat circle facing the camera.
+        const bodyGroup = new THREE.Group();
+        bodyGroup.rotation.x = BASE_TILT;
+        group.add(bodyGroup);
 
-        // --- The disc body: a squat cylinder rotated to face the camera, plus its own
-        // glowing rim. ---
+        // --- The disc body: a real cylinder, thick enough to show an edge once tilted,
+        // plus its own glowing rim. ---
         const discMat = new THREE.MeshBasicMaterial({ color: api.palette.hex3, side: THREE.DoubleSide, transparent: true, opacity: 0.22, depthWrite: false });
         const discGeo = new THREE.CylinderGeometry(DISC_RADIUS, DISC_RADIUS, DISC_THICKNESS, 48);
         discGeo.rotateX(Math.PI / 2);
         const disc = new THREE.Mesh(discGeo, discMat);
-        wobbleGroup.add(disc);
+        bodyGroup.add(disc);
 
         const discWireMat = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.6 });
         const discWire = new THREE.LineSegments(new THREE.EdgesGeometry(discGeo), discWireMat);
-        wobbleGroup.add(discWire);
+        bodyGroup.add(discWire);
 
         const rimMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
         const rim = new THREE.Mesh(new THREE.TorusGeometry(DISC_RADIUS, 1.6, 12, 48), rimMat);
-        wobbleGroup.add(rim);
+        bodyGroup.add(rim);
 
         // A thin inset structural ring, sitting just inside the rim.
         const structRingMat = new THREE.LineBasicMaterial({ color: api.palette.hex3, transparent: true, opacity: 0.55 });
@@ -76,44 +80,17 @@ HologramAvatar.registerAvatar({
             structRingPts.push(new THREE.Vector3(Math.cos(a) * 34, Math.sin(a) * 34, 0.5));
         }
         const structRing = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(structRingPts), structRingMat);
-        wobbleGroup.add(structRing);
+        bodyGroup.add(structRing);
 
-        // --- The glyph: a wide collar arc below, two shorter shoulder arcs above, with
-        // gaps separating all three -- a broken-ring insignia rather than a full circle. ---
-        const glyphMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-
-        function addArc(thetaStartDeg, arcDeg) {
-            const geo = new THREE.TorusGeometry(21, 2.6, 10, 48, arcDeg * deg);
-            const mesh = new THREE.Mesh(geo, glyphMat);
-            mesh.rotation.z = thetaStartDeg * deg;
-            mesh.position.z = GLYPH_Z;
-            wobbleGroup.add(mesh);
-            return mesh;
-        }
-        addArc(200, 140); // bottom collar
-        addArc(110, 55);  // top-left shoulder
-        addArc(15, 55);   // top-right shoulder
-
-        // --- The core node: a bright white pip ringed by the hot accent, the medallion's
-        // one point of focus. ---
-        const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false });
-        const core = new THREE.Mesh(new THREE.SphereGeometry(4, 16, 16), coreMat);
-        core.position.z = GLYPH_Z + 0.4;
-        wobbleGroup.add(core);
-
-        const coreRingMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
-        const coreRing = new THREE.Mesh(new THREE.TorusGeometry(7, 0.9, 10, 32), coreRingMat);
-        coreRing.position.z = GLYPH_Z + 0.4;
-        wobbleGroup.add(coreRing);
-
-        // --- Three micro accent dots at top, left and right (never at the bottom, where
-        // the collar arc already reads as the strongest edge). ---
+        // --- Three micro accent dots at top, left and right of the disc face (never at the
+        // bottom, where the core cluster's own collar arc already reads as the strongest
+        // edge). Mounted on the housing, so they turn with it. ---
         const dotAngles = [90 * deg, 180 * deg, 0 * deg];
         const microDots = dotAngles.map((a) => {
             const mat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
             const dot = new THREE.Mesh(new THREE.SphereGeometry(1.6, 10, 10), mat);
-            dot.position.set(Math.cos(a) * 27, Math.sin(a) * 27, GLYPH_Z);
-            wobbleGroup.add(dot);
+            dot.position.set(Math.cos(a) * 27, Math.sin(a) * 27, DISC_THICKNESS / 2 + 1.2);
+            bodyGroup.add(dot);
             return dot;
         });
 
@@ -121,8 +98,38 @@ HologramAvatar.registerAvatar({
         const scanlineMat = new THREE.SpriteMaterial({ map: api.helpers.glowTexture(64), color: CORE_HOT, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
         const scanline = new THREE.Sprite(scanlineMat);
         scanline.scale.set(DISC_RADIUS * 2.1, 7, 1);
-        scanline.position.z = GLYPH_Z + 0.8;
-        wobbleGroup.add(scanline);
+        scanline.position.z = DISC_THICKNESS / 2 + 1.4;
+        bodyGroup.add(scanline);
+
+        // --- The core cluster: this avatar's one fixed point of focus, a bright white pip
+        // ringed by a broken 3-piece circle -- a wide collar arc below, two shorter
+        // shoulder arcs above, with gaps separating all three. Never parented under
+        // bodyGroup, so it always faces the camera no matter how the housing behind it
+        // tilts or spins. ---
+        const coreGroup = new THREE.Group();
+        coreGroup.position.z = CORE_Z;
+        group.add(coreGroup);
+
+        const glyphMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+
+        function addArc(thetaStartDeg, arcDeg) {
+            const geo = new THREE.TorusGeometry(23, 3, 10, 48, arcDeg * deg);
+            const mesh = new THREE.Mesh(geo, glyphMat);
+            mesh.rotation.z = thetaStartDeg * deg;
+            coreGroup.add(mesh);
+            return mesh;
+        }
+        addArc(200, 140); // bottom collar
+        addArc(110, 55);  // top-left shoulder
+        addArc(15, 55);   // top-right shoulder
+
+        const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false });
+        const core = new THREE.Mesh(new THREE.SphereGeometry(5, 16, 16), coreMat);
+        coreGroup.add(core);
+
+        const coreRingMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+        const coreRing = new THREE.Mesh(new THREE.TorusGeometry(9, 1.1, 10, 32), coreRingMat);
+        coreGroup.add(coreRing);
 
         // --- Two thin rings orbiting the disc in opposite directions, standing in for the
         // reference's counter-rotating interface rings. ---
@@ -137,7 +144,7 @@ HologramAvatar.registerAvatar({
         group.add(outerRing2);
 
         return {
-            group, wobbleGroup,
+            group, bodyGroup, coreGroup, BASE_TILT,
             ambientGlow, ambientGlowMat,
             discMat, discWireMat, structRingMat, rimMat, glyphMat,
             core, coreMat, coreRing, coreRingMat,
@@ -152,8 +159,13 @@ HologramAvatar.registerAvatar({
         const isSpeaking = ctx.state === 'SPEAKING';
 
         model.group.position.y = Math.sin(ctx.time * (Math.PI * 2 / 5)) * 5;
-        model.wobbleGroup.rotation.y = Math.sin(ctx.time * 0.35) * 0.07;
-        model.wobbleGroup.rotation.x = Math.sin(ctx.time * 0.27 + 1.3) * 0.05;
+
+        // The disc housing spins continuously around Y (revealing its rim/thickness as it
+        // turns) while its base tilt breathes slightly on top -- this, not the old idle-only
+        // wobble, is what sells the housing as a real 3D object. The core cluster is never
+        // touched here: it lives in its own non-rotating group, always facing the camera.
+        model.bodyGroup.rotation.y = ctx.time * (Math.PI * 2 / 14);
+        model.bodyGroup.rotation.x = model.BASE_TILT + Math.sin(ctx.time * 0.3) * 0.06;
 
         // The two orbit rings, turning opposite ways at different speeds.
         model.outerRing1.rotation.z = ctx.time * (Math.PI * 2 / 20);
@@ -165,7 +177,7 @@ HologramAvatar.registerAvatar({
 
         // A brief glitch offset/flicker on click.
         const glitch = ctx.click;
-        model.wobbleGroup.position.x = (Math.random() - 0.5) * glitch * 2;
+        model.bodyGroup.position.x = (Math.random() - 0.5) * glitch * 2;
         model.rimMat.opacity = 0.7 + glitch * 0.3;
 
         // A slow ambient bloom breathing (period ~8s).
