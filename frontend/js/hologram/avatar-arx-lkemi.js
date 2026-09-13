@@ -9,10 +9,10 @@
  * The uploaded reference for this one pushed its three corner pyramids outward past
  * the edges of its own central shape, leaving a visible gap all the way around
  * (its "void" was meant to read as a hole, not the body of the figure) -- the
- * opposite of what was asked for here. This build instead gives each pyramid the
- * exact triangular wedge the cut removed as its base, so in the XY plane it closes
- * that gap completely; only then does it rise into a point in Z, so the corner
- * reads as a real pyramid rather than a flat patch.
+ * opposite of what was asked for here. This build instead bases each pyramid on
+ * the panel's own cut edge and points its apex outward in the picture plane to the
+ * triangle's true corner, so it closes the gap completely and reads as a spike
+ * radiating out from the panel rather than a bump poking toward the viewer.
  *
  * Loosely inspired by faceted geometric alchemical-symbol motifs in general -- a
  * triangle built from cut-cornered panel plus corner pyramids -- not a copy of any
@@ -89,27 +89,29 @@ HologramAvatar.registerAvatar({
         const panelWire = new THREE.LineSegments(new THREE.EdgesGeometry(panelGeo, 20), wireMat);
         spinGroup.add(panelWire);
 
-        // --- Three corner pyramids. Each one's base is the exact triangular wedge
-        // the cut above removed (the true corner plus the two adjacent cut points),
-        // sitting flush against the panel's front face -- so there is no XY gap
-        // between panel and corner, whatever angle it's viewed from. The apex then
-        // rises in Z off the centre of that base, so the corner reads as a real
-        // pyramid poking forward rather than as a flat patch. ---
-        const PYRAMID_HEIGHT = 22;
+        // --- Three corner pyramids. Each one's base is the rectangle standing on
+        // the panel's own cut edge (the two adjacent cut points, front face to back
+        // face) -- exactly where the panel was trimmed -- and its apex reaches
+        // outward in the XY plane to the triangle's true corner, at the panel's own
+        // mid-depth. So the point aims outward past the panel's edge, the way a
+        // horn or spike would, instead of poking out toward the viewer, while the
+        // base flush against the cut edge still closes the gap with no seam. ---
         const buildCornerPyramid = (cutPt1, corner, cutPt2) => {
-            const cx = (cutPt1.x + corner.x + cutPt2.x) / 3;
-            const cy = (cutPt1.y + corner.y + cutPt2.y) / 3;
-            const b1 = new THREE.Vector3(cutPt1.x - cx, cutPt1.y - cy, 0);
-            const b2 = new THREE.Vector3(corner.x - cx, corner.y - cy, 0);
-            const b3 = new THREE.Vector3(cutPt2.x - cx, cutPt2.y - cy, 0);
-            const apex = new THREE.Vector3(0, 0, PYRAMID_HEIGHT);
-            const tris = [b1, b2, apex, b2, b3, apex, b3, b1, apex, b1, b3, b2];
+            const ox = (cutPt1.x + cutPt2.x) / 2;
+            const oy = (cutPt1.y + cutPt2.y) / 2;
+            const oz = PANEL_THICKNESS / 2;
+            const p1 = new THREE.Vector3(cutPt1.x - ox, cutPt1.y - oy, -oz);
+            const p2 = new THREE.Vector3(cutPt1.x - ox, cutPt1.y - oy, oz);
+            const p3 = new THREE.Vector3(cutPt2.x - ox, cutPt2.y - oy, oz);
+            const p4 = new THREE.Vector3(cutPt2.x - ox, cutPt2.y - oy, -oz);
+            const apex = new THREE.Vector3(corner.x - ox, corner.y - oy, 0);
+            const tris = [p1, p2, apex, p2, p3, apex, p3, p4, apex, p4, p1, apex];
             const positions = new Float32Array(tris.length * 3);
             tris.forEach((v, i) => { positions[i * 3] = v.x; positions[i * 3 + 1] = v.y; positions[i * 3 + 2] = v.z; });
             const geo = new THREE.BufferGeometry();
             geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geo.computeVertexNormals();
-            return { geo, center: new THREE.Vector3(cx, cy, PANEL_THICKNESS) };
+            return { geo, center: new THREE.Vector3(ox, oy, oz) };
         };
         const cornerWedges = [
             buildCornerPyramid(panelPoints[5], A, panelPoints[0]),
