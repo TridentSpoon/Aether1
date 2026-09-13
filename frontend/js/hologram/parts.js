@@ -26,11 +26,14 @@
  *   effects     -- an ambient layer or background, not a fixed structure
  *
  * Some parts here are generic (built for this kit). Others are adapted from pieces of
- * the hand-built avatars whose designs are open for reuse this way -- rabbit, operator,
- * hAlcy, R.E.D. 9000, A.R.X.LIMES, A.R.X.LOGOS and A1ter_nul. (The Nexus / Nexus Sent
- * and A1 are not sources here -- their designs stay theirs alone.) An adapted part is a
- * fresh, simplified build of the same visual idea using only api.helpers, not the
- * original file's code -- it has to stand on its own next to parts it never met.
+ * the hand-built avatars. The rule is opt-out, not opt-in: every hand-built avatar's
+ * components belong in this kit by default -- including ones still behind a Trace
+ * Protocol unlock -- and a new avatar gets its pieces adapted in here as part of adding
+ * it, unless a reason to keep it exclusive is written down next to its exception. The
+ * only current exceptions are the Nexus / Nexus Sent and A1, whose designs stay theirs
+ * alone. An adapted part is a fresh, simplified build of the same visual idea using only
+ * api.helpers, not the original file's code -- it has to stand on its own next to parts
+ * it never met.
  *
  * Used by avatar-custom.js (which renders a saved recipe) and available to any
  * hand-written avatar that wants a piece without writing one from scratch.
