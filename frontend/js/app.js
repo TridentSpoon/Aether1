@@ -11,6 +11,7 @@ const AVATAR_DISPLAY_NAMES = {
     matrix: 'THE NEXUS',
     'arx-limes': 'A.R.X.LIMES',
     'arx-logos': 'A.R.X.LOGOS',
+    'arx-locas': 'A.R.X.LOCAS',
     red: 'R.E.D. 9000',
     crimson: 'R.E.D. 9000',
     senti: 'NEXUS SENT',
