@@ -31,9 +31,12 @@
  * Protocol unlock -- and a new avatar gets its pieces adapted in here as part of adding
  * it, unless a reason to keep it exclusive is written down next to its exception. The
  * only current exceptions are the Nexus / Nexus Sent and A1, whose designs stay theirs
- * alone. An adapted part is a fresh, simplified build of the same visual idea using only
- * api.helpers, not the original file's code -- it has to stand on its own next to parts
- * it never met.
+ * alone. (Note that avatar-senti.js registers under the id "senti" but its label is
+ * "Nexus Sent" -- it *is* the Nexus Sent avatar under a different filename, not a
+ * separate "Senti" avatar, so it falls under this same exception rather than being a
+ * gap in the catalogue.) An adapted part is a fresh, simplified build of the same visual
+ * idea using only api.helpers, not the original file's code -- it has to stand on its
+ * own next to parts it never met.
  *
  * Used by avatar-custom.js (which renders a saved recipe) and available to any
  * hand-written avatar that wants a piece without writing one from scratch.
@@ -387,6 +390,98 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LOREGENDA: the squashed outer/inner facet-shell pair with
+        // a small fixed-colour face (two lens eyes and a mouth bar) glowing through them,
+        // simplified to a single nested-shell core rather than a full head-and-body rig.
+        facetedHeadCore: {
+            label: 'Faceted head',
+            build(api, options) {
+                const HOT = 0x00e1ff;
+                const scaleY = 1.2, scaleZ = 0.85;
+                const group = new THREE.Group();
+
+                const shellMat = new THREE.MeshBasicMaterial({
+                    color: 0x00f0ff, side: THREE.DoubleSide, transparent: true, opacity: 0.22, depthWrite: false,
+                });
+                const outerWireMat = new THREE.LineBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.8 });
+
+                const outerGeom = new THREE.IcosahedronGeometry(options.size, 1);
+                outerGeom.scale(1, scaleY, scaleZ);
+                const outerShell = new THREE.Mesh(outerGeom, shellMat);
+                group.add(outerShell);
+                group.add(new THREE.LineSegments(new THREE.EdgesGeometry(outerGeom), outerWireMat));
+
+                const innerGeom = new THREE.IcosahedronGeometry(options.size * 0.68, 1);
+                innerGeom.scale(1, scaleY, scaleZ);
+                const innerShellMat = shellMat.clone();
+                innerShellMat.opacity = 0.14;
+                group.add(new THREE.Mesh(innerGeom, innerShellMat));
+
+                const faceGroup = new THREE.Group();
+                faceGroup.position.z = options.size * 0.68 * scaleZ * 1.1;
+                group.add(faceGroup);
+
+                const eyeMat = new THREE.MeshBasicMaterial({ color: HOT, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending });
+                const eyeGeom = new THREE.OctahedronGeometry(options.size * 0.22, 0);
+                eyeGeom.scale(0.75, 1.5, 0.45);
+                const eyeOffset = options.size * 0.35;
+                const leftEye = new THREE.Mesh(eyeGeom, eyeMat);
+                leftEye.position.set(-eyeOffset, options.size * 0.12, 0);
+                faceGroup.add(leftEye);
+                const rightEye = new THREE.Mesh(eyeGeom, eyeMat);
+                rightEye.position.set(eyeOffset, options.size * 0.12, 0);
+                faceGroup.add(rightEye);
+
+                const mouthMat = new THREE.MeshBasicMaterial({ color: HOT, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending });
+                const mouth = new THREE.Mesh(new THREE.BoxGeometry(options.size * 0.55, options.size * 0.06, options.size * 0.05), mouthMat);
+                mouth.position.set(0, -options.size * 0.32, 0);
+                faceGroup.add(mouth);
+
+                return {
+                    object: group,
+                    applyPalette(p) { shellMat.color.setHex(p.hex); outerWireMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.2;
+                        const blinkCycle = 4.2, blinkWindow = 0.18;
+                        const t = ctx.time % blinkCycle;
+                        const blink = t < blinkWindow ? 1 - Math.pow(Math.sin((t / blinkWindow) * Math.PI), 2) : 1;
+                        faceGroup.scale.y = blink;
+                        const pulse = ctx.state === 'SPEAKING' ? 0.7 + ctx.audio * 0.3
+                            : ctx.state === 'THINKING' ? 0.7 + Math.abs(Math.sin(ctx.time * 6)) * 0.3 : 0.7 + ctx.click * 0.3;
+                        eyeMat.opacity = pulse;
+                        mouthMat.opacity = pulse * 0.8;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LUCRE: the flattened-diamond shell (a squashed octahedron
+        // laid across a plane) on its own as a tumbling core, without the vertical
+        // cube stack or halo rings that surround it in the original.
+        flatDiamondCore: {
+            label: 'Flat diamond',
+            build(api, options) {
+                const geom = new THREE.OctahedronGeometry(options.size, 0);
+                geom.scale(1.5, 0.45, 1.5);
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: 0xffcc00, side: THREE.DoubleSide, transparent: true, opacity: 0.28, depthWrite: false,
+                });
+                const wireMat = new THREE.LineBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.9 });
+                const group = new THREE.Group();
+                group.add(new THREE.Mesh(geom, fillMat));
+                group.add(new THREE.LineSegments(new THREE.EdgesGeometry(geom), wireMat));
+                return {
+                    object: group,
+                    applyPalette(p) { fillMat.color.setHex(p.hex); wireMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.3;
+                        const breathe = 1 + Math.sin(ctx.time * 2) * 0.05 + ctx.audio * 0.15 + ctx.click * 0.15;
+                        group.scale.setScalar(breathe);
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -594,6 +689,85 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LYKSAUM: the fixed, camera-facing "face" cluster -- a
+        // wide collar arc below and two shorter shoulder arcs above, gapped from each
+        // other -- on its own as an inner ring, without the spinning disc housing it
+        // sits in front of in the original.
+        brokenCollarRing: {
+            label: 'Broken collar ring',
+            build(api, options) {
+                const group = new THREE.Group();
+                const arcMat = new THREE.MeshBasicMaterial({
+                    color: 0x00e8ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+                });
+                const thickness = options.radius * 0.07;
+                [{ start: 200, span: 140 }, { start: 110, span: 55 }, { start: 15, span: 55 }].forEach(({ start, span }) => {
+                    const geom = new THREE.TorusGeometry(options.radius, thickness, 10, 48, span * Math.PI / 180);
+                    const mesh = new THREE.Mesh(geom, arcMat);
+                    mesh.rotation.z = start * Math.PI / 180;
+                    group.add(mesh);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { arcMat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const pulse = ctx.state === 'SPEAKING' ? 0.7 + ctx.audio * 0.3
+                            : ctx.state === 'THINKING' ? 0.7 + Math.abs(Math.sin(ctx.time * 6)) * 0.3 : 0.7 + ctx.click * 0.3;
+                        arcMat.opacity = pulse;
+                        group.scale.setScalar(1 + ctx.click * 0.1);
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LEXICO: the plus-shaped cross of real cubes joined to the
+        // centre by data-beam lines, on its own as an inner ring, dropping the marker
+        // nodes, gyro rings and dust field that surround it in the original.
+        cubeCrossBeams: {
+            label: 'Cube cross',
+            build(api, options) {
+                const group = new THREE.Group();
+                const cubeSize = options.radius * 0.3;
+                const fillMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff, side: THREE.DoubleSide, transparent: true, opacity: 0.35 });
+                const wireMat = new THREE.LineBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.9 });
+                const beamMat = new THREE.LineBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.7 });
+                const geom = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+                const edges = new THREE.EdgesGeometry(geom);
+                const axes = [
+                    { x: 0, y: options.radius }, { x: 0, y: -options.radius },
+                    { x: -options.radius, y: 0 }, { x: options.radius, y: 0 },
+                ];
+                const beamPositions = new Float32Array(axes.length * 2 * 3);
+                const cubes = axes.map((pos, i) => {
+                    const cube = new THREE.Mesh(geom, fillMat);
+                    cube.position.set(pos.x, pos.y, 0);
+                    group.add(cube);
+                    const wire = new THREE.LineSegments(edges, wireMat);
+                    wire.position.copy(cube.position);
+                    group.add(wire);
+                    const o = i * 6;
+                    beamPositions[o] = 0; beamPositions[o + 1] = 0; beamPositions[o + 2] = 0;
+                    beamPositions[o + 3] = pos.x; beamPositions[o + 4] = pos.y; beamPositions[o + 5] = 0;
+                    return { cube, phase: i * 1.4 };
+                });
+                const beamGeom = new THREE.BufferGeometry();
+                beamGeom.setAttribute('position', new THREE.BufferAttribute(beamPositions, 3));
+                group.add(new THREE.LineSegments(beamGeom, beamMat));
+                return {
+                    object: group,
+                    applyPalette(p) { fillMat.color.setHex(p.hex); wireMat.color.setHex(p.hex2); beamMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.15;
+                        cubes.forEach(({ cube, phase }) => {
+                            const s = 1 + Math.sin(ctx.time * 2 + phase) * 0.08 + ctx.click * 0.15;
+                            cube.scale.setScalar(s);
+                        });
+                        beamMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Outer rings: a boundary further out ---------------------------------
@@ -777,6 +951,168 @@
                             ring.rotation.x += speed.x;
                             ring.rotation.y += speed.y;
                         });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOCAS: the fractured cube shell that surrounds the core
+        // with a clear gap, simplified from 24 shard panels (six faces x four
+        // quadrants) down to one shard per cube face, each drifting along its own
+        // face normal as the whole shell tumbles.
+        fracturedShardShell: {
+            label: 'Fractured shard shell',
+            build(api, options) {
+                const group = new THREE.Group();
+                const half = options.radius;
+                const size = half * 0.9;
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: 0xe024c3, side: THREE.DoubleSide, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending,
+                });
+                const edgeMat = new THREE.LineBasicMaterial({ color: 0xe024c3, transparent: true, opacity: 0.85 });
+                const normals = [
+                    new THREE.Vector3(1, 0, 0), new THREE.Vector3(-1, 0, 0),
+                    new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0),
+                    new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1),
+                ];
+                const geom = new THREE.PlaneGeometry(size, size);
+                const edges = new THREE.EdgesGeometry(geom);
+                const shards = normals.map((n, i) => {
+                    const shard = new THREE.Mesh(geom, fillMat);
+                    shard.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+                    const basePos = n.clone().multiplyScalar(half);
+                    shard.position.copy(basePos);
+                    shard.add(new THREE.LineSegments(edges, edgeMat));
+                    group.add(shard);
+                    return { shard, normal: n, basePos, phase: i * 1.1 };
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { fillMat.color.setHex(p.hex); edgeMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.12;
+                        group.rotation.x = Math.sin(ctx.time * 0.18) * 0.12;
+                        shards.forEach(({ shard, normal, basePos, phase }) => {
+                            const drift = Math.sin(ctx.time * 0.6 + phase) * (half * 0.08) + ctx.click * (half * 0.15);
+                            shard.position.copy(basePos).addScaledVector(normal, drift);
+                        });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LEGIONARE: the three tiered frustum shells sliced from
+        // one cone's silhouette with a clear horizontal air gap between each, hung
+        // apex-down, simplified from four gapped wall panels per tier to one open
+        // four-sided band per tier.
+        slicedPyramidShell: {
+            label: 'Sliced pyramid shell',
+            build(api, options) {
+                const group = new THREE.Group();
+                const height = options.radius * 2;
+                const baseRadius = options.radius;
+                const tierCount = 3;
+                const slotHeight = height / tierCount;
+                const tierHeight = slotHeight * 0.7;
+                const radiusAt = (y) => baseRadius * (height / 2 - y) / height;
+                const fillMat = new THREE.MeshBasicMaterial({ color: 0xff6a00, side: THREE.DoubleSide, transparent: true, opacity: 0.3 });
+                const wireMat = new THREE.LineBasicMaterial({ color: 0xff9955, transparent: true, opacity: 0.85 });
+                const invertGroup = new THREE.Group();
+                invertGroup.rotation.z = Math.PI;
+                group.add(invertGroup);
+                for (let i = 0; i < tierCount; i++) {
+                    const center = -height / 2 + (i + 0.5) * slotHeight;
+                    const topY = center + tierHeight / 2;
+                    const bottomY = center - tierHeight / 2;
+                    const isTip = i === tierCount - 1;
+                    const rTop = isTip ? 0.001 : radiusAt(topY);
+                    const rBottom = radiusAt(bottomY);
+                    const geom = new THREE.CylinderGeometry(rTop, rBottom, tierHeight, 4, 1, true);
+                    const mesh = new THREE.Mesh(geom, fillMat);
+                    mesh.position.y = center;
+                    mesh.rotation.y = Math.PI / 4;
+                    invertGroup.add(mesh);
+                    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geom), wireMat);
+                    wire.position.copy(mesh.position);
+                    wire.rotation.copy(mesh.rotation);
+                    invertGroup.add(wire);
+                }
+                return {
+                    object: group,
+                    applyPalette(p) { fillMat.color.setHex(p.hex); wireMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        invertGroup.rotation.y += 0.003 + ctx.click * 0.02;
+                        wireMat.opacity = 0.7 + ctx.click * 0.3;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.L'KEMI: the cut-corner hexagonal panel with a wedge
+        // rebuilt at each of its three cut corners to close the gap back into one
+        // solid downward-triangle silhouette, simplified to the shell alone without
+        // the core aperture, halo rings or particle column.
+        triangleShell: {
+            label: 'Triangle shell',
+            build(api, options) {
+                const group = new THREE.Group();
+                const r = options.radius;
+                const A = new THREE.Vector2(-r * 0.85, r * 0.5);
+                const B = new THREE.Vector2(r * 0.85, r * 0.5);
+                const C = new THREE.Vector2(0, -r);
+                const cut = r * 0.78;
+                const towards = (from, to, dist) => from.clone().add(to.clone().sub(from).normalize().multiplyScalar(dist));
+                const pts = [
+                    towards(A, B, cut), towards(B, A, cut),
+                    towards(B, C, cut), towards(C, B, cut),
+                    towards(C, A, cut), towards(A, C, cut),
+                ];
+                const shape = new THREE.Shape();
+                shape.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i].x, pts[i].y);
+                shape.closePath();
+                const thickness = r * 0.15;
+                const panelGeom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+                const fillMat = new THREE.MeshBasicMaterial({ color: 0x33ffb2, side: THREE.DoubleSide, transparent: true, opacity: 0.26, depthWrite: false });
+                const wireMat = new THREE.LineBasicMaterial({ color: 0x33ffb2, transparent: true, opacity: 0.85 });
+                group.add(new THREE.Mesh(panelGeom, fillMat));
+                group.add(new THREE.LineSegments(new THREE.EdgesGeometry(panelGeom, 20), wireMat));
+
+                function buildCornerWedge(cutPt1, corner, cutPt2) {
+                    const ox = (cutPt1.x + cutPt2.x) / 2, oy = (cutPt1.y + cutPt2.y) / 2, oz = thickness / 2;
+                    const p1 = new THREE.Vector3(cutPt1.x - ox, cutPt1.y - oy, -oz);
+                    const p2 = new THREE.Vector3(cutPt1.x - ox, cutPt1.y - oy, oz);
+                    const p3 = new THREE.Vector3(cutPt2.x - ox, cutPt2.y - oy, oz);
+                    const p4 = new THREE.Vector3(cutPt2.x - ox, cutPt2.y - oy, -oz);
+                    const apex = new THREE.Vector3(corner.x - ox, corner.y - oy, 0);
+                    const tris = [p1, p2, apex, p2, p3, apex, p3, p4, apex, p4, p1, apex];
+                    const positions = new Float32Array(tris.length * 3);
+                    tris.forEach((v, i) => { positions[i * 3] = v.x; positions[i * 3 + 1] = v.y; positions[i * 3 + 2] = v.z; });
+                    const geo = new THREE.BufferGeometry();
+                    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                    geo.computeVertexNormals();
+                    return { geo, center: new THREE.Vector3(ox, oy, oz) };
+                }
+                [
+                    buildCornerWedge(pts[5], A, pts[0]),
+                    buildCornerWedge(pts[1], B, pts[2]),
+                    buildCornerWedge(pts[3], C, pts[4]),
+                ].forEach(({ geo, center }) => {
+                    const mesh = new THREE.Mesh(geo, fillMat);
+                    mesh.position.copy(center);
+                    group.add(mesh);
+                    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo), wireMat);
+                    wire.position.copy(center);
+                    group.add(wire);
+                });
+
+                return {
+                    object: group,
+                    applyPalette(p) { fillMat.color.setHex(p.hex); wireMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.12;
+                        group.rotation.x = Math.sin(ctx.time * 0.4) * 0.1;
+                        wireMat.opacity = 0.7 + ctx.click * 0.3;
                     },
                 };
             },

@@ -67,13 +67,14 @@ or background) -- set the sizes and the motion, and press **Use this in Aether1*
 HUD picks it up immediately: the two windows share the saved recipe, so an open HUD
 updates the moment you save, with no reload.
 
-Some of the options in each tier are generic, built for the kit. Others are adapted
 pieces of the hand-built avatars. The rule is opt-out, not opt-in: every avatar's
 components are available to the kit -- and so to Genesis and the custom-avatar builder
 -- by default, including avatars still behind a Trace Protocol unlock. They stay out
 only when a reason is written down for it. The only current exceptions are the Nexus /
-Nexus Sent and A1, whose designs stay theirs alone. See `js/hologram/parts.js` for the
-full catalogue.
+Nexus Sent and A1, whose designs stay theirs alone. (`avatar-senti.js` is the Nexus Sent
+avatar under a different filename -- id `senti`, label "Nexus Sent" -- so it falls under
+this same exception, not a separate avatar left out by mistake.) See
+`js/hologram/parts.js` for the full catalogue.
 
 What is saved is a *recipe* — a few lines of settings, not code. A recipe can be pasted
 to someone else safely, because settings cannot do anything.
