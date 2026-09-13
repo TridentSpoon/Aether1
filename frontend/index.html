@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=21">
+    <link rel="stylesheet" href="css/A1theme.css?v=22">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
@@ -434,6 +434,17 @@
                 <div id="setup-models" class="space-y-1.5"></div>
             </div>
 
+            <!-- Downloads in flight. One row each, because more than one can run at a
+                 time, and a single shared bar would be lying about which. -->
+            <div id="setup-downloads-wrap" class="hidden space-y-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">DOWNLOADING</h3>
+                <div id="setup-downloads" class="space-y-2"></div>
+                <p class="text-[11px] font-mono text-slate-500 leading-snug">
+                    You can close this window &mdash; the download belongs to the model server,
+                    not to Aether1, and it keeps going either way.
+                </p>
+            </div>
+
             <!-- What the wizard is doing right now, and what it found when it looked. -->
             <div id="setup-status" class="hidden text-xs font-mono p-2.5 rounded border border-cyan-500/20 bg-slate-900/80 leading-snug"></div>
 
@@ -452,6 +463,9 @@
             <div class="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-cyan-500/30">
                 <span id="setup-help-hint" class="mr-auto text-[10px] font-mono text-slate-500">Stuck? The full written guide is in docs/GETTING_STARTED.md</span>
                 <button id="btn-setup-recheck" class="cyber-btn text-xs py-2 px-4">🔄 Check again</button>
+                <!-- Shown only when the server is installed but silent: the one case where
+                     the app can fix the missing piece itself instead of describing it. -->
+                <button id="btn-setup-start-server" class="hidden cyber-btn cyber-btn-active text-xs py-2 px-4">▶ Start it for me</button>
                 <button id="btn-setup-download" class="hidden cyber-btn text-xs py-2 px-4 text-cyan-300">📥 Download this brain</button>
                 <button id="btn-setup-finish" class="hidden cyber-btn cyber-btn-active text-xs py-2 px-5">✔ Use this and finish</button>
             </div>
@@ -1069,7 +1083,7 @@
     <script src="js/hologram/avatar-operator.js?v=2"></script>
     <script src="js/hologram/animate.js?v=37"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=31"></script>
+    <script src="js/app.js?v=32"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

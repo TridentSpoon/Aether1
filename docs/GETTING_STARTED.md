@@ -92,11 +92,19 @@ Roughly:
 | 16 GB | Mistral (large) | about 4.1 GB |
 | 32 GB or more | Qwen 2.5 (very large) | about 9 GB |
 
-**In the wizard:** choose one and press **📥 Download this brain**. The bar will tell you it has
-started. Downloading takes a few minutes on a fast connection and rather longer on a
-slow one; the wizard checks every few seconds and tells you the moment the model has
-arrived. You can close Aether1 while it downloads — the download is Ollama's job, not
-Aether1's, and it carries on regardless.
+**In the wizard:** choose one and press **📥 Download this brain**. A progress bar appears
+under **DOWNLOADING** showing the real percentage and how many gigabytes have arrived
+so far — not a guess, but the figure the model server itself reports. Downloading takes
+a few minutes on a fast connection and rather longer on a slow one, and the wizard says
+the moment it is done.
+
+You can start more than one download at a time: pick a second model and press Download
+again, and it gets its own bar. Three at once is the limit, and there is no advantage to
+more — they all share one connection, so starting a fourth would not make any of them
+finish sooner.
+
+You can close Aether1 while it downloads — the download is Ollama's job, not Aether1's,
+and it carries on regardless. Re-open the wizard and the bars pick up where they were.
 
 **If you would rather type it:** open a terminal (on Windows, press the Start button
 and type `cmd`) and run the model's name after `ollama pull`, for example:
@@ -139,10 +147,14 @@ Linux, run `sudo systemctl start ollama`.
 The install and the model are two separate downloads. Do Step 2.
 
 **The download bar has not moved in a long time.**
-Very large models on a slow connection genuinely take an hour or more. To see the
-real progress, open a terminal and run the same `ollama pull` command — it prints a
-percentage. Running it a second time does not download anything twice; it picks up
-where it left off.
+Very large models on a slow connection genuinely take an hour or more, and the bar only
+moves when bytes actually arrive. If it stops for good, press **📥 Download this brain**
+again — nothing is downloaded twice, it picks up where it left off.
+
+**The wizard says Ollama is installed but not running.**
+Press **▶ Start it for me**. That is the one gap Aether1 can close by itself: it starts
+the copy of Ollama already on this machine and then re-checks. Everything else the
+wizard can only describe.
 
 **I get an answer, but it is one of the same few canned lines every time.**
 That is offline mode: Aether1 is still set to `offline` rather than to your model.

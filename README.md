@@ -295,8 +295,16 @@ Press **🧠 Set up the AI** in the HUD menu. It looks at the machine, works out
 which of four things is true (nothing installed / installed but not running / running
 with no models / a model is there), and asks for exactly one thing at a time. It sizes
 the model list to the memory this computer actually has, marks one **Best for this
-computer**, downloads it, and fills the settings in for you. Until that is done, the
-dialogue stream itself says so, with a button to start.
+computer**, downloads it, and fills the settings in for you.
+
+Downloads show a real progress bar — the percentage and the byte count the model server
+itself reports, not a spinner — and up to three can run at once. If the model server is
+installed but not running, **▶ Start it for me** starts it; that is the one gap Aether1
+can close by itself rather than describe.
+
+Until a brain is connected the wizard opens on launch, the dialogue stream carries a
+notice you cannot miss, and sending a message says plainly that nothing is behind it
+rather than returning a canned line that looks like an answer.
 
 The same journey written out, per operating system, is in
 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — written for someone who has never

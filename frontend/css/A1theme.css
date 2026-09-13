@@ -857,3 +857,97 @@ body {
     border-color: var(--border-neon-bright);
     background: var(--tint-main);
 }
+
+/* ---- Download progress ----------------------------------------------------
+   One block per model being pulled. A model is several gigabytes over somebody's
+   home connection, so this shows the real figure the model server reports rather
+   than a spinner that means nothing. */
+
+.setup-download {
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.625rem;
+    background: var(--bg-panel);
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+}
+
+.setup-download[data-phase="done"] { border-color: rgba(74, 222, 128, 0.45); }
+.setup-download[data-phase="failed"] { border-color: rgba(248, 113, 113, 0.5); }
+
+.setup-bar {
+    position: relative;
+    height: 0.4375rem;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid var(--border-neon);
+    overflow: hidden;
+}
+
+.setup-bar-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--neon-cyan);
+    box-shadow: var(--glow-cyan);
+    transition: width 0.4s ease;
+}
+
+.setup-bar-fill[data-state="done"] {
+    background: #4ade80;
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
+}
+
+.setup-bar-fill[data-state="failed"] {
+    background: #f87171;
+    box-shadow: none;
+}
+
+/* No byte counts yet -- the server is looking up a manifest or checking a digest.
+   A sliding sliver says "working" without claiming a position it does not know. */
+.setup-bar-fill[data-state="unknown"] {
+    width: 35%;
+    transition: none;
+    animation: setup-bar-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes setup-bar-sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .setup-bar-fill[data-state="unknown"] { animation: none; width: 100%; opacity: 0.4; }
+}
+
+/* ---- "Nothing is connected" ------------------------------------------------
+   The one notice in this app that is allowed to shout. Everything else can be
+   missed without consequence; this cannot. */
+
+.no-brain-card {
+    align-self: stretch;
+    margin: 0.75rem 0;
+    padding: 0.875rem 1rem;
+    border: 2px solid #f59e0b;
+    border-left-width: 6px;
+    border-radius: 0.5rem;
+    background: rgba(69, 26, 3, 0.55);
+    box-shadow: 0 0 18px rgba(245, 158, 11, 0.28);
+}
+
+.no-brain-head {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 1rem;
+    letter-spacing: 0.08em;
+    color: #fbbf24;
+    margin-bottom: 0.375rem;
+}
+
+.no-brain-body {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: #fde68a;
+}

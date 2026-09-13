@@ -1067,6 +1067,45 @@ from nowhere:
   and `transcribe_audio`, none settable from the HUD. Now three fields nested under Voice
   & Sound, where empty means "find them yourself", which is the working default.
 
+### Step 31: a download you can watch, and a missing piece you cannot miss — **shipped**
+
+Two complaints from the first person to use Step 29 in anger, and they turn out to be the
+same complaint: *the app knows something is wrong and says so too quietly to hear.*
+
+**The progress bar.** Step 29's download spawned `ollama pull` as a child process and
+returned. A child process reports nothing, so the wizard polled the model list every five
+seconds and said "still going" until the name appeared — true, and for four minutes
+indistinguishable from a hang. `downloads.rs` replaces it: `POST /api/pull` with
+`{"stream": true}` returns newline-delimited JSON, one line per progress tick, and a
+thread per download reads it into a registry the HUD polls once a second.
+
+The one thing that needed care is that a model is several blobs, and the stream reports
+`completed`/`total` for whichever layer is moving. A bar wired straight to those numbers
+drops to zero at every layer boundary. `Tracker` keeps the last figure *per digest* and
+sums them, so the bar only ever goes forwards. Ten tests cover the shape of that stream:
+a second layer adding rather than replacing, `verifying sha256 digest` not throwing the
+bar away, `success` finishing it even when the final line carries no numbers.
+
+Because the registry is a map with a thread per entry, several downloads at once fell out
+for free. It is capped at three, and the refusal past that says why: *they share one
+connection, so starting more would not make any of them finish sooner.*
+
+**The notice.** The "no AI connected" card was a small amber line in the chat stream, and
+sending a message with nothing configured returned a canned offline reply — which reads
+exactly like an answer. So the app looked like it worked, badly. Now: the card is a
+full-width bordered block with an Orbitron headline; the wizard opens by itself on launch
+when `needs_attention` is set (once per launch — re-opening a window somebody just closed
+teaches people to close windows without reading them); and the send path re-probes and
+refuses rather than answering, because a canned reply in place of a real one is the app
+lying about its own state.
+
+**The one thing it can fix itself.** Four of the five setup stages are things Aether1 can
+only describe. `installed-not-running` is not: the binary is there and nothing is using
+it. `start_local_server` spawns it — no shell, no caller-supplied argument, the binary
+`which` finds under exactly the name `ollama`, so the whole of what it can be made to run
+is "the ollama already installed here, serving". It is not a tool, so nothing the
+companion says in a conversation can reach it.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
