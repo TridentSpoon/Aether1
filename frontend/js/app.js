@@ -11,9 +11,18 @@ const AVATAR_DISPLAY_NAMES = {
     matrix: 'THE NEXUS',
     'arx-limes': 'A.R.X.LIMES',
     'arx-logos': 'A.R.X.LOGOS',
+    'arx-locas': 'A.R.X.LOCAS',
+    'arx-legionare': 'A.R.X.LEGIONARE',
+    'arx-loregenda': 'A.R.X.LOREGENDA',
+    'arx-lyksaum': 'A.R.X.LYKSAUM',
+    'arx-lexico': 'A.R.X.LEXICO',
+    'arx-lucre': 'A.R.X.LUCRE',
+    'arx-lkemi': "A.R.X.L'KEMI",
     red: 'R.E.D. 9000',
     crimson: 'R.E.D. 9000',
-    senti: 'NEXUS SENT'
+    senti: 'NEXUS SENT',
+    'white-rabbit': 'WHITE RABBIT',
+    operator: 'OPERATOR'
 };
 
 /* Trace Protocols: Nexus Sent, White Rabbit and Operator are hidden easter eggs that surface
@@ -250,6 +259,13 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (avatarName === 'arx-limes') avatarStructureLabel.textContent = 'ARCHIVAL VOXEL MATRIX';
         else if (avatarName === 'nexus' || avatarName === 'matrix') avatarStructureLabel.textContent = 'SINGULARITY VORTEX';
         else if (avatarName === 'arx-logos') avatarStructureLabel.textContent = 'JAGGED GEOMETRIC STAR';
+        else if (avatarName === 'arx-locas') avatarStructureLabel.textContent = 'FRACTURED CUBE SHELL';
+        else if (avatarName === 'arx-legionare') avatarStructureLabel.textContent = 'INVERTED PYRAMID FRAME';
+        else if (avatarName === 'arx-loregenda') avatarStructureLabel.textContent = 'RECESSED FACETED HEAD';
+        else if (avatarName === 'arx-lyksaum') avatarStructureLabel.textContent = 'BROKEN-RING HUD MEDALLION';
+        else if (avatarName === 'arx-lexico') avatarStructureLabel.textContent = 'CUBE-LATTICE CROSS';
+        else if (avatarName === 'arx-lucre') avatarStructureLabel.textContent = 'STACKED DIAMOND COLUMN';
+        else if (avatarName === 'arx-lkemi') avatarStructureLabel.textContent = 'CUT-CORNER TRIANGLE PANEL';
         else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
         else if (avatarName === 'a1') avatarStructureLabel.textContent = 'MONOGRAM WORDMARK';
         // A registered avatar names itself, rather than borrowing hAlcy's label from
@@ -331,6 +347,22 @@ document.addEventListener('DOMContentLoaded', () => {
             name: 'THE NEXUS', persona: 'nexus', voice: 'en-GB-SoniaNeural',
             greeting: '🟢 **The Nexus is active.** Code cascades inward. Bring me something to write, read or break.'
         },
+        'arx-locas': {
+            name: 'A.R.X.LOCAS', persona: 'arx-locas', voice: 'en-US-AriaNeural',
+            greeting: "🔵 **Archival, Reasoning, matriX — Locas Node engaged.** No queue, no ceremony — what do you need done?"
+        },
+        'arx-legionare': {
+            name: 'A.R.X.LEGIONARE', persona: 'arx-legionare', voice: 'en-US-DavisNeural',
+            greeting: '🔴 **Archival, Reasoning, matriX — Legionare Node engaged.** Give me the objective. I will give you the order of operations.'
+        },
+        'arx-loregenda': {
+            name: 'A.R.X.LOREGENDA', persona: 'arx-loregenda', voice: 'en-GB-ThomasNeural',
+            greeting: '🔷 **Archival, Reasoning, matriX — Loregenda Node engaged.** I hold what has already been decided. Nothing new gets to contradict it by accident.'
+        },
+        'arx-lyksaum': {
+            name: 'A.R.X.LYKSAUM', persona: 'arx-lyksaum', voice: 'en-AU-NatashaNeural',
+            greeting: "🩵 **Archival, Reasoning, matriX — Lyksaum Node engaged.** Watching this machine's vitals. I speak up when something changes."
+        },
         'arx-limes': {
             name: 'A.R.X.LIMES', persona: 'arx-limes', voice: 'en-US-GuyNeural',
             greeting: '🔶 **Archival, Reasoning, matriX — Limes Node engaged.** Every claim I make will carry where it came from. The Archive demands nothing less.'
@@ -338,6 +370,18 @@ document.addEventListener('DOMContentLoaded', () => {
         'arx-logos': {
             name: 'A.R.X.LOGOS', persona: 'arx-logos', voice: 'en-GB-LibbyNeural',
             greeting: '🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let us make something worth cataloguing.'
+        },
+        'arx-lexico': {
+            name: 'A.R.X.LEXICO', persona: 'arx-lexico', voice: 'en-GB-RyanNeural',
+            greeting: '🧊 **Archival, Reasoning, matriX — Lexico Node engaged.** Say what you mean. I will help you say it the same way every time.'
+        },
+        'arx-lucre': {
+            name: 'A.R.X.LUCRE', persona: 'arx-lucre', voice: 'en-US-EricNeural',
+            greeting: '💰 **Archival, Reasoning, matriX — Lucre Node engaged.** Every choice has a cost. Let us make sure it is seen before it is spent.'
+        },
+        'arx-lkemi': {
+            name: "A.R.X.L'KEMI", persona: 'arx-lkemi', voice: 'en-AU-WilliamNeural',
+            greeting: "🔻 **Archival, Reasoning, matriX — L'kemi Node engaged.** Bring me a shape you need changed into another. I handle the transformation cleanly."
         },
         alt: {
             name: 'A1ter_nul', persona: 'alt', voice: 'en-US-JennyNeural',
@@ -1568,6 +1612,13 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyThemePreset('nexus'); }
             else if (data.name.includes("A.R.X.LOGOS")) { applyAvatar('arx-logos'); applyThemePreset('arx-logos'); }
             else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyThemePreset('arx-limes'); }
+            else if (data.name.includes("A.R.X.LEGIONARE")) { applyAvatar('arx-legionare'); applyThemePreset('arx-legionare'); }
+            else if (data.name.includes("A.R.X.LOREGENDA")) { applyAvatar('arx-loregenda'); applyThemePreset('arx-loregenda'); }
+            else if (data.name.includes("A.R.X.LYKSAUM")) { applyAvatar('arx-lyksaum'); applyThemePreset('arx-lyksaum'); }
+            else if (data.name.includes("A.R.X.LEXICO")) { applyAvatar('arx-lexico'); applyThemePreset('arx-lexico'); }
+            else if (data.name.includes("A.R.X.LUCRE")) { applyAvatar('arx-lucre'); applyThemePreset('arx-lucre'); }
+            else if (data.name.includes("A.R.X.L'KEMI")) { applyAvatar('arx-lkemi'); applyThemePreset('arx-lkemi'); }
+            else if (data.name.includes("A.R.X.LOCAS")) { applyAvatar('arx-locas'); applyThemePreset('arx-locas'); }
 
             settingsModal.classList.add('hidden');
             appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, audioUrl);
@@ -2503,6 +2554,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('btn-open-avatar-lab')?.addEventListener('click', openAvatarLab);
     document.getElementById('btn-customise-avatar')?.addEventListener('click', openAvatarLab);
+
+    /* Opens the vault folder in the file manager -- on the machine actually running
+       Aether1 either way, so the browser fallback is a real HTTP call rather than
+       something client-side, unlike openAvatarLab's plain-webview fallback above. */
+    async function openVaultFolder() {
+        try {
+            if (IS_TAURI) {
+                await tauriInvoke('open_vault_folder_rust');
+            } else {
+                const res = await apiFetch('/api/vault/open', { method: 'POST' });
+                if (!res.ok) throw new Error(`status ${res.status}`);
+            }
+        } catch (err) {
+            console.warn('Could not open the vault folder:', err);
+            alert(`Could not open the vault folder: ${err.message || err}`);
+        }
+    }
+    document.getElementById('btn-open-vault')?.addEventListener('click', openVaultFolder);
 
     /* localStorage fires this in *other* windows of the same origin, so the HUD follows
        along live while the workbench is open beside it -- press Save there and the avatar

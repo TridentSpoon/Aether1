@@ -15,6 +15,19 @@
  *    an operator has actually picked a persona/avatar
  * 8. Real-time Audio Frequency and State deformation.
  *
+ * Three of the avatars above belong to named families, grouped together (not scattered
+ * through the list above) in index.html's avatar-menu and js/avatar-lab.js's BUILT_IN --
+ * see registerAvatar's optional def.group if a new one joins as a plugin rather than a
+ * hand-modelled buildXAvatar() like these:
+ * - "Singular Ascended Class": hAlcy (1), R.E.D. 9000 (4), A1ter_nul (6).
+ * - "Trace Protocols": The Nexus (3), and the plugins Nexus Sent, White Rabbit and Operator.
+ *   The latter three are also hidden easter eggs, not just a group: they start absent from
+ *   the picker and only ever appear by being triggered from a chat message while The Nexus
+ *   is on screen (a greeting, an Alice/rabbit-hole reference, a security or diagnostic
+ *   question), unlocking permanently into the picker the first time that happens -- see
+ *   js/app.js's EASTER_EGG_RULES, checkEasterEggTriggers and flashEasterEgg.
+ * - "The Umbrals": A.R.X.LIMES (2) and A.R.X.LOGOS (5), the A.R.X. name in general.
+ *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).
  * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,
  * and the per-frame animation loop in animate.js -- all attached via HologramAvatar.prototype,
@@ -49,9 +62,17 @@ class HologramAvatar {
         this.arxLimesHubOutline = null;
         this.arxLimesPlates = []; // { group, baseAngle, baseRadius, phase, tier }
         this.arxLimesHubFillMat = null;
+        this.arxLimesHubRimMat = null; // fixed hot "event horizon" rim — not theme-tinted
         this.arxLimesOutlineMat = null;
         this.arxLimesMainFillMat = null;
         this.arxLimesWingFillMat = null;
+        this.arxLimesAccretionGroup = null;
+        this.arxLimesAccretionRing1 = null;
+        this.arxLimesAccretionRing1Mat = null; // fixed hot accent — not theme-tinted
+        this.arxLimesAccretionRing2 = null;
+        this.arxLimesAccretionRing2Mat = null; // fixed hot accent — not theme-tinted
+        this.arxLimesAccretionHotspots = []; // { mesh, angle, radius, speed }
+        this.arxLimesAccretionHotspotsMat = null; // fixed hot accent — not theme-tinted
 
         // 3. The Nexus Crew (v3): an elongated, bulbous lathe-hull rendered as a wireframe/
         // point-cloud "live sensor feed" (not a solid mesh), the previous build's eye-lens
@@ -489,8 +510,10 @@ class HologramAvatar {
         if (this.nexusTentaclePointMat) this.nexusTentaclePointMat.color.setHex(p.hex3);
         this.nexusRainMaterials.forEach(mat => mat.color.setHex(p.hex));
 
-        // A.R.X.LIMES fractured dome
-        if (this.arxLimesHubFillMat) this.arxLimesHubFillMat.color.setHex(p.hex);
+        // A.R.X.LIMES fractured dome. The hub is a fixed black void now (a black hole),
+        // and its event-horizon rim + accretion disc are this avatar's fixed hot accent --
+        // none of the three retint with the theme, same as every other avatar's one
+        // constant identity colour.
         if (this.arxLimesMainFillMat) this.arxLimesMainFillMat.color.setHex(p.hex);
         if (this.arxLimesWingFillMat) this.arxLimesWingFillMat.color.setHex(p.hex2);
         if (this.arxLimesOutlineMat) this.arxLimesOutlineMat.color.setHex(p.hex3);
@@ -692,10 +715,13 @@ HologramAvatar.registerAvatar = function (def) {
     return true;
 };
 
-/* What is on offer, for anything drawing an avatar picker. */
+/* What is on offer, for anything drawing an avatar picker. group is optional and purely
+   organisational -- a plugin avatar that belongs to a named family (see "The Umbrals" in
+   index.html's avatar-menu and js/avatar-lab.js's BUILT_IN) sets def.group to the same
+   family name so pickers can cluster it with its relatives instead of listing it flat. */
 HologramAvatar.registeredAvatars = function () {
     return Array.from(HologramAvatar.avatarPlugins.values())
-        .map((def) => ({ id: def.id, label: def.label || def.id }));
+        .map((def) => ({ id: def.id, label: def.label || def.id, group: def.group }));
 };
 
 /* Geometry and materials live on the GPU and are not reclaimed by dropping the last

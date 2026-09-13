@@ -51,6 +51,29 @@ HologramAvatar.prototype.createRingSpriteTexture = function(size = 64, thickness
     return new THREE.CanvasTexture(canvas);
 };
 
+// A soft radial-fade band on a transparent canvas, meant for a flat THREE.RingGeometry
+// annulus (used by A.R.X.LIMES's accretion disc) rather than a solid-shaded tube -- an
+// unlit MeshBasicMaterial on a torus reads as flat painted plastic, not light. A ring's
+// UV.v runs radially (inner edge to outer edge) and UV.u runs around the angle, so a
+// gradient that only varies down the canvas's height produces a soft glowing band with a
+// bright core and feathered inner/outer edges, tiling seamlessly around the angle since
+// nothing varies horizontally. Rendered white so material.color/opacity still tint it.
+HologramAvatar.prototype.createRadialBandTexture = function(size = 128) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 8;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, size);
+    gradient.addColorStop(0, 'rgba(255,255,255,0)');
+    gradient.addColorStop(0.35, 'rgba(255,255,255,0.9)');
+    gradient.addColorStop(0.5, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.65, 'rgba(255,255,255,0.9)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 8, size);
+    return new THREE.CanvasTexture(canvas);
+};
+
 // A faint tiled grid on a transparent canvas (used by The Nexus's CRT-radar backdrop) --
 // rendered white so material.color can tint it per the active color theme.
 HologramAvatar.prototype.createGridSpriteTexture = function(size = 256, divisions = 10) {
@@ -119,35 +142,72 @@ HologramAvatar.prototype.buildHexFill = function(radius, rotationOffset, materia
     return mesh;
 };
 
+// A real 3D hex prism (front + back hex caps and 6 rectangular side walls), not a
+// single-sided flat pane -- used for A.R.X.LOGOS's central core-eye, which needs to read
+// as a solid gem with actual depth and stay visible (not vanish) when viewed from behind,
+// e.g. after the scene is drag-rotated around. CylinderGeometry's axis defaults to Y,
+// with its own end caps at y = +-thickness/2; rotating -90deg about X and then shifting
+// back by half the thickness lays it flat in the XY plane with its front cap at z=0 (so
+// anything already positioned in front of the old flat fill, like the pupil/catchlight,
+// stays exactly where it was) and its depth receding into -z, matching hexVertices'
+// (radius, rotationOffset) vertex layout on the front cap so the two stay interchangeable.
+HologramAvatar.prototype.buildHexPrism = function(radius, rotationOffset, material, thickness, cx = 0, cy = 0) {
+    const geom = new THREE.CylinderGeometry(radius, radius, thickness, 6, 1, false, rotationOffset);
+    geom.rotateX(-Math.PI / 2);
+    geom.translate(0, 0, -thickness / 2);
+    const mesh = new THREE.Mesh(geom, material);
+    mesh.position.set(cx, cy, 0);
+    return mesh;
+};
+
 // Builds one flat-ish irregular polygon "shard" (used by A.R.X.LIMES). points2D form a
 // convex loop in local space; the loop is bulged along Z (root at y=0 stays flat, the
 // outward tip recedes) so a cluster of shards reads as facets of one convex dome. Returns
 // a Group containing both the translucent fill and a bright edge outline.
-HologramAvatar.prototype.buildPolygonShard = function(points2D, bulge, fillMat, outlineMat) {
+HologramAvatar.prototype.buildPolygonShard = function(points2D, bulge, fillMat, outlineMat, thickness = 0) {
     // Shapes are drawn with their near (hub-facing) edge at y=0 and extend toward +y.
     // Bulge by y alone (not radial distance) so the whole near edge sits flush at z=0
     // and only the far edge angles backward -- not the near edge's side corners too.
     const maxY = Math.max(...points2D.map(p => p.y), 1);
-    const verts = points2D.map(p => {
-        return new THREE.Vector3(p.x, p.y, -bulge * (p.y / maxY));
-    });
+    const frontVerts = points2D.map(p => new THREE.Vector3(p.x, p.y, -bulge * (p.y / maxY)));
 
     const positions = [];
-    for (let i = 1; i < verts.length - 1; i++) {
-        positions.push(verts[0].x, verts[0].y, verts[0].z);
-        positions.push(verts[i].x, verts[i].y, verts[i].z);
-        positions.push(verts[i + 1].x, verts[i + 1].y, verts[i + 1].z);
+    const pushTri = (a, b, c) => positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    for (let i = 1; i < frontVerts.length - 1; i++) {
+        pushTri(frontVerts[0], frontVerts[i], frontVerts[i + 1]);
     }
+
+    // With a thickness, the shard becomes a real solid slab -- a back face parallel to
+    // the front (same per-vertex bulge, just pushed further from the camera) plus side
+    // walls closing the loop between them -- rather than a single zero-depth surface, so
+    // it actually shows an edge/depth once the plate turns away from face-on.
+    let backVerts = null;
+    if (thickness > 0) {
+        backVerts = frontVerts.map((v) => new THREE.Vector3(v.x, v.y, v.z - thickness));
+        for (let i = 1; i < backVerts.length - 1; i++) {
+            pushTri(backVerts[0], backVerts[i + 1], backVerts[i]);
+        }
+        for (let i = 0; i < frontVerts.length; i++) {
+            const j = (i + 1) % frontVerts.length;
+            pushTri(frontVerts[i], frontVerts[j], backVerts[j]);
+            pushTri(frontVerts[i], backVerts[j], backVerts[i]);
+        }
+    }
+
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geom.computeVertexNormals();
     const fillMesh = new THREE.Mesh(geom, fillMat);
 
-    const outlineGeom = new THREE.BufferGeometry().setFromPoints(verts);
+    const outlineGeom = new THREE.BufferGeometry().setFromPoints(frontVerts);
     const outline = new THREE.LineLoop(outlineGeom, outlineMat);
 
     const group = new THREE.Group();
     group.add(fillMesh);
     group.add(outline);
+    if (backVerts) {
+        const backOutlineGeom = new THREE.BufferGeometry().setFromPoints(backVerts);
+        group.add(new THREE.LineLoop(backOutlineGeom, outlineMat));
+    }
     return group;
 };

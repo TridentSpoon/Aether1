@@ -401,6 +401,20 @@ impl LlmEngine {
         )
     }
 
+    /// The one-line trace naming which vault notes are behind an answer -- the always-primed
+    /// ones (see vault::prime, which put them in system_prompt in the first place). An ad
+    /// hoc read_file mid-turn already gets its own trace line (see tool_loop); this is the
+    /// one the operator otherwise never sees, since priming happens by concatenation, not by
+    /// a tool call. Empty when there's no vault yet, same as prime().
+    fn vault_trace(&self) -> String {
+        let notes = crate::vault::primed_notes(&self.db);
+        if notes.is_empty() {
+            String::new()
+        } else {
+            crate::tools::protocol::trace_of(&format!("vault notes loaded: {}", notes.join(", ")))
+        }
+    }
+
     /// Prefix match that's case-insensitive on the *prefix* but preserves whatever case
     /// the operator typed in the rest of the command -- fixes a bug in the Python original,
     /// where `prompt.replace("set name ", "")` silently no-ops unless the user typed that
@@ -667,6 +681,7 @@ impl LlmEngine {
         system_prompt: &str,
         base_history: Vec<Message>,
         user_prompt: &str,
+        preamble: &str,
         sink: providers::Sink,
     ) -> providers::Completion {
         let registry = crate::tools::registry();
@@ -675,6 +690,10 @@ impl LlmEngine {
         let mut history = base_history;
         let mut current_prompt = user_prompt.to_string();
         let mut visible = String::new();
+        if !preamble.is_empty() {
+            visible.push_str(preamble);
+            sink(preamble);
+        }
         /* One answer can take several round trips, and every one of them costs tokens. A
         loop that reported only its final round would show a fraction of what a tool-using
         turn actually spent, which is precisely the sort of comfortable under-count this
@@ -926,10 +945,25 @@ impl LlmEngine {
             sink(&reply);
             reply
         } else if tools_on {
-            let completion = self.tool_loop(&config, &system_prompt, history, prompt, sink);
+            let completion = self.tool_loop(
+                &config,
+                &system_prompt,
+                history,
+                prompt,
+                &self.vault_trace(),
+                sink,
+            );
             reported = completion.usage;
             completion.text
         } else {
+            // system_prompt (and whatever the vault primed into it) is only actually sent
+            // to a model in this branch and the tool_loop one above -- the offline/
+            // local-only-refusal replies above never look at it, so tracing it there would
+            // claim something that did not happen.
+            let vault_trace = self.vault_trace();
+            if !vault_trace.is_empty() {
+                sink(&vault_trace);
+            }
             let ctx = ChatContext {
                 system_prompt: &system_prompt,
                 history: &history,
@@ -938,7 +972,7 @@ impl LlmEngine {
                 tools: &[],
                 exchanges: &[],
             };
-            match self.call_provider(&config, &ctx, sink) {
+            let text = match self.call_provider(&config, &ctx, sink) {
                 Ok(completion) => {
                     reported = completion.usage;
                     completion.text
@@ -980,7 +1014,8 @@ impl LlmEngine {
                         format!("{}{notice}", failure.partial)
                     }
                 }
-            }
+            };
+            format!("{vault_trace}{text}")
         };
 
         self.usage.lock().unwrap().record_usage(
@@ -1081,6 +1116,24 @@ mod tests {
             &serde_json::Value::String(vault.to_string_lossy().to_string()),
         );
         LlmEngine::new(db)
+    }
+
+    /// The trace is how the operator finds out the vault primed anything at all -- priming
+    /// happens by concatenating into the system prompt, which leaves no other trace of it.
+    #[test]
+    fn vault_trace_names_the_notes_actually_primed() {
+        let engine = temp_engine("vault_trace");
+        assert_eq!(engine.vault_trace(), "", "no vault means nothing to report");
+
+        crate::vault::ensure(&engine.db).unwrap();
+        let trace = engine.vault_trace();
+        assert!(
+            trace.contains("⚙ vault notes loaded:"),
+            "should read like the trace a tool call gets: {trace}"
+        );
+        for note in ["INDEX.md", "profile.md", "machine.md"] {
+            assert!(trace.contains(note), "{trace}");
+        }
     }
 
     /// The end the operator actually experiences: with the mode on, a configured cloud
@@ -1327,9 +1380,17 @@ mod tests {
     fn generate_response_offline_says_there_is_no_engine_and_where_to_connect_one() {
         let _guard = env_guard();
         let engine = temp_engine("offline_default");
+        crate::vault::ensure(engine.db()).unwrap();
         let reply = generate(&engine, "hello there", "test-session");
         assert!(reply.contains("Ollama"), "reply was: {reply}");
         assert!(reply.contains("Settings"), "reply was: {reply}");
+        // The canned offline reply never looks at system_prompt (see Persona::offline_reply's
+        // signature), so claiming the vault was loaded here would be exactly the kind of
+        // dressed-up-as-a-measurement claim step 14 already refuses to make elsewhere.
+        assert!(
+            !reply.contains("vault notes loaded"),
+            "a vault that was never consulted must not be claimed: {reply}"
+        );
     }
 
     #[test]

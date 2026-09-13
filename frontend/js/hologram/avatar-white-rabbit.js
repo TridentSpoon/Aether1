@@ -48,6 +48,10 @@ function sampleEllipseCluster(ellipses, count, zJitter) {
 HologramAvatar.registerAvatar({
     id: 'white-rabbit',
     label: 'White Rabbit',
+    // Trace Protocols: grouped with The Nexus, Nexus Sent and Operator in the HUD's
+    // avatar menu and the workbench dropdown -- see registerAvatar's optional def.group
+    // in js/hologram/README.md.
+    group: 'Trace Protocols',
 
     build(api) {
         const group = new THREE.Group();

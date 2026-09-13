@@ -527,6 +527,33 @@ pub fn relative_name(db: &MemoryDb, path: &Path) -> String {
         .to_string()
 }
 
+/// The always-loaded notes that actually exist right now, in priming order -- exactly the
+/// files `prime` would load into this turn's context. Kept separate from `prime` itself so
+/// the operator can be told *which* notes are behind an answer (see llm/mod.rs's
+/// vault_trace) without needing their contents, which is all `prime` actually needs this
+/// list for. Empty when there's no vault yet, same as `prime`.
+pub fn primed_notes(db: &MemoryDb) -> Vec<String> {
+    let root = vault_path(db);
+    if !root.exists() {
+        return Vec::new();
+    }
+    ALWAYS_LOADED
+        .iter()
+        .filter(|name| root.join(name).exists())
+        .map(|name| name.to_string())
+        .collect()
+}
+
+/// Opens the vault folder in the operator's own file manager -- Explorer, Finder, or
+/// whichever handler `xdg-open` resolves to on Linux. Creates the starter layout first if
+/// this is the very first time anything has touched the vault: opening a folder that was
+/// never created would be a worse first impression than the empty starter notes `ensure`
+/// already produces.
+pub fn open_folder(db: &MemoryDb) -> Result<(), String> {
+    let root = ensure(db)?;
+    crate::paths::open_in_file_manager(&root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,6 +689,26 @@ mod tests {
             "",
             "no vault means no vault section in the prompt"
         );
+    }
+
+    #[test]
+    fn primed_notes_lists_exactly_what_prime_loads() {
+        let (db, root) = fixture("primed_notes");
+        assert!(
+            primed_notes(&db).is_empty(),
+            "no vault means no notes to report either"
+        );
+
+        ensure(&db).unwrap();
+        assert_eq!(
+            primed_notes(&db),
+            vec!["INDEX.md", "profile.md", "machine.md"]
+        );
+
+        // A note the operator deleted is a note that did not load, so it must not be
+        // claimed as part of the answer.
+        std::fs::remove_file(root.join("machine.md")).unwrap();
+        assert_eq!(primed_notes(&db), vec!["INDEX.md", "profile.md"]);
     }
 
     #[test]

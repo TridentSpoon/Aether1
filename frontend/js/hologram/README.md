@@ -86,6 +86,12 @@ HologramAvatar.registerAvatar({
     id: 'my-avatar',
     label: 'My avatar',
 
+    // Optional, and unrelated to build()'s own `group` below -- this one is a family
+    // name for the picker to cluster related avatars under, e.g. 'The Umbrals' for the
+    // A.R.X. line (see index.html's avatar-menu and js/avatar-lab.js's BUILT_IN, which
+    // group the same way). Leave it out for an avatar that stands on its own.
+    group: 'My family',
+
     // Runs once. Return an object with a `group`; anything else you put on it comes
     // back to you as `model` below.
     build(api) { … return { group, myMaterial }; },

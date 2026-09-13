@@ -26,6 +26,10 @@
 HologramAvatar.registerAvatar({
     id: 'senti',
     label: 'Nexus Sent',
+    // Trace Protocols: grouped with The Nexus, White Rabbit and Operator in the HUD's
+    // avatar menu and the workbench dropdown -- see registerAvatar's optional def.group
+    // in js/hologram/README.md.
+    group: 'Trace Protocols',
 
     build(api) {
         const group = new THREE.Group();
