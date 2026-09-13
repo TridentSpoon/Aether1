@@ -682,6 +682,12 @@ fn clear_messages_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
     commands::clear_messages(&engine)
 }
 
+/// Rust-native equivalent of POST /api/vault/open.
+#[tauri::command]
+fn open_vault_folder_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
+    commands::open_vault_folder(&engine)
+}
+
 /// Rust-native equivalent of GET /api/settings (backend/main.py) -- same default-filling
 /// behavior, so a fresh install (no settings rows yet) still gets sensible values.
 #[tauri::command]
@@ -953,6 +959,7 @@ fn main() {
             set_always_allowed_rust,
             get_messages_rust,
             clear_messages_rust,
+            open_vault_folder_rust,
             get_settings_rust,
             save_settings_rust,
             generate_speech_rust,

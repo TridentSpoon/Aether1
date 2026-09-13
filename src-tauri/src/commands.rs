@@ -168,6 +168,15 @@ pub fn tool_catalog(engine: &LlmEngine) -> Value {
     tools::catalog(engine.db(), tools::registry())
 }
 
+/// Opens the vault folder in the file manager on the machine actually running Aether1 --
+/// the HUD's "which notes were loaded" caption exists precisely so there's somewhere to
+/// point a click at. Over `--lan`, that's the server's machine, same as everything else
+/// under [Local host] in IMPLEMENTATION.md's vocabulary table -- there is no way to hand a
+/// folder-manager window to a remote browser, only to the desktop this process is on.
+pub fn open_vault_folder(engine: &LlmEngine) -> Result<(), String> {
+    crate::vault::open_folder(engine.db())
+}
+
 /// The record of what the companion has actually done, newest first.
 pub fn recent_actions(engine: &LlmEngine, limit: Option<u32>) -> Vec<ActionRecord> {
     engine

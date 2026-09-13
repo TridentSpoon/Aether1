@@ -103,6 +103,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/actions/{id}/reject", post(reject_action))
         .route("/api/tools/always-allow", post(set_always_allowed))
         .route("/api/messages", get(get_messages).delete(clear_messages))
+        .route("/api/vault/open", post(open_vault_folder))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
         .route("/api/stt", post(stt))
@@ -483,6 +484,20 @@ async fn clear_messages(
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(serde_json::json!({ "status": "cleared" })))
+}
+
+/// Opens the vault folder in the file manager on this machine -- see commands::
+/// open_vault_folder for why that's the server's desktop rather than the requester's,
+/// under `--lan`.
+async fn open_vault_folder(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || commands::open_vault_folder(&engine))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::json!({ "status": "opened" })))
 }
 
 async fn get_settings(State(state): State<AppState>) -> Json<Value> {

@@ -1710,6 +1710,24 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-open-avatar-lab')?.addEventListener('click', openAvatarLab);
     document.getElementById('btn-customise-avatar')?.addEventListener('click', openAvatarLab);
 
+    /* Opens the vault folder in the file manager -- on the machine actually running
+       Aether1 either way, so the browser fallback is a real HTTP call rather than
+       something client-side, unlike openAvatarLab's plain-webview fallback above. */
+    async function openVaultFolder() {
+        try {
+            if (IS_TAURI) {
+                await tauriInvoke('open_vault_folder_rust');
+            } else {
+                const res = await apiFetch('/api/vault/open', { method: 'POST' });
+                if (!res.ok) throw new Error(`status ${res.status}`);
+            }
+        } catch (err) {
+            console.warn('Could not open the vault folder:', err);
+            alert(`Could not open the vault folder: ${err.message || err}`);
+        }
+    }
+    document.getElementById('btn-open-vault')?.addEventListener('click', openVaultFolder);
+
     /* localStorage fires this in *other* windows of the same origin, so the HUD follows
        along live while the workbench is open beside it -- press Save there and the avatar
        here changes, with no reload and nothing to click. */
