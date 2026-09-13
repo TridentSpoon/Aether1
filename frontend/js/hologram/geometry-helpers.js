@@ -142,6 +142,24 @@ HologramAvatar.prototype.buildHexFill = function(radius, rotationOffset, materia
     return mesh;
 };
 
+// A real 3D hex prism (front + back hex caps and 6 rectangular side walls), not a
+// single-sided flat pane -- used for A.R.X.LOGOS's central core-eye, which needs to read
+// as a solid gem with actual depth and stay visible (not vanish) when viewed from behind,
+// e.g. after the scene is drag-rotated around. CylinderGeometry's axis defaults to Y,
+// with its own end caps at y = +-thickness/2; rotating -90deg about X and then shifting
+// back by half the thickness lays it flat in the XY plane with its front cap at z=0 (so
+// anything already positioned in front of the old flat fill, like the pupil/catchlight,
+// stays exactly where it was) and its depth receding into -z, matching hexVertices'
+// (radius, rotationOffset) vertex layout on the front cap so the two stay interchangeable.
+HologramAvatar.prototype.buildHexPrism = function(radius, rotationOffset, material, thickness, cx = 0, cy = 0) {
+    const geom = new THREE.CylinderGeometry(radius, radius, thickness, 6, 1, false, rotationOffset);
+    geom.rotateX(-Math.PI / 2);
+    geom.translate(0, 0, -thickness / 2);
+    const mesh = new THREE.Mesh(geom, material);
+    mesh.position.set(cx, cy, 0);
+    return mesh;
+};
+
 // Builds one flat-ish irregular polygon "shard" (used by A.R.X.LIMES). points2D form a
 // convex loop in local space; the loop is bulged along Z (root at y=0 stays flat, the
 // outward tip recedes) so a cluster of shards reads as facets of one convex dome. Returns
