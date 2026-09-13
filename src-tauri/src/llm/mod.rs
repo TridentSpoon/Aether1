@@ -591,6 +591,82 @@ impl LlmEngine {
         }
     }
 
+    /// Tries the given provider/model/endpoint/key with one trivial call, bypassing
+    /// history, persona and token accounting entirely -- this is a connectivity probe run
+    /// from Settings before Save, not a chat turn. Reuses explain_failure so a bad key or a
+    /// wrong model name reads exactly the same here as it would mid-conversation.
+    pub fn test_connection(
+        &self,
+        provider_key: &str,
+        model: &str,
+        endpoint: &str,
+        api_key: &str,
+    ) -> Result<String, String> {
+        let provider = Provider::from_key(provider_key);
+
+        if provider == Provider::Offline {
+            return Ok(
+                "Offline mode needs no connection -- it never leaves this machine.".to_string(),
+            );
+        }
+
+        // Same rule Config::reaches_the_internet applies to a real turn: Ollama/LM Studio
+        // are judged by where their endpoint actually points, every other provider always
+        // leaves the machine. A test click is not an exemption from local-only mode.
+        let reaches_the_internet = !matches!(provider, Provider::Ollama | Provider::LmStudio)
+            || !crate::local_only::is_local_endpoint(endpoint);
+        if reaches_the_internet && crate::local_only::enabled(&self.db) {
+            return Err(crate::local_only::refusal(
+                "the test connection was not attempted",
+            ));
+        }
+
+        let ctx = ChatContext {
+            system_prompt: "",
+            history: &[],
+            prompt: "Reply with just the word OK.",
+            agent_name: "",
+            // No tools offered and no prior rounds to replay -- this is a bare connectivity
+            // probe, not a real turn, so there is nothing native tool-calling needs to see.
+            tools: &[],
+            exchanges: &[],
+        };
+
+        let started = Instant::now();
+        let result = match provider {
+            Provider::Ollama => providers::call_ollama(endpoint, model, &ctx),
+            Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                providers::call_openai_compatible(provider, endpoint, api_key, model, &ctx)
+            }
+            Provider::Gemini => providers::call_gemini(api_key, model, &ctx),
+            Provider::Anthropic => providers::call_anthropic(api_key, model, &ctx),
+            Provider::Offline => unreachable!("handled above"),
+        };
+
+        match result {
+            Ok(completion) => Ok(format!(
+                "{provider} replied in {:.1}s: \"{}\"",
+                started.elapsed().as_secs_f64(),
+                Self::truncate_reply(&completion.text)
+            )),
+            Err(e) => Err(providers::explain_failure(provider, endpoint, &e)),
+        }
+    }
+
+    /// Keeps a chatty test model's reply from blowing up the status box -- this only needs
+    /// to prove the round trip worked, not display the whole thing.
+    fn truncate_reply(text: &str) -> String {
+        const LIMIT: usize = 160;
+        if text.len() <= LIMIT {
+            return text.to_string();
+        }
+        let mut end = LIMIT;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &text[..end])
+    }
+
     /// Runs rounds of model call -> tool calls -> results until the model answers without
     /// asking for a tool, and returns what the operator saw.
     ///
@@ -638,8 +714,19 @@ impl LlmEngine {
             providers::Completion {
                 text,
                 usage: any_reported.then_some(total),
+                calls: Vec::new(),
             }
         };
+
+        /* Providers that take a tool list in their own request format get one, and answer
+        with structured calls. The rest stay on the fenced text protocol. The two paths
+        differ in three places and nowhere else: what goes into the request, where the
+        calls are read from, and how the round is carried into the next one -- a native
+        round becomes an Exchange, a text round becomes two more history messages. */
+        let native = config.provider.supports_native_tools();
+        let schemas = registry.schemas();
+        let none: Vec<crate::tools::ToolSchema> = Vec::new();
+        let mut exchanges: Vec<providers::Exchange> = Vec::new();
 
         for _round in 0..MAX_TOOL_ROUNDS {
             let ctx = ChatContext {
@@ -647,12 +734,20 @@ impl LlmEngine {
                 history: &history,
                 prompt: &current_prompt,
                 agent_name: &config.agent_name,
+                tools: if native { &schemas } else { &none },
+                exchanges: &exchanges,
             };
 
+            // Nothing to filter on the native path: the calls never appear in the text, so
+            // withholding a fence there could only swallow prose the operator should see.
             let mut filter = crate::tools::protocol::FenceFilter::new();
             let outcome = {
                 let mut round_sink = |delta: &str| {
-                    let shown = filter.push(delta);
+                    let shown = if native {
+                        delta.to_string()
+                    } else {
+                        filter.push(delta)
+                    };
                     if !shown.is_empty() {
                         visible.push_str(&shown);
                         sink(&shown);
@@ -661,15 +756,15 @@ impl LlmEngine {
                 self.call_provider(config, &ctx, &mut round_sink)
             };
             let tail = filter.finish();
-            if !tail.is_empty() {
+            if !native && !tail.is_empty() {
                 visible.push_str(&tail);
                 sink(&tail);
             }
 
-            let raw = match outcome {
+            let (raw, native_calls) = match outcome {
                 Ok(completion) => {
                     carry(completion.usage);
-                    completion.text
+                    (completion.text, completion.calls)
                 }
                 Err(failure) => {
                     eprintln!(
@@ -689,7 +784,22 @@ impl LlmEngine {
                 }
             };
 
-            let calls = crate::tools::protocol::parse_calls(&raw);
+            /* Both paths converge on the same list. A text-protocol call has no id of its
+            own, so it is given its position in the round -- nothing reads it back on that
+            path, and it keeps one shape for the executor to work from. */
+            let calls: Vec<providers::NativeCall> = if native {
+                native_calls
+            } else {
+                crate::tools::protocol::parse_calls(&raw)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, call)| providers::NativeCall {
+                        id: index.to_string(),
+                        tool: call.tool,
+                        arguments: call.arguments,
+                    })
+                    .collect()
+            };
             if calls.is_empty() {
                 return done(visible.trim().to_string(), any_reported, total);
             }
@@ -703,7 +813,10 @@ impl LlmEngine {
                     Some(tool) if tool.mutating() => {
                         crate::tools::protocol::trace_of(&tool.preview(&call.arguments))
                     }
-                    _ => crate::tools::protocol::trace_line(call),
+                    _ => crate::tools::protocol::trace_line(&crate::tools::protocol::ToolCall {
+                        tool: call.tool.clone(),
+                        arguments: call.arguments.clone(),
+                    }),
                 };
                 visible.push_str(&trace);
                 sink(&trace);
@@ -713,19 +826,40 @@ impl LlmEngine {
                 ));
             }
 
-            // Carry the round into the history so the next one can see what it asked for
-            // and what came back.
-            history.push(Message {
-                sender: "user".to_string(),
-                text: current_prompt,
-                timestamp: String::new(),
-            });
-            history.push(Message {
-                sender: "assistant".to_string(),
-                text: raw,
-                timestamp: String::new(),
-            });
-            current_prompt = crate::tools::protocol::format_results(&results);
+            if native {
+                /* The round goes back as the provider's own structures: the assistant turn
+                that asked, then one turn carrying every answer. The stored conversation
+                stays plain text -- these live only for the length of this turn, and
+                nothing reads them back afterwards. */
+                let returned = calls
+                    .iter()
+                    .zip(&results)
+                    .map(|(call, (tool, outcome))| providers::CallResult {
+                        id: call.id.clone(),
+                        tool: tool.clone(),
+                        output: match outcome {
+                            Ok(text) => text.clone(),
+                            Err(error) => format!("FAILED: {error}"),
+                        },
+                    })
+                    .collect();
+                exchanges.push(providers::Exchange::Called { text: raw, calls });
+                exchanges.push(providers::Exchange::Returned(returned));
+            } else {
+                // Carry the round into the history so the next one can see what it asked
+                // for and what came back.
+                history.push(Message {
+                    sender: "user".to_string(),
+                    text: current_prompt,
+                    timestamp: String::new(),
+                });
+                history.push(Message {
+                    sender: "assistant".to_string(),
+                    text: raw,
+                    timestamp: String::new(),
+                });
+                current_prompt = crate::tools::protocol::format_results(&results);
+            }
         }
 
         let notice = format!(
@@ -771,10 +905,12 @@ impl LlmEngine {
         let registry = crate::tools::registry();
         let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
         if tools_on {
-            system_prompt.push_str(&crate::tools::protocol::instructions(
-                &registry.prompt_catalog(),
-                &config.persona.domain().field(),
-            ));
+            let field = config.persona.domain().field();
+            system_prompt.push_str(&if config.provider.supports_native_tools() {
+                crate::tools::protocol::native_instructions(&field)
+            } else {
+                crate::tools::protocol::instructions(&registry.prompt_catalog(), &field)
+            });
         }
 
         // Local-only mode refuses the cloud rather than quietly routing around it. The
@@ -833,6 +969,8 @@ impl LlmEngine {
                 history: &history,
                 prompt,
                 agent_name: &config.agent_name,
+                tools: &[],
+                exchanges: &[],
             };
             let text = match self.call_provider(&config, &ctx, sink) {
                 Ok(completion) => {

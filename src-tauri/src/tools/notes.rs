@@ -186,6 +186,74 @@ impl Tool for WriteNote {
     }
 }
 
+// -------------------------------------------------------------- archive_note
+
+pub struct ArchiveNote;
+
+impl Tool for ArchiveNote {
+    fn name(&self) -> &'static str {
+        "archive_note"
+    }
+
+    fn description(&self) -> &'static str {
+        "Move a note into the vault's archive/ folder, for a note that has stopped being true or whose contents have been folded into another note. Nothing is deleted -- the note keeps its text and its links, and stays readable and searchable. Use this after consolidating daily notes into a topic note, or when a fact has been superseded. Requires approval."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "Note path relative to the vault, ending in .md -- for example daily/2026-04-01.md."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why this note is being archived, in one line. Shown to the operator on the approval card."
+                }
+            },
+            "required": ["note"]
+        })
+    }
+
+    fn mutating(&self) -> bool {
+        true
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        let note = args.get("note").and_then(Value::as_str).unwrap_or("?");
+        match args.get("reason").and_then(Value::as_str) {
+            Some(reason) if !reason.trim().is_empty() => {
+                format!("Archive {note}: {}", summarize(reason))
+            }
+            _ => format!("Archive {note}"),
+        }
+    }
+
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
+        let relative = string_arg(args, "note")?.trim().to_string();
+        let destination = vault::archive(ctx.db, &relative)?;
+
+        Ok(Outcome::reversible(
+            format!("Moved {relative} to {destination}"),
+            json!({"archived": destination, "original": relative}),
+        ))
+    }
+
+    fn undo(&self, undo: &Value, ctx: &ToolContext) -> Result<String, String> {
+        let archived = undo
+            .get("archived")
+            .and_then(Value::as_str)
+            .ok_or("the undo record has no archived path")?;
+        let original = undo
+            .get("original")
+            .and_then(Value::as_str)
+            .ok_or("the undo record has no original path")?;
+        vault::unarchive(ctx.db, archived, original)?;
+        Ok(format!("Moved {archived} back to {original}"))
+    }
+}
+
 /// Both note tools undo the same way: put the previous text back, or remove a note that
 /// did not exist before.
 fn undo_note(undo: &Value, ctx: &ToolContext) -> Result<String, String> {
@@ -314,5 +382,63 @@ mod tests {
         assert!(WriteNote
             .call(&json!({"note": ".bashrc", "content": "evil"}), &ctx)
             .is_err());
+    }
+
+    // ---------------------------------------------------- archive_note
+
+    /// Archiving changes the vault, so it goes through the consent path like every other
+    /// mutating tool. The registry gate is what enforces that; this pins the declaration
+    /// the gate reads.
+    #[test]
+    fn archiving_is_a_change_and_says_so() {
+        assert!(ArchiveNote.mutating());
+        let preview = ArchiveNote.preview(&json!({
+            "note": "daily/2026-04-01.md",
+            "reason": "folded into projects/sourdough.md"
+        }));
+        assert!(preview.contains("daily/2026-04-01.md"), "{preview}");
+        assert!(preview.contains("sourdough"), "{preview}");
+    }
+
+    #[test]
+    fn archiving_a_note_moves_it_and_can_be_undone() {
+        let (db, root) = fixture("archive_tool");
+        let ctx = ToolContext::new(&db);
+        std::fs::write(root.join("projects/spare.md"), "# Spare\n").unwrap();
+
+        let outcome = ArchiveNote
+            .call(&json!({"note": "projects/spare.md"}), &ctx)
+            .unwrap();
+        assert!(root.join("archive/projects/spare.md").exists());
+
+        let undo = outcome.undo.expect("an archive records how to undo itself");
+        ArchiveNote.undo(&undo, &ctx).unwrap();
+        assert!(root.join("projects/spare.md").exists());
+        assert!(!root.join("archive/projects/spare.md").exists());
+    }
+
+    /// A note that isn't there is a mistake to report, not a file to create.
+    #[test]
+    fn archiving_a_note_that_does_not_exist_is_an_error() {
+        let (db, _) = fixture("archive_missing");
+        let ctx = ToolContext::new(&db);
+        let refused = ArchiveNote
+            .call(&json!({"note": "projects/ghost.md"}), &ctx)
+            .unwrap_err();
+        assert!(refused.contains("not a note"), "{refused}");
+    }
+
+    /// The path guard that keeps notes inside the vault applies here too -- archiving is a
+    /// move, and a move that could name any path would be a way out of the vault.
+    #[test]
+    fn archiving_cannot_name_a_path_outside_the_vault() {
+        let (db, _) = fixture("archive_escape");
+        let ctx = ToolContext::new(&db);
+        for path in ["../secrets.md", "/etc/passwd.md", "notes.txt"] {
+            assert!(
+                ArchiveNote.call(&json!({"note": path}), &ctx).is_err(),
+                "{path} should be refused"
+            );
+        }
     }
 }

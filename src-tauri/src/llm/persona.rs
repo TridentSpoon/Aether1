@@ -576,6 +576,11 @@ impl Persona {
             "list_dir",
             "telemetry_detail",
             "read_event_log",
+            // Searching the operator's own notes is the least dangerous read there is, and
+            // MINIMUM_TOOLS calls it something every persona keeps. Leaving it off here
+            // meant the two machine-facing personas fell *below* the minimum, which is not
+            // a minimum -- and made "have I told you about this box before?" a proposal.
+            "search_memory",
         ];
 
         match self {
@@ -726,6 +731,23 @@ impl Provider {
             "anthropic" => Provider::Anthropic,
             _ => Provider::Offline,
         }
+    }
+
+    /// Whether the provider takes a tool list in its own request format and answers with
+    /// structured calls, rather than needing the fenced-text protocol.
+    ///
+    /// The two local providers are deliberately out. Ollama is driven through
+    /// `/api/generate`, which has no tools field at all -- tools live on `/api/chat`, a
+    /// different endpoint with a different shape. LM Studio's OpenAI-compatible server
+    /// does accept tools on recent builds, but it is the provider most likely to be an
+    /// older install on someone's desktop, and a silent 400 there costs more than the
+    /// text protocol does. Both stay on the fenced protocol, which is what it was written
+    /// for.
+    pub fn supports_native_tools(&self) -> bool {
+        matches!(
+            self,
+            Provider::OpenAi | Provider::Groq | Provider::Gemini | Provider::Anthropic
+        )
     }
 
     pub fn key(&self) -> &'static str {

@@ -725,3 +725,281 @@ body {
     font-size: 0.7em;
     vertical-align: middle;
 }
+
+/* ---- Settings groups ------------------------------------------------------
+   The Agent & System tab is six collapsible groups rather than one flat scroll.
+   Written against the theme's own custom properties, like everything else here,
+   so a group looks right in Solar, Eclipse and Cyberpunk without three rules.
+
+   Only the chrome lives here. Every field inside a group keeps its own id and is
+   found, read and written exactly as before -- a closed <details> still has all
+   of its inputs in the DOM, which is the whole reason this is <details> and not
+   a set of panels that swap in and out. */
+.settings-group {
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel);
+    overflow: hidden;
+}
+
+.settings-group-summary {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    padding: 0.625rem 0.75rem;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.settings-group-summary:hover {
+    background: var(--bg-panel-hover);
+}
+
+/* The arrow is drawn by ::before below, so the native marker would be a second one. */
+.settings-group-summary::-webkit-details-marker { display: none; }
+.settings-group-summary { list-style: none; }
+.settings-group-summary::marker { content: ""; }
+
+.settings-group-summary::before {
+    content: "▸";
+    color: var(--neon-cyan);
+    font-size: 0.7rem;
+    transition: transform 0.15s ease;
+    display: inline-block;
+}
+
+.settings-group[open] > .settings-group-summary::before {
+    transform: rotate(90deg);
+}
+
+.settings-group-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--neon-cyan);
+}
+
+/* What the group is for, in ordinary words, on the same line as the name. A heading
+   reading "Network" tells you what the group is called, not whether your question is
+   in it. */
+.settings-group-hint {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.625rem;
+    color: var(--text-dim);
+}
+
+.settings-group-body {
+    padding: 0 0.75rem 0.875rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    border-top: 1px solid var(--border-neon);
+    padding-top: 0.75rem;
+}
+
+/* A group inside a group: the handful of fields that only matter when the automatic
+   search has failed. Quieter than its parent so the eye reads it as a footnote rather
+   than a seventh top-level thing to decide about. */
+.settings-group-nested {
+    background: transparent;
+    border-style: dashed;
+}
+
+.settings-group-nested > .settings-group-summary {
+    padding: 0.45rem 0.6rem;
+}
+
+.settings-group-nested .settings-group-title {
+    font-size: 0.625rem;
+    color: var(--text-dim);
+}
+
+.settings-group-nested[open] > .settings-group-summary .settings-group-title {
+    color: var(--neon-cyan);
+}
+
+.settings-group-nested > .settings-group-summary::before {
+    color: var(--text-dim);
+}
+
+/* ---- The setup wizard ----------------------------------------------------- */
+
+/* One step: what to do, why, and -- at most -- one thing to press. */
+.setup-step {
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel);
+    padding: 0.625rem 0.75rem;
+}
+
+/* The four dots across the top. Filled means done, and it is filled because a probe
+   said so, not because a Next button was pressed. */
+.setup-dot {
+    height: 0.375rem;
+    flex: 1 1 0;
+    border-radius: 999px;
+    background: var(--border-neon);
+    transition: background 0.2s ease;
+}
+
+.setup-dot[data-done="true"] { background: var(--neon-cyan); }
+.setup-dot[data-current="true"] {
+    background: var(--neon-cyan);
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* A model to choose from. The whole card is the click target -- a radio button four
+   pixels across is not a thing to ask anyone to hit. */
+.setup-model {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.625rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.setup-model:hover { background: var(--bg-panel-hover); }
+
+.setup-model:has(input:checked) {
+    border-color: var(--border-neon-bright);
+    background: var(--tint-main);
+}
+
+/* ---- The bigger models -----------------------------------------------------
+   The catalogue covers everything from a netbook to a workstation, so the models
+   this machine has no memory for are folded away rather than dropped. One click,
+   no script: a <details> element does the whole job. */
+
+.setup-more {
+    border: 1px dashed var(--border-neon);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.625rem;
+}
+
+.setup-more > summary {
+    cursor: pointer;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.6875rem;
+    color: var(--neon-cyan);
+    list-style: none;
+    user-select: none;
+}
+
+.setup-more > summary::-webkit-details-marker { display: none; }
+
+.setup-more > summary::before {
+    content: '▸ ';
+}
+
+.setup-more[open] > summary::before {
+    content: '▾ ';
+}
+
+.setup-more > summary:hover { text-decoration: underline; }
+
+.setup-more-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+/* ---- Download progress ----------------------------------------------------
+   One block per model being pulled. A model is several gigabytes over somebody's
+   home connection, so this shows the real figure the model server reports rather
+   than a spinner that means nothing. */
+
+.setup-download {
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.625rem;
+    background: var(--bg-panel);
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+}
+
+.setup-download[data-phase="done"] { border-color: rgba(74, 222, 128, 0.45); }
+.setup-download[data-phase="failed"] { border-color: rgba(248, 113, 113, 0.5); }
+
+.setup-bar {
+    position: relative;
+    height: 0.4375rem;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid var(--border-neon);
+    overflow: hidden;
+}
+
+.setup-bar-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--neon-cyan);
+    box-shadow: var(--glow-cyan);
+    transition: width 0.4s ease;
+}
+
+.setup-bar-fill[data-state="done"] {
+    background: #4ade80;
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
+}
+
+.setup-bar-fill[data-state="failed"] {
+    background: #f87171;
+    box-shadow: none;
+}
+
+/* No byte counts yet -- the server is looking up a manifest or checking a digest.
+   A sliding sliver says "working" without claiming a position it does not know. */
+.setup-bar-fill[data-state="unknown"] {
+    width: 35%;
+    transition: none;
+    animation: setup-bar-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes setup-bar-sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .setup-bar-fill[data-state="unknown"] { animation: none; width: 100%; opacity: 0.4; }
+}
+
+/* ---- "Nothing is connected" ------------------------------------------------
+   The one notice in this app that is allowed to shout. Everything else can be
+   missed without consequence; this cannot. */
+
+.no-brain-card {
+    align-self: stretch;
+    margin: 0.75rem 0;
+    padding: 0.875rem 1rem;
+    border: 2px solid #f59e0b;
+    border-left-width: 6px;
+    border-radius: 0.5rem;
+    background: rgba(69, 26, 3, 0.55);
+    box-shadow: 0 0 18px rgba(245, 158, 11, 0.28);
+}
+
+.no-brain-head {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 1rem;
+    letter-spacing: 0.08em;
+    color: #fbbf24;
+    margin-bottom: 0.375rem;
+}
+
+.no-brain-body {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: #fde68a;
+}

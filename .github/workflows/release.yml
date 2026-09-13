@@ -127,9 +127,116 @@ jobs:
           if ("${{ github.ref_type }}" -ne "tag") { $version = "" }
           echo "AETHER1_VERSION=$version" >> $env:GITHUB_ENV
 
+      # Signing is optional and gated on secrets, so a fork -- or this repo before a
+      # certificate exists -- still produces a working (unsigned) installer rather than a
+      # failed build. The six values are read into one boolean here rather than tested in
+      # each step's `if`, so there is a single place that decides and a single line in the
+      # log saying which way it went.
+      - name: Decide whether the builds can be signed
+        id: signing
+        shell: pwsh
+        env:
+          AZ_TENANT: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
+          AZ_CLIENT: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          AZ_SECRET: ${{ secrets.AZURE_SIGNING_CLIENT_SECRET }}
+          AZ_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZ_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZ_PROFILE: ${{ secrets.AZURE_SIGNING_CERT_PROFILE }}
+        run: |
+          $needed = [ordered]@{
+            AZURE_SIGNING_TENANT_ID      = $env:AZ_TENANT
+            AZURE_SIGNING_CLIENT_ID      = $env:AZ_CLIENT
+            AZURE_SIGNING_CLIENT_SECRET  = $env:AZ_SECRET
+            AZURE_SIGNING_ENDPOINT       = $env:AZ_ENDPOINT
+            AZURE_SIGNING_ACCOUNT        = $env:AZ_ACCOUNT
+            AZURE_SIGNING_CERT_PROFILE   = $env:AZ_PROFILE
+          }
+          # @() around the pipeline so a single missing value is still an array: bare, one
+          # empty string comes back as "" and PowerShell reads that as false, which would
+          # have made "one secret missing" look exactly like "nothing missing".
+          $missing = @($needed.Keys | Where-Object { [string]::IsNullOrWhiteSpace($needed[$_]) })
+
+          if ($missing.Count -eq 0) {
+            Write-Host "Code signing is configured; the binary and the installer will be signed."
+            "configured=true" >> $env:GITHUB_OUTPUT
+          } elseif ($missing.Count -eq $needed.Count) {
+            Write-Host "::warning::No code-signing secrets set -- shipping an UNSIGNED build. Windows Smart App Control will block it. See the README's 'Windows blocked it' section."
+            "configured=false" >> $env:GITHUB_OUTPUT
+          } else {
+            # Half-configured is not "build it unsigned". Someone who set four of these
+            # meant to sign, and a release that quietly comes out unsigned is found by
+            # whoever downloads it rather than here.
+            Write-Host "::error::Code signing is half-configured. Missing: $($missing -join ', '). Set all six or none."
+            exit 1
+          }
+
+      # Built here rather than inside the packaging script so there is a point between
+      # "the binary exists" and "the binary is inside an installer" at which to sign it.
+      - name: Build the release binary
+        shell: pwsh
+        working-directory: src-tauri
+        run: cargo build --release
+
+      - name: Sign the binary
+        if: steps.signing.outputs.configured == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_SIGNING_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_CERT_PROFILE }}
+          files: ${{ github.workspace }}\src-tauri\target\release\aether1.exe
+          file-digest: SHA256
+          # Without a timestamp the signature stops being trusted when the certificate
+          # expires, which for a released installer means "in a year or so, silently".
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # -SignedExe stages the binary built (and possibly signed) above instead of building
+      # its own, so nothing relinks over the signature between here and Inno Setup.
       - name: Package the offline installer
         shell: pwsh
-        run: .\scripts\package_offline_windows.ps1 -OutDir dist
+        run: >
+          .\scripts\package_offline_windows.ps1 -OutDir dist
+          -SignedExe "${{ github.workspace }}\src-tauri\target\release\aether1.exe"
+
+      - name: Sign the installer
+        if: steps.signing.outputs.configured == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_SIGNING_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_CERT_PROFILE }}
+          files: ${{ github.workspace }}\dist\Aether1-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # The failure this catches: signing was configured, a step reported success, and the
+      # file came out unsigned anyway -- which ships as a normal release and is only found
+      # by whoever downloads it. Chain validity is deliberately not asserted, only that a
+      # signature is present: a runner that cannot build the chain would fail this for a
+      # reason that has nothing to do with whether the release is signed.
+      - name: Check the signatures actually landed
+        if: steps.signing.outputs.configured == 'true'
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($file in @("src-tauri\target\release\aether1.exe", "dist\Aether1-Setup.exe")) {
+            $sig = Get-AuthenticodeSignature $file
+            if ($sig.Status -eq 'NotSigned') {
+              Write-Host "::error::$file is not signed, but signing was configured."
+              $failed = $true
+            } else {
+              Write-Host "$file : $($sig.Status) -- $($sig.SignerCertificate.Subject)"
+            }
+          }
+          if ($failed) { exit 1 }
 
       # Same one-day retention as the Linux bundle above, for the same reason.
       - uses: actions/upload-artifact@v4

@@ -429,25 +429,8 @@ mod tests {
         (db, dir)
     }
 
-    /// These tools write to real paths, and the guard resolves against $HOME.
-    fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let previous_home = std::env::var_os("HOME");
-        let previous_profile = std::env::var_os("USERPROFILE");
-        std::env::set_var("HOME", home);
-        std::env::remove_var("USERPROFILE");
-        let out = body();
-        match previous_home {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        match previous_profile {
-            Some(p) => std::env::set_var("USERPROFILE", p),
-            None => std::env::remove_var("USERPROFILE"),
-        }
-        out
-    }
+    // These tools write to real paths, and the guard resolves against $HOME.
+    use crate::tools::fs_guard::with_home;
 
     #[test]
     fn writing_a_new_file_can_be_undone_by_removing_it() {

@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=21">
+    <link rel="stylesheet" href="css/A1theme.css?v=23">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
@@ -19,6 +19,7 @@
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
     <script src="js/theme.js?v=4"></script>
+    <script src="js/avatar-unlocks.js?v=1"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
 </head>
@@ -81,11 +82,12 @@
 
                     <!-- Trace Protocols. The Nexus is the host and always shown; the other three
                          are hidden easter eggs that only ever surface by being triggered from a
-                         chat message while The Nexus is active (see app.js's EASTER_EGG_RULES and
-                         checkEasterEggTriggers) -- each starts with the `hidden` class below and
-                         app.js's refreshEasterEggVisibility() removes it permanently the first
-                         time that avatar's trigger fires, recording the unlock in localStorage.
-                         A new avatar in this family's pill goes in this grid either way. -->
+                         chat message while The Nexus is active (see app.js's AVATAR_TRIGGER_RULES
+                         and flashTraceProtocolAvatar) -- each starts with the `hidden` class below
+                         and app.js's refreshTraceProtocolVisibility() removes it permanently the
+                         first time that avatar's trigger fires, recording the unlock via
+                         js/avatar-unlocks.js. A new avatar in this family's pill goes in this grid
+                         either way. -->
                     <div class="avatar-group-label">TRACE PROTOCOLS</div>
                     <div class="grid grid-cols-2 gap-1">
                         <button class="avatar-pill" data-avatar-val="nexus">🟢 The Nexus</button>
@@ -157,6 +159,7 @@
                 </button>
                 <div id="hud-menu" class="hud-slideout hud-slideout-right hidden" role="menu" aria-labelledby="btn-hud-menu">
                     <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
+                    <button id="btn-setup" class="hud-slideout-action" role="menuitem">🧠 Set up the AI</button>
                     <button id="btn-activity" class="hud-slideout-action" role="menuitem">📜 Activity</button>
                     <button id="btn-clear-chat" class="hud-slideout-action" role="menuitem">🗑️ Clear conversation</button>
                     <button id="btn-settings" class="hud-slideout-action" role="menuitem">⚙️ Settings</button>
@@ -427,6 +430,85 @@
         </div>
     </div>
 
+    <!-- SETUP WIZARD -- the way from a fresh install to a model that answers.
+         Every stage it shows is re-derived from a live probe of the machine (see
+         src-tauri/src/setup.rs), never from a step counter, so it cannot claim progress
+         that has not happened and cannot be clicked past a step that has not been done. -->
+    <div id="setup-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    🧠 GIVE IT A BRAIN
+                </h2>
+                <button id="btn-close-setup" class="text-slate-400 hover:text-cyan-300 font-bold text-lg" title="Close">✕</button>
+            </div>
+
+            <p class="text-xs font-mono text-slate-400 leading-snug">
+                Aether1 is the face and the memory. The thinking is done by an AI model that runs
+                on this computer &mdash; it is a separate program, and it is free. This page
+                installs one, start to finish. You do not need to understand any of it.
+            </p>
+
+            <!-- Where the machine is. Four dots rather than a bar: there are four things that
+                 can be wrong, and knowing which one you are on is the entire question. -->
+            <div class="bg-slate-900/80 border border-cyan-500/30 rounded p-3 space-y-2">
+                <div id="setup-progress" class="flex items-center gap-1.5" aria-hidden="true"></div>
+                <div id="setup-headline" class="text-sm font-mono text-cyan-200">Checking this computer...</div>
+            </div>
+
+            <!-- What to do now. Rendered from the advice; empty when there is nothing to do. -->
+            <ol id="setup-steps" class="space-y-2"></ol>
+
+            <!-- Which model. Only shown once there is somewhere to put one. -->
+            <div id="setup-models-wrap" class="hidden space-y-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">CHOOSE A BRAIN</h3>
+                <p class="text-[11px] font-mono text-slate-400 leading-snug">
+                    Bigger means better answers and more waiting &mdash; both to download now and
+                    to think later. The one marked <span class="text-green-400">Best for this
+                    computer</span> is sized to the memory this machine actually has. You can
+                    install others later.
+                </p>
+                <div id="setup-models" class="space-y-1.5"></div>
+            </div>
+
+            <!-- Downloads in flight. One row each, because more than one can run at a
+                 time, and a single shared bar would be lying about which. -->
+            <div id="setup-downloads-wrap" class="hidden space-y-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">DOWNLOADING</h3>
+                <div id="setup-downloads" class="space-y-2"></div>
+                <p class="text-[11px] font-mono text-slate-500 leading-snug">
+                    You can close this window &mdash; the download belongs to the model server,
+                    not to Aether1, and it keeps going either way.
+                </p>
+            </div>
+
+            <!-- What the wizard is doing right now, and what it found when it looked. -->
+            <div id="setup-status" class="hidden text-xs font-mono p-2.5 rounded border border-cyan-500/20 bg-slate-900/80 leading-snug"></div>
+
+            <!-- The cloud alternative. Offered, never taken on anyone's behalf: it means the
+                 words you type leave this machine, and that is a decision, not a default. -->
+            <details class="border border-slate-600/40 rounded p-3">
+                <summary class="text-xs font-mono text-slate-300 cursor-pointer">I'd rather use a cloud AI (OpenAI, Google, Anthropic, Groq)</summary>
+                <p class="text-[11px] font-mono text-slate-400 leading-snug mt-2">
+                    That works too and needs no download &mdash; but everything you say is sent to
+                    that company's computers, and you will need an account and a paid API key from
+                    them. Close this and open <span class="text-cyan-300">Settings &rarr; Agent &amp;
+                    System &rarr; The Brain</span>, pick the provider, and paste the key in.
+                </p>
+            </details>
+
+            <div class="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-cyan-500/30">
+                <span id="setup-help-hint" class="mr-auto text-[10px] font-mono text-slate-500">Stuck? The full written guide is in docs/GETTING_STARTED.md</span>
+                <button id="btn-setup-recheck" class="cyber-btn text-xs py-2 px-4">🔄 Check again</button>
+                <!-- Shown only when the server is installed but silent: the one case where
+                     the app can fix the missing piece itself instead of describing it. -->
+                <button id="btn-setup-start-server" class="hidden cyber-btn cyber-btn-active text-xs py-2 px-4">▶ Start it for me</button>
+                <button id="btn-setup-download" class="hidden cyber-btn text-xs py-2 px-4 text-cyan-300">📥 Download this brain</button>
+                <button id="btn-setup-finish" class="hidden cyber-btn cyber-btn-active text-xs py-2 px-5">✔ Use this and finish</button>
+            </div>
+        </div>
+    </div>
+
     <!-- SETTINGS & IDENTITY MATRIX MODAL -->
     <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
         <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-5 max-h-[90vh] overflow-y-auto">
@@ -461,9 +543,11 @@
                 </h3>
 
                 <!-- Avatar + Color Theme Selectors, condensed into one card: avatar row, theme row
-                     below it. The avatar row runs one column wider than the theme row below (7
-                     presets vs. 6 themes) since A1 -- the default placeholder shown before an
-                     operator has picked a persona/avatar -- has no matching theme of its own. -->
+                     below it. The main avatar row runs one column wider than the theme row below
+                     it (7 presets vs. 6 themes) since A1 -- the default placeholder shown before
+                     an operator has picked a persona/avatar -- has no matching theme of its own.
+                     Senti, White Rabbit and Operator sit in a second row below rather than
+                     stretching the grid past 7 columns. -->
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-3 rounded-md space-y-1.5">
                     <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🎭 AVATAR</label>
                     <div class="grid grid-cols-7 gap-1">
@@ -476,9 +560,21 @@
                         <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-yellow-300 border-yellow-300" data-avatar="alt">⚠️ A1ter</button>
                     </div>
 
-                    <!-- The avatar you design yourself sits on its own row rather than as an
-                         eighth column -- it's a different kind of thing anyway, and comes with
-                         the button that opens the workbench. -->
+                    <!-- Senti, White Rabbit and Operator get their own row rather than an eighth
+                         through tenth column -- the grid above is fixed at 7 wide, and these three
+                         read theme-tinted with no fixed accent colour of their own (see
+                         js/hologram/avatar-senti.js, avatar-white-rabbit.js, avatar-operator.js),
+                         same as hAlcy above. Trace Protocols: hidden until discovered -- see the
+                         matching buttons and comment in #avatar-menu above. -->
+                    <div class="grid grid-cols-3 gap-1">
+                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center hidden" data-avatar="senti">🛸 Nexus Sent</button>
+                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center hidden" data-avatar="white-rabbit">🐇 White Rabbit</button>
+                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center hidden" data-avatar="operator">📟 Operator</button>
+                    </div>
+
+                    <!-- The avatar you design yourself sits on its own row rather than as another
+                         column -- it's a different kind of thing anyway, and comes with the button
+                         that opens the workbench. -->
                     <div class="grid grid-cols-2 gap-1">
                         <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-200" data-avatar="custom">✨ Your own</button>
                         <button id="btn-open-avatar-lab" type="button" class="cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-cyan-300">🛠️ Design your own</button>
@@ -617,224 +713,380 @@
 
             </div><!-- /#settings-panel-customisation -->
 
-            <div id="settings-panel-system" class="settings-tab-panel hidden space-y-5">
+            <div id="settings-panel-system" class="settings-tab-panel hidden space-y-3">
 
-            <!-- SECTION: AUTO-DISCOVERY & LOCAL SCANNER -->
-            <div class="bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
-                <div class="flex items-center justify-between">
-                    <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
-                        🔍 FIND LOCAL LLM SERVERS AND API KEYS
-                    </h3>
-                    <button id="btn-scan-system" class="cyber-btn text-[11px] py-1 px-2.5">
-                        🔄 Scan System & Keys
-                    </button>
-                </div>
+            <!-- Six groups, each a collapsed <details> with a heading anyone can match to
+                 what they came here to change: the brain, the voice, the memory, what it is
+                 allowed to do, the network, and the app itself. Before this, twelve unrelated
+                 controls shared one flat scroll -- a command allowlist sat under a speech
+                 engine, and finding the model box meant reading all of it.
 
-                <div id="scanner-results-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
-                    <div>Status: press Scan to look for local LLM servers on this machine and API keys in the environment.</div>
-                </div>
+                 Every field keeps the id it had. loadSettings/saveSettings address these by
+                 id and know nothing about the grouping, which is what lets the arrangement
+                 change without the plumbing changing with it. <details> also means a closed
+                 group's fields are still in the DOM and still read and written normally --
+                 nothing here may be conditional on a group being open. -->
 
-                <div class="space-y-1.5 pt-1">
-                    <span class="text-xs font-mono text-slate-400 block">Guided install -- a small local LLM to get started with (via Ollama):</span>
-                    <div class="flex items-center justify-between gap-2">
-                        <select id="select-local-model" class="flex-1 bg-slate-900 border border-cyan-500/40 rounded p-1.5 text-xs text-cyan-100 font-mono">
-                            <option value="llama3.2:1b">Llama 3.2 (1B) -- fastest, smallest</option>
-                            <option value="qwen2.5:1.5b">Qwen 2.5 (1.5B) -- fast, strong for its size</option>
-                            <option value="gemma2:2b">Gemma 2 (2B) -- balanced</option>
-                            <option value="phi3">Phi-3 (3.8B) -- stronger reasoning</option>
-                            <option value="mistral">Mistral (7B) -- best quality, needs more RAM</option>
+            <!-- ======================= THE BRAIN ======================= -->
+            <details id="settings-group-brain" class="settings-group" open>
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">🧠 The Brain</span>
+                    <span class="settings-group-hint">which AI does the thinking</span>
+                </summary>
+                <div class="settings-group-body">
+
+                    <!-- The way in for anyone who does not already know what any of the fields
+                         below mean. Everything under it is the same settings by hand. -->
+                    <div class="bg-cyan-950/30 border border-cyan-500/40 p-3 rounded-md flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-xs font-mono text-cyan-200">Not sure what to put here?</div>
+                            <div class="text-[11px] font-mono text-slate-400 leading-snug">
+                                Let Aether1 check this computer and walk you through installing a
+                                free AI that runs offline. Takes a few minutes.
+                            </div>
+                        </div>
+                        <button id="btn-open-setup-settings" type="button" class="cyber-btn cyber-btn-active text-xs py-2 px-3 whitespace-nowrap">🧠 Set it up for me</button>
+                    </div>
+
+                    <div id="brain-status" class="text-[11px] font-mono p-2 rounded border border-slate-600/40 bg-slate-900/60 text-slate-400">
+                        Checking what is connected...
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div class="space-y-1">
+                            <label for="setting-provider" class="text-xs font-mono text-cyan-300 block">WHERE THE AI RUNS</label>
+                            <!-- Named by what they are, not by whose product they are: the two
+                                 local options are API shapes, and a dozen programs speak each. -->
+                            <select id="setting-provider" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <option value="offline">Nothing yet -- canned replies only</option>
+                                <option value="lmstudio">On this computer -- OpenAI-compatible server</option>
+                                <option value="ollama">On this computer -- Ollama-style server</option>
+                                <option value="gemini">Google Gemini (cloud)</option>
+                                <option value="groq">Groq (cloud)</option>
+                                <option value="openai">OpenAI (cloud)</option>
+                                <option value="anthropic">Anthropic Claude (cloud)</option>
+                            </select>
+                            <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                &quot;On this computer&quot; means nothing you type ever leaves the
+                                machine. A cloud option sends it to that company.
+                            </p>
+                        </div>
+
+                        <div class="space-y-1">
+                            <label for="setting-model-picker" class="text-xs font-mono text-cyan-300 block">WHICH MODEL</label>
+                            <!-- The dropdown lists what a detected server says it can run; the box
+                                 below stays typeable, because a cloud model is a name you know
+                                 and nothing local can enumerate it. -->
+                            <select id="setting-model-picker" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <option value="">-- models on the selected server --</option>
+                            </select>
+                            <input id="setting-model" type="text" placeholder="or type one: llama3.2, gemini-2.0-flash, gpt-4o-mini" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        </div>
+                    </div>
+
+                    <div class="space-y-1">
+                        <label for="setting-local-server" class="text-xs font-mono text-cyan-300 block">AI SERVERS FOUND ON THIS COMPUTER</label>
+                        <select id="setting-local-server" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <option value="">-- none found yet; press Scan below --</option>
                         </select>
-                        <button id="btn-pull-llama" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
-                            📥 Install Model
-                        </button>
+                        <span class="text-[11px] font-mono text-slate-500 block">
+                            Picking one fills in everything else for you.
+                        </span>
                     </div>
-                    <span class="text-[11px] font-mono text-slate-500 block">
-                        Any local server works, not just this one: anything speaking the OpenAI-compatible or native API on a common port is found by the scan, and anything else can be typed into the endpoint box by hand.
-                    </span>
-                </div>
-            </div>
 
-            <!-- SECTION: APP VERSION & UPDATES (native desktop app only) -->
-            <div id="update-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-3">
-                <div class="flex items-center justify-between">
-                    <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
-                        🔄 APP VERSION & UPDATES
-                    </h3>
-                    <span id="settings-version-label" class="text-[10px] font-mono text-cyan-400">--</span>
-                </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div class="space-y-1">
+                            <label for="setting-endpoint" class="text-xs font-mono text-cyan-300 block">ADDRESS (for a server on this computer or your LAN)</label>
+                            <input id="setting-endpoint" type="text" placeholder="http://localhost:11434" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        </div>
 
-                <div id="update-status-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
-                    <div>Status: Click Check for Updates to compare this build against the latest commit on GitHub.</div>
-                </div>
-
-                <div class="flex items-center justify-between gap-2">
-                    <span class="text-[11px] font-mono text-slate-500">Checks GitHub directly -- this is a real comparison, not a cached guess.</span>
-                    <div class="flex gap-2">
-                        <button id="btn-check-update" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
-                            🔄 Check for Updates
-                        </button>
-                        <!-- Shown only on Windows, only when the update check fails for lack of
-                             `gh` credentials -- see needs_gh_auth in main.rs and
-                             handleCheckForUpdate() in app.js. -->
-                        <button id="btn-install-gh" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">
-                            📦 Install gh via winget
-                        </button>
-                        <button id="btn-apply-update" class="hidden cyber-btn text-xs py-1 px-3 text-green-400 border-green-400 whitespace-nowrap">
-                            ⬆ Update Now
-                        </button>
+                        <div class="space-y-1">
+                            <label for="setting-apikey" class="text-xs font-mono text-cyan-300 block">API KEY (cloud only)</label>
+                            <input id="setting-apikey" type="password" placeholder="Key for the cloud provider selected above" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        </div>
                     </div>
-                </div>
-            </div>
 
-            <!-- SECTION: PROVIDER & API KEYS -->
-            <div class="space-y-3">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="space-y-1.5">
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="text-[11px] font-mono text-slate-500">
+                                Sends one real message with the settings above -- before Save, so a
+                                mistake is caught here instead of in chat.
+                            </span>
+                            <button id="btn-test-connection" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                                📡 Test it
+                            </button>
+                        </div>
+                        <div id="test-connection-status" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-500/20"></div>
+                    </div>
+
+                    <!-- The scanner, kept with the fields it fills in rather than in a card of
+                         its own at the top of the panel, where it read as a feature instead of
+                         as the way these boxes get filled. -->
+                    <details class="border border-slate-600/40 rounded p-3">
+                        <summary class="text-xs font-mono text-slate-300 cursor-pointer">🔍 Search this computer for AI servers and keys</summary>
+                        <div class="space-y-2 mt-2">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-[11px] font-mono text-slate-500">
+                                    Looks at the usual ports on this machine, and at API keys already
+                                    set in your environment.
+                                </span>
+                                <button id="btn-scan-system" class="cyber-btn text-[11px] py-1 px-2.5 whitespace-nowrap">
+                                    🔄 Scan now
+                                </button>
+                            </div>
+
+                            <div id="scanner-results-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
+                                <div>Press Scan to look for AI servers on this machine and API keys in the environment.</div>
+                            </div>
+
+                            <div class="space-y-1.5 pt-1">
+                                <label for="select-local-model" class="text-xs font-mono text-slate-400 block">Download a small model through Ollama:</label>
+                                <div class="flex items-center justify-between gap-2">
+                                    <select id="select-local-model" class="flex-1 bg-slate-900 border border-cyan-500/40 rounded p-1.5 text-xs text-cyan-100 font-mono">
+                                        <option value="llama3.2:1b">Llama 3.2 (1B) -- fastest, smallest</option>
+                                        <option value="qwen2.5:1.5b">Qwen 2.5 (1.5B) -- fast, strong for its size</option>
+                                        <option value="gemma2:2b">Gemma 2 (2B) -- balanced</option>
+                                        <option value="llama3.2:3b">Llama 3.2 (3B) -- best all-rounder</option>
+                                        <option value="mistral">Mistral (7B) -- better answers, needs more RAM</option>
+                                    </select>
+                                    <button id="btn-pull-llama" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                                        📥 Download
+                                    </button>
+                                </div>
+                                <span class="text-[11px] font-mono text-slate-500 block">
+                                    Any local server works, not just Ollama: anything speaking the
+                                    OpenAI-compatible or Ollama-style API on a common port is found by
+                                    the scan, and anything else can be typed into the address box by hand.
+                                </span>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </details>
+
+            <!-- ======================= VOICE & SOUND ======================= -->
+            <details id="settings-group-voice" class="settings-group">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">🗣 Voice &amp; Sound</span>
+                    <span class="settings-group-hint">how it speaks, and whether it beeps</span>
+                </summary>
+                <div class="settings-group-body">
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">LLM PROVIDER</label>
-                        <!-- Named by what they are, not by whose product they are: the two
-                             local options are API shapes, and a dozen programs speak each. -->
-                        <select id="setting-provider" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="offline">Offline standby -- no model, instant local replies</option>
-                            <option value="lmstudio">Local LLM server -- OpenAI-compatible API</option>
-                            <option value="ollama">Local LLM server -- native API</option>
-                            <option value="gemini">Google Gemini API (cloud)</option>
-                            <option value="groq">Groq API (cloud)</option>
-                            <option value="openai">OpenAI API (cloud)</option>
-                            <option value="anthropic">Anthropic Claude API (cloud)</option>
+                        <label for="setting-tts-engine" class="text-xs font-mono text-cyan-300 block">WHAT DOES THE SPEAKING</label>
+                        <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <option value="auto">Auto — Piper, then cloud, then this OS's built-in voice</option>
+                            <option value="local">Local only (Piper) — never leaves this machine</option>
+                            <option value="cloud">Cloud (Microsoft) — better voices, text is sent away</option>
+                            <option value="os">This OS's built-in voice only — always available, never leaves this machine</option>
                         </select>
+                        <div id="voice-status" class="text-[10px] font-mono text-slate-400 leading-snug"></div>
                     </div>
 
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">MODEL NAME / ID</label>
-                        <!-- The dropdown lists what a detected server says it can run; the box
-                             below stays typeable, because a cloud model is a name you know
-                             and nothing local can enumerate it. -->
-                        <select id="setting-model-picker" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="">-- models on the selected server --</option>
+                        <label for="setting-voice" class="text-xs font-mono text-cyan-300 block">WHICH VOICE</label>
+                        <select id="setting-voice" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <option value="en-US-AriaNeural">en-US-AriaNeural (hAlcy Primary)</option>
+                            <option value="en-US-GuyNeural">en-US-GuyNeural (R.E.D. 9000 / Tactical)</option>
+                            <option value="en-GB-SoniaNeural">en-GB-SoniaNeural (The Nexus / Sophisticated)</option>
+                            <option value="en-US-JennyNeural">en-US-JennyNeural (hAlcy Alternative)</option>
+                            <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural (Cyberpunk Tokyo)</option>
                         </select>
-                        <input id="setting-model" type="text" placeholder="or type one: llama3.2, gemini-2.0-flash, gpt-4o-mini" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            These names are the cloud voices. Piper and the built-in OS voice pick
+                            their own; this box has no effect on them.
+                        </p>
                     </div>
-                </div>
 
-                <div class="space-y-1">
-                    <label class="text-xs font-mono text-cyan-300 block">LOCAL SERVERS FOUND ON THIS MACHINE</label>
-                    <select id="setting-local-server" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <option value="">-- none found yet; press Scan below --</option>
-                    </select>
-                    <span class="text-[11px] font-mono text-slate-500 block">
-                        Picking one fills in the provider, endpoint and model list for you.
-                    </span>
-                </div>
+                    <div class="flex items-center gap-2 pt-1">
+                        <input id="setting-autospeak" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                        <label for="setting-autospeak" class="text-xs font-mono text-slate-300">Read answers out loud</label>
+                    </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <!-- enable_sfx has been a saved setting, and one the companion itself is
+                         allowed to change, since before there was anywhere to change it from:
+                         nothing read it and the HUD beeped regardless. This is that switch. -->
+                    <div class="flex items-center gap-2">
+                        <input id="setting-sfx" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                        <label for="setting-sfx" class="text-xs font-mono text-slate-300">Interface sound effects (clicks, alerts)</label>
+                    </div>
+
+                    <!-- These three have been saved settings, and read by the backend
+                         (voice_status and transcribe_audio), since before there was anywhere
+                         to set them from. Nested because most people never touch them: the
+                         defaults find Piper and Whisper on their own if they are installed. -->
+                    <details id="settings-group-offline-speech" class="settings-group settings-group-nested">
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">Offline speech files</span>
+                            <span class="settings-group-hint">only if Auto cannot find them</span>
+                        </summary>
+                        <div class="settings-group-body">
+                            <div class="space-y-1">
+                                <label for="setting-tts-local-voice" class="text-xs font-mono text-cyan-300 block">PIPER VOICE FILE</label>
+                                <input id="setting-tts-local-voice" type="text" placeholder="leave empty to find it automatically" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                    The full path to a Piper <span class="text-cyan-300">.onnx</span> voice.
+                                    Leave it empty unless the status line above says Piper was found but a
+                                    voice was not.
+                                </p>
+                            </div>
+
+                            <div class="space-y-1">
+                                <label for="setting-stt-model" class="text-xs font-mono text-cyan-300 block">WHISPER MODEL FILE</label>
+                                <input id="setting-stt-model" type="text" placeholder="leave empty to find it automatically" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                    The full path to a <span class="text-cyan-300">.bin</span> Whisper model,
+                                    used to turn what you say into text. Same rule: empty is usually right.
+                                </p>
+                            </div>
+
+                            <div class="space-y-1">
+                                <label for="setting-stt-language" class="text-xs font-mono text-cyan-300 block">WHAT LANGUAGE YOU SPEAK</label>
+                                <input id="setting-stt-language" type="text" placeholder="en" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                    A two-letter code &mdash; <span class="text-cyan-300">en</span> for English,
+                                    <span class="text-cyan-300">de</span> for German, and so on. Only affects
+                                    listening, not speaking.
+                                </p>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </details>
+
+            <!-- ======================= MEMORY ======================= -->
+            <details id="settings-group-memory" class="settings-group">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">📓 Memory</span>
+                    <span class="settings-group-hint">what it remembers, and where that lives</span>
+                </summary>
+                <div class="settings-group-body">
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">ENDPOINT (for a local server)</label>
-                        <input id="setting-endpoint" type="text" placeholder="http://localhost:11434" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <label for="setting-vault-path" class="text-xs font-mono text-cyan-300 block">NOTES FOLDER</label>
+                        <input id="setting-vault-path" type="text" placeholder="~/Aether1Vault" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <div class="flex items-center gap-2">
+                            <button id="open-vault-folder" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Open Folder</button>
+                            <span id="vault-folder-status" class="text-[10px] font-mono text-slate-400"></span>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            A folder of markdown notes &mdash; what the AI remembers about you. Open it in
+                            any editor or in Obsidian, where the <span class="text-cyan-300">[[links]]</span>
+                            between notes draw themselves as a graph. Edit or delete anything; it is
+                            your folder. Notes are only written with your approval.
+                        </p>
                     </div>
+                </div>
+            </details>
 
+            <!-- ======================= WHAT IT MAY DO ======================= -->
+            <details id="settings-group-permissions" class="settings-group">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">🔐 What it may do</span>
+                    <span class="settings-group-hint">reading this machine, running programs</span>
+                </summary>
+                <div class="settings-group-body">
                     <div class="space-y-1">
-                        <label class="text-xs font-mono text-cyan-300 block">API KEY (cloud providers only)</label>
-                        <input id="setting-apikey" type="password" placeholder="Key for the cloud provider selected above" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <div class="flex items-center gap-2">
+                            <input id="setting-tools" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-tools" class="text-xs font-mono text-slate-300">Let it look at this computer (reading only)</label>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                            Lets the AI read files, list directories and check processes to answer you.
+                            Only your home directory, <span class="text-cyan-300">/etc</span>,
+                            <span class="text-cyan-300">/proc</span> and <span class="text-cyan-300">/var/log</span>;
+                            never passwords or keys. Every use is recorded in the Activity Log.
+                            Nothing is changed without you approving it first.
+                        </p>
+                    </div>
+
+                    <div class="space-y-1 pt-1">
+                        <label for="setting-command-allowlist" class="text-xs font-mono text-cyan-300 block">PROGRAMS IT MAY ASK TO RUN</label>
+                        <input id="setting-command-allowlist" type="text" placeholder="e.g. git, docker, systemctl" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            Comma separated. Empty means none, which is the default and is the right
+                            answer unless you have a reason. Every run still needs your approval &mdash;
+                            this only decides what it is allowed to ask for. There is no shell: no
+                            pipes, redirects or wildcards.
+                        </p>
                     </div>
                 </div>
+            </details>
 
-                <div class="space-y-1">
-                    <label class="text-xs font-mono text-cyan-300 block">NEURAL VOICE SYNTHESIS</label>
-                    <select id="setting-voice" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <option value="en-US-AriaNeural">en-US-AriaNeural (hAlcy Primary)</option>
-                        <option value="en-US-GuyNeural">en-US-GuyNeural (R.E.D. 9000 / Tactical)</option>
-                        <option value="en-GB-SoniaNeural">en-GB-SoniaNeural (The Nexus / Sophisticated)</option>
-                        <option value="en-US-JennyNeural">en-US-JennyNeural (hAlcy Alternative)</option>
-                        <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural (Cyberpunk Tokyo)</option>
-                    </select>
-                </div>
-
-                <div class="space-y-1">
-                    <label class="text-xs font-mono text-cyan-300 block">MEMORY VAULT</label>
-                    <div class="flex items-center gap-2">
-                        <input id="setting-vault-path" type="text" placeholder="~/Aether1Vault" class="flex-1 bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <button id="btn-open-vault" type="button" class="cyber-btn text-xs py-2 px-3 whitespace-nowrap" title="Open the vault folder in your file manager">📂 Open</button>
+            <!-- ======================= NETWORK ======================= -->
+            <details id="settings-group-network" class="settings-group">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">🌐 Network</span>
+                    <span class="settings-group-hint">whether anything may leave this machine</span>
+                </summary>
+                <div class="settings-group-body">
+                    <div class="space-y-1">
+                        <div class="flex items-center gap-2">
+                            <input id="setting-local-only" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-local-only" class="text-xs font-mono text-slate-300">Local only &mdash; never reach the internet</label>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                            Nothing leaves this machine or your local network. Cloud providers are
+                            refused, speech uses Piper or stays silent rather than sending your words
+                            to Microsoft, and update checks and model downloads stop. A model server
+                            on your own LAN still works &mdash; that is the point. Turning this on
+                            does not delete anything; switch it off and your cloud settings are still
+                            there.
+                        </p>
+                        <p id="local-only-forced" class="text-[10px] font-mono text-amber-400 leading-snug pl-6 hidden">
+                            Forced on by <span class="text-cyan-300">AETHER1_LOCAL_ONLY</span> in this
+                            environment &mdash; the checkbox cannot switch it off.
+                        </p>
                     </div>
-                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                        A folder of markdown notes &mdash; what the AI remembers about you. Open it in
-                        any editor or in Obsidian, where the <span class="text-cyan-300">[[links]]</span>
-                        between notes draw themselves as a graph. Edit or delete anything; it is
-                        your folder. Notes are only written with your approval. Every reply also says,
-                        in a line like <code class="text-cyan-300">⚙ vault notes loaded: ...</code>,
-                        exactly which notes were behind it.
-                    </p>
                 </div>
+            </details>
 
-                <div class="space-y-1 pt-1">
-                    <label class="text-xs font-mono text-cyan-300 block">NETWORK</label>
-                    <div class="flex items-center gap-2">
-                        <input id="setting-local-only" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                        <label for="setting-local-only" class="text-xs font-mono text-slate-300">Local only &mdash; never reach the internet</label>
+            <!-- ======================= THE APP ITSELF ======================= -->
+            <details id="settings-group-app" class="settings-group">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">🖥 The app itself</span>
+                    <span class="settings-group-hint">hotkey, version, updates</span>
+                </summary>
+                <div class="settings-group-body">
+                    <div id="setting-hotkey-wrap" class="space-y-1">
+                        <label for="setting-hotkey" class="text-xs font-mono text-cyan-300 block">KEYS THAT SUMMON IT</label>
+                        <input id="setting-hotkey" type="text" placeholder="Super+Shift+A" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            Shows or hides this HUD from anywhere. Modifiers: Super, Control, Alt, Shift.
+                            Leave empty to disable. On Wayland an app can't grab keys system-wide &mdash;
+                            bind your compositor to <span class="text-cyan-300">aether1 toggle</span> instead.
+                        </p>
                     </div>
-                    <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                        Nothing leaves this machine or your local network. Cloud providers are
-                        refused, speech uses Piper or stays silent rather than sending your words
-                        to Microsoft, and update checks and model downloads stop. A model server
-                        on your own LAN still works &mdash; that is the point. Turning this on
-                        does not delete anything; switch it off and your cloud settings are still
-                        there.
-                    </p>
-                    <p id="local-only-forced" class="text-[10px] font-mono text-amber-400 leading-snug pl-6 hidden">
-                        Forced on by <span class="text-cyan-300">AETHER1_LOCAL_ONLY</span> in this
-                        environment &mdash; the checkbox cannot switch it off.
-                    </p>
-                </div>
 
-                <div class="space-y-1">
-                    <label class="text-xs font-mono text-cyan-300 block">SPEECH ENGINE</label>
-                    <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <option value="auto">Auto — Piper, then cloud, then this OS's built-in voice</option>
-                        <option value="local">Local only (Piper) — never leaves this machine</option>
-                        <option value="cloud">Cloud (Microsoft) — better voices, text is sent away</option>
-                        <option value="os">This OS's built-in voice only — always available, never leaves this machine</option>
-                    </select>
-                    <div id="voice-status" class="text-[10px] font-mono text-slate-400 leading-snug"></div>
-                </div>
+                    <!-- Native desktop app only: a browser tab has no build to update. -->
+                    <div id="update-section" class="hidden space-y-2 pt-1">
+                        <div class="flex items-center justify-between">
+                            <label class="text-xs font-mono text-cyan-300 block">VERSION &amp; UPDATES</label>
+                            <span id="settings-version-label" class="text-[10px] font-mono text-cyan-400">--</span>
+                        </div>
 
-                <div id="setting-hotkey-wrap" class="space-y-1">
-                    <label class="text-xs font-mono text-cyan-300 block">GLOBAL SUMMON HOTKEY</label>
-                    <input id="setting-hotkey" type="text" placeholder="Super+Shift+A" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                        Shows or hides this HUD from anywhere. Modifiers: Super, Control, Alt, Shift.
-                        Leave empty to disable. On Wayland an app can't grab keys system-wide &mdash;
-                        bind your compositor to <span class="text-cyan-300">aether1 toggle</span> instead.
-                    </p>
-                </div>
+                        <div id="update-status-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
+                            <div>Press Check for Updates to compare this build against the latest commit on GitHub.</div>
+                        </div>
 
-                <div class="space-y-1 pt-1">
-                    <div class="flex items-center gap-2">
-                        <input id="setting-tools" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                        <label for="setting-tools" class="text-xs font-mono text-slate-300">Allow inspection of this machine (read-only)</label>
+                        <div class="flex items-center justify-between gap-2 flex-wrap">
+                            <span class="text-[11px] font-mono text-slate-500">Checks GitHub directly -- a real comparison, not a cached guess.</span>
+                            <div class="flex gap-2 flex-wrap">
+                                <button id="btn-check-update" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                                    🔄 Check for Updates
+                                </button>
+                                <!-- Shown only on Windows, only when the update check fails for lack of
+                                     `gh` credentials -- see needs_gh_auth in main.rs and
+                                     handleCheckForUpdate() in app.js. -->
+                                <button id="btn-install-gh" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">
+                                    📦 Install gh via winget
+                                </button>
+                                <button id="btn-apply-update" class="hidden cyber-btn text-xs py-1 px-3 text-green-400 border-green-400 whitespace-nowrap">
+                                    ⬆ Update Now
+                                </button>
+                            </div>
+                        </div>
                     </div>
-                    <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                        Lets the AI read files, list directories and check processes to answer you.
-                        Only your home directory, <span class="text-cyan-300">/etc</span>,
-                        <span class="text-cyan-300">/proc</span> and <span class="text-cyan-300">/var/log</span>;
-                        never credentials or keys. Every use is recorded. Nothing can be changed &mdash;
-                        no tool that alters this machine exists yet.
-                    </p>
                 </div>
-
-                <div class="space-y-1 pt-1">
-                    <label class="text-xs font-mono text-cyan-300 block">COMMAND ALLOWLIST</label>
-                    <input id="setting-command-allowlist" type="text" placeholder="e.g. git, docker, systemctl" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                        Programs the AI may ask to run, comma separated. Empty means none, which is
-                        the default. Every run still needs your approval &mdash; this only decides
-                        what it is allowed to ask for. There is no shell: no pipes, redirects or globs.
-                    </p>
-                </div>
-
-                <div class="flex items-center gap-2 pt-1">
-                    <input id="setting-autospeak" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                    <label for="setting-autospeak" class="text-xs font-mono text-slate-300">Auto-speak AI responses aloud with neural voice</label>
-                </div>
-            </div>
+            </details>
 
             </div><!-- /#settings-panel-system -->
 

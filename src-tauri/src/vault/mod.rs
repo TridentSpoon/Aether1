@@ -20,6 +20,20 @@ use std::path::{Path, PathBuf};
 
 use crate::llm::MemoryDb;
 
+pub mod consulted;
+pub mod search;
+
+/// Cuts `text` to at most `limit` *characters*, adding an ellipsis when it does.
+///
+/// Characters rather than bytes: everything trimmed here is prose written by a person, and
+/// a snippet that ends mid-character is a bug looking for a name to be reported under.
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    format!("{}…", text.chars().take(limit).collect::<String>())
+}
+
 /// Where the vault lives unless the operator says otherwise. Under home so that the
 /// existing tool path guards already reach it.
 pub const DEFAULT_VAULT_DIR: &str = "Aether1Vault";
@@ -29,6 +43,13 @@ const IMPORT_FLAG_SETTING: &str = "vault_imported_memories";
 /// Notes loaded into every prompt, in this order. Kept deliberately short: this is the
 /// part that costs context on every single turn, and everything else is one read away.
 const ALWAYS_LOADED: &[&str] = &["INDEX.md", "profile.md", "machine.md"];
+
+/// How many notes may pile up in `daily/` before priming mentions it.
+///
+/// Two weeks of conversations. Below that there is nothing to fold and saying so every turn
+/// would be nagging; above it the dailies have started to be where things are remembered,
+/// which is the opposite of what they are for.
+const DAILY_BEFORE_CONSOLIDATING: usize = 14;
 
 /// How much of the always-loaded set to accept. A note that grows past this is a note that
 /// should have been split, and truncating is better than crowding out the conversation.
@@ -180,6 +201,131 @@ pub fn resolve_note(db: &MemoryDb, relative: &str) -> Result<PathBuf, String> {
     Ok(root.join(relative))
 }
 
+/// The notes that are loaded every turn, and so are never archived. A vault whose index
+/// has been moved into `archive/` is a vault with no map; a profile that has stopped being
+/// true gets *edited*, which is what write_note is for.
+pub fn is_core_note(relative: &str) -> bool {
+    ALWAYS_LOADED
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(relative.trim()))
+}
+
+/// How many `-2`, `-3` … suffixes to try before giving up on a name collision in the
+/// archive. Past this, two notes are being archived under one name repeatedly and the
+/// honest answer is to say so rather than to keep inventing filenames.
+const MAX_ARCHIVE_SUFFIX: u32 = 20;
+
+/// Where a note goes when it stops being true, and the source it moves from.
+///
+/// Archiving rather than deleting is the whole point: a note that contradicted a newer one
+/// is evidence about what the companion used to believe, and the operator is the only one
+/// who gets to destroy their own memory.
+pub fn archive_destination(
+    db: &MemoryDb,
+    relative: &str,
+) -> Result<(PathBuf, String, PathBuf), String> {
+    let relative = relative.trim();
+    let from = resolve_note(db, relative)?;
+    if !from.exists() {
+        return Err(format!("{relative} is not a note in the vault"));
+    }
+    if relative.starts_with("archive/") {
+        return Err(format!("{relative} is already archived"));
+    }
+    if is_core_note(relative) {
+        return Err(format!(
+            "{relative} is loaded into every conversation and is not archived -- correct it \
+             with write_note instead"
+        ));
+    }
+
+    let root = vault_path(db);
+    let stem = relative.trim_end_matches(".md");
+    for attempt in 1..=MAX_ARCHIVE_SUFFIX {
+        let candidate = if attempt == 1 {
+            format!("archive/{relative}")
+        } else {
+            format!("archive/{stem}-{attempt}.md")
+        };
+        let path = root.join(&candidate);
+        if !path.exists() {
+            return Ok((from, candidate, path));
+        }
+    }
+    Err(format!(
+        "{relative} has been archived {MAX_ARCHIVE_SUFFIX} times already; tidy the archive \
+         before adding another"
+    ))
+}
+
+/// Marks a note archived in the index without removing its line.
+///
+/// The line stays because `[[wiki links]]` resolve by note name rather than by folder, so
+/// the link still works after the move -- and because silently deleting a line from a file
+/// the operator writes in themselves is not a thing a memory system should do. Best-effort:
+/// failing to annotate the index is not a reason to fail the archive.
+fn mark_archived_in_index(root: &Path, relative: &str) {
+    let index = root.join("INDEX.md");
+    let Ok(contents) = std::fs::read_to_string(&index) else {
+        return;
+    };
+    let stem = Path::new(relative)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let link = format!("[[{stem}]]");
+
+    let mut changed = false;
+    let updated: Vec<String> = contents
+        .lines()
+        .map(|line| {
+            if line.contains(&link) && !line.contains("(archived)") {
+                changed = true;
+                format!("{} (archived)", line.trim_end())
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    if changed {
+        let _ = std::fs::write(&index, format!("{}\n", updated.join("\n")));
+    }
+}
+
+/// Moves a note into `archive/`, returning its new path relative to the vault.
+pub fn archive(db: &MemoryDb, relative: &str) -> Result<String, String> {
+    let (from, destination, to) = archive_destination(db, relative)?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    std::fs::rename(&from, &to)
+        .map_err(|e| format!("could not move {} to {}: {e}", from.display(), to.display()))?;
+    mark_archived_in_index(&vault_path(db), relative.trim());
+    Ok(destination)
+}
+
+/// Puts an archived note back where it came from. The undo half of `archive`.
+pub fn unarchive(db: &MemoryDb, archived: &str, original: &str) -> Result<(), String> {
+    let from = resolve_note(db, archived)?;
+    let to = resolve_note(db, original)?;
+    if to.exists() {
+        return Err(format!("{original} exists again; nothing was moved back"));
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    std::fs::rename(&from, &to).map_err(|e| {
+        format!(
+            "could not move {} back to {}: {e}",
+            from.display(),
+            to.display()
+        )
+    })?;
+    Ok(())
+}
+
 /// The vault's contribution to the system prompt: the index, the always-loaded notes, and
 /// an instruction about how to reach the rest.
 pub fn prime(db: &MemoryDb) -> String {
@@ -191,9 +337,10 @@ pub fn prime(db: &MemoryDb) -> String {
     let mut block = format!(
         "\n[MEMORY VAULT: {}]\n\
          These notes are your memory of this operator. Read others with read_file when the \
-         question calls for them, following the index below. Write with append_note and \
-         write_note; both need the operator's approval, so say what you intend to record \
-         and why.\n",
+         question calls for them, following the index below. The index does not list every \
+         note -- use search_memory when the index has no obvious answer, and prefer what it \
+         returns over guessing. Write with append_note and write_note; both need the \
+         operator's approval, so say what you intend to record and why.\n",
         root.display()
     );
 
@@ -211,9 +358,44 @@ pub fn prime(db: &MemoryDb) -> String {
             contents
         };
         block.push_str(&format!("\n--- {name} ---\n{contents}"));
+        consulted::record(name, consulted::How::Primed);
     }
 
+    block.push_str(&consolidation_note(&root));
     block
+}
+
+/// The one line of housekeeping the prompt is allowed to carry, and only once there is
+/// housekeeping to do.
+///
+/// Consolidation is the model's job rather than the code's: folding a fortnight of daily
+/// notes into a topic note is a judgement about what mattered, and a routine that did it
+/// automatically would be rewriting the operator's memory without being asked. What the
+/// code can do is notice, and say so once the pile is real -- and say plainly that it is not
+/// worth interrupting anyone over, so this does not become a companion that nags.
+fn consolidation_note(root: &Path) -> String {
+    let daily = root.join("daily");
+    let count = std::fs::read_dir(&daily)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+                .count()
+        })
+        .unwrap_or(0);
+
+    if count <= DAILY_BEFORE_CONSOLIDATING {
+        return String::new();
+    }
+
+    format!(
+        "\n[CONSOLIDATION]\nThere are {count} notes in `daily/`. When the conversation \
+         reaches a natural pause, offer to fold the older ones into topic notes under \
+         `projects/` or into [[profile]], then archive_note the dailies you folded. A fact \
+         worth keeping belongs in the note about its subject, not in the note about the day \
+         it was mentioned. Do not interrupt the operator to do this, and do not do it \
+         without asking.\n"
+    )
 }
 
 /// Records something the operator explicitly asked to be remembered. Appends to
@@ -324,6 +506,19 @@ fn collect_notes(root: &Path, dir: &Path, into: &mut Vec<String>, depth: usize) 
     }
 }
 
+/// The note's name if `path` is inside the vault, and nothing if it is anywhere else.
+///
+/// Both sides are canonicalised before they are compared, because the vault path is a
+/// setting the operator typed and the path being checked has been through `fs_guard`: one
+/// may have a symlink or a `..` in it that the other does not, and a string comparison
+/// would answer "not in the vault" for a file plainly in the vault.
+pub fn note_in_vault(db: &MemoryDb, path: &Path) -> Option<String> {
+    let root = vault_path(db).canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
+    let name = path.strip_prefix(&root).ok()?;
+    Some(name.to_string_lossy().to_string())
+}
+
 /// A note's path relative to the vault, for reporting which notes were consulted.
 pub fn relative_name(db: &MemoryDb, path: &Path) -> String {
     path.strip_prefix(vault_path(db))
@@ -374,6 +569,45 @@ mod tests {
         )
         .unwrap();
         (db, dir.join("vault"))
+    }
+
+    /// What the HUD says under an answer starts here: every note priming pasted in is a note
+    /// that was in front of the model, whether or not it used it.
+    #[test]
+    fn priming_reports_the_notes_it_loaded() {
+        let (db, _root) = fixture("consulted");
+        ensure(&db).unwrap();
+
+        consulted::begin();
+        let block = prime(&db);
+        let notes = consulted::taken();
+
+        let names: Vec<&str> = notes.iter().map(|c| c.note.as_str()).collect();
+        assert_eq!(names, ALWAYS_LOADED.to_vec());
+        assert!(
+            notes.iter().all(|c| c.how == consulted::How::Primed),
+            "priming is the reason these are here: {notes:?}"
+        );
+        assert!(
+            block.contains("profile.md"),
+            "and they really were pasted in"
+        );
+    }
+
+    /// The check that keeps read_file's report honest: only files actually under the vault
+    /// count as memory, and the answer must not depend on how the path was spelled.
+    #[test]
+    fn a_file_outside_the_vault_is_not_a_note() {
+        let (db, root) = fixture("in_vault");
+        ensure(&db).unwrap();
+        let outside = root.parent().unwrap().join("memory.db");
+
+        assert_eq!(
+            note_in_vault(&db, &root.join("projects").join("..").join("profile.md")),
+            Some("profile.md".to_string())
+        );
+        assert_eq!(note_in_vault(&db, &outside), None);
+        assert_eq!(note_in_vault(&db, Path::new("/etc/hostname")), None);
     }
 
     #[test]
@@ -571,5 +805,187 @@ mod tests {
         assert!(resolve_note(&db, "profile.txt").is_err());
         assert!(resolve_note(&db, ".bashrc").is_err());
         assert!(resolve_note(&db, "profile.md").is_ok());
+    }
+
+    // ------------------------------------------------------ retrieval
+
+    /// The acceptance test from the plan, written out: with two hundred notes, asking
+    /// about one topic pulls that topic's note and not the ten most recent.
+    ///
+    /// The dailies are written *after* the topic note on purpose, so every one of them is
+    /// more recent than the answer. If recency were doing any of the ranking this test
+    /// would fail, which is the point of it.
+    #[test]
+    fn with_two_hundred_notes_a_topic_question_finds_the_topic_note() {
+        let (db, root) = fixture("bulk");
+        ensure(&db).unwrap();
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        std::fs::write(
+            root.join("projects/sourdough.md"),
+            "# Sourdough\n\nThe starter lives in the fridge and gets fed on Sundays.\n",
+        )
+        .unwrap();
+
+        for n in 0..200 {
+            std::fs::write(
+                root.join(format!("daily/2026-01-{n:03}.md")),
+                format!("# Day {n}\n\nOrdinary conversation. Nothing about baking at all.\n"),
+            )
+            .unwrap();
+        }
+
+        let results = search::search(&db, "sourdough starter");
+        assert!(results.scanned > 200, "scanned {}", results.scanned);
+        assert_eq!(
+            results.hits.first().map(|h| h.note.as_str()),
+            Some("projects/sourdough.md"),
+            "got {:?}",
+            results.hits.iter().map(|h| &h.note).collect::<Vec<_>>()
+        );
+    }
+
+    /// And the shortlist stays a shortlist: a word every note contains must not return
+    /// every note.
+    #[test]
+    fn a_search_returns_a_shortlist_rather_than_the_whole_vault() {
+        let (db, root) = fixture("shortlist");
+        ensure(&db).unwrap();
+        for n in 0..50 {
+            std::fs::write(
+                root.join(format!("daily/day-{n:03}.md")),
+                "# Day\n\nTelemetry looked normal.\n",
+            )
+            .unwrap();
+        }
+        let results = search::search(&db, "telemetry");
+        assert!(results.hits.len() <= 8, "{} hits", results.hits.len());
+        assert!(results.scanned >= 50);
+    }
+
+    #[test]
+    fn a_search_that_finds_nothing_says_so_rather_than_inventing_something() {
+        let (db, _) = fixture("empty_search");
+        ensure(&db).unwrap();
+        let results = search::search(&db, "sourdough");
+        assert!(results.hits.is_empty());
+        let rendered = search::render(&db, "sourdough", &results);
+        assert!(rendered.contains("No note matches"), "{rendered}");
+    }
+
+    // ---------------------------------------------------- consolidation
+
+    #[test]
+    fn a_handful_of_daily_notes_is_not_worth_mentioning() {
+        let (db, root) = fixture("quiet");
+        ensure(&db).unwrap();
+        for n in 0..3 {
+            std::fs::write(root.join(format!("daily/day-{n}.md")), "# Day\n").unwrap();
+        }
+        assert!(!prime(&db).contains("CONSOLIDATION"));
+    }
+
+    /// Once the dailies are where things are being remembered -- which is the opposite of
+    /// what they are for -- the prompt says so, once, and says not to interrupt over it.
+    #[test]
+    fn a_pile_of_daily_notes_prompts_consolidation_without_nagging() {
+        let (db, root) = fixture("pile");
+        ensure(&db).unwrap();
+        for n in 0..30 {
+            std::fs::write(root.join(format!("daily/day-{n:03}.md")), "# Day\n").unwrap();
+        }
+        let primed = prime(&db);
+        assert!(primed.contains("CONSOLIDATION"), "{primed}");
+        assert!(primed.contains("30 notes"), "{primed}");
+        assert!(primed.contains("Do not interrupt"), "{primed}");
+    }
+
+    // --------------------------------------------------------- archive
+
+    #[test]
+    fn archiving_moves_a_note_and_marks_it_in_the_index() {
+        let (db, root) = fixture("archive");
+        ensure(&db).unwrap();
+        std::fs::write(root.join("projects/sourdough.md"), "# Sourdough\n").unwrap();
+        link_from_index(&root, "sourdough", "the starter");
+
+        let destination = archive(&db, "projects/sourdough.md").unwrap();
+        assert_eq!(destination, "archive/projects/sourdough.md");
+        assert!(!root.join("projects/sourdough.md").exists());
+        assert!(root.join(&destination).exists());
+
+        // The line stays -- wiki links resolve by name, so it still works -- but it says
+        // what happened.
+        let index = std::fs::read_to_string(root.join("INDEX.md")).unwrap();
+        assert!(index.contains("[[sourdough]]"), "{index}");
+        assert!(index.contains("(archived)"), "{index}");
+    }
+
+    /// Nothing archives the map or the two notes loaded every turn: those get corrected,
+    /// not filed away.
+    #[test]
+    fn the_always_loaded_notes_are_never_archived() {
+        let (db, _) = fixture("core");
+        ensure(&db).unwrap();
+        for note in ["INDEX.md", "profile.md", "machine.md"] {
+            let refused = archive(&db, note).unwrap_err();
+            assert!(refused.contains("write_note"), "{refused}");
+        }
+    }
+
+    #[test]
+    fn archiving_the_same_name_twice_does_not_overwrite_the_first() {
+        let (db, root) = fixture("collide");
+        ensure(&db).unwrap();
+        std::fs::write(root.join("notes.md"), "first").unwrap();
+        assert_eq!(archive(&db, "notes.md").unwrap(), "archive/notes.md");
+
+        std::fs::write(root.join("notes.md"), "second").unwrap();
+        assert_eq!(archive(&db, "notes.md").unwrap(), "archive/notes-2.md");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("archive/notes.md")).unwrap(),
+            "first"
+        );
+    }
+
+    #[test]
+    fn an_archive_can_be_undone() {
+        let (db, root) = fixture("unarchive");
+        ensure(&db).unwrap();
+        std::fs::write(root.join("projects/old.md"), "# Old\n").unwrap();
+
+        let destination = archive(&db, "projects/old.md").unwrap();
+        unarchive(&db, &destination, "projects/old.md").unwrap();
+
+        assert!(root.join("projects/old.md").exists());
+        assert!(!root.join(&destination).exists());
+    }
+
+    /// Undo must not clobber a note that came back by another route while the archive sat
+    /// there -- the whole reason archiving exists is that memory is not ours to destroy.
+    #[test]
+    fn undoing_an_archive_refuses_to_overwrite_a_note_written_since() {
+        let (db, root) = fixture("unarchive_clash");
+        ensure(&db).unwrap();
+        std::fs::write(root.join("projects/old.md"), "original").unwrap();
+        let destination = archive(&db, "projects/old.md").unwrap();
+        std::fs::write(root.join("projects/old.md"), "written since").unwrap();
+
+        let refused = unarchive(&db, &destination, "projects/old.md").unwrap_err();
+        assert!(refused.contains("exists again"), "{refused}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("projects/old.md")).unwrap(),
+            "written since"
+        );
+    }
+
+    #[test]
+    fn an_already_archived_note_is_not_archived_again() {
+        let (db, root) = fixture("double");
+        ensure(&db).unwrap();
+        std::fs::write(root.join("x.md"), "x").unwrap();
+        let destination = archive(&db, "x.md").unwrap();
+        let refused = archive(&db, &destination).unwrap_err();
+        assert!(refused.contains("already archived"), "{refused}");
     }
 }

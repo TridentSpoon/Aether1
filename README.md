@@ -166,8 +166,43 @@ A self-signed certificate does **not** work here, even installed into Trusted Ro
 Control judges signatures against Microsoft's own trust and reputation service, not against
 your machine's certificate store, so signing it yourself changes nothing.
 
-Nothing in `.github/workflows/release.yml` signs anything today, so every release carries this
-caveat. The signing step belongs there once a certificate exists.
+#### Signing releases
+
+`.github/workflows/release.yml` signs both the binary and the installer when — and only when
+— six repository secrets are set. With none of them set it builds exactly as before and warns
+in the job log that the release is unsigned, so a fork still builds.
+
+| Secret | What it is |
+|---|---|
+| `AZURE_SIGNING_TENANT_ID` | Directory (tenant) ID |
+| `AZURE_SIGNING_CLIENT_ID` | App registration's client ID |
+| `AZURE_SIGNING_CLIENT_SECRET` | That app registration's client secret |
+| `AZURE_SIGNING_ENDPOINT` | Regional endpoint, e.g. `https://eus.codesigning.azure.net/` |
+| `AZURE_SIGNING_ACCOUNT` | Signing account name |
+| `AZURE_SIGNING_CERT_PROFILE` | Certificate profile name |
+
+The app registration needs the **Trusted Signing Certificate Profile Signer** role on the
+certificate profile. The last three are configuration rather than secrets, but they live
+alongside the other three so there is one place to set signing up and one condition deciding
+whether it is on.
+
+Three things the workflow does deliberately:
+
+- **`aether1.exe` is signed before Inno Setup packages it**, not only the installer
+  afterwards. Smart App Control judges the binary that ends up running, so an installer
+  signed around an unsigned payload installs cleanly and is then blocked on launch — which is
+  exactly the failure above, one step later. The packaging script takes `-SignedExe` so the
+  signed binary is staged as-is and nothing relinks over the signature.
+- **Setting some of the six but not all fails the build.** Anyone who set four of them meant
+  to sign, and a release that quietly comes out unsigned is discovered by whoever downloads
+  it rather than by CI.
+- **Signatures are verified after the fact.** If signing was configured and a file came out
+  unsigned anyway, the job fails rather than publishing it. Only presence is asserted, not
+  chain validity — a runner that cannot build the chain would otherwise fail for a reason
+  unrelated to whether the release is signed.
+
+Signatures are timestamped (`timestamp.acs.microsoft.com`), so they stay valid after the
+certificate expires rather than every released installer going bad on the same day.
 
 ### Building from source
 
@@ -250,11 +285,51 @@ Nothing is deleted by turning it on. Untick it and your cloud settings are exact
 left them. To nail it on for good — a shared machine, a locked-down install — set
 `AETHER1_LOCAL_ONLY=1` in the environment and the checkbox can no longer switch it off.
 
+## Giving it a brain
+
+A fresh install has no AI behind it: it talks, reads out your system stats and answers
+with a handful of canned lines, because `llm_provider` starts at `offline`. Nothing is
+broken — there is simply no model yet.
+
+Press **🧠 Set up the AI** in the HUD menu. It looks at the machine, works out
+which of four things is true (nothing installed / installed but not running / running
+with no models / a model is there), and asks for exactly one thing at a time. It sizes
+the model list to the memory this computer actually has, marks one **Best for this
+computer**, downloads it, and fills the settings in for you.
+
+The list is the nineteen most-used local models — Llama, Gemma, Qwen, Mistral, Phi and
+DeepSeek R1 — across five memory tiers, from a 400 MB one that runs on almost anything
+to a 43 GB one for a machine with 64 GB of memory. What this computer can run is listed
+straight away; the rest is one click away behind **Show N bigger models**, because the
+recommendation is a default and not a gate.
+
+Downloads show a real progress bar — the percentage and the byte count the model server
+itself reports, not a spinner — and up to three can run at once. If the model server is
+installed but not running, **▶ Start it for me** starts it; that is the one gap Aether1
+can close by itself rather than describe.
+
+Until a brain is connected the wizard opens on launch, the dialogue stream carries a
+notice you cannot miss, and sending a message says plainly that nothing is behind it
+rather than returning a canned line that looks like an answer.
+
+The same journey written out, per operating system, is in
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — written for someone who has never
+installed a developer tool in their life.
+
 ## Choosing a model
 
-Open **Settings** and Aether1 looks for model servers already running on this machine. Any
-that answer appear in **LOCAL SERVERS FOUND ON THIS MACHINE**; picking one fills in the
-provider, the address and the list of models it can run, so there is nothing to look up.
+Once there is a brain, the rest of this is for changing it. Open **Settings** and
+Aether1 looks for model servers already running on this machine. Any
+that answer appear under **AI SERVERS FOUND ON THIS COMPUTER**, inside the
+**🧠 The Brain** group; picking one fills in the provider, the address and the list
+of models it can run, so there is nothing to look up.
+
+The **Agent & System** tab is grouped by the question you came in with rather than by
+which module implements it: **🧠 The Brain**, **🗣 Voice & Sound**,
+**📓 Memory**, **🛡 What it may do**, **🌐 Network** and
+**⚙ The app itself**. Each group is collapsed until you open it, and the things
+almost nobody needs — the Piper voice file, the Whisper model file — are nested one level
+further inside the group they belong to.
 
 The scan probes the loopback ports these tools tend to use and identifies them by the API
 they speak, not by which program they are — so it finds the popular runners, most of the
@@ -403,6 +478,56 @@ rather than a projection. That panel is the one part of the window that does not
 background colour.
 
 
+## What it remembers
+
+Everything the companion keeps about you is a folder of ordinary markdown files, by default
+`~/Aether1Vault`. Not a database — a folder. You can open it in any editor, search it, put it
+in git, sync it with Obsidian, hand it to a different assistant, or delete a line you disagree
+with, and none of that needs a feature from us.
+
+```
+Aether1Vault/
+  INDEX.md        what is here, and which notes matter for which question
+  profile.md      who you are and how you like things done
+  machine.md      what this computer is
+  memories.md     things you asked it to remember
+  projects/       one note per project
+  daily/          what happened on a given day
+  archive/        notes that stopped being true, kept rather than deleted
+```
+
+Notes link to each other with `[[wiki links]]`, which is what turns the folder into a graph —
+open it in Obsidian and the graph view *is* a picture of what your companion knows.
+
+**How it finds things.** `INDEX.md`, `profile.md` and `machine.md` are loaded into every
+conversation; everything else it goes and reads when the question calls for it. Once the vault
+outgrows its index it searches instead, ranking by *where* a word appears rather than by how
+recent a note is: a note named for the topic comes first, then one with the topic in a heading,
+then one that just mentions it in passing. That ordering is the whole point. Asking about
+sourdough should find your sourdough note, not last Tuesday's conversation.
+
+**How it forgets.** Nothing is deleted. A note that has stopped being true, or whose contents
+have been folded into a better note, gets moved to `archive/` — it keeps its text, its links
+and its searchability, and the index line says `(archived)` rather than vanishing. Once the
+`daily/` folder passes a fortnight's worth of notes, the companion is told to *offer* to tidy
+them into topic notes at a natural pause. It will not interrupt you to do it and it will not do
+it without asking, because a fact worth keeping belongs in the note about its subject, and
+deciding which facts those are is a judgement you should get a say in.
+
+**How you can tell.** Under an answer that used the vault, the HUD lists the notes behind it:
+● a note that is loaded every turn, ◆ one it went and fetched while answering, ○ one
+search offered it as a candidate and which it may not have used at all. Those three are
+deliberately not the same claim. A companion that quotes something about you should be able to
+say where it got it, because otherwise recall and invention look identical from the outside.
+Settings has an **Open Folder** button next to the vault path, so the notes it names are one
+click from being open in your own editor. (In a browser tab it copies the path instead --
+a tab on your phone cannot open a folder on your desktop, and pretending otherwise would be
+worse than saying so.)
+
+Writing to the vault always shows you an approval card first — what it wants to record, and
+where. The one exception is `remember that …`, which writes straight through: that is your own
+instruction, and asking you to approve your own sentence would be ceremony rather than consent.
+
 ## Personas
 
 A persona is a **job**, not a character. The character is how the job sounds. Settings leads
@@ -464,6 +589,24 @@ Two things this does *not* change. Every persona has the same tools available �
 decides what runs without a prompt, not what is possible. And the paths Aether1 never reads at
 all (SSH and GPG keys, cloud credentials, `/etc/shadow`, and the rest) stay off limits inside a
 persona's own field and after an approval alike: a field can only narrow.
+
+### How it asks for a tool
+
+Two ways, chosen by whichever provider you are pointed at, and you should not be able to tell
+the difference from the chat.
+
+**OpenAI, Groq, Gemini and Anthropic** are given the tool list as part of the request, in the
+format each of them documents, and ask for a tool through their own machinery. Nothing about
+the request appears in the reply text.
+
+**Ollama and LM Studio** use the original approach instead: the tools are described in the
+system prompt and the model asks for one by writing a small block of JSON, which Aether1
+recognises mid-stream and hides from you. This is on purpose. Ollama is driven through an
+endpoint that has no tools field at all, and LM Studio is the one most likely to be an older
+install that would reject the request outright — better the way that works everywhere than a
+failure you have to diagnose.
+
+Either way you see the same thing: a one-line trace of what actually ran, and then the answer.
 
 Because a persona now carries access, the companion cannot change its own persona, avatar or
 directive — those settings are out of reach of `set_aether_setting`, alongside API keys and its

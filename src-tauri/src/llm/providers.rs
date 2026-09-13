@@ -14,6 +14,7 @@
 use std::io::{BufRead, BufReader};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use super::db::Message;
 use super::persona::Provider;
@@ -52,6 +53,12 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
         return format!(
             "{provider} refused the API key -- it may lack access to this model, or be for the wrong account."
         );
+    }
+    // 400 is the provider saying the request was wrong rather than the key or the network,
+    // and its body says which part. That body is worth more than anything that could be
+    // written here, so this passes it through instead of paraphrasing it away.
+    if lowered.contains("400") || lowered.contains("invalid_request") {
+        return format!("{provider} rejected the request itself: {raw}");
     }
     if lowered.contains("404") || lowered.contains("not found") {
         return format!(
@@ -119,6 +126,51 @@ pub struct ChatContext<'a> {
     pub history: &'a [Message],
     pub prompt: &'a str,
     pub agent_name: &'a str,
+    /// The tools to offer natively. Empty means send none -- either there are no tools, or
+    /// this provider is driven by the text protocol instead and the catalogue is already in
+    /// the system prompt.
+    pub tools: &'a [crate::tools::ToolSchema],
+    /// The tool rounds already taken *this turn*. Providers replay these in their own
+    /// shape so the model sees what it asked for and what came back.
+    pub exchanges: &'a [Exchange],
+}
+
+/// One tool call as a provider asked for it.
+///
+/// `id` is the provider's own handle for the call, and the whole reason native tool calling
+/// needs a type of its own rather than reusing the text protocol's ToolCall: every provider
+/// requires the result to be sent back quoting that id, and a conversation with two calls in
+/// flight has no other way to say which answer belongs to which question.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeCall {
+    pub id: String,
+    pub tool: String,
+    pub arguments: Value,
+}
+
+/// What one tool produced, paired back to the call that asked for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallResult {
+    pub id: String,
+    pub tool: String,
+    pub output: String,
+}
+
+/// A round of the within-turn tool conversation.
+///
+/// These live only for the length of a turn. The stored history stays plain text, because
+/// a tool round is scaffolding for one answer rather than part of the conversation someone
+/// would want to read back later -- and because giving the database a structured message
+/// format to support this would be a migration in service of something nobody reads.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Exchange {
+    /// What the model said, and what it asked to run.
+    Called {
+        text: String,
+        calls: Vec<NativeCall>,
+    },
+    /// What those calls returned, in the same order.
+    Returned(Vec<CallResult>),
 }
 
 fn role_for(sender: &str, model_role: &str) -> String {
@@ -127,6 +179,42 @@ fn role_for(sender: &str, model_role: &str) -> String {
     } else {
         model_role.to_string()
     }
+}
+
+/// How much of a provider's error body to keep. Enough for the sentence that says what is
+/// wrong, short of pasting a wall of JSON into the chat.
+const MAX_ERROR_BODY: usize = 600;
+
+/// Turns a non-2xx response into an error that carries what the provider actually said.
+///
+/// Every request here is built with `http_status_as_error(false)` so a 400 arrives as a
+/// response with a readable body rather than as a bare status code. That body is the whole
+/// point: "http status: 400" tells an operator nothing, while the same failure with the
+/// body attached says `messages: roles must alternate between "user" and "assistant"`, or
+/// names the model that does not exist, or the max_tokens that is too high for it. The
+/// status stays in the string too, because `explain_failure` matches on it.
+fn checked(
+    response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let mut response = response.map_err(|e| e.to_string())?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .unwrap_or_else(|_| String::new());
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(format!("http status: {}", status.as_u16()));
+    }
+    let mut shown = body.chars().take(MAX_ERROR_BODY).collect::<String>();
+    if body.chars().count() > MAX_ERROR_BODY {
+        shown.push_str("...");
+    }
+    Err(format!("http status: {} -- {shown}", status.as_u16()))
 }
 
 // ------------------------------------------------------------- stream plumbing
@@ -195,20 +283,37 @@ pub struct TokenUsage {
 pub struct Completion {
     pub text: String,
     pub usage: Option<TokenUsage>,
+    /// Tools the model asked for through the provider's own tool-calling shape. Empty when
+    /// it asked for none, and always empty for providers driven by the text protocol --
+    /// those announce their calls inside `text`, which the caller parses instead.
+    pub calls: Vec<NativeCall>,
 }
 
 /// A stream that produced no text at all is a failure even when the transport succeeded --
 /// an empty reply would otherwise reach the operator as silence.
 fn finish(accumulated: String, usage: Option<TokenUsage>) -> Result<Completion, String> {
+    finish_with(accumulated, usage, Vec::new())
+}
+
+/// As `finish`, for the native tool-calling paths.
+///
+/// A turn that asked for a tool and said nothing else is not an empty reply -- it is the
+/// most ordinary shape there is, and the emptiness check that protects the text path would
+/// reject every one of them.
+fn finish_with(
+    accumulated: String,
+    usage: Option<TokenUsage>,
+    calls: Vec<NativeCall>,
+) -> Result<Completion, String> {
     let trimmed = accumulated.trim().to_string();
-    if trimmed.is_empty() {
-        Err("stream ended without any content".to_string())
-    } else {
-        Ok(Completion {
-            text: trimmed,
-            usage,
-        })
+    if trimmed.is_empty() && calls.is_empty() {
+        return Err("stream ended without any content".to_string());
     }
+    Ok(Completion {
+        text: trimmed,
+        usage,
+        calls,
+    })
 }
 
 // ---------------------------------------------------------------- Ollama
@@ -274,19 +379,22 @@ fn ollama_url(endpoint: &str) -> String {
 }
 
 pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
-    let response: OllamaResponse = ureq::post(&ollama_url(endpoint))
-        .config()
-        .timeout_global(Some(CALL_TIMEOUT))
-        .build()
-        .send_json(ollama_payload(model, ctx, false))
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: OllamaResponse = checked(
+        ureq::post(&ollama_url(endpoint))
+            .config()
+            .timeout_global(Some(CALL_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(ollama_payload(model, ctx, false)),
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     Ok(Completion {
         text: response.response.trim().to_string(),
         usage: response.usage(),
+        calls: Vec::new(),
     })
 }
 
@@ -298,12 +406,14 @@ pub fn stream_ollama(
     ctx: &ChatContext,
     sink: Sink,
 ) -> Result<Completion, String> {
-    let response = ureq::post(&ollama_url(endpoint))
-        .config()
-        .timeout_global(Some(STREAM_TIMEOUT))
-        .build()
-        .send_json(ollama_payload(model, ctx, true))
-        .map_err(|e| e.to_string())?;
+    let response = checked(
+        ureq::post(&ollama_url(endpoint))
+            .config()
+            .timeout_global(Some(STREAM_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(ollama_payload(model, ctx, true)),
+    )?;
 
     let mut full = String::new();
     let mut usage = None;
@@ -330,7 +440,7 @@ pub fn stream_ollama(
 
 // -------------------------------------------------- OpenAI-compatible (OpenAI, Groq, LM Studio)
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
 struct ChatMessage {
     role: String,
     content: String,
@@ -350,11 +460,77 @@ struct OpenAiStreamOptions {
 #[derive(Serialize)]
 struct OpenAiRequest {
     model: String,
-    messages: Vec<ChatMessage>,
+    messages: Vec<OpenAiMessage>,
     temperature: f32,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAiStreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OpenAiToolDef>>,
+}
+
+#[derive(Serialize)]
+struct OpenAiToolDef {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: OpenAiFunctionDef,
+}
+
+#[derive(Serialize)]
+struct OpenAiFunctionDef {
+    name: &'static str,
+    description: &'static str,
+    parameters: Value,
+}
+
+/// One message in the OpenAI shape. An ordinary turn is role + content; an assistant turn
+/// that asked for tools also carries `tool_calls`; a result is role `tool` with the
+/// `tool_call_id` it answers. Every field but the role is skipped when absent, because
+/// sending `"tool_calls": null` is not the same as sending nothing.
+#[derive(Serialize, Clone, Debug)]
+struct OpenAiMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+impl OpenAiMessage {
+    fn plain(role: &str, content: String) -> OpenAiMessage {
+        OpenAiMessage {
+            role: role.to_string(),
+            content: Some(content),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+}
+
+/// A tool call as the API returns it, streamed or not.
+///
+/// `index` is what stitches a streamed call together: the arguments arrive as fragments
+/// across many chunks and `id` is only sent on the first of them, so the index is the only
+/// field present on every fragment.
+#[derive(Deserialize, Default, Clone)]
+struct OpenAiToolCallChunk {
+    #[serde(default)]
+    index: u64,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<OpenAiFunctionChunk>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+struct OpenAiFunctionChunk {
+    #[serde(default)]
+    name: Option<String>,
+    /// A JSON *string*, not an object -- and only a fragment of one while streaming.
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone, Copy)]
@@ -377,7 +553,10 @@ impl From<OpenAiUsage> for TokenUsage {
 
 #[derive(Deserialize)]
 struct OpenAiChoiceMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAiToolCallChunk>>,
 }
 
 #[derive(Deserialize)]
@@ -396,6 +575,8 @@ struct OpenAiResponse {
 struct OpenAiStreamDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAiToolCallChunk>>,
 }
 
 #[derive(Deserialize)]
@@ -519,20 +700,55 @@ fn openai_payload(
     };
     let url = format!("{}/chat/completions", base_endpoint.trim_end_matches('/'));
 
-    let mut messages = vec![ChatMessage {
-        role: "system".to_string(),
-        content: ctx.system_prompt.to_string(),
-    }];
+    let mut messages = vec![OpenAiMessage::plain(
+        "system",
+        ctx.system_prompt.to_string(),
+    )];
     for msg in ctx.history {
-        messages.push(ChatMessage {
-            role: role_for(&msg.sender, "assistant"),
-            content: msg.text.clone(),
-        });
+        messages.push(OpenAiMessage::plain(
+            &role_for(&msg.sender, "assistant"),
+            msg.text.clone(),
+        ));
     }
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: ctx.prompt.to_string(),
-    });
+    messages.push(OpenAiMessage::plain("user", ctx.prompt.to_string()));
+
+    // This turn's tool rounds. Unlike Anthropic, results are separate messages rather than
+    // blocks inside one -- one `tool` message per call, each quoting the id it answers.
+    for exchange in ctx.exchanges {
+        match exchange {
+            Exchange::Called { text, calls } => messages.push(OpenAiMessage {
+                role: "assistant".to_string(),
+                content: (!text.trim().is_empty()).then(|| text.clone()),
+                tool_calls: Some(
+                    calls
+                        .iter()
+                        .map(|call| {
+                            json!({
+                                "id": call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": call.tool,
+                                    // Arguments go back as the JSON *string* they arrived as.
+                                    "arguments": call.arguments.to_string(),
+                                },
+                            })
+                        })
+                        .collect(),
+                ),
+                tool_call_id: None,
+            }),
+            Exchange::Returned(results) => {
+                for result in results {
+                    messages.push(OpenAiMessage {
+                        role: "tool".to_string(),
+                        content: Some(result.output.clone()),
+                        tool_calls: None,
+                        tool_call_id: Some(result.id.clone()),
+                    });
+                }
+            }
+        }
+    }
 
     (
         url,
@@ -548,8 +764,63 @@ fn openai_payload(
             } else {
                 None
             },
+            tools: (!ctx.tools.is_empty()).then(|| {
+                ctx.tools
+                    .iter()
+                    .map(|t| OpenAiToolDef {
+                        kind: "function",
+                        function: OpenAiFunctionDef {
+                            name: t.name,
+                            description: t.description,
+                            parameters: t.input_schema.clone(),
+                        },
+                    })
+                    .collect()
+            }),
         },
     )
+}
+
+/// Rebuilds calls from the fragments a stream delivers them in.
+///
+/// Everything is keyed by `index` because that is the only field present on every fragment:
+/// `id` and `name` arrive once, at the start, and the arguments arrive as a run of partial
+/// JSON strings that are not parseable until the last one has landed.
+#[derive(Default)]
+struct OpenAiCallBuilder {
+    parts: std::collections::BTreeMap<u64, (String, String, String)>,
+}
+
+impl OpenAiCallBuilder {
+    fn absorb(&mut self, chunks: &[OpenAiToolCallChunk]) {
+        for chunk in chunks {
+            let slot = self.parts.entry(chunk.index).or_default();
+            if let Some(id) = &chunk.id {
+                slot.0 = id.clone();
+            }
+            if let Some(function) = &chunk.function {
+                if let Some(name) = &function.name {
+                    slot.1 = name.clone();
+                }
+                if let Some(arguments) = &function.arguments {
+                    slot.2.push_str(arguments);
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> Result<Vec<NativeCall>, String> {
+        self.parts
+            .into_values()
+            .map(|(id, tool, arguments)| {
+                Ok(NativeCall {
+                    id,
+                    tool,
+                    arguments: parse_arguments(&arguments)?,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Whether this provider documents `stream_options.include_usage`. LM Studio is left out
@@ -567,6 +838,7 @@ fn openai_request(
     let mut request = ureq::post(url)
         .config()
         .timeout_global(Some(timeout))
+        .http_status_as_error(false)
         .build()
         .header("Content-Type", "application/json");
     if !api_key.is_empty() {
@@ -584,23 +856,35 @@ pub fn call_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
 
-    let response: OpenAiResponse = openai_request(&url, api_key, CALL_TIMEOUT)
-        .send_json(&payload)
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: OpenAiResponse =
+        checked(openai_request(&url, api_key, CALL_TIMEOUT).send_json(&payload))?
+            .into_body()
+            .read_json()
+            .map_err(|e| e.to_string())?;
 
     let usage = response.usage.map(TokenUsage::from);
-    response
+    let choice = response
         .choices
         .into_iter()
         .next()
-        .map(|c| Completion {
-            text: c.message.content.trim().to_string(),
-            usage,
-        })
-        .ok_or_else(|| "empty choices in response".to_string())
+        .ok_or_else(|| "empty choices in response".to_string())?;
+
+    // Not streamed, so each call arrives whole -- but the same builder assembles it, so
+    // there is one place that turns this shape into a NativeCall rather than two.
+    let mut builder = OpenAiCallBuilder::default();
+    if let Some(chunks) = &choice.message.tool_calls {
+        builder.absorb(chunks);
+    }
+    let calls = builder.finish()?;
+    let text = choice.message.content.unwrap_or_default();
+    if text.trim().is_empty() && calls.is_empty() {
+        return Err("empty choices in response".to_string());
+    }
+    Ok(Completion {
+        text: text.trim().to_string(),
+        usage,
+        calls,
+    })
 }
 
 pub fn stream_openai_compatible(
@@ -613,12 +897,11 @@ pub fn stream_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response = openai_request(&url, api_key, STREAM_TIMEOUT)
-        .send_json(&payload)
-        .map_err(|e| e.to_string())?;
+    let response = checked(openai_request(&url, api_key, STREAM_TIMEOUT).send_json(&payload))?;
 
     let mut full = String::new();
     let mut usage = None;
+    let mut builder = OpenAiCallBuilder::default();
     for_each_line(response, |line| {
         let data = match sse_line(line) {
             SseLine::Data(data) => data,
@@ -631,7 +914,11 @@ pub fn stream_openai_compatible(
             usage = Some(TokenUsage::from(reported));
         }
         for choice in chunk.choices {
-            if let Some(text) = choice.delta.and_then(|d| d.content) {
+            let Some(delta) = choice.delta else { continue };
+            if let Some(chunks) = &delta.tool_calls {
+                builder.absorb(chunks);
+            }
+            if let Some(text) = delta.content {
                 if !text.is_empty() {
                     full.push_str(&text);
                     sink(&text);
@@ -641,14 +928,29 @@ pub fn stream_openai_compatible(
         Ok(true)
     })?;
 
-    finish(full, usage)
+    finish_with(full, usage, builder.finish()?)
 }
 
 // ---------------------------------------------------------------- Gemini
 
 #[derive(Serialize)]
 struct GeminiPart {
-    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
+    function_call: Option<Value>,
+    #[serde(rename = "functionResponse", skip_serializing_if = "Option::is_none")]
+    function_response: Option<Value>,
+}
+
+impl GeminiPart {
+    fn text(text: impl Into<String>) -> GeminiPart {
+        GeminiPart {
+            text: Some(text.into()),
+            function_call: None,
+            function_response: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -660,11 +962,52 @@ struct GeminiContent {
 #[derive(Serialize)]
 struct GeminiRequest {
     contents: Vec<GeminiContent>,
+    /// One entry holding every declaration, which is the shape the API documents -- not one
+    /// entry per tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<GeminiToolBlock>>,
+}
+
+#[derive(Serialize)]
+struct GeminiToolBlock {
+    #[serde(rename = "functionDeclarations")]
+    function_declarations: Vec<GeminiFunctionDecl>,
+}
+
+#[derive(Serialize)]
+struct GeminiFunctionDecl {
+    name: &'static str,
+    description: &'static str,
+    parameters: Value,
 }
 
 #[derive(Deserialize)]
 struct GeminiRespPart {
-    text: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default, rename = "functionCall")]
+    function_call: Option<GeminiFunctionCall>,
+}
+
+/// Gemini names a call rather than giving it an opaque id, and `id` is optional. The name
+/// is what the answer is matched on, so it stands in when no id came back.
+#[derive(Deserialize)]
+struct GeminiFunctionCall {
+    name: String,
+    #[serde(default)]
+    args: Option<Value>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+impl From<GeminiFunctionCall> for NativeCall {
+    fn from(call: GeminiFunctionCall) -> NativeCall {
+        NativeCall {
+            id: call.id.unwrap_or_else(|| call.name.clone()),
+            tool: call.name,
+            arguments: call.args.unwrap_or_else(|| json!({})),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -717,36 +1060,89 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
     let mut contents = vec![
         GeminiContent {
             role: "user".to_string(),
-            parts: vec![GeminiPart {
-                text: format!("System Directive: {}", ctx.system_prompt),
-            }],
+            parts: vec![GeminiPart::text(format!(
+                "System Directive: {}",
+                ctx.system_prompt
+            ))],
         },
         GeminiContent {
             role: "model".to_string(),
-            parts: vec![GeminiPart {
-                text: format!(
-                    "Directive acknowledged. {} systems operational. Ready.",
-                    ctx.agent_name
-                ),
-            }],
+            parts: vec![GeminiPart::text(format!(
+                "Directive acknowledged. {} systems operational. Ready.",
+                ctx.agent_name
+            ))],
         },
     ];
     for msg in ctx.history {
         contents.push(GeminiContent {
             role: role_for(&msg.sender, "model"),
-            parts: vec![GeminiPart {
-                text: msg.text.clone(),
-            }],
+            parts: vec![GeminiPart::text(msg.text.clone())],
         });
     }
     contents.push(GeminiContent {
         role: "user".to_string(),
-        parts: vec![GeminiPart {
-            text: ctx.prompt.to_string(),
-        }],
+        parts: vec![GeminiPart::text(ctx.prompt.to_string())],
     });
 
-    GeminiRequest { contents }
+    // This turn's tool rounds. Gemini keeps everything in `parts`, so a round is one
+    // model turn whose parts are the calls, then one user turn whose parts are the answers.
+    for exchange in ctx.exchanges {
+        match exchange {
+            Exchange::Called { text, calls } => {
+                let mut parts = Vec::new();
+                if !text.trim().is_empty() {
+                    parts.push(GeminiPart::text(text.clone()));
+                }
+                for call in calls {
+                    parts.push(GeminiPart {
+                        text: None,
+                        function_call: Some(json!({
+                            "name": call.tool,
+                            "args": call.arguments,
+                        })),
+                        function_response: None,
+                    });
+                }
+                contents.push(GeminiContent {
+                    role: "model".to_string(),
+                    parts,
+                });
+            }
+            Exchange::Returned(results) => contents.push(GeminiContent {
+                role: "user".to_string(),
+                parts: results
+                    .iter()
+                    .map(|r| GeminiPart {
+                        text: None,
+                        // `response` is an object rather than a string, so the output is
+                        // wrapped rather than sent bare.
+                        function_response: Some(json!({
+                            "name": r.tool,
+                            "response": {"result": r.output},
+                        })),
+                        function_call: None,
+                    })
+                    .collect(),
+            }),
+        }
+    }
+
+    GeminiRequest {
+        contents,
+        tools: (!ctx.tools.is_empty()).then(|| {
+            vec![GeminiToolBlock {
+                function_declarations: ctx
+                    .tools
+                    .iter()
+                    .map(|t| GeminiFunctionDecl {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.input_schema.clone(),
+                    })
+                    .collect(),
+            }]
+        }),
+    }
 }
 
 pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
@@ -755,27 +1151,37 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Comp
         gemini_model(model)
     );
 
-    let response: GeminiResponse = ureq::post(&url)
-        .config()
-        .timeout_global(Some(CALL_TIMEOUT))
-        .build()
-        .send_json(gemini_payload(ctx))
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: GeminiResponse = checked(
+        ureq::post(&url)
+            .config()
+            .timeout_global(Some(CALL_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(gemini_payload(ctx)),
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     let usage = response.usage_metadata.map(TokenUsage::from);
-    response
+    let candidate = response
         .candidates
         .into_iter()
         .next()
-        .and_then(|c| c.content.parts.into_iter().next())
-        .map(|p| Completion {
-            text: p.text.trim().to_string(),
-            usage,
-        })
-        .ok_or_else(|| "empty candidates in response".to_string())
+        .ok_or_else(|| "empty candidates in response".to_string())?;
+
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    for part in candidate.content.parts {
+        if let Some(said) = part.text {
+            text.push_str(&said);
+        }
+        if let Some(call) = part.function_call {
+            calls.push(NativeCall::from(call));
+        }
+    }
+
+    finish_with(text, usage, calls)
 }
 
 /// `alt=sse` asks for Server-Sent Events; without it streamGenerateContent returns a
@@ -791,15 +1197,18 @@ pub fn stream_gemini(
         gemini_model(model)
     );
 
-    let response = ureq::post(&url)
-        .config()
-        .timeout_global(Some(STREAM_TIMEOUT))
-        .build()
-        .send_json(gemini_payload(ctx))
-        .map_err(|e| e.to_string())?;
+    let response = checked(
+        ureq::post(&url)
+            .config()
+            .timeout_global(Some(STREAM_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(gemini_payload(ctx)),
+    )?;
 
     let mut full = String::new();
     let mut usage = None;
+    let mut calls: Vec<NativeCall> = Vec::new();
     for_each_line(response, |line| {
         let data = match sse_line(line) {
             SseLine::Data(data) => data,
@@ -813,16 +1222,19 @@ pub fn stream_gemini(
         }
         for candidate in chunk.candidates {
             for part in candidate.content.parts {
-                if !part.text.is_empty() {
-                    full.push_str(&part.text);
-                    sink(&part.text);
+                if let Some(said) = part.text.filter(|t| !t.is_empty()) {
+                    full.push_str(&said);
+                    sink(&said);
+                }
+                if let Some(call) = part.function_call {
+                    calls.push(NativeCall::from(call));
                 }
             }
         }
         Ok(true)
     })?;
 
-    finish(full, usage)
+    finish_with(full, usage, calls)
 }
 
 // ---------------------------------------------------------------- Anthropic
@@ -835,14 +1247,119 @@ const ANTHROPIC_MAX_TOKENS: u32 = 8192;
 struct AnthropicRequest {
     model: String,
     system: String,
-    messages: Vec<ChatMessage>,
+    messages: Vec<AnthropicMessage>,
     max_tokens: u32,
     stream: bool,
+    /// Omitted entirely when there are none: an empty array is a different thing from no
+    /// tools, and some models behave differently when told they have a toolbox with nothing
+    /// in it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<AnthropicTool>>,
+}
+
+#[derive(Serialize)]
+struct AnthropicTool {
+    name: &'static str,
+    description: &'static str,
+    input_schema: Value,
+}
+
+/// Content is a Value because it is a plain string on an ordinary turn and an array of
+/// blocks on a tool round, and the API accepts both in the same field.
+#[derive(Serialize, Clone, Debug)]
+struct AnthropicMessage {
+    role: String,
+    content: Value,
 }
 
 #[derive(Deserialize)]
 struct AnthropicContentBlock {
-    text: String,
+    #[serde(rename = "type")]
+    block_type: String,
+    #[serde(default)]
+    text: Option<String>,
+    // tool_use blocks only.
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    input: Option<Value>,
+}
+
+/// Turns an accumulated argument buffer into a value.
+///
+/// A tool that takes no arguments produces no fragments at all, so an empty buffer means
+/// `{}` rather than a malformed call. Both streaming providers spell arguments out the
+/// same way and both need this same exception.
+fn parse_arguments(buffer: &str) -> Result<Value, String> {
+    if buffer.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(buffer).map_err(|e| format!("unparseable tool arguments: {e}"))
+}
+
+/// Rebuilds Anthropic's tool calls from the events they are spread across.
+///
+/// `content_block_start` names a call, a run of `content_block_delta` events spells its
+/// arguments out a fragment at a time, and `content_block_stop` ends it. Keyed by block
+/// index rather than held as a single "current" call, so the reassembly does not depend on
+/// blocks never interleaving.
+#[derive(Default)]
+struct AnthropicCallBuilder {
+    building: std::collections::BTreeMap<u64, (String, String, String)>,
+    calls: Vec<NativeCall>,
+}
+
+impl AnthropicCallBuilder {
+    fn start(&mut self, index: u64, block: &AnthropicContentBlock) {
+        if block.block_type != "tool_use" {
+            return;
+        }
+        self.building.insert(
+            index,
+            (
+                block.id.clone().unwrap_or_default(),
+                block.name.clone().unwrap_or_default(),
+                String::new(),
+            ),
+        );
+    }
+
+    fn fragment(&mut self, index: u64, partial: &str) {
+        if let Some(slot) = self.building.get_mut(&index) {
+            slot.2.push_str(partial);
+        }
+    }
+
+    fn stop(&mut self, index: u64) -> Result<(), String> {
+        let Some((id, tool, arguments)) = self.building.remove(&index) else {
+            return Ok(()); // a text block closing, which carries nothing to rebuild
+        };
+        self.calls.push(NativeCall {
+            id,
+            tool,
+            arguments: parse_arguments(&arguments)?,
+        });
+        Ok(())
+    }
+
+    fn finish(self) -> Vec<NativeCall> {
+        self.calls
+    }
+}
+
+impl AnthropicContentBlock {
+    fn as_call(&self) -> Option<NativeCall> {
+        if self.block_type != "tool_use" {
+            return None;
+        }
+        Some(NativeCall {
+            id: self.id.clone()?,
+            tool: self.name.clone()?,
+            arguments: self.input.clone().unwrap_or_else(|| json!({})),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -885,12 +1402,24 @@ struct AnthropicStreamEvent {
     /// message_delta only, carrying the output count so far.
     #[serde(default)]
     usage: Option<AnthropicUsage>,
+    /// content_block_start / content_block_delta / content_block_stop all carry the index
+    /// of the block they belong to. Tool arguments arrive as fragments across many deltas,
+    /// so the index is what reassembles them into the right call.
+    #[serde(default)]
+    index: Option<u64>,
+    /// content_block_start only.
+    #[serde(default)]
+    content_block: Option<AnthropicContentBlock>,
 }
 
 #[derive(Deserialize)]
 struct AnthropicDelta {
     #[serde(default)]
     text: Option<String>,
+    /// input_json_delta only: one fragment of the tool's arguments, as a JSON string that
+    /// is not valid JSON on its own.
+    #[serde(default)]
+    partial_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -899,18 +1428,98 @@ struct AnthropicError {
     message: String,
 }
 
+/// Bends a conversation into the shape the Messages API insists on: the first message is
+/// from the user, and roles strictly alternate after that.
+///
+/// Nothing else here needs this. OpenAI and Gemini accept a transcript as it happened, so
+/// the history was handed over untouched -- and a real transcript is full of sequences that
+/// are not alternating. Two replies in a row whenever the companion answers and then posts
+/// a status line; an assistant message first whenever the eight-message window happens to
+/// open on one. Anthropic answers both with a 400 that never reaches the operator as
+/// anything but a number.
+///
+/// Consecutive turns from the same side are joined rather than dropped, because they are
+/// what was actually said and losing them would change the conversation to make it fit.
+fn alternating(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::with_capacity(messages.len());
+    for message in messages {
+        match out.last_mut() {
+            // Leading assistant turns have nothing to answer, so the window starts at the
+            // first thing the operator said.
+            None if message.role != "user" => continue,
+            Some(previous) if previous.role == message.role => {
+                previous.content.push_str("\n\n");
+                previous.content.push_str(&message.content);
+            }
+            _ => out.push(message),
+        }
+    }
+    out
+}
+
 fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicRequest {
-    let mut messages = Vec::new();
+    // The stored conversation first, bent into the alternating shape the API requires.
+    let mut plain = Vec::new();
     for msg in ctx.history {
-        messages.push(ChatMessage {
+        plain.push(ChatMessage {
             role: role_for(&msg.sender, "assistant"),
             content: msg.text.clone(),
         });
     }
-    messages.push(ChatMessage {
+    plain.push(ChatMessage {
         role: "user".to_string(),
         content: ctx.prompt.to_string(),
     });
+    let mut messages: Vec<AnthropicMessage> = alternating(plain)
+        .into_iter()
+        .map(|m| AnthropicMessage {
+            role: m.role,
+            content: Value::String(m.content),
+        })
+        .collect();
+
+    // Then this turn's tool rounds, which alternate by construction: the model asks, the
+    // tools answer, and nothing else is interleaved.
+    for exchange in ctx.exchanges {
+        match exchange {
+            Exchange::Called { text, calls } => {
+                let mut blocks = Vec::new();
+                if !text.trim().is_empty() {
+                    blocks.push(json!({"type": "text", "text": text}));
+                }
+                for call in calls {
+                    blocks.push(json!({
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.tool,
+                        "input": call.arguments,
+                    }));
+                }
+                messages.push(AnthropicMessage {
+                    role: "assistant".to_string(),
+                    content: Value::Array(blocks),
+                });
+            }
+            Exchange::Returned(results) => {
+                // Every result for a round goes in one user message. Splitting them teaches
+                // the model to stop asking for more than one tool at a time.
+                let blocks: Vec<Value> = results
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "type": "tool_result",
+                            "tool_use_id": r.id,
+                            "content": r.output,
+                        })
+                    })
+                    .collect();
+                messages.push(AnthropicMessage {
+                    role: "user".to_string(),
+                    content: Value::Array(blocks),
+                });
+            }
+        }
+    }
 
     AnthropicRequest {
         model: if model.is_empty() {
@@ -923,6 +1532,16 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
         messages,
         max_tokens: ANTHROPIC_MAX_TOKENS,
         stream,
+        tools: (!ctx.tools.is_empty()).then(|| {
+            ctx.tools
+                .iter()
+                .map(|t| AnthropicTool {
+                    name: t.name,
+                    description: t.description,
+                    input_schema: t.input_schema.clone(),
+                })
+                .collect()
+        }),
     }
 }
 
@@ -933,6 +1552,7 @@ fn anthropic_request(
     ureq::post("https://api.anthropic.com/v1/messages")
         .config()
         .timeout_global(Some(timeout))
+        .http_status_as_error(false)
         .build()
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
@@ -940,27 +1560,37 @@ fn anthropic_request(
 }
 
 pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
-    let response: AnthropicResponse = anthropic_request(api_key, CALL_TIMEOUT)
-        .send_json(anthropic_payload(model, ctx, false))
-        .map_err(|e| e.to_string())?
-        .into_body()
-        .read_json()
-        .map_err(|e| e.to_string())?;
+    let response: AnthropicResponse = checked(
+        anthropic_request(api_key, CALL_TIMEOUT).send_json(anthropic_payload(model, ctx, false)),
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     let usage = response.usage.map(|u| TokenUsage {
         prompt_tokens: u.input_tokens,
         completion_tokens: u.output_tokens,
         eval_nanos: None,
     });
-    response
-        .content
-        .into_iter()
-        .next()
-        .map(|c| Completion {
-            text: c.text.trim().to_string(),
-            usage,
-        })
-        .ok_or_else(|| "empty content in response".to_string())
+    // A reply is a list of blocks, not one block: text and tool_use arrive side by side,
+    // and taking only the first would silently drop whichever came second.
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    for block in &response.content {
+        if let Some(call) = block.as_call() {
+            calls.push(call);
+        } else if let Some(chunk) = &block.text {
+            text.push_str(chunk);
+        }
+    }
+    if text.trim().is_empty() && calls.is_empty() {
+        return Err("empty content in response".to_string());
+    }
+    Ok(Completion {
+        text: text.trim().to_string(),
+        usage,
+        calls,
+    })
 }
 
 pub fn stream_anthropic(
@@ -969,9 +1599,9 @@ pub fn stream_anthropic(
     ctx: &ChatContext,
     sink: Sink,
 ) -> Result<Completion, String> {
-    let response = anthropic_request(api_key, STREAM_TIMEOUT)
-        .send_json(anthropic_payload(model, ctx, true))
-        .map_err(|e| e.to_string())?;
+    let response = checked(
+        anthropic_request(api_key, STREAM_TIMEOUT).send_json(anthropic_payload(model, ctx, true)),
+    )?;
 
     let mut full = String::new();
     // Input arrives once at the top, output as a running total near the end, so the two
@@ -979,6 +1609,7 @@ pub fn stream_anthropic(
     let mut prompt_tokens = 0u64;
     let mut completion_tokens = 0u64;
     let mut reported = false;
+    let mut builder = AnthropicCallBuilder::default();
     for_each_line(response, |line| {
         let data = match sse_line(line) {
             SseLine::Data(data) => data,
@@ -1008,12 +1639,31 @@ pub fn stream_anthropic(
                     .unwrap_or_else(|| "unspecified error".to_string());
                 Err(format!("Anthropic stream error: {message}"))
             }
+            "content_block_start" => {
+                if let (Some(index), Some(block)) = (event.index, event.content_block.as_ref()) {
+                    builder.start(index, block);
+                }
+                Ok(true)
+            }
             "content_block_delta" => {
-                if let Some(text) = event.delta.and_then(|d| d.text) {
+                let Some(delta) = event.delta else {
+                    return Ok(true);
+                };
+                if let Some(fragment) = delta.partial_json {
+                    if let Some(index) = event.index {
+                        builder.fragment(index, &fragment);
+                    }
+                } else if let Some(text) = delta.text {
                     if !text.is_empty() {
                         full.push_str(&text);
                         sink(&text);
                     }
+                }
+                Ok(true)
+            }
+            "content_block_stop" => {
+                if let Some(index) = event.index {
+                    builder.stop(index)?;
                 }
                 Ok(true)
             }
@@ -1027,12 +1677,137 @@ pub fn stream_anthropic(
         completion_tokens,
         eval_nanos: None,
     });
-    finish(full, usage)
+    finish_with(full, usage, builder.finish())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    /// The exact shape that produced a 400 in the field: the companion answered, then
+    /// posted a status line, so two assistant turns ran together.
+    #[test]
+    fn two_replies_in_a_row_become_one_turn() {
+        let out = alternating(vec![
+            msg("user", "Claude?"),
+            msg("assistant", "[HUD Alert: ...]"),
+            msg("assistant", "Cognitive Core updated."),
+            msg("user", "Claude you there?"),
+        ]);
+        let roles: Vec<&str> = out.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+        // Joined rather than dropped -- both were really said.
+        assert!(out[1].content.contains("HUD Alert"));
+        assert!(out[1].content.contains("Cognitive Core updated."));
+    }
+
+    /// The other half of the same failure: the eight-message window can open on a reply,
+    /// and the Messages API requires the first message to be the user's.
+    #[test]
+    fn a_window_opening_on_a_reply_starts_at_the_first_thing_the_operator_said() {
+        let out = alternating(vec![
+            msg("assistant", "...earlier reply"),
+            msg("assistant", "and another"),
+            msg("user", "now this"),
+            msg("assistant", "answer"),
+            msg("user", "and this"),
+        ]);
+        let roles: Vec<&str> = out.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+        assert_eq!(out[0].content, "now this");
+    }
+
+    #[test]
+    fn a_conversation_that_already_alternates_is_left_alone() {
+        let original = vec![
+            msg("user", "one"),
+            msg("assistant", "two"),
+            msg("user", "three"),
+        ];
+        assert_eq!(alternating(original.clone()), original);
+    }
+
+    /// A fresh session is one user message and nothing else, which is already valid.
+    #[test]
+    fn the_first_turn_of_a_session_survives() {
+        let out = alternating(vec![msg("user", "hello")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+
+        // And a history of nothing but replies leaves nothing to send rather than an
+        // invalid request.
+        assert!(alternating(vec![msg("assistant", "a"), msg("assistant", "b")]).is_empty());
+    }
+
+    /// Through the real payload builder, not just the helper: the failure this fixes came
+    /// back if anyone removed the one call, and a test on `alternating` alone would not
+    /// have noticed.
+    #[test]
+    fn the_anthropic_payload_is_always_in_a_shape_the_api_accepts() {
+        let history = vec![
+            Message {
+                sender: "user".to_string(),
+                text: "Claude?".to_string(),
+                timestamp: String::new(),
+            },
+            Message {
+                sender: "assistant".to_string(),
+                text: "[HUD Alert: ...]".to_string(),
+                timestamp: String::new(),
+            },
+            Message {
+                sender: "assistant".to_string(),
+                text: "Cognitive Core updated.".to_string(),
+                timestamp: String::new(),
+            },
+        ];
+        let ctx = ChatContext {
+            system_prompt: "be useful",
+            history: &history,
+            prompt: "Claude you there?",
+            agent_name: "R.E.D. 9000",
+            tools: &[],
+            exchanges: &[],
+        };
+        let payload = anthropic_payload("claude-opus-5", &ctx, true);
+
+        assert_eq!(
+            payload.messages[0].role, "user",
+            "must open on the operator"
+        );
+        for pair in payload.messages.windows(2) {
+            assert_ne!(
+                pair[0].role, pair[1].role,
+                "roles have to alternate: {:?}",
+                payload.messages
+            );
+        }
+    }
+
+    /// A 400 means the request was wrong, not the key or the network, and the provider's
+    /// own body says which part. Paraphrasing that away is what left an operator reading
+    /// "http status: 400" with nothing to act on.
+    #[test]
+    fn a_rejected_request_keeps_what_the_provider_said_about_it() {
+        let raw = "http status: 400 -- {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages: roles must alternate between \\\"user\\\" and \\\"assistant\\\"\"}}";
+        let explained = explain_failure(Provider::Anthropic, "", raw);
+        assert!(
+            explained.contains("rejected the request itself"),
+            "{explained}"
+        );
+        assert!(explained.contains("roles must alternate"), "{explained}");
+
+        // Still distinct from the key being wrong, which is a different fix.
+        let unauthorized = explain_failure(Provider::Anthropic, "", "http status: 401");
+        assert!(unauthorized.contains("API KEY"), "{unauthorized}");
+    }
 
     /// Each provider reports its token counts in a different shape and a different place.
     /// These parse the real ones -- the counts were being thrown away and replaced with a
@@ -1088,6 +1863,8 @@ mod tests {
             history: &[],
             prompt: "p",
             agent_name: "A1",
+            tools: &[],
+            exchanges: &[],
         };
         let (_, lm) = openai_payload(
             Provider::LmStudio,
@@ -1189,6 +1966,8 @@ mod tests {
             history: &[],
             prompt: "hello",
             agent_name: "HALCY",
+            tools: &[],
+            exchanges: &[],
         };
         let blocking = serde_json::to_value(anthropic_payload("m", &ctx, false)).unwrap();
         let streaming = serde_json::to_value(anthropic_payload("m", &ctx, true)).unwrap();
@@ -1205,6 +1984,8 @@ mod tests {
             history: &[],
             prompt: "p",
             agent_name: "a",
+            tools: &[],
+            exchanges: &[],
         };
         assert_eq!(ollama_payload("", &ctx, true).model, "llama3");
         let (url, payload) = openai_payload(Provider::Groq, "", "", &ctx, true);
@@ -1263,5 +2044,333 @@ mod failure_tests {
     fn an_unknown_failure_is_passed_through_verbatim() {
         let msg = explain_failure(Provider::Gemini, "", "something nobody has seen before");
         assert!(msg.contains("something nobody has seen before"), "{msg}");
+    }
+
+    // ------------------------------------------------ native tool calling
+
+    fn a_tool() -> crate::tools::ToolSchema {
+        crate::tools::ToolSchema {
+            name: "read_file",
+            description: "Read a file",
+            input_schema: json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            }),
+            mutating: false,
+            always_allowable: true,
+        }
+    }
+
+    fn with_tools<'a>(
+        tools: &'a [crate::tools::ToolSchema],
+        exchanges: &'a [Exchange],
+    ) -> ChatContext<'a> {
+        ChatContext {
+            system_prompt: "be useful",
+            history: &[],
+            prompt: "what is in /etc/hostname?",
+            agent_name: "R.E.D. 9000",
+            tools,
+            exchanges,
+        }
+    }
+
+    fn one_round() -> Vec<Exchange> {
+        vec![
+            Exchange::Called {
+                text: "Let me look.".to_string(),
+                calls: vec![NativeCall {
+                    id: "call_1".to_string(),
+                    tool: "read_file".to_string(),
+                    arguments: json!({"path": "/etc/hostname"}),
+                }],
+            },
+            Exchange::Returned(vec![CallResult {
+                id: "call_1".to_string(),
+                tool: "read_file".to_string(),
+                output: "aether".to_string(),
+            }]),
+        ]
+    }
+
+    /// A turn with no tools must look exactly like it did before native tools existed:
+    /// the field is absent, not an empty array. Some models behave differently when told
+    /// they have a toolbox with nothing in it.
+    #[test]
+    fn no_tools_means_no_tools_field_at_all() {
+        let tools = Vec::new();
+        let ctx = with_tools(&tools, &[]);
+
+        let anthropic = serde_json::to_value(anthropic_payload("m", &ctx, true)).unwrap();
+        assert!(anthropic.get("tools").is_none(), "{anthropic}");
+
+        let (_, openai) = openai_payload(Provider::OpenAi, "", "", &ctx, true);
+        let openai = serde_json::to_value(openai).unwrap();
+        assert!(openai.get("tools").is_none(), "{openai}");
+
+        let gemini = serde_json::to_value(gemini_payload(&ctx)).unwrap();
+        assert!(gemini.get("tools").is_none(), "{gemini}");
+    }
+
+    /// Each provider spells the same tool out in its own shape. These are the three wire
+    /// formats verified against the published request schemas.
+    #[test]
+    fn each_provider_declares_a_tool_in_its_own_shape() {
+        let tools = vec![a_tool()];
+        let ctx = with_tools(&tools, &[]);
+
+        let anthropic = serde_json::to_value(anthropic_payload("m", &ctx, true)).unwrap();
+        let declared = &anthropic["tools"][0];
+        assert_eq!(declared["name"], "read_file");
+        assert_eq!(declared["input_schema"]["required"], json!(["path"]));
+
+        let (_, openai) = openai_payload(Provider::OpenAi, "", "", &ctx, true);
+        let openai = serde_json::to_value(openai).unwrap();
+        let declared = &openai["tools"][0];
+        assert_eq!(declared["type"], "function");
+        assert_eq!(declared["function"]["name"], "read_file");
+        assert_eq!(
+            declared["function"]["parameters"]["required"],
+            json!(["path"])
+        );
+
+        let gemini = serde_json::to_value(gemini_payload(&ctx)).unwrap();
+        let declared = &gemini["tools"][0]["functionDeclarations"][0];
+        assert_eq!(declared["name"], "read_file");
+        assert_eq!(declared["parameters"]["required"], json!(["path"]));
+    }
+
+    /// Anthropic wants the whole round back as content blocks, and every result for the
+    /// round in a single user message -- splitting them teaches the model to ask for one
+    /// tool at a time.
+    #[test]
+    fn anthropic_replays_a_round_as_content_blocks() {
+        let tools = vec![a_tool()];
+        let exchanges = one_round();
+        let payload = serde_json::to_value(anthropic_payload(
+            "m",
+            &with_tools(&tools, &exchanges),
+            true,
+        ))
+        .unwrap();
+        let messages = payload["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 3, "{payload}");
+        assert_eq!(messages[0]["role"], "user");
+
+        assert_eq!(messages[1]["role"], "assistant");
+        let blocks = messages[1]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["id"], "call_1");
+        assert_eq!(blocks[1]["input"]["path"], "/etc/hostname");
+
+        assert_eq!(messages[2]["role"], "user");
+        let blocks = messages[2]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "tool_result");
+        assert_eq!(blocks[0]["tool_use_id"], "call_1");
+        assert_eq!(blocks[0]["content"], "aether");
+    }
+
+    /// OpenAI is the other arrangement: the call rides on the assistant message and each
+    /// result is its own `tool` message quoting the id it answers. Arguments go back as
+    /// the JSON string they arrived as, not as an object.
+    #[test]
+    fn openai_replays_a_round_as_tool_messages() {
+        let tools = vec![a_tool()];
+        let exchanges = one_round();
+        let (_, payload) = openai_payload(
+            Provider::OpenAi,
+            "",
+            "",
+            &with_tools(&tools, &exchanges),
+            true,
+        );
+        let payload = serde_json::to_value(payload).unwrap();
+        let messages = payload["messages"].as_array().unwrap();
+
+        let asked = messages
+            .iter()
+            .find(|m| m["tool_calls"].is_array())
+            .unwrap();
+        assert_eq!(asked["role"], "assistant");
+        let call = &asked["tool_calls"][0];
+        assert_eq!(call["id"], "call_1");
+        assert_eq!(call["type"], "function");
+        assert_eq!(call["function"]["name"], "read_file");
+        assert_eq!(call["function"]["arguments"], r#"{"path":"/etc/hostname"}"#);
+
+        let answered = messages.iter().find(|m| m["role"] == "tool").unwrap();
+        assert_eq!(answered["tool_call_id"], "call_1");
+        assert_eq!(answered["content"], "aether");
+    }
+
+    #[test]
+    fn gemini_replays_a_round_as_function_parts() {
+        let tools = vec![a_tool()];
+        let exchanges = one_round();
+        let payload =
+            serde_json::to_value(gemini_payload(&with_tools(&tools, &exchanges))).unwrap();
+        let contents = payload["contents"].as_array().unwrap();
+
+        let asked = contents.last().unwrap();
+        // The last model turn: the first is the acknowledgement the system prompt is
+        // dressed up as, which carries nothing to find.
+        let model_turn = contents
+            .iter()
+            .rev()
+            .find(|c| c["role"] == "model")
+            .unwrap();
+        let call = model_turn["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|p| p.get("functionCall"))
+            .unwrap();
+        assert_eq!(call["name"], "read_file");
+        assert_eq!(call["args"]["path"], "/etc/hostname");
+
+        // The answer is the last turn, and `response` is an object rather than a bare
+        // string -- Gemini rejects a string there.
+        assert_eq!(asked["role"], "user");
+        let answer = &asked["parts"][0]["functionResponse"];
+        assert_eq!(answer["name"], "read_file");
+        assert_eq!(answer["response"]["result"], "aether");
+    }
+
+    /// OpenAI streams a call in fragments whose only reliable field is `index`: the id and
+    /// name arrive once and the arguments dribble in as unparseable partial JSON.
+    #[test]
+    fn openai_reassembles_a_call_from_its_fragments() {
+        let mut builder = OpenAiCallBuilder::default();
+        for data in [
+            r#"{"index":0,"id":"call_7","type":"function","function":{"name":"read_file","arguments":""}}"#,
+            r#"{"index":0,"function":{"arguments":"{\"pa"}}"#,
+            r#"{"index":0,"function":{"arguments":"th\": \"/etc/hostname\"}"}}"#,
+        ] {
+            let chunk: OpenAiToolCallChunk = serde_json::from_str(data).unwrap();
+            builder.absorb(&[chunk]);
+        }
+
+        let calls = builder.finish().unwrap();
+        assert_eq!(
+            calls,
+            vec![NativeCall {
+                id: "call_7".to_string(),
+                tool: "read_file".to_string(),
+                arguments: json!({"path": "/etc/hostname"}),
+            }]
+        );
+    }
+
+    /// Two calls in one round are told apart by index alone, and come back in index order.
+    #[test]
+    fn openai_keeps_two_calls_in_the_same_round_apart() {
+        let mut builder = OpenAiCallBuilder::default();
+        for data in [
+            r#"{"index":1,"id":"b","function":{"name":"get_time","arguments":"{}"}}"#,
+            r#"{"index":0,"id":"a","function":{"name":"read_file","arguments":"{\"path\":\"/x\"}"}}"#,
+        ] {
+            let chunk: OpenAiToolCallChunk = serde_json::from_str(data).unwrap();
+            builder.absorb(&[chunk]);
+        }
+
+        let calls = builder.finish().unwrap();
+        let names: Vec<&str> = calls.iter().map(|c| c.tool.as_str()).collect();
+        assert_eq!(names, vec!["read_file", "get_time"]);
+        assert_eq!(calls[1].arguments, json!({}));
+    }
+
+    /// Anthropic spreads a call across three event types. The arguments are not valid JSON
+    /// until the last fragment lands, so nothing can be parsed before content_block_stop.
+    #[test]
+    fn anthropic_reassembles_a_call_across_its_events() {
+        let mut builder = AnthropicCallBuilder::default();
+        let start: AnthropicContentBlock = serde_json::from_str(
+            r#"{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}"#,
+        )
+        .unwrap();
+        builder.start(1, &start);
+        builder.fragment(1, "{\"path\"");
+        builder.fragment(1, ": \"/etc/hostname\"}");
+        builder.stop(1).unwrap();
+
+        assert_eq!(
+            builder.finish(),
+            vec![NativeCall {
+                id: "toolu_1".to_string(),
+                tool: "read_file".to_string(),
+                arguments: json!({"path": "/etc/hostname"}),
+            }]
+        );
+    }
+
+    /// Block 0 of a reply is usually text, and its start and stop events must not produce
+    /// a call made of nothing.
+    #[test]
+    fn a_text_block_closing_is_not_mistaken_for_a_call() {
+        let mut builder = AnthropicCallBuilder::default();
+        let text: AnthropicContentBlock =
+            serde_json::from_str(r#"{"type":"text","text":""}"#).unwrap();
+        builder.start(0, &text);
+        builder.stop(0).unwrap();
+        assert!(builder.finish().is_empty());
+    }
+
+    /// A tool that takes no arguments sends no fragments, which means `{}` rather than a
+    /// broken call.
+    #[test]
+    fn an_argument_less_call_means_an_empty_object() {
+        assert_eq!(parse_arguments("").unwrap(), json!({}));
+        assert_eq!(parse_arguments("   ").unwrap(), json!({}));
+        assert!(parse_arguments("{\"half\":").is_err());
+    }
+
+    /// Gemini names a call instead of giving it an id, and the id is optional -- the name
+    /// stands in so there is always something to match the answer to.
+    #[test]
+    fn a_gemini_call_without_an_id_falls_back_to_its_name() {
+        let call: GeminiFunctionCall =
+            serde_json::from_str(r#"{"name":"get_time","args":{}}"#).unwrap();
+        let call = NativeCall::from(call);
+        assert_eq!(call.id, "get_time");
+        assert_eq!(call.tool, "get_time");
+        assert_eq!(call.arguments, json!({}));
+    }
+
+    /// A round that is only a tool call carries no text, and that is a complete answer
+    /// rather than the "stream ended without any content" failure an empty reply is.
+    #[test]
+    fn a_reply_that_is_only_a_tool_call_is_not_an_empty_stream() {
+        let call = NativeCall {
+            id: "a".to_string(),
+            tool: "get_time".to_string(),
+            arguments: json!({}),
+        };
+        let completion = finish_with(String::new(), None, vec![call]).unwrap();
+        assert!(completion.text.is_empty());
+        assert_eq!(completion.calls.len(), 1);
+
+        assert!(finish_with(String::new(), None, Vec::new()).is_err());
+    }
+
+    /// The two local providers stay on the fenced text protocol: Ollama is driven through
+    /// an endpoint with no tools field, and LM Studio is the one most likely to be an old
+    /// build that would reject the request outright.
+    #[test]
+    fn the_local_providers_stay_on_the_text_protocol() {
+        assert!(!Provider::Ollama.supports_native_tools());
+        assert!(!Provider::LmStudio.supports_native_tools());
+        assert!(!Provider::Offline.supports_native_tools());
+        for provider in [
+            Provider::OpenAi,
+            Provider::Groq,
+            Provider::Gemini,
+            Provider::Anthropic,
+        ] {
+            assert!(provider.supports_native_tools(), "{provider}");
+        }
     }
 }

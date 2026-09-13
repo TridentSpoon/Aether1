@@ -52,7 +52,7 @@ impl Tool for ReadFile {
         false
     }
 
-    fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
         let path = fs_guard::resolve_readable(string_arg(args, "path")?)?;
         if path.is_dir() {
             return Err(format!(
@@ -78,6 +78,13 @@ impl Tool for ReadFile {
                 )))
             }
         };
+
+        // A note fetched by name is the strongest form of "this is where the answer came
+        // from", so it is worth reporting to the HUD. Only vault files: the rest of the
+        // filesystem is not the operator's memory and does not belong in that footer.
+        if let Some(note) = crate::vault::note_in_vault(ctx.db, &path) {
+            crate::vault::consulted::record(&note, crate::vault::consulted::How::Read);
+        }
 
         Ok(Outcome::text(if truncated {
             format!(
@@ -252,7 +259,7 @@ impl Tool for SearchMemory {
     }
 
     fn description(&self) -> &'static str {
-        "Search everything the operator has asked Aether1 to remember. Use this before saying you don't know something about them -- the answer is often already stored."
+        "Search the memory vault -- every note Aether1 keeps about this operator -- by keyword. Ranks by where a word appears: a note named for the topic first, then one with it in a heading, then one that mentions it in passing. Use this before saying you don't know something about them, and whenever the index has no obvious answer. Returns a shortlist of notes to read with read_file, not the notes themselves."
     }
 
     fn parameters(&self) -> Value {
@@ -261,7 +268,7 @@ impl Tool for SearchMemory {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Words to look for. Matches against both the name and the content of each stored memory."
+                    "description": "Words to look for. Matched against note names, headings and body text; a note matching more of them ranks higher, so include the topic rather than a whole sentence."
                 }
             },
             "required": ["query"]
@@ -273,15 +280,26 @@ impl Tool for SearchMemory {
     }
 
     fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
-        let query = string_arg(args, "query")?.to_lowercase();
-        let memories = ctx.db.get_all_memories().map_err(|e| e.to_string())?;
+        let query = string_arg(args, "query")?;
 
-        // Substring matching for now. Step 10 replaces this with real retrieval; the
-        // tool's shape doesn't change when it does.
+        /* The vault is the memory now, so it is what this searches. The key-value table is
+        still read when there is no vault at all -- which only happens before the first run
+        creates one, since `ensure` copies those rows into imported-memories.md and after
+        that the vault search covers them. Reading both would mean answering the same fact
+        twice under two names. */
+        if crate::vault::vault_path(ctx.db).exists() {
+            let results = crate::vault::search::search(ctx.db, query);
+            return Ok(Outcome::text(crate::vault::search::render(
+                ctx.db, query, &results,
+            )));
+        }
+
+        let lowered = query.to_lowercase();
+        let memories = ctx.db.get_all_memories().map_err(|e| e.to_string())?;
         let hits: Vec<String> = memories
             .iter()
             .filter(|m| {
-                m.key.to_lowercase().contains(&query) || m.value.to_lowercase().contains(&query)
+                m.key.to_lowercase().contains(&lowered) || m.value.to_lowercase().contains(&lowered)
             })
             .take(MAX_MEMORY_HITS)
             .map(|m| format!("- {}: {}", m.key, m.value))
@@ -289,7 +307,8 @@ impl Tool for SearchMemory {
 
         Ok(Outcome::text(if hits.is_empty() {
             format!(
-                "Nothing stored matching {query:?} ({} memories searched).",
+                "Nothing stored matching {query:?} ({} memories searched; there is no vault \
+                 yet).",
                 memories.len()
             )
         } else {
@@ -352,9 +371,110 @@ mod tests {
         assert!(outcome.result.contains("entries"));
     }
 
+    /// Sets up a db whose vault is a fresh temporary folder. Pinned explicitly: without it
+    /// the vault resolves under the real home directory, and a test that reads whatever
+    /// notes happen to be on the machine running it is a test that passes or fails by
+    /// accident.
+    fn db_with_vault(name: &str) -> (MemoryDb, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("aether1_builtin_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = MemoryDb::open(dir.join("memory.db")).unwrap();
+        db.set_setting(
+            "vault_path",
+            &json!(dir.join("vault").to_string_lossy().to_string()),
+        )
+        .unwrap();
+        let root = crate::vault::ensure(&db).unwrap();
+        (db, root)
+    }
+
+    /// The HUD's footer, at the two call sites in this file: a note the model went and
+    /// fetched is reported as read, and one search merely offered is reported as found.
+    /// The distinction is the point -- a shortlist is not a citation.
     #[test]
-    fn search_memory_finds_what_was_stored_and_says_so_when_it_doesnt() {
-        let db = temp_db("search_memory");
+    fn reading_a_vault_note_reports_it_and_searching_reports_the_shortlist() {
+        let (db, root) = db_with_vault("consulted");
+        std::fs::write(
+            root.join("projects/editors.md"),
+            "# Editors\n\nThey moved from vim to helix in 2025.\n",
+        )
+        .unwrap();
+        let ctx = ToolContext::new(&db);
+
+        // read_file only reaches what fs_guard allows, and the vault's real home is the
+        // operator's home directory -- so the fixture's has to be one too.
+        let notes = crate::tools::fs_guard::with_home(root.parent().unwrap(), || {
+            crate::vault::consulted::begin();
+            SearchMemory
+                .call(&json!({"query": "editors"}), &ctx)
+                .unwrap();
+            ReadFile
+                .call(
+                    &json!({"path": root.join("projects/editors.md").to_string_lossy()}),
+                    &ctx,
+                )
+                .unwrap();
+            // Outside the vault, and so none of the operator's memory: not in the footer.
+            ReadFile
+                .call(&json!({"path": "/etc/hostname"}), &ctx)
+                .unwrap();
+            crate::vault::consulted::taken()
+        });
+        assert_eq!(
+            notes.len(),
+            1,
+            "only the vault note belongs in the footer: {notes:?}"
+        );
+        assert_eq!(notes[0].note, "projects/editors.md");
+        assert_eq!(
+            notes[0].how,
+            crate::vault::consulted::How::Read,
+            "a note that was found and then read is reported as read"
+        );
+    }
+
+    /// search_memory searches the vault now, not the old key-value table.
+    #[test]
+    fn search_memory_finds_the_note_and_says_so_when_there_is_none() {
+        let (db, root) = db_with_vault("search_memory");
+        std::fs::write(
+            root.join("projects/editors.md"),
+            "# Editors\n\nThey moved from vim to helix in 2025.\n",
+        )
+        .unwrap();
+        let ctx = ToolContext::new(&db);
+
+        let hit = SearchMemory
+            .call(&json!({"query": "editors"}), &ctx)
+            .unwrap();
+        assert!(hit.result.contains("projects/editors.md"), "{}", hit.result);
+        assert!(hit.result.contains("helix"), "{}", hit.result);
+
+        let miss = SearchMemory
+            .call(&json!({"query": "sourdough"}), &ctx)
+            .unwrap();
+        assert!(miss.result.contains("No note matches"), "{}", miss.result);
+    }
+
+    /// Before the first run creates a vault there is nowhere to search, and the old
+    /// key-value rows are the only memory there is. After it, `ensure` has copied them into
+    /// a note and the vault search covers them -- so this path is a fallback, not a second
+    /// source competing with the first.
+    #[test]
+    fn search_memory_falls_back_to_the_old_rows_when_there_is_no_vault_yet() {
+        let dir = std::env::temp_dir().join(format!("aether1_novault_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = MemoryDb::open(dir.join("memory.db")).unwrap();
+        // Pointed at a folder that does not exist, which is what "before the first run"
+        // looks like from here.
+        db.set_setting(
+            "vault_path",
+            &json!(dir.join("absent").to_string_lossy().to_string()),
+        )
+        .unwrap();
         db.set_memory("favorite_editor", "helix", "general")
             .unwrap();
         let ctx = ToolContext::new(&db);
@@ -363,11 +483,6 @@ mod tests {
             .call(&json!({"query": "editor"}), &ctx)
             .unwrap();
         assert!(hit.result.contains("helix"), "{}", hit.result);
-
-        let miss = SearchMemory
-            .call(&json!({"query": "sourdough"}), &ctx)
-            .unwrap();
-        assert!(miss.result.contains("Nothing stored"), "{}", miss.result);
     }
 
     #[test]

@@ -241,7 +241,7 @@ that cannot yet do anything.
   non-mutating ones, append results to the context, call again. Start with a **prompt-level
   protocol** — the tool list rendered into the system prompt, the model replying with a
   fenced JSON block — because that works on every provider including small local models.
-  Native tool calling comes in step 8.
+  Native tool calling arrived in step 8; this stays as the fallback for Ollama and LM Studio.
 - **Path safety:** `read_file` and `list_dir` resolve and canonicalise against an allowed
   roots list (home directory and below by default, `/etc` read-only, never `~/.ssh` or the
   Aether1 database itself). This is the same class of check `server.rs`'s `get_audio`
@@ -326,14 +326,55 @@ HUD. Notes on what was decided:
 with a longer name once an allowlist exists, and it deserves its own guard rather than
 being tacked on here.
 
-### Step 8: Native tool calling
+### Step 8: Native tool calling ✅
 
-- **`src-tauri/src/llm/providers.rs`** — real `tools` / `tool_use` blocks for Anthropic,
-  the OpenAI-compatible shape, and Gemini, each with typed request/response structs the way
-  the existing calls are built. Keep the step-5 prompt protocol as the automatic fallback
-  for Ollama and any model that tool-calls badly.
-- **Verify:** the same conversation produces the same actions on a cloud provider and on a
-  local model, one through native tool calls and one through the text protocol.
+Built as planned. Four providers now carry the tool list in their own request format and
+answer with structured calls; the step-5 fenced text protocol stays exactly as it was and is
+what the two local providers still use.
+
+- **`src-tauri/src/llm/providers.rs`** — `ChatContext` gained `tools` (the registry's
+  schemas) and `exchanges` (this turn's rounds). A round is an `Exchange::Called { text,
+  calls }` followed by an `Exchange::Returned(Vec<CallResult>)`, and each provider bends
+  that into its own shape:
+  - **Anthropic** — `tools: [{name, description, input_schema}]`; the round replays as
+    assistant `tool_use` blocks and then *one* user message holding every `tool_result`.
+    Splitting the results across messages teaches the model to ask for one tool at a time,
+    so they stay together.
+  - **OpenAI-compatible** (OpenAI, Groq) — `tools: [{type:"function", function:{…}}]`; the
+    call rides on the assistant message and each result is its own `role:"tool"` message
+    quoting the `tool_call_id` it answers. Arguments go back as the JSON *string* they
+    arrived as.
+  - **Gemini** — `tools[0].functionDeclarations`; parts carry `functionCall` and
+    `functionResponse`, and `response` is an object rather than a bare string.
+- Streaming is where the work is. A call does not arrive whole: OpenAI sends fragments whose
+  only reliable field is `index`, and Anthropic spreads one call across
+  `content_block_start`, a run of `input_json_delta` fragments, and `content_block_stop`.
+  `OpenAiCallBuilder` and `AnthropicCallBuilder` reassemble them, both keyed by index so the
+  reassembly does not depend on blocks never interleaving. An empty argument buffer means
+  `{}` — an argument-less tool sends no fragments at all — rather than a parse failure.
+- **`Provider::supports_native_tools()`** is the switch, and the two local providers are
+  deliberately out. Ollama is driven through `/api/generate`, which has no tools field at
+  all — tools live on `/api/chat`, a different endpoint with a different shape. LM Studio's
+  server does accept tools on recent builds, but it is the provider most likely to be an
+  older install on someone's desktop, and a silent 400 there costs a working setup.
+- **`src-tauri/src/llm/mod.rs`** — `tool_loop` drives both paths from one list of calls. The
+  differences are three: what goes into the request, where the calls are read from, and how
+  the round is carried forward. A native round becomes an `Exchange`; a text round becomes
+  two more history messages, as before. The `FenceFilter` is skipped on the native path,
+  where withholding a fence could only swallow prose the operator should see. The system
+  prompt loses the fenced-block instructions and the catalog on that path — the provider
+  already has every name and schema, and repeating them is both wasted tokens and a second
+  copy to drift out of date.
+- Tool exchanges live only for the length of a turn. The SQLite message store stays plain
+  text: nothing reads these back afterwards, so there is no migration for scaffolding.
+- **Verified by unit tests against the published wire formats**, not against live providers
+  — this was built in a container with no API keys. The Anthropic shapes came from the
+  Messages API documentation, the OpenAI shapes from the official `openai-openapi` spec, and
+  the Gemini shapes from the API's own discovery document. What the tests cover: each
+  provider's tool declaration, each provider's replay of a completed round, fragment
+  reassembly for both streaming formats, an argument-less call, a text block closing without
+  being mistaken for a call, and a reply that is *only* a tool call not counting as an empty
+  stream. **First run against a real key is the real test.**
 
 ---
 
@@ -406,21 +447,96 @@ operation with one fewer thing to explain.
 the session-close note. The index plus `read_file` is the whole retrieval mechanism today,
 which is enough while a vault is small and is the thing to measure before adding search.
 
-### Step 11: Retrieval, consolidation, decay
+*Since then:* step 11 landed the search and the archive. The session-close note is still
+unwritten — see step 12, which is where showing what was loaded belongs.
 
-- **Retrieval** — start with the index plus filename/heading search over the vault, since
-  that is what the priming design actually asks for. Add a real index (SQLite FTS over note
-  contents, or embeddings) only if the simple thing measurably fails.
-- **Consolidation** — daily notes fold into topic notes; a note that has stopped being true
-  gets edited or moved to `archive/` rather than silently contradicting a newer one.
-- **Verify:** with 200 notes, asking about one topic pulls that topic's notes and not the
-  ten most recent.
+### Step 11: Retrieval, consolidation, decay ✅
 
-### Step 12: Vault in the HUD *(reduced)* — **shipped**
+Built as planned, and deliberately without an index.
 
-Not a memory browser any more — the browser is the operator's editor. What is still worth
-building is small: show which notes were loaded for the current answer, and a button that
-opens the vault folder. Seeing *why* it said something matters more than another file list.
+- **New `src-tauri/src/vault/search.rs`** — a scan, not an FTS table and not embeddings. A
+  vault is a few hundred markdown files totalling a couple of megabytes; scanning it costs
+  milliseconds, needs no index to keep in sync, no migration, and no second copy of the
+  operator's memory in a format they cannot open. The plan said to add a real index only if
+  the simple thing measurably fails, and it has not been measured failing yet.
+- **The ranking is the part that matters**, and it is written against one specific failure:
+  "asking about one topic pulls the ten most recent notes". Where a word appears is what
+  counts — the note's own path (8), a heading (4), a body line (1, and only the first three,
+  so a note cannot climb by repetition). A breadth bonus (5 per extra word matched) puts a
+  note matching *both* search words above one matching either word repeatedly. Recency is a
+  tiebreaker and never a reason to rank one note above a better-matching one.
+- **Function words are dropped from a query**, which exists only because of the breadth
+  bonus: almost every note contains "the", so without a stop list that bonus would go to
+  whichever notes are longest.
+- **`search_memory` now searches the vault** rather than the old key-value table. It keeps
+  its name and its shape — the shape was right, only what it searched was stale. The table is
+  still read when there is no vault at all, which is only true before the first run creates
+  one; after that `ensure` has copied those rows into `imported-memories.md` and the vault
+  search covers them, so reading both would answer the same fact twice under two names.
+- **`archive_note`** (mutating, reversible) — moves a note to `archive/`, preserving its
+  subpath, refusing the three always-loaded notes (those get *corrected* with `write_note`,
+  not filed away), and suffixing rather than overwriting on a name collision. The index line
+  is annotated `(archived)` rather than deleted: `[[wiki links]]` resolve by name, so the link
+  still works after the move, and silently removing a line from a file the operator writes in
+  themselves is not a thing a memory system should do.
+- **Consolidation is prompted, never automatic.** Folding a fortnight of dailies into a topic
+  note is a judgement about what mattered, and code that did it on its own would be rewriting
+  the operator's memory without being asked. What the code does is *notice*: past 14 notes in
+  `daily/`, priming carries one line telling the model to offer at a natural pause, not to
+  interrupt, and not to do it without asking. The line disappears once the pile is dealt with.
+- **`search_memory` added to the two machine-facing personas' domains.** `MINIMUM_TOOLS`
+  already called it something every persona keeps; leaving it off `INSPECTS_THE_MACHINE` meant
+  System Diagnosis and Security fell *below* the stated minimum, and "have I told you about
+  this box before?" became a proposal. Searching the operator's own notes is the least
+  dangerous read there is.
+- **Verify — done, as a test.** `with_two_hundred_notes_a_topic_question_finds_the_topic_note`
+  builds 200 daily notes written *after* the topic note, so every one of them is more recent
+  than the answer, and asserts the topic note still ranks first. If recency were doing any of
+  the ranking, that test fails.
+
+### Step 12: Vault in the HUD ✅
+
+Built as reduced: no memory browser — the operator's own editor is the memory browser. What
+was worth building was the citation, and the one click that gets to the folder.
+
+- **New `src-tauri/src/vault/consulted.rs`** — a per-turn record of which notes reached the
+  answer, and by which of the three routes. A note can be `Primed` (pasted into the system
+  prompt because it is always loaded), `Read` (fetched by name with `read_file`) or `Found`
+  (offered by search, and possibly ignored). Those are not the same claim and the HUD does
+  not render them as one: ● loaded, ◆ read, ○ found.
+- **A thread-local, not a field on the engine.** A turn *is* a thread here —
+  `generate_response_streamed` runs to completion on one blocking thread, and priming, the
+  provider call and the whole tool loop run inside it. So two operators on the LAN cannot
+  bleed into each other's footer, and none of the three recording sites needs a handle
+  threaded down to it through code with no interest in reporting. Recording is off unless a
+  turn opened it, so an approval executed from the HUD ten minutes later leaves nothing
+  behind for the next answer to claim.
+- **Three call sites**: `vault::prime` records each always-loaded note it actually pasted;
+  `vault::search::search` records its shortlist; `ReadFile` records the path *if* it is
+  inside the vault, which is what the new `vault::note_in_vault` decides — canonicalising
+  both sides first, because the vault path is typed by the operator and the read path has
+  been through `fs_guard`, and a string comparison would answer "not in the vault" for a
+  file plainly in it.
+- **`commands::generate_response_streamed`** opens the record and drains it around the one
+  call that reads the vault, and returns it as `notes` on the reply. Both transports carry
+  it for free: the Tauri command returns that value, and the WebSocket's `done` frame is
+  that value.
+- **`commands::open_vault_folder`** hands the folder to the operator's own file manager
+  (`xdg-open`/`explorer`/`open`, spawned with no shell), creating the vault first if this is
+  the first run. Reachable **only** from the desktop app's Settings pane: there is no HTTP
+  route, because a phone on the LAN asking a desktop in another room to pop open a file
+  manager is not a feature anyone asked for. The browser fallback copies the path and says
+  why it cannot do more. The path comes from the vault setting, which is not in `SETTABLE`,
+  so nothing a model says can steer it.
+- **Verify — done, as tests.** Six on the record itself (nothing recorded outside a turn;
+  a note found and then read reports the reading; draining ends the turn; the footer is
+  capped at twelve), plus one that primes a real vault and asserts the footer names exactly
+  the always-loaded set, and one that reads a vault note and `/etc/hostname` in the same
+  turn and asserts only the note appears.
+
+What is **not** tested is the part that matters most: whether the notes it names are the
+notes that actually shaped the answer. That is a judgement about a live model, and it needs
+a real conversation against a real vault to make.
 
 Landed as a one-line trace, the same idiom a tool call already gets (see
 `tools/protocol.rs`'s `trace_of`): `LlmEngine::vault_trace` names whichever of
@@ -912,32 +1028,135 @@ the sliders non-destructive — otherwise nudging a picker after moving a slider
 adjustment in permanently — and since it means the swatch and the screen disagree, a note says
 so while the tone is off default.
 
+### Step 29: a fresh install has no brain, and nothing said so — **shipped**
+
+The report was "a good looking app with no substance". It was accurate, and the cause was
+not the chat path — streaming, deltas, TTS chunking and history all worked. It was that a
+fresh install defaults to `llm_provider = "offline"`, so every answer came from
+`Persona::offline_reply`: canned text with nothing thinking behind it, and no route from
+that state to a working model that a non-technical person could find.
+
+`setup.rs` answers one question — *where is this machine, and what is the single next
+thing to do?* — from a live probe, as five stages: `NothingInstalled`,
+`InstalledNotRunning`, `RunningNoModel`, `ReadyToSelect`, `Configured`. Two properties
+make it honest:
+
+- **The stage is derived, never counted.** There is no step counter anywhere; the wizard
+  re-asks the backend after every action. A stage cannot be skipped past or claimed
+  falsely, and closing the app mid-way loses nothing.
+- **A finished download is a model the server reports.** `ollama pull` is spawned and
+  returns immediately, so "done" cannot come from the pull. The wizard polls
+  `/api/setup/advice` every five seconds and watches `installed_models` for the chosen
+  name to appear — true by construction, and it survives Aether1 being closed, because
+  the download was never Aether1's job.
+
+`models_for(ram_total_gb)` sizes the offer to the machine: usable memory is 70% of total,
+and the largest model that fits is marked recommended, so 4 GB is offered a 1B, 8 GB a 3B,
+16 GB `llama3.1:8b`, 32 GB a 14B and 64 GB+ `llama3.3:70b`. The catalogue is nineteen
+models across five memory tiers — the popular Llama, Gemma, Qwen, Mistral, Phi and
+DeepSeek R1 sizes — grouped ascending by `needs_gb`, with the intended recommendation
+*last* inside each tier, because the pick is `rposition(|m| m.needs_gb <= usable)`. That
+makes intra-tier ordering load-bearing rather than cosmetic, so
+`catalogue_is_ordered_by_memory` pins the ascent as a test.
+
+The whole catalogue is always listed — the recommendation is a default, not a gate — but
+nineteen radio buttons is its own kind of unhelpful, so each `ModelChoice` now carries
+`fits`, and the HUD folds the ones this machine has no memory for behind a `<details>`
+("Show N bigger models"). Already-downloaded models count as fitting whatever the memory
+says: they are on the disk, and hiding one would mean offering a download instead.
+
+Two things are deliberately *not* automatic. The cloud route is offered and never taken,
+because it means the words you type leave the machine and that is a decision. And the
+download button is hidden outright when `can_install_from_here` is false, rather than
+shown as a button that cannot work.
+
+Falling out of the same work: `pull_model`'s HTTP branch has a five-second timeout, so it
+can never complete a real download — it always fell through to the CLI and reported
+"Started in background" with no further signal. Both messages now say what actually
+happened.
+
+### Step 30: the settings panel, grouped by the question you arrived with — **shipped**
+
+`Agent & System` was one flat column. It is now six `<details>` groups — The Brain, Voice
+& Sound, Memory, What it may do, Network, The app itself — with the things almost nobody
+needs nested one level further inside the group they belong to. `<details>` rather than
+swapping panels for a concrete reason: a closed group still has all of its inputs in the
+DOM, so `loadSettings` and `saveSettings` address fields by id and need to know nothing
+about the grouping.
+
+Auditing every field against both halves of that round trip found four settings that were
+stored, some of them writable by the companion itself, and read by nothing or settable
+from nowhere:
+
+- `enable_sfx` — stored and AI-writable, but `voice.js` hardcoded `sfxEnabled = true` and
+  the menu toggle forgot on reload. Now one switch in two places, both saving.
+- `color_theme` — AI-writable, but the HUD only ever read the browser's own copy, so
+  asking the companion to change its colours changed nothing visible. Now reconciled on
+  load, and given a default in `get_settings` so the key comes back at all.
+- `tts_local_voice`, `stt_model_path`, `stt_language` — all three read by `voice_status`
+  and `transcribe_audio`, none settable from the HUD. Now three fields nested under Voice
+  & Sound, where empty means "find them yourself", which is the working default.
+
+### Step 31: a download you can watch, and a missing piece you cannot miss — **shipped**
+
+Two complaints from the first person to use Step 29 in anger, and they turn out to be the
+same complaint: *the app knows something is wrong and says so too quietly to hear.*
+
+**The progress bar.** Step 29's download spawned `ollama pull` as a child process and
+returned. A child process reports nothing, so the wizard polled the model list every five
+seconds and said "still going" until the name appeared — true, and for four minutes
+indistinguishable from a hang. `downloads.rs` replaces it: `POST /api/pull` with
+`{"stream": true}` returns newline-delimited JSON, one line per progress tick, and a
+thread per download reads it into a registry the HUD polls once a second.
+
+The one thing that needed care is that a model is several blobs, and the stream reports
+`completed`/`total` for whichever layer is moving. A bar wired straight to those numbers
+drops to zero at every layer boundary. `Tracker` keeps the last figure *per digest* and
+sums them, so the bar only ever goes forwards. Ten tests cover the shape of that stream:
+a second layer adding rather than replacing, `verifying sha256 digest` not throwing the
+bar away, `success` finishing it even when the final line carries no numbers.
+
+Because the registry is a map with a thread per entry, several downloads at once fell out
+for free. It is capped at three, and the refusal past that says why: *they share one
+connection, so starting more would not make any of them finish sooner.*
+
+**The notice.** The "no AI connected" card was a small amber line in the chat stream, and
+sending a message with nothing configured returned a canned offline reply — which reads
+exactly like an answer. So the app looked like it worked, badly. Now: the card is a
+full-width bordered block with an Orbitron headline; the wizard opens by itself on launch
+when `needs_attention` is set (once per launch — re-opening a window somebody just closed
+teaches people to close windows without reading them); and the send path re-probes and
+refuses rather than answering, because a canned reply in place of a real one is the app
+lying about its own state.
+
+**The one thing it can fix itself.** Four of the five setup stages are things Aether1 can
+only describe. `installed-not-running` is not: the binary is there and nothing is using
+it. `start_local_server` spawns it — no shell, no caller-supplied argument, the binary
+`which` finds under exactly the name `ollama`, so the whole of what it can be made to run
+is "the ollama already installed here, serving". It is not a tool, so nothing the
+companion says in a conversation can reach it.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
 the vault as what to do next, and all three shipped some time ago.*
 
 **Done.** Phase 1 entire (CLI, hotkey, streaming, local TTS and STT). Phase 2 entire (tool
-registry, the read-only loop, the consent path, mutating tools and undo). Phase 3's core (the
-vault, priming from it, and writing back). Plus local-only mode, the theme engine, the top
-bar, personas as specialities, per-persona access with per-request elevation, reading the
-Windows event log, and honest token telemetry.
+registry, the read-only loop, the consent path, mutating tools and undo). Phase 3 bar its
+last step (the vault, priming from it, writing back, search and archiving). Plus local-only
+mode, the theme engine, the top bar, personas as specialities, per-persona access with
+per-request elevation, reading the Windows event log, honest token telemetry, and native tool
+calling.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Step 8, native tool calling.** The text protocol works, but a model that supports real
-   `tool_use` blocks should get them — fewer parse failures, and the fallback stays for
-   everything else.
-2. **Step 11, retrieval and consolidation.** The vault primes from its index today, which is
-   fine at twenty notes and will not be at two hundred.
-3. **Step 12, vault in the HUD** *(small)*. Show which notes were loaded for the answer on
-   screen. Seeing *why* it said something is worth more than another file browser.
-4. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+1. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-5. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+2. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
-6. **Step 19, several local models.** A stated core requirement, and still deliberately not
-   started.
+3. **Step 19, several local models.** A stated core requirement, and still deliberately not
+   started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
+   download path it would need already exist in `setup.rs`.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
-which is correct: what they should be depends on the six above.
+which is correct: what they should be depends on the three above.

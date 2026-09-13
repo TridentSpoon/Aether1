@@ -20,6 +20,7 @@
 mod cli;
 mod commands;
 mod discovery;
+mod downloads;
 mod hotkey;
 mod llm;
 mod local_only;
@@ -27,6 +28,7 @@ mod model_scanner;
 mod paths;
 mod serve_auth;
 mod server;
+mod setup;
 mod tools;
 mod vault;
 
@@ -603,12 +605,54 @@ fn agent_genesis_rust(
     commands::agent_genesis(&engine, purpose)
 }
 
+#[tauri::command]
+fn test_llm_connection_rust(
+    engine: tauri::State<LlmEngine>,
+    provider: String,
+    model: String,
+    endpoint: String,
+    api_key: String,
+) -> Result<String, String> {
+    commands::test_llm_connection(&engine, provider, model, endpoint, api_key)
+}
+
 /// Rust-native equivalent of GET /api/scanner/status (backend/main.py) -- cloud API key
 /// detection plus Ollama/LM Studio probes. Blocking (matches this file's existing
 /// synchronous command style); each probe has its own short timeout so this can't hang.
 #[tauri::command]
 fn scan_models_rust() -> model_scanner::ScanResult {
     model_scanner::scan_all()
+}
+
+/// Where this machine is on the road to having a model, and what to do about it. Drives
+/// the setup wizard; safe to call as often as the wizard likes, since it is only probes.
+#[tauri::command]
+fn setup_advice_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::setup_advice(&engine)
+}
+
+#[tauri::command]
+fn start_download_rust(
+    engine: tauri::State<LlmEngine>,
+    model_name: String,
+    endpoint: Option<String>,
+) -> serde_json::Value {
+    commands::start_download(&engine, model_name, endpoint.unwrap_or_default())
+}
+
+#[tauri::command]
+fn download_status_rust() -> serde_json::Value {
+    commands::download_status()
+}
+
+#[tauri::command]
+fn forget_download_rust(model_name: String) -> serde_json::Value {
+    commands::forget_download(model_name)
+}
+
+#[tauri::command]
+fn start_local_server_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::start_local_server(&engine)
 }
 
 /// Rust-native equivalent of POST /api/scanner/pull-model (backend/main.py).
@@ -947,8 +991,14 @@ fn main() {
             generate_response_rust,
             generate_response_streaming_rust,
             agent_genesis_rust,
+            test_llm_connection_rust,
             scan_models_rust,
+            setup_advice_rust,
             pull_model_rust,
+            start_download_rust,
+            download_status_rust,
+            forget_download_rust,
+            start_local_server_rust,
             get_static_info_rust,
             get_tools_rust,
             get_actions_rust,

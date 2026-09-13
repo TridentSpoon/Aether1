@@ -14,8 +14,15 @@
 # v1.9.3, confirmed absent at v1.7.2 (the --target whisper-cli build below fails there with
 # MSB1009 "Project file does not exist: whisper-cli.vcxproj"). If bumping this ever breaks
 # the same way, check examples/cli/CMakeLists.txt exists at the new ref first.
+# SignedExe exists for release.yml, which signs the binary before it is packaged rather
+# than after: Smart App Control judges aether1.exe itself, not only the installer that
+# carried it, so an installer signed around an unsigned payload is still blocked once it
+# has finished installing. Given a path, that file is staged as-is and no build happens
+# here -- the caller has already built it, signed it, and must not have it rebuilt
+# underneath the signature.
 param(
     [string]$OutDir = "dist",
+    [string]$SignedExe = "",
     [string]$PiperVersion = "2023.11.14-2",
     [string]$PiperVoice = "en_US-lessac-medium",
     [string]$WhisperCppRef = "v1.9.3",
@@ -35,12 +42,18 @@ try {
     Write-Host "Packaging AETHER1 offline bundle (Windows x64)"
     Write-Host "======================================================================"
 
-    Write-Host "Building the release binary..."
-    Push-Location src-tauri
-    cargo build --release
-    if ($LASTEXITCODE -ne 0) { throw "cargo build --release failed" }
-    Pop-Location
-    Copy-Item "src-tauri\target\release\aether1.exe" "$Stage\aether1.exe"
+    if ($SignedExe) {
+        if (-not (Test-Path $SignedExe)) { throw "SignedExe not found: $SignedExe" }
+        Write-Host "Staging the prebuilt binary from $SignedExe (skipping the build)..."
+        Copy-Item $SignedExe "$Stage\aether1.exe"
+    } else {
+        Write-Host "Building the release binary..."
+        Push-Location src-tauri
+        cargo build --release
+        if ($LASTEXITCODE -ne 0) { throw "cargo build --release failed" }
+        Pop-Location
+        Copy-Item "src-tauri\target\release\aether1.exe" "$Stage\aether1.exe"
+    }
 
     Write-Host "Fetching Piper $PiperVersion (TTS)..."
     $piperZip = "$Stage\piper.zip"
