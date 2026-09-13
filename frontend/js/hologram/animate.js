@@ -560,6 +560,29 @@ HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity,
         }
     }
 
+    // The accretion disc: two static tilted rings (a torus is rotationally symmetric, so
+    // spinning it changes nothing) that brighten with speech/thought, plus a handful of
+    // hotspots actually orbiting the inner ring so the disc visibly swirls.
+    if (this.arxLimesAccretionRing1) {
+        let glow = 1.0;
+        if (isSpeaking) {
+            glow = 1.0 + audioIntensity * 0.6;
+        } else if (isThinking) {
+            glow = 1.0 + Math.abs(Math.sin(elapsedTime * 10)) * 0.3;
+        }
+        glow += clickPulse * 0.5;
+        this.arxLimesAccretionRing1Mat.opacity = Math.min(0.75 * glow, 1);
+        this.arxLimesAccretionRing2Mat.opacity = Math.min(0.45 * glow, 1);
+        const discScale = 1 + clickPulse * 0.15;
+        this.arxLimesAccretionGroup.scale.set(discScale, discScale, discScale);
+
+        this.arxLimesAccretionHotspots.forEach((h) => {
+            h.angle += h.speed;
+            h.mesh.position.set(Math.cos(h.angle) * h.radius, Math.sin(h.angle) * h.radius, 0);
+        });
+        this.arxLimesAccretionHotspotsMat.opacity = 0.7 + (glow - 1) * 0.3;
+    }
+
     // A click makes it blink -- the side wing plates flutter shut and open again,
     // like eyelashes blinking. Top/bottom "eyelids" stay still. No idle auto-blink.
     const blinkScale = 1.0 - clickPulse * 0.9;

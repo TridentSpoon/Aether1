@@ -62,9 +62,17 @@ class HologramAvatar {
         this.arxLimesHubOutline = null;
         this.arxLimesPlates = []; // { group, baseAngle, baseRadius, phase, tier }
         this.arxLimesHubFillMat = null;
+        this.arxLimesHubRimMat = null; // fixed hot "event horizon" rim — not theme-tinted
         this.arxLimesOutlineMat = null;
         this.arxLimesMainFillMat = null;
         this.arxLimesWingFillMat = null;
+        this.arxLimesAccretionGroup = null;
+        this.arxLimesAccretionRing1 = null;
+        this.arxLimesAccretionRing1Mat = null; // fixed hot accent — not theme-tinted
+        this.arxLimesAccretionRing2 = null;
+        this.arxLimesAccretionRing2Mat = null; // fixed hot accent — not theme-tinted
+        this.arxLimesAccretionHotspots = []; // { mesh, angle, radius, speed }
+        this.arxLimesAccretionHotspotsMat = null; // fixed hot accent — not theme-tinted
 
         // 3. The Nexus Crew (v3): an elongated, bulbous lathe-hull rendered as a wireframe/
         // point-cloud "live sensor feed" (not a solid mesh), the previous build's eye-lens
@@ -502,8 +510,10 @@ class HologramAvatar {
         if (this.nexusTentaclePointMat) this.nexusTentaclePointMat.color.setHex(p.hex3);
         this.nexusRainMaterials.forEach(mat => mat.color.setHex(p.hex));
 
-        // A.R.X.LIMES fractured dome
-        if (this.arxLimesHubFillMat) this.arxLimesHubFillMat.color.setHex(p.hex);
+        // A.R.X.LIMES fractured dome. The hub is a fixed black void now (a black hole),
+        // and its event-horizon rim + accretion disc are this avatar's fixed hot accent --
+        // none of the three retint with the theme, same as every other avatar's one
+        // constant identity colour.
         if (this.arxLimesMainFillMat) this.arxLimesMainFillMat.color.setHex(p.hex);
         if (this.arxLimesWingFillMat) this.arxLimesWingFillMat.color.setHex(p.hex2);
         if (this.arxLimesOutlineMat) this.arxLimesOutlineMat.color.setHex(p.hex3);
