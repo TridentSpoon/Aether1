@@ -50,7 +50,7 @@ HologramAvatar.registerAvatar({
         // Each corner is cut back a fixed distance along its two edges, leaving a
         // hexagonal centre panel -- the wedge cut off each corner is exactly what
         // the corner pyramid below fills back in.
-        const CUT = 14;
+        const CUT = 25;
         const towards = (from, to, dist) => from.clone().add(to.clone().sub(from).normalize().multiplyScalar(dist));
         const panelPoints = [
             towards(A, B, CUT), towards(B, A, CUT),
@@ -95,7 +95,7 @@ HologramAvatar.registerAvatar({
         // between panel and corner, whatever angle it's viewed from. The apex then
         // rises in Z off the centre of that base, so the corner reads as a real
         // pyramid poking forward rather than as a flat patch. ---
-        const PYRAMID_HEIGHT = 12;
+        const PYRAMID_HEIGHT = 22;
         const buildCornerPyramid = (cutPt1, corner, cutPt2) => {
             const cx = (cutPt1.x + corner.x + cutPt2.x) / 3;
             const cy = (cutPt1.y + corner.y + cutPt2.y) / 3;
