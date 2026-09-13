@@ -1553,6 +1553,13 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (data.name.includes("NEXUS")) { applyAvatar('nexus'); applyThemePreset('nexus'); }
             else if (data.name.includes("A.R.X.LOGOS")) { applyAvatar('arx-logos'); applyThemePreset('arx-logos'); }
             else if (data.name.includes("A.R.X.LIMES")) { applyAvatar('arx-limes'); applyThemePreset('arx-limes'); }
+            else if (data.name.includes("A.R.X.LEGIONARE")) { applyAvatar('arx-legionare'); applyThemePreset('arx-legionare'); }
+            else if (data.name.includes("A.R.X.LOREGENDA")) { applyAvatar('arx-loregenda'); applyThemePreset('arx-loregenda'); }
+            else if (data.name.includes("A.R.X.LYKSAUM")) { applyAvatar('arx-lyksaum'); applyThemePreset('arx-lyksaum'); }
+            else if (data.name.includes("A.R.X.LEXICO")) { applyAvatar('arx-lexico'); applyThemePreset('arx-lexico'); }
+            else if (data.name.includes("A.R.X.LUCRE")) { applyAvatar('arx-lucre'); applyThemePreset('arx-lucre'); }
+            else if (data.name.includes("A.R.X.L'KEMI")) { applyAvatar('arx-lkemi'); applyThemePreset('arx-lkemi'); }
+            else if (data.name.includes("A.R.X.LOCAS")) { applyAvatar('arx-locas'); applyThemePreset('arx-locas'); }
 
             settingsModal.classList.add('hidden');
             appendMessage(data.name, `### ⚡ IDENTITY FORGED: **${data.name}**\n**Callsign**: \`${data.callsign}\`\n\n${data.greeting}`, audioUrl);
