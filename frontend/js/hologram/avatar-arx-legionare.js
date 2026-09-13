@@ -1,8 +1,10 @@
 /* Avatar: A.R.X.LEGIONARE -- an inverted four-sided pyramid frame hanging apex-down,
- * built from a single translucent shell with a bright wireframe overlay tracing its
- * sharp edges, holding a small crystalline core (an icosahedron) tumbling on its own
- * fast independent spin near the pyramid's open (upper) end, lit from within by a
- * pulsing hot-red glow standing in for the reference's point light.
+ * split into three tiered shells -- a pointed tip, a middle band, and a wide top band
+ * -- each its own translucent frustum with a bright wireframe overlay, separated from
+ * its neighbours by a clear air gap, so the frame reads as three plates stacked around
+ * a shared taper rather than one solid mass. A small crystalline core (an icosahedron)
+ * tumbles on its own fast independent spin inside the middle band, lit from within by
+ * a pulsing hot-red glow standing in for the reference's point light.
  *
  * Loosely inspired by faceted low-poly sci-fi companion-drone motifs in general --
  * an inverted pyramid shell around a spinning crystalline core -- not a copy of any
@@ -33,6 +35,8 @@ HologramAvatar.registerAvatar({
 
         const PYRAMID_RADIUS = 40;
         const PYRAMID_HEIGHT = 78;
+        const TIER_COUNT = 3;
+        const TIER_FILL = 0.72; // fraction of each tier's vertical slot actually built -- the rest is air gap
         const CRYSTAL_RADIUS = 14;
         const CRYSTAL_OFFSET_Y = 5; // slightly toward the apex, before the whole thing inverts
 
@@ -54,15 +58,37 @@ HologramAvatar.registerAvatar({
         const spinGroup = new THREE.Group();
         invertGroup.add(spinGroup);
 
-        const pyramidGeo = new THREE.ConeGeometry(PYRAMID_RADIUS, PYRAMID_HEIGHT, 4);
+        // Three tiered shells sliced from one ideal cone's silhouette (apex at
+        // +PYRAMID_HEIGHT/2, base radius PYRAMID_RADIUS at -PYRAMID_HEIGHT/2), each
+        // shrunk toward its own slot's centre so a clear air gap separates it from its
+        // neighbours -- their radii still line up with that shared taper, so the three
+        // pieces read as one pyramid's silhouette even with the gaps carved out of it.
         const pyramidFillMat = new THREE.MeshBasicMaterial({ color: api.palette.hex, side: THREE.DoubleSide, transparent: true, opacity: 0.32 });
-        const pyramid = new THREE.Mesh(pyramidGeo, pyramidFillMat);
-        spinGroup.add(pyramid);
-
         const wireframeMat = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.85 });
-        const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(pyramidGeo), wireframeMat);
-        wireframe.scale.set(1.01, 1.01, 1.01);
-        spinGroup.add(wireframe);
+
+        const slotHeight = PYRAMID_HEIGHT / TIER_COUNT;
+        const tierHeight = slotHeight * TIER_FILL;
+        const radiusAt = (y) => PYRAMID_RADIUS * (PYRAMID_HEIGHT / 2 - y) / PYRAMID_HEIGHT;
+
+        for (let i = 0; i < TIER_COUNT; i++) {
+            const center = -PYRAMID_HEIGHT / 2 + (i + 0.5) * slotHeight;
+            const topY = center + tierHeight / 2;
+            const bottomY = center - tierHeight / 2;
+            const isTip = i === TIER_COUNT - 1; // the slot nearest the apex -- built as a point
+
+            const tierGeo = isTip
+                ? new THREE.ConeGeometry(radiusAt(bottomY), tierHeight, 4)
+                : new THREE.CylinderGeometry(radiusAt(topY), radiusAt(bottomY), tierHeight, 4);
+
+            const tierMesh = new THREE.Mesh(tierGeo, pyramidFillMat);
+            tierMesh.position.y = center;
+            spinGroup.add(tierMesh);
+
+            const tierWire = new THREE.LineSegments(new THREE.EdgesGeometry(tierGeo), wireframeMat);
+            tierWire.scale.set(1.01, 1.01, 1.01);
+            tierWire.position.y = center;
+            spinGroup.add(tierWire);
+        }
 
         const crystalMat = new THREE.MeshBasicMaterial({ color: CORE_HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending });
         const crystal = new THREE.Mesh(new THREE.IcosahedronGeometry(CRYSTAL_RADIUS, 0), crystalMat);
