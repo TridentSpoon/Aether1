@@ -24,6 +24,10 @@
 
     const layout = document.getElementById('hud-layout');
     if (!layout) return;
+    /* Solo-panel windows show exactly one panel and none of the grid chrome
+       around it -- dragging, resizing and persistence all assume a real
+       multi-column layout that doesn't exist here. */
+    if (document.documentElement.hasAttribute('data-solo-panel')) return;
 
     const columns = Array.from(layout.querySelectorAll('.hud-column'));
     const resizers = Array.from(layout.querySelectorAll('.col-resizer'));

@@ -916,6 +916,20 @@ fn show_main_window_rust(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Toggles "always on top" for whichever window invoked this command -- the "(optionally)"
+/// in an undocked panel's always-on-top pane. Generic rather than sprite-specific: the sprite
+/// window's own always-on-top is fixed true at build time (see build_sprite_window) because
+/// that is the whole point of a desktop pet, but a decorated panel window opened via
+/// open_panel_window_rust has a corner checkbox (see the solo-pin-control markup in
+/// index.html and initSoloPanel in app.js) that calls this to opt in.
+#[tauri::command]
+fn set_window_always_on_top_rust(
+    window: tauri::WebviewWindow,
+    enabled: bool,
+) -> Result<(), String> {
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())
+}
+
 /// Starts an OS-native window drag for whichever window invoked this command. The sprite
 /// window has no decorations (so no native title bar to drag by); the frontend calls this on
 /// mousedown over the avatar instead (see frontend/js/sprite.js), matching Tauri's usual
@@ -924,6 +938,55 @@ fn show_main_window_rust(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn start_window_drag_rust(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|e| e.to_string())
+}
+
+/// Every HUD panel that can be undocked into its own window other than the hologram --
+/// that one already has a floating window of its own (see build_sprite_window) with its own
+/// PNGTuber-style presentation, so its "Undock" button goes there instead. Panel id, window
+/// title suffix, and a starting size sane for that panel's content.
+const PANEL_WINDOWS: &[(&str, &str, f64, f64)] = &[
+    ("tokens", "Model Performance", 380.0, 560.0),
+    ("hardware", "Hardware Telemetry", 380.0, 560.0),
+    ("commands", "Quick Commands", 340.0, 260.0),
+    ("chat", "Neural Dialogue Stream", 480.0, 680.0),
+];
+
+/// Rust-native "undock" for any HUD panel that isn't the hologram: opens a normal, decorated,
+/// resizable window showing just that one panel full-bleed, so a screen too small for the
+/// three-column HUD (see the narrow-window stacking in frontend/css/layout.css) has somewhere
+/// to send a panel instead of squeezing everything into one scrolling column. The window loads
+/// the same index.html as the main HUD with `?panel=<id>` on the URL; frontend/index.html's
+/// inline bootstrap script and the `[data-solo-panel]` rules in layout.css do the actual
+/// hiding, so this window runs the exact same app.js the main HUD does -- nothing about a
+/// panel's live behaviour (chat, telemetry polling, quick commands) is reimplemented here.
+///
+/// Re-shows and focuses an already-open one rather than building a second, matching
+/// toggle_sprite_window_rust and open_avatar_lab_rust.
+#[tauri::command]
+fn open_panel_window_rust(app: tauri::AppHandle, panel: String) -> Result<(), String> {
+    let Some(&(id, title, width, height)) = PANEL_WINDOWS.iter().find(|(id, ..)| *id == panel)
+    else {
+        return Err(format!("{panel:?} is not a panel that can be undocked"));
+    };
+
+    let label = format!("panel-{id}");
+    if let Some(window) = app.get_webview_window(&label) {
+        window.show().map_err(|e| e.to_string())?;
+        return window.set_focus().map_err(|e| e.to_string());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App(format!("index.html?panel={id}").into()),
+    )
+    .title(format!("AETHER1 -- {title}"))
+    .inner_size(width, height)
+    .min_inner_size(280.0, 200.0)
+    .resizable(true)
+    .build()
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Shared by both the native Tauri path and `--serve`: opens the real sqlite file at
@@ -1054,6 +1117,8 @@ fn main() {
             install_gh_via_winget_rust,
             toggle_sprite_window_rust,
             open_avatar_lab_rust,
+            open_panel_window_rust,
+            set_window_always_on_top_rust,
             show_main_window_rust,
             start_window_drag_rust
         ])
@@ -1265,6 +1330,8 @@ mod ipc_thread_tests {
     const MAIN_THREAD_ONLY: &[&str] = &[
         "toggle_sprite_window_rust",
         "open_avatar_lab_rust",
+        "open_panel_window_rust",
+        "set_window_always_on_top_rust",
         "show_main_window_rust",
         "start_window_drag_rust",
     ];

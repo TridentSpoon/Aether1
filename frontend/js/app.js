@@ -1,7 +1,7 @@
 /**
  * Main Frontend Application Logic for Project AETHER1.
  * Handles independently-selectable 3D Avatars (A1 monogram placeholder, R.E.D. 9000, The Nexus,
- * A.R.X.LIMES, hAlcy, A.R.X.LOGOS, A1ter_nul) and Color Themes, Token Telemetry Graph, Agent
+ * A.R.X.LIMES, hAlcy, A.R.X.LOGOS, A1ter_nul) and Color Themes, the Model Performance panel, Agent
  * Genesis, and Model Scanner.
  */
 
@@ -3174,6 +3174,55 @@ document.addEventListener('DOMContentLoaded', () => {
         if (section) section.classList.remove('hidden');
     }
 
+    // Solo-panel mode: this window was opened by open_panel_window_rust with ?panel=<id>,
+    // and the bootstrap script in <head> already stamped data-solo-panel on <html> before
+    // anything painted. Mark the matching panel as the one CSS should expand to fill the
+    // window, and (native app only) wire up the "Always on top" pin -- a bare popped-out
+    // window has no title bar of its own to put that control on.
+    function initSoloPanel() {
+        const panelId = document.documentElement.getAttribute('data-solo-panel');
+        if (!panelId) return;
+        const panel = document.querySelector(`[data-panel="${CSS.escape(panelId)}"]`);
+        if (panel) panel.classList.add('solo-target');
+
+        if (!IS_TAURI) return;
+        const pinControl = document.getElementById('solo-pin-control');
+        const pinCheckbox = document.getElementById('solo-pin-checkbox');
+        if (!pinControl || !pinCheckbox) return;
+        pinControl.classList.remove('hidden');
+        pinCheckbox.addEventListener('change', () => {
+            tauriInvoke('set_window_always_on_top_rust', { enabled: pinCheckbox.checked })
+                .catch((e) => console.warn('Could not toggle always-on-top', e));
+        });
+    }
+
+    // Every panel's "Undock" button opens it in its own solo-panel window (see
+    // open_panel_window_rust) -- except the hologram's, which turns on Desktop Sprite
+    // Mode instead. The avatar already has a dedicated floating window built for exactly
+    // this (transparent, click-to-chat, drag-anywhere); a second, plainer window showing
+    // the same avatar would just be a worse copy of it.
+    function initPanelUndock() {
+        if (!IS_TAURI) return;
+        document.querySelectorAll('[data-undock]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const id = btn.dataset.undock;
+                if (id === 'hologram') {
+                    const spriteModeToggle = document.getElementById('setting-sprite-mode');
+                    if (spriteModeToggle) spriteModeToggle.checked = true;
+                    try {
+                        await tauriInvoke('save_settings_rust', { settings: { desktop_sprite_enabled: true } });
+                        await tauriInvoke('toggle_sprite_window_rust', { enabled: true });
+                    } catch (e) {
+                        console.warn('Could not enable Desktop Sprite Mode', e);
+                    }
+                    return;
+                }
+                tauriInvoke('open_panel_window_rust', { panel: id })
+                    .catch((e) => console.warn('Could not undock panel', id, e));
+            });
+        });
+    }
+
     async function loadChatHistory() {
         try {
             const msgs = IS_TAURI
@@ -3744,6 +3793,8 @@ document.addEventListener('DOMContentLoaded', () => {
     connectTelemetry();
     initVersionAndUpdates();
     initSpriteMode();
+    initSoloPanel();
+    initPanelUndock();
 
     document.body.addEventListener('click', () => {
         voiceEngine.playSFX('boot');
