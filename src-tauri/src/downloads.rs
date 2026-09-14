@@ -160,6 +160,21 @@ fn registry() -> std::sync::MutexGuard<'static, HashMap<String, Download>> {
 ///
 /// Asking twice for the same model is not an error -- it is what a second press of the
 /// button means -- so it returns the state that already exists rather than complaining.
+/// The endpoint a pull request belongs at, given whatever address the operator's server
+/// was discovered under.
+///
+/// The address handed in can carry a `/v1` suffix: `scan_local_servers` prefers the
+/// OpenAI-compatible shape whenever a port answers both, so a plain Ollama install that
+/// also speaks that dialect gets recorded with it. Ollama's pull API is only ever native --
+/// there's no such thing as an OpenAI-compatible pull -- and it lives at the bare origin
+/// regardless of which shape the operator chats through, so a `/v1` here is stripped rather
+/// than sent into `/api/pull`, where it 404s.
+fn native_pull_endpoint(endpoint: &str) -> String {
+    let endpoint = endpoint.trim_end_matches('/');
+    let endpoint = endpoint.strip_suffix("/v1").unwrap_or(endpoint);
+    endpoint.trim_end_matches('/').to_string()
+}
+
 pub fn start(endpoint: &str, model: &str) -> Result<Download, String> {
     let model = model.trim().to_string();
     if model.is_empty() {
@@ -186,7 +201,7 @@ pub fn start(endpoint: &str, model: &str) -> Result<Download, String> {
         reg.insert(model.clone(), Download::new(&model));
     }
 
-    let endpoint = endpoint.trim_end_matches('/').to_string();
+    let endpoint = native_pull_endpoint(endpoint);
     let name = model.clone();
     std::thread::spawn(move || {
         let outcome = pump(&endpoint, &name);
@@ -405,6 +420,33 @@ mod tests {
     #[test]
     fn a_download_with_no_name_is_refused() {
         assert!(start("http://localhost:11434", "   ").is_err());
+    }
+
+    #[test]
+    fn a_v1_suffix_is_stripped_before_the_native_pull_api() {
+        // This is the shape scan_local_servers hands back for an Ollama install that also
+        // answers the OpenAI-compatible probe -- exactly the case that used to send the pull
+        // request to ".../v1/api/pull" and get a 404 back for it.
+        assert_eq!(
+            native_pull_endpoint("http://127.0.0.1:11434/v1"),
+            "http://127.0.0.1:11434"
+        );
+        assert_eq!(
+            native_pull_endpoint("http://127.0.0.1:11434/v1/"),
+            "http://127.0.0.1:11434"
+        );
+    }
+
+    #[test]
+    fn an_endpoint_with_no_v1_suffix_is_left_alone() {
+        assert_eq!(
+            native_pull_endpoint("http://localhost:11434/"),
+            "http://localhost:11434"
+        );
+        assert_eq!(
+            native_pull_endpoint("http://localhost:11434"),
+            "http://localhost:11434"
+        );
     }
 
     #[test]
