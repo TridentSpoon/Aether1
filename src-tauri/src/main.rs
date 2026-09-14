@@ -708,6 +708,19 @@ fn reject_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<(), St
 }
 
 #[tauri::command(async)]
+fn persona_access_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::persona_access(&engine)
+}
+
+#[tauri::command(async)]
+fn set_persona_access_rust(
+    engine: tauri::State<LlmEngine>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    commands::set_persona_access(&engine, paths)
+}
+
+#[tauri::command(async)]
 fn set_always_allowed_rust(
     engine: tauri::State<LlmEngine>,
     tool: String,
@@ -1009,6 +1022,9 @@ fn build_llm_engine() -> LlmEngine {
             if let Err(e) = vault::ensure(&db) {
                 eprintln!("[AETHER1] Memory vault unavailable: {e}");
             }
+            // Likewise once, on the first run only: the programs the companion may ask to
+            // run. See STARTER_ALLOWLIST for why the list is short and what keeps it safe.
+            tools::mutating::seed_starter_allowlist(&db);
             LlmEngine::new(db)
         }
         Err(e) => {
@@ -1099,6 +1115,8 @@ fn main() {
             undo_action_rust,
             reject_action_rust,
             set_always_allowed_rust,
+            persona_access_rust,
+            set_persona_access_rust,
             get_messages_rust,
             clear_messages_rust,
             reset_benchmarks_rust,

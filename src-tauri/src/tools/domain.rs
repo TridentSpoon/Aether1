@@ -24,7 +24,16 @@ use serde_json::Value;
 
 use super::{Tool, ToolContext};
 use crate::llm::MemoryDb;
-use crate::llm::{Domain, Root};
+use crate::llm::{Domain, Persona, Root};
+
+/// Setting holding the folders the operator has added to a persona's field, as
+/// `{"nexus": ["/home/you/Projects"], ...}`.
+const EXTRA_ROOTS_SETTING: &str = "domain_extra_roots";
+
+/// How many folders one persona may be given. A cap rather than a judgement: a list long
+/// enough to be unreadable is a list nobody is checking, and the point of the field is that
+/// the operator can see what it is at a glance.
+pub const MAX_EXTRA_ROOTS: usize = 12;
 
 /// Where a root actually is on this machine, right now. Empty when the platform has no
 /// answer -- see property 3 above.
@@ -129,21 +138,125 @@ fn project_tree() -> Option<PathBuf> {
     Some(cwd)
 }
 
+/// The folders the operator has added to this persona's field.
+///
+/// Stored per persona rather than globally, because a field that widens for everyone at
+/// once is not a field. Adding the project directory to the Coding persona says something
+/// specific; adding it to all twelve says only that the idea has been abandoned.
+pub fn extra_roots(db: &MemoryDb, persona: &Persona) -> Vec<String> {
+    db.get_setting(EXTRA_ROOTS_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|v| {
+            serde_json::from_value::<std::collections::HashMap<String, Vec<String>>>(v).ok()
+        })
+        .and_then(|mut map| map.remove(persona.key()))
+        .unwrap_or_default()
+}
+
+/// Replaces the folders in this persona's field, returning what was stored and what was
+/// refused.
+///
+/// Every path is checked with the same guard the tools themselves use, at the moment it is
+/// saved. That ordering is the whole point: a folder the guard would refuse can be typed
+/// into the box, and storing it would leave the operator believing they had granted a
+/// access that does not exist -- the panel would say the persona reads it, and every read
+/// would still be refused. Better to say no while someone is looking at the box.
+///
+/// This widens what runs *without asking*. It cannot widen what may be read at all:
+/// `fs_guard` runs inside each tool, after this, and its deny list beats a domain, an
+/// approval and an operator's setting alike.
+pub fn set_extra_roots(
+    db: &MemoryDb,
+    persona: &Persona,
+    paths: &[String],
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let mut accepted: Vec<String> = Vec::new();
+    let mut refused: Vec<String> = Vec::new();
+
+    for raw in paths {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        if accepted.len() >= MAX_EXTRA_ROOTS {
+            refused.push(format!(
+                "{raw} — a persona may be given at most {MAX_EXTRA_ROOTS} folders"
+            ));
+            continue;
+        }
+        match super::fs_guard::resolve_readable(raw) {
+            Ok(resolved) => {
+                // The filesystem root would make the field everything, which is the one
+                // outcome a field exists to prevent. Home is allowed: it is a real answer
+                // to "where do I keep my things", and the deny list still covers the keys
+                // and credentials inside it.
+                if resolved.parent().is_none() {
+                    refused.push(format!(
+                        "{raw} — the whole filesystem is not a field. Name a folder inside it"
+                    ));
+                    continue;
+                }
+                let resolved = resolved.display().to_string();
+                if !accepted.contains(&resolved) {
+                    accepted.push(resolved);
+                }
+            }
+            Err(e) => refused.push(format!("{raw} — {e}")),
+        }
+    }
+
+    let mut map: std::collections::HashMap<String, Vec<String>> = db
+        .get_setting(EXTRA_ROOTS_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    if accepted.is_empty() {
+        map.remove(persona.key());
+    } else {
+        map.insert(persona.key().to_string(), accepted.clone());
+    }
+    db.set_setting(EXTRA_ROOTS_SETTING, &serde_json::json!(map))
+        .map_err(|e| format!("could not save the folder list: {e}"))?;
+
+    Ok((accepted, refused))
+}
+
+/// The persona's field in words, including anything the operator added to it.
+///
+/// Derived at the moment it is shown rather than stored, for the same reason `Domain::field`
+/// is: a description kept beside the thing it describes drifts from it, and this one is read
+/// by an operator deciding whether to approve something.
+pub fn field_with_extras(db: &MemoryDb, persona: &Persona) -> String {
+    let base = persona.domain().field();
+    let extra = extra_roots(db, persona);
+    match extra.len() {
+        0 => base,
+        1 => format!("{base}, and {}", extra[0]),
+        n => format!("{base}, and {n} folders you added"),
+    }
+}
+
 /// Whether `path` (as the model wrote it) falls inside the domain's roots.
 ///
 /// Resolved before comparing, symlinks and `..` included: judging a path by its spelling
 /// is how `~/project/../.ssh` gets counted as project work. A path that does not resolve
 /// is not inside anything, which means it is proposed -- and then refused by fs_guard for
 /// the same reason, one step later.
-fn within_roots(domain: &Domain, db: &MemoryDb, path: &str) -> bool {
+fn within_roots(domain: &Domain, db: &MemoryDb, persona: &Persona, path: &str) -> bool {
     let Ok(resolved) = crate::paths::expand_home(path).canonicalize() else {
         return false;
     };
-    domain
+    let declared = domain
         .roots
         .iter()
         .flat_map(|root| directories(*root, db))
-        .any(|dir| contains(&dir, &resolved))
+        .any(|dir| contains(&dir, &resolved));
+    declared
+        || extra_roots(db, persona)
+            .iter()
+            .any(|dir| contains(Path::new(dir), &resolved))
 }
 
 /// True when `dir` is `candidate` or an ancestor of it. A resolved root may itself be a
@@ -171,7 +284,7 @@ pub fn elevation_needed(ctx: &ToolContext, tool: &dyn Tool, args: &Value) -> Opt
 
     let persona = &ctx.persona;
     let domain = persona.domain();
-    let field = domain.field();
+    let field = field_with_extras(ctx.db, persona);
     let speciality = persona.short_name();
 
     if !domain.allows_tool(tool.name()) {
@@ -184,13 +297,14 @@ pub fn elevation_needed(ctx: &ToolContext, tool: &dyn Tool, args: &Value) -> Opt
 
     // Only the tools that take a path are subject to roots; the rest were settled above.
     let path = args.get("path").and_then(Value::as_str)?;
-    if within_roots(&domain, ctx.db, path) {
+    if within_roots(&domain, ctx.db, persona, path) {
         return None;
     }
 
     Some(format!(
-        "{path} is outside {speciality}'s field ({field}). Approving runs this one read. \
-         It will ask again next time."
+        "{path} is outside {speciality}'s field ({field}). Approving runs this one read, and \
+         it will ask again next time — add the folder to {speciality}'s field in Settings to \
+         stop being asked about it."
     ))
 }
 
@@ -198,6 +312,18 @@ pub fn elevation_needed(ctx: &ToolContext, tool: &dyn Tool, args: &Value) -> Opt
 mod tests {
     use super::*;
     use crate::llm::Persona;
+
+    /// A real directory under the operator's home, because that is where the path guard
+    /// permits reading and therefore the only place `set_extra_roots` will accept. Building
+    /// these in /tmp is what the first version of these tests did, and the guard refused
+    /// every one of them -- correctly.
+    fn dir_under_home(name: &str) -> PathBuf {
+        let dir = crate::paths::home_dir()
+            .unwrap()
+            .join(format!("aether1_test_{name}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     fn temp_db(name: &str) -> MemoryDb {
         let path =
@@ -243,6 +369,114 @@ mod tests {
         );
     }
 
+    /// The operator adding a folder is what makes the read stop being asked about -- that
+    /// is the whole feature, and it is the assertion that would fail if the extra roots
+    /// were stored but never consulted.
+    #[test]
+    fn a_folder_the_operator_adds_becomes_part_of_the_field() {
+        let db = temp_db("extra_roots_gate");
+        let dir = dir_under_home("extra");
+        let inside = dir.join("notes.txt");
+        std::fs::write(&inside, "hello").unwrap();
+
+        let persona = Persona::Nexus;
+        let domain = persona.domain();
+        assert!(
+            !within_roots(&domain, &db, &persona, &inside.display().to_string()),
+            "nothing is in the field before the operator puts it there"
+        );
+
+        let (accepted, refused) =
+            set_extra_roots(&db, &persona, &[dir.display().to_string()]).unwrap();
+        assert_eq!(accepted.len(), 1, "the folder was accepted: {refused:?}");
+        assert!(
+            within_roots(&domain, &db, &persona, &inside.display().to_string()),
+            "a file inside an added folder is inside the field"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Widening one persona says nothing about the others. A grant that leaked across all
+    /// of them would leave the fields intact on screen while meaning nothing.
+    #[test]
+    fn widening_one_persona_does_not_widen_another() {
+        let db = temp_db("extra_roots_scope");
+        let dir = dir_under_home("scope");
+        let inside = dir.join("f.txt");
+        std::fs::write(&inside, "x").unwrap();
+
+        set_extra_roots(&db, &Persona::Nexus, &[dir.display().to_string()]).unwrap();
+
+        assert!(within_roots(
+            &Persona::Nexus.domain(),
+            &db,
+            &Persona::Nexus,
+            &inside.display().to_string()
+        ));
+        assert!(
+            !within_roots(
+                &Persona::ArxLucre.domain(),
+                &db,
+                &Persona::ArxLucre,
+                &inside.display().to_string()
+            ),
+            "a folder given to one persona is not given to every persona"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A path the guard would refuse is refused while the operator is looking at it, rather
+    /// than stored and silently ineffective. Storing it would put a folder on the panel that
+    /// the persona cannot actually read.
+    #[test]
+    fn a_folder_the_guard_refuses_is_never_stored() {
+        let db = temp_db("extra_roots_refused");
+        let (accepted, refused) = set_extra_roots(
+            &db,
+            &Persona::Nexus,
+            &["/definitely/not/a/real/path/here".to_string()],
+        )
+        .unwrap();
+        assert!(accepted.is_empty(), "nothing readable was named");
+        assert_eq!(refused.len(), 1, "and the operator is told which one");
+        assert!(extra_roots(&db, &Persona::Nexus).is_empty());
+    }
+
+    /// Granting the filesystem root would make "field" meaningless, so it is the one path
+    /// refused by name rather than by the guard.
+    #[test]
+    fn the_whole_filesystem_is_not_a_field() {
+        let db = temp_db("extra_roots_slash");
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let (accepted, refused) =
+            set_extra_roots(&db, &Persona::Nexus, &[root.to_string()]).unwrap();
+        assert!(accepted.is_empty(), "the filesystem root is not a folder");
+        assert_eq!(refused.len(), 1);
+    }
+
+    /// A field with folders added says so. The sentence is what an operator reads when
+    /// deciding whether to approve something, and a field description that omits half the
+    /// field is the same class of untruth as a made-up number on a panel.
+    #[test]
+    fn the_described_field_includes_what_was_added() {
+        let db = temp_db("extra_roots_field");
+        let dir = dir_under_home("field");
+
+        let persona = Persona::Nexus;
+        assert_eq!(field_with_extras(&db, &persona), persona.domain().field());
+
+        set_extra_roots(&db, &persona, &[dir.display().to_string()]).unwrap();
+        let described = field_with_extras(&db, &persona);
+        assert!(
+            described.len() > persona.domain().field().len(),
+            "the added folder is part of the sentence: {described}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The home directory is not a project. If it were, the Coding persona's field would be
     /// nearly the whole disk, which is the thing a field exists to prevent.
     #[test]
@@ -251,7 +485,7 @@ mod tests {
         let home = crate::paths::home_dir().unwrap();
         let domain = Persona::Nexus.domain();
         assert!(
-            !within_roots(&domain, &db, &home.display().to_string()),
+            !within_roots(&domain, &db, &Persona::Nexus, &home.display().to_string()),
             "the operator's home directory must not count as a project"
         );
     }
@@ -318,10 +552,20 @@ mod tests {
             .unwrap();
         let vault = crate::vault::ensure(&db).unwrap();
         let domain = Persona::Halcy.domain();
-        assert!(within_roots(&domain, &db, &vault.display().to_string()));
+        assert!(within_roots(
+            &domain,
+            &db,
+            &Persona::Halcy,
+            &vault.display().to_string()
+        ));
         if cfg!(unix) && Path::new("/var/log").exists() {
-            assert!(!within_roots(&domain, &db, "/var/log"));
-            assert!(within_roots(&Persona::Default.domain(), &db, "/var/log"));
+            assert!(!within_roots(&domain, &db, &Persona::Halcy, "/var/log"));
+            assert!(within_roots(
+                &Persona::Default.domain(),
+                &db,
+                &Persona::Default,
+                "/var/log"
+            ));
         }
     }
 }

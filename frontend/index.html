@@ -1059,7 +1059,19 @@
                             A folder of markdown notes &mdash; what the AI remembers about you. Open it in
                             any editor or in Obsidian, where the <span class="text-cyan-300">[[links]]</span>
                             between notes draw themselves as a graph. Edit or delete anything; it is
-                            your folder. Notes are only written with your approval.
+                            your folder.
+                        </p>
+                        <div class="flex items-center gap-2 pt-1">
+                            <input id="setting-vault-journal" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-vault-journal" class="text-xs font-mono text-slate-300">Keep a dated note of each conversation</label>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            Every exchange is added to a note named after today's date, inside
+                            <span class="text-cyan-300">daily</span> in the folder above. No approval is
+                            asked, because this only ever writes into its own folder. Switch it off and
+                            conversations stay in the app and nowhere else. Everything else &mdash; what
+                            it decides to remember <em>about</em> you &mdash; is still only written with
+                            your approval.
                         </p>
                     </div>
                 </div>
@@ -1090,10 +1102,25 @@
                         <label for="setting-command-allowlist" class="text-xs font-mono text-cyan-300 block">PROGRAMS IT MAY ASK TO RUN</label>
                         <input id="setting-command-allowlist" type="text" placeholder="e.g. git, docker, systemctl" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Comma separated. Empty means none, which is the default and is the right
-                            answer unless you have a reason. Every run still needs your approval &mdash;
-                            this only decides what it is allowed to ask for. There is no shell: no
-                            pipes, redirects or wildcards.
+                            Comma separated. Starts with a few programs that can only look at this
+                            machine, never change it &mdash; add your own, or empty the box to allow
+                            nothing. Every run still needs your approval &mdash; this only decides what
+                            it is allowed to ask for. There is no shell: no pipes, redirects or
+                            wildcards.
+                        </p>
+                    </div>
+
+                    <div class="space-y-1 pt-1">
+                        <label for="setting-persona-roots" class="text-xs font-mono text-cyan-300 block">
+                            FOLDERS <span id="persona-roots-who">IT</span> MAY READ WITHOUT ASKING
+                        </label>
+                        <input id="setting-persona-roots" type="text" placeholder="e.g. ~/Projects, ~/Documents" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <p id="persona-roots-note" class="text-[10px] font-mono text-slate-400 leading-snug">
+                            Comma separated. Each speciality already reads the folders its job needs;
+                            anything else is asked about every single time. Add a folder here and it
+                            stops asking about that one. This applies to the speciality selected above
+                            and to no other, and it never overrides the list of files that are never
+                            read &mdash; passwords and keys stay off limits regardless.
                         </p>
                     </div>
                 </div>
@@ -1202,7 +1229,7 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=45"></script>
+    <script src="js/app.js?v=47"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

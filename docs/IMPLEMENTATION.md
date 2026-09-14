@@ -1364,27 +1364,118 @@ was never sent and `undefined` in a gauge width is a bar of zero width rather th
 The check reads the field list out of `UsageSnapshot` at run time and fails the build on any
 `tokens.<field>` in `app.js` that the struct does not send.
 
+### Step 35: the three ways it could not touch the machine — **shipped**
+
+The operator's verdict on pillar 2, in full: *"This I feel it doesn't do at all 'it can
+actually operate your PC'. It asks for access and doesn't remember the answer. There is no
+Terminal for it to work on. No chat storage via markdown files because of no access from what
+I can see."*
+
+Three complaints, and the audit matters because **two of the three were features that already
+existed and were switched off or invisible**, not features that were missing. Building what
+the words asked for would have built the wrong thing twice.
+
+**"It asks for access and doesn't remember the answer."** There are two consent paths in this
+codebase and only one of them has a memory. `tool_always_allow` does exist, does work, and
+does stop a tool being asked about again — but it governs *which tool*, not *which folder*.
+The prompt the operator was actually hitting is `domain::elevation_needed` (step 26): a read
+of a folder outside the speciality's declared field. That path was designed with no "stop
+asking" at all — elevation lasts exactly one call, by intent — so every read of the same
+folder asked again, forever. Working as designed, and wrong as experienced.
+
+**"There is no Terminal for it to work on."** `run_command` has shipped since step 7. But
+`command_allowlist` defaulted to `[]`, and an allowlist of nothing refuses everything, so the
+tool was present in the catalogue and refused every call. A capability that always says no is
+indistinguishable from a capability that does not exist.
+
+**"No chat storage via markdown files."** This one was real. The vault (steps 9–12) only ever
+received notes the model deliberately chose to `remember`, each behind an approval prompt. An
+ordinary conversation left nothing behind in the folder the operator can open.
+
+**What shipped, with the choice the operator made on each.**
+
+*Consent — widen the field rather than remember the answer.* Offered a choice between
+session-length approvals, per-tool memory, and widening what the speciality may touch, the
+operator chose the third: *"make it easy to say 'this persona may always read this folder' in
+Settings, so the request never comes up."* `domain::set_extra_roots` stores folders **per
+speciality** — `{"nexus": ["/home/you/Projects"]}` — because a list that widens for everyone
+at once is not a field, and would have quietly deleted the point of specialities while
+leaving them on screen. `within_roots` now consults the extras as well as the declared roots,
+and the elevation message ends by naming the cure: *"add the folder to Nexus's field in
+Settings to stop being asked about it."*
+
+Two things keep this from being a hole. Every path is validated at save time through
+`fs_guard::resolve_readable` — the same function the tools themselves call — so a folder the
+guard would refuse can never be stored, and the panel can never advertise access that does
+not exist. And the deny list is untouched and unreachable from here: `fs_guard` runs inside
+each tool, *after* the domain check, and it beats a domain, an approval, an elevation and an
+operator's setting alike. `~/.ssh` added to a field is refused at the point of saving, with
+the reason shown.
+
+*A terminal — a starter list that can only look.* Offered "stays empty", "safe starter list",
+or "anything that does not need admin", the operator chose the middle. `STARTER_ALLOWLIST` is
+seeded once, on first run only, behind `command_allowlist_seeded`, so clearing the list stays
+cleared — `save_settings` writes back whatever the panel sends, so a getter-side fallback
+would have fought the operator's own choice every time they emptied the box.
+
+The rule the list is built on is one line, and the test enforces it: **no argument to any of
+these programs can change the machine.** That excludes more than it sounds like. `systemctl`
+is out because it has `stop`. `git` is out because it has `reset --hard`. `ipconfig` is out
+because it has `/release`; `hostname` and `date` because they set as well as show. The
+allowlist matches on program name only and the *model* chooses the arguments, so a program
+with one destructive flag is a program that can be destructive. What is left is `uname`,
+`uptime`, `df`, `free`, `lsblk`, `lscpu`, `lspci`, `lsusb`, `nproc`, `arch`, `ps`, `whoami`,
+`id` on unix and `systeminfo`, `tasklist`, `driverquery`, `whoami` on Windows. Every run
+still asks first: being on the list makes a command *proposable*, not automatic, and
+`run_command` remains the one tool that can never be pre-approved.
+
+*Chat notes — automatic, because the consent was already given.* `vault::journal_exchange`
+appends every exchange to `daily/YYYY-MM-DD.md` in the vault, hooked into
+`generate_response_streamed`, which is the single chokepoint both transports pass through. It
+is a plain function rather than a tool the model calls, and that is the whole design: asking
+the operator to approve their own conversation being remembered would be a consent prompt
+with no question in it, and it only ever writes inside the folder that exists to hold it. The
+consent that matters is the checkbox in Settings, given once — and it can be switched off,
+after which conversations stay in the database and nowhere else. A failed write is logged to
+stderr and nowhere else: a reply that was generated has been generated, and a full disk is
+not a reason to replace it with an error.
+
+Dates come from SQLite (`db::local_now`, `date('now','localtime')`) rather than a date crate,
+consistent with step 33's binary-size goal — the connection is already open on every path
+that needs it, and `localtime` is load-bearing: a note filed under yesterday because the
+machine is west of UTC is a note the operator cannot find by looking for the day it happened
+on.
+
+**What this does not fix.** Pillar 2's "change" and "do" verbs still route entirely through
+the consent path one action at a time; nothing here makes the companion an agent that
+executes a plan. The gap named in step 26 stays named.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
 the vault as what to do next, and all three shipped some time ago.*
 
 **Done.** Phase 1 entire (CLI, hotkey, streaming, local TTS and STT). Phase 2 entire (tool
-registry, the read-only loop, the consent path, mutating tools and undo). Phase 3 bar its
-last step (the vault, priming from it, writing back, search and archiving). Plus local-only
-mode, the theme engine, the top bar, personas as specialities, per-persona access with
-per-request elevation, reading the Windows event log, honest token telemetry, and native tool
-calling.
+registry, the read-only loop, the consent path, mutating tools and undo). Phase 3 entire (the
+vault, priming from it, writing back, search and archiving, and — since step 35 — every
+conversation folded into a dated note without being asked). Plus local-only mode, the theme
+engine, the top bar, personas as specialities, per-persona access with per-request elevation
+*and* operator-widened fields, a command allowlist that ships usable, reading the Windows
+event log, honest token telemetry, and native tool calling.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+1. **Push-to-talk from outside the HUD.** The operator's standing complaint — *"STILL voice
+   eludes me, and that is with things installed"* — is the loudest thing left. Both engines
+   work; holding a key to talk from another application needs an OS-level press-and-hold the
+   global-shortcut plugin does not express yet.
+2. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-2. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+3. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
-3. **Step 19, several local models.** A stated core requirement, and still deliberately not
+4. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
    download path it would need already exist in `setup.rs`.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
-which is correct: what they should be depends on the three above.
+which is correct: what they should be depends on the four above.
