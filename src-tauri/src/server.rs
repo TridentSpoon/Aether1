@@ -111,6 +111,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/actions/{id}/reject", post(reject_action))
         .route("/api/tools/always-allow", post(set_always_allowed))
         .route("/api/messages", get(get_messages).delete(clear_messages))
+        .route("/api/benchmarks/reset", post(reset_benchmarks))
         .route("/api/vault/open", post(open_vault_folder))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
@@ -592,6 +593,17 @@ async fn clear_messages(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let engine = state.engine.clone();
     tokio::task::spawn_blocking(move || commands::clear_messages(&engine))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::json!({ "status": "cleared" })))
+}
+
+async fn reset_benchmarks(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || commands::reset_benchmarks(&engine))
         .await
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;

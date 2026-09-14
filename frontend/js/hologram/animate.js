@@ -16,6 +16,17 @@ HologramAvatar.prototype.animate = function() {
     if (this.disposed) return;
     requestAnimationFrame(() => this.animate());
 
+    /* Nothing to draw for a window nobody can see. Minimised, hidden behind another window
+       on a compositor that reports it, or sitting in the tray, this loop was still running
+       the full scene sixty times a second -- particle physics, tentacle chains, the lot --
+       burning CPU and GPU on pixels that go nowhere.
+       The frame is skipped rather than the loop stopped, so there is nothing to restart:
+       the moment the window is visible again the next frame draws as normal. The clock keeps
+       counting wall time across the skipped frames, so the avatar comes back where it would
+       have been rather than frozen mid-gesture -- what you return to is the companion
+       carrying on, not one that stopped when you looked away. */
+    if (typeof document !== 'undefined' && document.hidden) return;
+
     const elapsedTime = this.clock.getElapsedTime();
 
     let audioSum = 0;
@@ -70,18 +81,17 @@ HologramAvatar.prototype.animate = function() {
                 console.error(`Avatar "${this.currentAvatar}" threw while animating and was stopped:`, err);
             }
         }
-    } else if (this.currentAvatar === 'arx-logos') {
-        this.animateArxLogos(elapsedTime, audioIntensity, clickPulse);
-    } else if (this.currentAvatar === 'red' || this.currentAvatar === 'crimson') {
-        this.animateRed9000(elapsedTime, audioIntensity, clickPulse);
-    } else if (this.currentAvatar === 'nexus' || this.currentAvatar === 'matrix') {
-        this.animateNexus(elapsedTime, audioIntensity, clickPulse);
-    } else if (this.currentAvatar === 'arx-limes') {
-        this.animateArxLimes(elapsedTime, audioIntensity, clickPulse, clickAge);
-    } else if (this.currentAvatar === 'alt' || this.currentAvatar === 'cunningham' || this.currentAvatar === 'a1ter_nul') {
-        this.animateAlt(elapsedTime, audioIntensity, clickPulse);
     } else {
-        this.animateHalcy(elapsedTime, audioIntensity, clickPulse);
+        /* Which of the six hand-modelled avatars animates itself this frame -- looked up by
+           name rather than spelled out as a chain of comparisons, because an avatar's file
+           may not be in the page at all now (they load on demand -- see
+           js/hologram/avatar-loader.js) and calling a method that has not arrived yet would
+           kill this loop for every avatar, not just that one. An unrecognised name resolves
+           to hAlcy, which is the fallback shape it has always been given. */
+        const animator = HologramAvatar.animatorNameFor(this.currentAvatar);
+        if (typeof this[animator] === 'function') {
+            this[animator](elapsedTime, audioIntensity, clickPulse, clickAge);
+        }
     }
 
     // Drag-to-spin inertia -- once you let go, the yaw picked up during the drag (see

@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=24">
+    <link rel="stylesheet" href="css/A1theme.css?v=27">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
@@ -29,7 +29,7 @@
          head rather than with the engine at the foot of the body: loaded down there, the page
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=4"></script>
+    <script src="js/theme.js?v=5"></script>
     <script src="js/avatar-unlocks.js?v=1"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
@@ -183,42 +183,57 @@
     <!-- MAIN DASHBOARD CONTENT (3-COLUMN HUD) -->
     <main id="hud-layout" class="flex-1 p-4 overflow-hidden z-10">
         
-        <!-- LEFT PANEL: SYSTEM & TOKEN TELEMETRY GAUGES (3 Cols) -->
+        <!-- LEFT PANEL: MODEL PERFORMANCE & SYSTEM GAUGES (3 Cols) -->
         <section class="hud-column" data-column="0">
-            <!-- Token Usage & Availability Telemetry -->
+            <!-- Model speed scoreboard and token/cost accounting -->
             <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens">
                 <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
-                <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Token Telemetry in its own window">⧉</button>
+                <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Model Performance in its own window">⧉</button>
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
                     <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
                         <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        COGNITIVE TOKEN TELEMETRY
+                        MODEL PERFORMANCE
                     </h2>
-                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">0.0 TPS</span>
+                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">--</span>
                 </div>
 
                 <!-- Two views, because a cloud model and a local one raise different
-                     questions. Against an API the question is what you have spent; on your
-                     own hardware nothing is being spent and the question is how fast it runs
-                     and how much it can hold. The tabs alternate while nothing is happening
-                     and pin to whichever is in use once something is. -->
+                     questions. On your own hardware nothing is being spent and the question
+                     is how fast it runs; against an API the question is what it cost. The
+                     tabs alternate while nothing is happening and pin to whichever is in
+                     use once something is. -->
                 <div id="telemetry-tabs" class="flex gap-1 text-[10px] font-mono">
-                    <button type="button" class="telemetry-tab" data-telemetry-tab="usage" aria-pressed="true">USAGE</button>
-                    <button type="button" class="telemetry-tab" data-telemetry-tab="capacity" aria-pressed="false">CAPACITY</button>
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="speed" aria-pressed="true">SPEED</button>
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="usage" aria-pressed="false">USAGE</button>
                 </div>
 
-                <!-- USAGE: what this session has spent. -->
-                <div class="space-y-1" data-telemetry-view="usage">
+                <!-- SPEED: how fast each model runs on this machine.
+                     A scoreboard rather than a single live reading, because the question
+                     worth answering is comparative -- "is mistral faster than llama3 here?"
+                     -- and one number in isolation cannot answer it. Rows accumulate from
+                     ordinary use; nothing extra is run to fill them. -->
+                <div class="space-y-1" data-telemetry-view="speed">
                     <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">SESSION TOKENS</span>
+                        <span class="text-slate-300">ON THIS MACHINE</span>
+                        <span id="speed-current" class="text-purple-300 font-bold">--</span>
+                    </div>
+                    <!-- Hidden until there is a board to reset. The readings describe this
+                         machine, so a new graphics card or a different quantisation makes
+                         the old ones worth throwing away rather than averaging in. -->
+                    <button type="button" id="speed-reset" class="speed-reset hidden" title="Forget every speed reading and start measuring again.">RESET READINGS</button>
+                    <div id="speed-board" class="space-y-1"></div>
+                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="speed-note">Nothing measured yet.</div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400" id="capacity-row">
+                        <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
+                        <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
+                    </div>
+                </div>
+
+                <!-- USAGE: what this session has actually used, and what that cost. -->
+                <div class="space-y-1 hidden" data-telemetry-view="usage">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">THIS SESSION</span>
                         <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
-                    </div>
-                    <div class="gauge-bar-track">
-                        <div id="tokens-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #7000ff, #b026ff); box-shadow: 0 0 8px rgba(176, 38, 255, 0.8);"></div>
-                    </div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
-                        <span>Used: <strong id="tokens-used-pct" class="text-purple-300">0%</strong></span>
-                        <span>Budget left: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
                     </div>
                     <div class="flex justify-between text-[10px] font-mono text-slate-400">
                         <span>In: <strong id="tokens-in-val" class="text-cyan-300">0</strong> · Out: <strong id="tokens-out-val" class="text-cyan-300">0</strong></span>
@@ -227,37 +242,11 @@
                              claims and only one of them is checkable. -->
                         <span id="tokens-accounting" class="text-slate-500">--</span>
                     </div>
-                </div>
-
-                <!-- CAPACITY: what the local model is and what it can do. -->
-                <div class="space-y-1 hidden" data-telemetry-view="capacity">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">THROUGHPUT</span>
-                        <span id="capacity-tps" class="text-purple-300 font-bold">-- tok/s</span>
+                    <div class="flex justify-between text-xs font-mono pt-1" id="cost-row">
+                        <span class="text-slate-300">COST</span>
+                        <span id="cost-val" class="text-purple-300 font-bold">--</span>
                     </div>
-                    <div class="gauge-bar-track">
-                        <div id="capacity-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #00b3ff, #00f0ff); box-shadow: 0 0 8px rgba(0, 240, 255, 0.8);"></div>
-                    </div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
-                        <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
-                        <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
-                    </div>
-                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="capacity-note">Nothing local is answering yet.</div>
-                </div>
-
-                <!-- Token History Graph / Canvas -->
-                <div class="space-y-1 pt-1">
-                    <div class="text-[10px] font-mono text-slate-400 flex justify-between">
-                        <!-- Sits outside both views because it is true of either: a history
-                             of how big each turn was. "Consumption" was only ever right for
-                             a metered provider, and on your own hardware nothing is being
-                             consumed. -->
-                        <span>TOKEN HISTORY</span>
-                        <span>BURST SPARKLINE</span>
-                    </div>
-                    <div class="bg-black/60 p-1.5 rounded border border-purple-500/30">
-                        <canvas id="tokens-graph-canvas" width="280" height="50" class="w-full"></canvas>
-                    </div>
+                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="cost-note">Nothing has been sent anywhere yet.</div>
                 </div>
             </div>
 
@@ -384,9 +373,12 @@
 
             <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent">
                 <div class="flex items-center gap-2 mb-1.5" title="Manual zoom -- how big the avatar reads on screen">
-                    <span class="text-[9px] font-mono text-cyan-400/80 tracking-wider">ZOOM</span>
+                    <!-- viewport-label, not the page's own dim ink: these two sit on the
+                         dark projection bay, and --text-dim is mixed for the page behind it.
+                         On Solar that put a mid grey meant for white on a near-black bay. -->
+                    <span class="viewport-label text-[9px] font-mono tracking-wider">ZOOM</span>
                     <input id="avatar-zoom" type="range" min="50" max="250" value="100" class="cyber-range flex-1" aria-label="Avatar zoom">
-                    <span id="avatar-zoom-readout" class="text-[9px] font-mono text-slate-400 w-9 text-right">100%</span>
+                    <span id="avatar-zoom-readout" class="viewport-label text-[9px] font-mono w-9 text-right">100%</span>
                 </div>
                 <canvas id="audio-waveform" width="360" height="36" class="w-full"></canvas>
             </div>
@@ -1197,34 +1189,20 @@
     <!-- Scripts -->
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
-         prototype methods, and all of them must finish before app.js instantiates it. -->
-    <script src="js/hologram/core.js?v=41"></script>
+         prototype methods, and all of them must finish before app.js instantiates it. The
+         avatar files themselves are the exception -- they attach the same way, but arrive
+         later, on demand. -->
+    <script src="js/hologram/core.js?v=42"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
-    <script src="js/hologram/avatar-halcy.js?v=17"></script>
-    <script src="js/hologram/avatar-arx-limes.js?v=17"></script>
-    <script src="js/hologram/avatar-nexus.js?v=29"></script>
-    <script src="js/hologram/avatar-red9000.js?v=19"></script>
-    <script src="js/hologram/avatar-arx-logos.js?v=18"></script>
-    <script src="js/hologram/avatar-arx-locas.js?v=2"></script>
-    <script src="js/hologram/avatar-arx-legionare.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-loregenda.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lyksaum.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lexico.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lucre.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lkemi.js?v=1"></script>
-    <script src="js/hologram/avatar-alt.js?v=3"></script>
-    <!-- The parts kit and the avatar assembled from a saved recipe (see
-         frontend/avatar-lab.html). Any hand-written avatar file goes here too:
-         after core.js, before app.js. -->
-    <script src="js/hologram/parts.js?v=1"></script>
-    <script src="js/hologram/avatar-custom.js?v=2"></script>
-    <script src="js/hologram/avatar-a1.js?v=1"></script>
-    <script src="js/hologram/avatar-senti.js?v=2"></script>
-    <script src="js/hologram/avatar-white-rabbit.js?v=2"></script>
-    <script src="js/hologram/avatar-operator.js?v=3"></script>
-    <script src="js/hologram/animate.js?v=37"></script>
+    <!-- Which avatar lives in which file, and fetching it the first time it is asked for.
+         Every one of the nineteen avatar files used to be listed here and loaded at launch,
+         about 195 KB of geometry, to put one of them on screen. See
+         js/hologram/avatar-loader.js -- the list of files now lives there, once, instead of
+         being repeated in this page, sprite.html and avatar-lab.html. -->
+    <script src="js/hologram/avatar-loader.js?v=1"></script>
+    <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=37"></script>
+    <script src="js/app.js?v=45"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

@@ -11,7 +11,7 @@
          head rather than with the engine at the foot of the body: loaded down there, the page
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=4"></script>
+    <script src="js/theme.js?v=5"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
     <link rel="stylesheet" href="css/sprite.css?v=2">
@@ -33,32 +33,16 @@
     </div>
 
     <!-- Same hologram engine as the main HUD (see index.html's own script block for the
-         load-order note: core.js first, then the per-avatar builders, animate.js last). -->
-    <script src="js/hologram/core.js?v=41"></script>
+         load-order note: core.js first, then the loader, animate.js last). -->
+    <script src="js/hologram/core.js?v=42"></script>
     <script src="js/hologram/geometry-helpers.js?v=20"></script>
-    <script src="js/hologram/avatar-halcy.js?v=17"></script>
-    <script src="js/hologram/avatar-arx-limes.js?v=17"></script>
-    <script src="js/hologram/avatar-nexus.js?v=29"></script>
-    <script src="js/hologram/avatar-red9000.js?v=19"></script>
-    <script src="js/hologram/avatar-arx-logos.js?v=18"></script>
-    <script src="js/hologram/avatar-arx-locas.js?v=2"></script>
-    <script src="js/hologram/avatar-arx-legionare.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-loregenda.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lyksaum.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lexico.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lucre.js?v=1"></script>
-    <script src="js/hologram/avatar-arx-lkemi.js?v=1"></script>
-    <script src="js/hologram/avatar-alt.js?v=3"></script>
-    <!-- The parts kit and the avatar assembled from a saved recipe (see
-         frontend/avatar-lab.html) -- without these, selecting "Your own" in the HUD has
-         nothing to show here: the sprite falls back to hAlcy instead of the custom design. -->
-    <script src="js/hologram/parts.js?v=1"></script>
-    <script src="js/hologram/avatar-custom.js?v=2"></script>
-    <script src="js/hologram/avatar-a1.js?v=1"></script>
-    <script src="js/hologram/avatar-senti.js?v=2"></script>
-    <script src="js/hologram/avatar-white-rabbit.js?v=2"></script>
-    <script src="js/hologram/avatar-operator.js?v=2"></script>
-    <script src="js/hologram/animate.js?v=37"></script>
+    <!-- Which avatar lives in which file, and fetching it the first time it is asked for.
+         Every one of the nineteen avatar files used to be listed here and loaded at launch,
+         about 195 KB of geometry, to put one of them on screen. See
+         js/hologram/avatar-loader.js -- the list of files now lives there, once, instead of
+         being repeated in this page, sprite.html and avatar-lab.html. -->
+    <script src="js/hologram/avatar-loader.js?v=1"></script>
+    <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
     <script src="js/sprite.js?v=6"></script>
 </body>

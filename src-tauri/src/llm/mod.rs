@@ -7,6 +7,7 @@
 mod db;
 mod genesis;
 mod persona;
+mod pricing;
 mod providers;
 mod stt;
 mod telemetry;
@@ -15,7 +16,7 @@ mod tts;
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub use db::{ActionRecord, ActionStatus, MemoryDb, Message};
+pub use db::{ActionRecord, ActionStatus, MemoryDb, Message, ModelBenchmark};
 pub use genesis::Identity;
 use persona::Provider;
 // Re-exported because commands.rs serves the persona catalogue to the HUD: the Settings list
@@ -36,14 +37,17 @@ pub use tts::{
 /// enough that a model stuck in a loop stops costing time and tokens.
 const MAX_TOOL_ROUNDS: usize = 6;
 
-/// Aether1's own cap on a session, not a quota any provider enforces or reports.
-///
-/// No provider API returns "tokens you have left" -- that is a billing question, answered
-/// on a dashboard rather than in a response body. So this is a budget the operator is
-/// spending against, and the panel labels it that way rather than implying the number came
-/// from anywhere but here.
-const SESSION_TOKEN_BUDGET: u64 = 100_000;
-const SPARKLINE_LEN: usize = 15;
+/* There was a SESSION_TOKEN_BUDGET here: a flat 100,000 invented in this file, which the
+HUD then divided into to show "Used: 1.3%" and "Budget left: 98.7k" beside a gauge bar.
+Nothing enforced it and no provider reported it, so those three readings were a number this
+constant made up being displayed back as though it were a measurement -- and on a local
+model, where tokens cost nothing at all, there was no budget to have any of left. The panel
+now shows what a reply cost in money when the model has a published price, and nothing at
+all when it does not. See pricing.rs.
+
+The sparkline went with it. Fifteen per-request token totals drawn as a filled area chart
+is a shape, not a finding: nobody can act on "that reply was longer than this one", and with
+one reply recorded it drew a diagonal line across the panel that looked like a trend. */
 
 #[derive(Default)]
 struct UsageStats {
@@ -56,8 +60,6 @@ struct UsageStats {
     last_tps: f64,
     /// Whether the most recent reply's numbers were reported by the provider.
     last_measured: bool,
-    /// Per-request total token counts, most recent last, capped at SPARKLINE_LEN.
-    sparkline: Vec<u64>,
 }
 
 /// Serializable snapshot of UsageStats for the HUD's telemetry panel.
@@ -65,9 +67,6 @@ struct UsageStats {
 pub struct UsageSnapshot {
     pub last_tps: f64,
     pub total_session_tokens: u64,
-    pub used_percent: f64,
-    pub available_tokens: u64,
-    pub sparkline: Vec<u64>,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub requests: u64,
@@ -76,13 +75,34 @@ pub struct UsageSnapshot {
     /// "about 1,200 tokens" are different claims and only one of them is checkable.
     pub measured: bool,
     pub measured_requests: u64,
-    pub session_budget: u64,
     /// "local", "cloud" or "offline" -- which half of the panel is the relevant one.
     pub mode: &'static str,
     pub provider: String,
     pub model: String,
     /// What the local model is, when there is one and it says. None for cloud.
     pub capability: Option<providers::LocalCapability>,
+    /// What this session's cloud tokens have cost, when the model has a known price.
+    ///
+    /// None covers two different situations that the panel words differently: a local
+    /// model, whose tokens are free, and a cloud model nobody has priced yet, which needs
+    /// a line adding to the price file. `mode` is what tells them apart.
+    pub cost: Option<pricing::Cost>,
+    /// Whether every request behind `cost` reported its own token counts. A cost built on
+    /// even one estimated reply is shown as approximate, because it is.
+    pub cost_fully_measured: bool,
+    /// When the built-in price list was last checked, shown beside any cost derived from
+    /// it so a stale table is visible rather than silently trusted.
+    pub prices_as_of: &'static str,
+    /// Every model measured on this machine, fastest first. Empty until a provider that
+    /// reports its own generation time has answered at least once.
+    pub benchmarks: Vec<ModelBenchmark>,
+    /// Whether the configured provider reports the time it spent generating, and so whether
+    /// this model can ever appear on the scoreboard.
+    ///
+    /// An empty board has two entirely different causes -- a provider that cannot be timed,
+    /// and a board that has simply not been filled yet (a fresh install, or a reset) -- and
+    /// the panel has to word them differently. Only the engine knows which it is.
+    pub provider_times_itself: bool,
 }
 
 /// About how many tokens a piece of text is, when nothing better is available.
@@ -96,6 +116,23 @@ fn estimate_tokens(text: &str) -> u64 {
     } else {
         (text.chars().count() as u64).div_ceil(4).max(1)
     }
+}
+
+/// Everything `UsageStats::snapshot` needs that the counters themselves do not hold.
+///
+/// A struct rather than six more parameters: the counters know how many tokens went by,
+/// and nothing else -- which provider they went to, what it charges, and what this machine
+/// has clocked other models at all live in the database, and passing them positionally
+/// through a seven-argument call was how `provider` and `model`, both `String`, would
+/// eventually end up the wrong way round.
+struct SnapshotContext<'a> {
+    mode: &'static str,
+    provider: String,
+    model: String,
+    capability: Option<providers::LocalCapability>,
+    prices: &'a std::collections::HashMap<String, pricing::ModelPrice>,
+    benchmarks: Vec<ModelBenchmark>,
+    provider_times_itself: bool,
 }
 
 impl UsageStats {
@@ -132,46 +169,43 @@ impl UsageStats {
             .map(|nanos| nanos as f64 / 1_000_000_000.0)
             .unwrap_or(duration_secs);
         self.last_tps = (completion_tok as f64 / seconds.max(0.05) * 10.0).round() / 10.0;
-
-        self.sparkline.push(prompt_tok + completion_tok);
-        if self.sparkline.len() > SPARKLINE_LEN {
-            self.sparkline.remove(0);
-        }
     }
 
-    fn snapshot(
-        &self,
-        mode: &'static str,
-        provider: String,
-        model: String,
-        capability: Option<providers::LocalCapability>,
-    ) -> UsageSnapshot {
+    fn snapshot(&self, about: SnapshotContext) -> UsageSnapshot {
         let total_session = self.session_prompt_tokens + self.session_completion_tokens;
-        let used_percent =
-            ((total_session as f64 / SESSION_TOKEN_BUDGET.max(1) as f64) * 100.0).min(100.0);
-        let used_percent = (used_percent * 10.0).round() / 10.0;
-        let available_tokens = SESSION_TOKEN_BUDGET.saturating_sub(total_session);
+
+        /* Cloud only. A local model's tokens are free, and running them through a price
+        table would produce $0.00 -- indistinguishable on screen from a cloud model whose
+        price nobody has filled in yet. */
+        let cost = (about.mode == "cloud")
+            .then(|| {
+                pricing::cost_of(
+                    &about.model,
+                    self.session_prompt_tokens,
+                    self.session_completion_tokens,
+                    about.prices,
+                )
+            })
+            .flatten();
 
         UsageSnapshot {
             last_tps: self.last_tps,
             total_session_tokens: total_session,
-            used_percent,
-            available_tokens,
-            sparkline: if self.sparkline.is_empty() {
-                vec![0]
-            } else {
-                self.sparkline.clone()
-            },
             prompt_tokens: self.session_prompt_tokens,
             completion_tokens: self.session_completion_tokens,
             requests: self.total_requests,
             measured: self.last_measured,
             measured_requests: self.measured_requests,
-            session_budget: SESSION_TOKEN_BUDGET,
-            mode,
-            provider,
-            model,
-            capability,
+            mode: about.mode,
+            provider: about.provider,
+            model: about.model,
+            capability: about.capability,
+            cost,
+            cost_fully_measured: self.total_requests > 0
+                && self.measured_requests == self.total_requests,
+            prices_as_of: pricing::PRICES_AS_OF,
+            benchmarks: about.benchmarks,
+            provider_times_itself: about.provider_times_itself,
         }
     }
 }
@@ -1025,6 +1059,7 @@ impl LlmEngine {
             start.elapsed().as_secs_f64(),
             reported,
         );
+        self.record_benchmark_sample(&config, reported);
         self.refresh_capability(&config);
         reply
     }
@@ -1082,12 +1117,56 @@ impl LlmEngine {
             .filter(|(known, _)| *known == key)
             .map(|(_, found)| found.clone());
 
-        self.usage.lock().unwrap().snapshot(
+        /* Read from disk on every tick rather than cached at startup, so an operator who
+        corrects a price in model_prices.json sees the corrected figure within the second,
+        without restarting the app. It is a file of a dozen lines and the tick is one a
+        second; the read does not register against anything. */
+        let prices = self
+            .db
+            .dir()
+            .map(pricing::load_overrides)
+            .unwrap_or_default();
+
+        self.usage.lock().unwrap().snapshot(SnapshotContext {
             mode,
-            provider.label().to_string(),
-            model,
-            if mode == "local" { capability } else { None },
-        )
+            provider: provider.label().to_string(),
+            model: model.clone(),
+            capability: if mode == "local" { capability } else { None },
+            prices: &prices,
+            /* A failed read leaves the scoreboard empty for this tick rather than taking
+            the panel down with it. */
+            benchmarks: self.db.benchmarks().unwrap_or_default(),
+            provider_times_itself: providers::reports_generation_time(provider),
+        })
+    }
+
+    /// Adds one reply to the model-speed scoreboard, when the reply is worth measuring.
+    ///
+    /// Both guards matter. Without reported token counts the numerator is a
+    /// characters-divided-by-four guess, and without the provider's own generation time the
+    /// denominator is a wall clock that was also running while the model was read off disk
+    /// -- which is why the first reply after launch looks half as fast as every one after
+    /// it. Either one alone turns the scoreboard into a ranking of measurement error.
+    ///
+    /// So a sample is only kept when the provider reported both. Today that means Ollama,
+    /// which returns `eval_count` and `eval_duration` on the last object of its stream. A
+    /// server that reports neither simply never appears on the scoreboard, and the panel
+    /// says so -- an empty row is a true statement about what can be measured, and an
+    /// invented one is not.
+    fn record_benchmark_sample(&self, config: &Config, reported: Option<providers::TokenUsage>) {
+        let Some(usage) = reported else { return };
+        let Some(nanos) = usage.eval_nanos.filter(|nanos| *nanos > 0) else {
+            return;
+        };
+        if config.model_name.is_empty() {
+            return;
+        }
+        let _ = self.db.record_benchmark(
+            config.provider.label(),
+            &config.model_name,
+            usage.completion_tokens,
+            nanos as f64 / 1_000_000_000.0,
+        );
     }
 
     pub fn db(&self) -> &MemoryDb {
@@ -1117,6 +1196,160 @@ mod tests {
             &serde_json::Value::String(vault.to_string_lossy().to_string()),
         );
         LlmEngine::new(db)
+    }
+
+    /// The panel is fed entirely by this one snapshot, so what it does and does not carry
+    /// is the whole contract. A local model's tokens are free: the cost line has to be
+    /// absent rather than zero, because "$0.00" is what an unpriced cloud model would also
+    /// render as, and those are opposite situations.
+    #[test]
+    fn a_local_snapshot_costs_nothing_and_says_so_by_omission() {
+        let engine = temp_engine("snapshot_local");
+        let _ = engine
+            .db
+            .set_setting("llm_provider", &serde_json::Value::String("ollama".into()));
+        let _ = engine.db.set_setting(
+            "llm_endpoint",
+            &serde_json::Value::String("http://localhost:11434".into()),
+        );
+        let _ = engine.db.set_setting(
+            "llm_model",
+            &serde_json::Value::String("llama3.1:8b".into()),
+        );
+
+        engine.usage.lock().unwrap().record_usage(
+            "a question",
+            "an answer",
+            2.0,
+            Some(providers::TokenUsage {
+                prompt_tokens: 40,
+                completion_tokens: 200,
+                eval_nanos: Some(2_000_000_000),
+            }),
+        );
+
+        let snap = engine.usage_snapshot();
+        assert_eq!(snap.mode, "local");
+        assert_eq!(snap.prompt_tokens, 40);
+        assert_eq!(snap.completion_tokens, 200);
+        assert_eq!(snap.total_session_tokens, 240);
+        assert!(snap.measured, "the provider reported its own counts");
+        assert_eq!(snap.measured_requests, 1);
+        assert!(
+            snap.cost.is_none(),
+            "a model running on this machine bills nobody: {:?}",
+            snap.cost
+        );
+        assert!(
+            snap.provider_times_itself,
+            "Ollama reports eval_duration, so an empty board here means 'not yet', not 'never'"
+        );
+    }
+
+    /// An empty scoreboard has two causes that need opposite sentences under it, and the
+    /// panel cannot tell them apart on its own -- so the snapshot has to. Getting this
+    /// backwards puts "this provider cannot be timed" under a provider that can, moments
+    /// after someone pressed RESET READINGS.
+    #[test]
+    fn the_snapshot_says_whether_the_provider_can_be_timed_at_all() {
+        let engine = temp_engine("snapshot_timeable");
+        let _ = engine.db.set_setting(
+            "llm_endpoint",
+            &serde_json::Value::String("http://localhost:1234".into()),
+        );
+
+        for (provider, timeable) in [("ollama", true), ("lmstudio", false)] {
+            let _ = engine
+                .db
+                .set_setting("llm_provider", &serde_json::Value::String(provider.into()));
+            let snap = engine.usage_snapshot();
+            assert_eq!(
+                snap.mode, "local",
+                "{provider} on loopback is the local half"
+            );
+            assert_eq!(
+                snap.provider_times_itself, timeable,
+                "{provider} reports its own generation time: {timeable}"
+            );
+        }
+    }
+
+    /// The cloud half. A model with a published price turns real counts into a real figure,
+    /// and the snapshot says whether every count behind that figure was reported or some of
+    /// it was guessed -- a cost built on an estimate is still an estimate.
+    #[test]
+    fn a_cloud_snapshot_prices_reported_tokens_and_flags_a_guessed_one() {
+        let engine = temp_engine("snapshot_cloud");
+        let _ = engine
+            .db
+            .set_setting("llm_provider", &serde_json::Value::String("openai".into()));
+        let _ = engine.db.set_setting(
+            "llm_model",
+            // Dated build suffix on purpose: the price file lists the base name, and the
+            // panel is useless if a routine version bump silently unprices the model.
+            &serde_json::Value::String("gpt-4o-mini-2024-07-18".into()),
+        );
+
+        engine.usage.lock().unwrap().record_usage(
+            "q",
+            "a",
+            1.0,
+            Some(providers::TokenUsage {
+                prompt_tokens: 1_000_000,
+                completion_tokens: 1_000_000,
+                eval_nanos: None,
+            }),
+        );
+
+        let snap = engine.usage_snapshot();
+        assert_eq!(snap.mode, "cloud");
+        let cost = snap.cost.expect("gpt-4o-mini has a built-in price");
+        assert_eq!(cost.input_usd, 0.15);
+        assert_eq!(cost.output_usd, 0.60);
+        assert_eq!(cost.total_usd, 0.75);
+        assert!(snap.cost_fully_measured, "the one request was reported");
+        assert!(
+            !snap.prices_as_of.is_empty(),
+            "a price shown without a date is a price nobody can tell is stale"
+        );
+
+        // One reply the provider said nothing about, so the counts fall back to the
+        // character heuristic -- and the whole session's cost stops being exact.
+        engine
+            .usage
+            .lock()
+            .unwrap()
+            .record_usage("q", "a", 1.0, None);
+        let snap = engine.usage_snapshot();
+        assert!(!snap.cost_fully_measured);
+        assert!(!snap.measured);
+    }
+
+    /// The scoreboard reaches the panel through the snapshot, and only through it. It is
+    /// empty until something measurable has actually answered -- not seeded, not
+    /// pre-populated with the configured model at a speed nobody observed.
+    #[test]
+    fn the_scoreboard_starts_empty_and_fills_from_measured_replies() {
+        let engine = temp_engine("snapshot_board");
+        assert!(
+            engine.usage_snapshot().benchmarks.is_empty(),
+            "nothing has answered yet"
+        );
+
+        engine
+            .db
+            .record_benchmark("Ollama", "llama3.1:8b", 300, 10.0)
+            .unwrap();
+        engine
+            .db
+            .record_benchmark("Ollama", "mistral:latest", 300, 20.0)
+            .unwrap();
+
+        let board = engine.usage_snapshot().benchmarks;
+        assert_eq!(board.len(), 2);
+        assert_eq!(board[0].model, "llama3.1:8b", "fastest first");
+        assert_eq!(board[0].average_tps, 30.0);
+        assert_eq!(board[1].average_tps, 15.0);
     }
 
     /// The trace is how the operator finds out the vault primed anything at all -- priming
@@ -1303,7 +1536,7 @@ mod tests {
             !stats.last_measured,
             "the most recent reply was the estimated one"
         );
-        assert_eq!(stats.sparkline.len(), 3);
+        assert_eq!(stats.session_completion_tokens, 50 + estimate_tokens("b"));
     }
 
     /// An endpoint on the loopback or the LAN is local; the same provider pointed at a

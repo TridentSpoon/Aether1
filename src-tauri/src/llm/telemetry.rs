@@ -11,6 +11,7 @@ use sysinfo::{Disks, Networks, ProcessesToUpdate, System};
 
 /// A laptop's battery, when one is present -- desktops report no batteries at all, which
 /// `battery_status` below treats as `None` rather than an error.
+#[derive(Default)]
 pub struct BatteryInfo {
     pub percent: f32,
     /// "charging" | "discharging" | "full" | "empty" | "unknown", matching
@@ -36,6 +37,9 @@ fn battery_status() -> Option<BatteryInfo> {
     })
 }
 
+/// Default exists so a test can state the one or two readings it is about and leave the
+/// rest at zero, rather than inventing a whole plausible machine each time.
+#[derive(Default)]
 pub struct Telemetry {
     pub os_name: String,
     pub architecture: String,
@@ -59,6 +63,13 @@ pub struct Telemetry {
 
 fn bytes_to_gb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+}
+
+/// Rounds a reading to the number of decimals it is actually meaningful to. See
+/// to_wire_json below for why this exists at all.
+fn round_to(value: f64, decimals: u32) -> f64 {
+    let factor = 10_f64.powi(decimals as i32);
+    (value * factor).round() / factor
 }
 
 fn format_uptime(seconds: u64) -> String {
@@ -167,27 +178,34 @@ impl Telemetry {
     /// Nested JSON shape matching system_monitor.py's get_telemetry() -- lets the frontend's
     /// existing updateHardwareTelemetry() handle both the Python websocket and this Tauri
     /// event with the same code, instead of needing a second, Rust-specific handler.
+    ///
+    /// Rounded here rather than in the HUD's JavaScript, to the same number of decimals
+    /// diagnostic_report() prints below. A raw reading is a float with seventeen digits
+    /// behind it, and the HUD put every one of them on screen: "RAM 63.74251937894533%"
+    /// next to a CLI saying "63.7%" reads as two different machines, and the number is
+    /// jittering through the last ten digits every second besides. Both answers now come
+    /// from the same place, so they cannot disagree.
     pub fn to_wire_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "cpu": { "total_percent": self.cpu_percent },
+            "cpu": { "total_percent": round_to(self.cpu_percent as f64, 1) },
             "ram": {
-                "percent": self.ram_percent,
-                "used_gb": self.ram_used_gb,
-                "total_gb": self.ram_total_gb,
+                "percent": round_to(self.ram_percent as f64, 1),
+                "used_gb": round_to(self.ram_used_gb, 2),
+                "total_gb": round_to(self.ram_total_gb, 2),
             },
             "disk": {
-                "percent": self.disk_percent,
-                "used_gb": self.disk_used_gb,
-                "total_gb": self.disk_total_gb,
+                "percent": round_to(self.disk_percent, 1),
+                "used_gb": round_to(self.disk_used_gb, 1),
+                "total_gb": round_to(self.disk_total_gb, 1),
             },
             "network": {
-                "download_kbps": self.network_download_kbps,
-                "upload_kbps": self.network_upload_kbps,
+                "download_kbps": round_to(self.network_download_kbps, 1),
+                "upload_kbps": round_to(self.network_upload_kbps, 1),
             },
             // null on a desktop -- the frontend hides the battery row entirely for that,
             // rather than showing a permanent, meaningless 0%.
             "battery": self.battery.as_ref().map(|b| serde_json::json!({
-                "percent": b.percent,
+                "percent": round_to(b.percent as f64, 0),
                 "state": b.state,
                 "on_battery": b.on_battery,
             })),
@@ -235,5 +253,64 @@ impl Telemetry {
         report.push_str("Top Processes: ");
         report.push_str(&processes);
         report
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The HUD and the CLI read the same numbers and must say the same thing about them.
+    /// They did not: `aether1 status` printed "63.7%" while the HUD's panel showed the raw
+    /// float behind it, all seventeen digits, re-jittering every second.
+    #[test]
+    fn wire_json_rounds_the_way_the_report_prints() {
+        let telemetry = Telemetry {
+            cpu_percent: 63.742_52,
+            ram_used_gb: 7.111_111_1,
+            ram_total_gb: 15.999_999,
+            ram_percent: 44.444_44,
+            disk_used_gb: 123.456_78,
+            disk_total_gb: 500.987_65,
+            disk_percent: 24.681_357,
+            network_download_kbps: 1_024.555_5,
+            network_upload_kbps: 0.049_9,
+            ..Telemetry::default()
+        };
+
+        let wire = telemetry.to_wire_json();
+        assert_eq!(wire["cpu"]["total_percent"], serde_json::json!(63.7));
+        assert_eq!(wire["ram"]["percent"], serde_json::json!(44.4));
+        assert_eq!(wire["ram"]["used_gb"], serde_json::json!(7.11));
+        assert_eq!(wire["ram"]["total_gb"], serde_json::json!(16.0));
+        assert_eq!(wire["disk"]["percent"], serde_json::json!(24.7));
+        assert_eq!(wire["disk"]["used_gb"], serde_json::json!(123.5));
+        assert_eq!(wire["disk"]["total_gb"], serde_json::json!(501.0));
+        assert_eq!(wire["network"]["download_kbps"], serde_json::json!(1024.6));
+        // Rounds to zero rather than disappearing: a quiet link reads "0.0 KB/s".
+        assert_eq!(wire["network"]["upload_kbps"], serde_json::json!(0.0));
+    }
+
+    /// A desktop has no battery, and the HUD hides the row entirely for that -- which it
+    /// can only do if this stays null rather than becoming a permanent, meaningless 0%.
+    #[test]
+    fn wire_json_keeps_a_missing_battery_null() {
+        let wire = Telemetry::default().to_wire_json();
+        assert!(wire["battery"].is_null());
+    }
+
+    #[test]
+    fn wire_json_rounds_battery_to_whole_percent() {
+        let telemetry = Telemetry {
+            battery: Some(BatteryInfo {
+                percent: 87.6,
+                state: "Discharging".to_string(),
+                on_battery: true,
+            }),
+            ..Telemetry::default()
+        };
+        let wire = telemetry.to_wire_json();
+        assert_eq!(wire["battery"]["percent"], serde_json::json!(88.0));
+        assert_eq!(wire["battery"]["on_battery"], serde_json::json!(true));
     }
 }

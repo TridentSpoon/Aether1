@@ -452,12 +452,19 @@ HologramAvatar.registerAvatar({
 
     // ---- Start --------------------------------------------------------------
 
-    fillPartPickers();
-    writeRecipeToControls(window.CustomAvatarRecipe.load());
-    fillAvatarPicker();
-    fillThemePicker();
-    document.querySelector('.state-btn').classList.add('is-on');
-    $('share-recipe').value = JSON.stringify(window.CustomAvatarRecipe.load(), null, 2);
-    rebuild();
-    requestAnimationFrame(pump);
+    /* The HUD fetches only the avatar it is wearing (see js/hologram/avatar-loader.js).
+       The workbench is the one page that genuinely wants all of them: its picker is a list
+       of everything there is to look at, and the parts kit it builds custom designs from
+       comes down with them. So it asks for the lot, once, and starts when they are here. */
+    say('loading avatars...');
+    HologramAvatar.loadAllAvatars().then(() => {
+        fillPartPickers();
+        writeRecipeToControls(window.CustomAvatarRecipe.load());
+        fillAvatarPicker();
+        fillThemePicker();
+        document.querySelector('.state-btn').classList.add('is-on');
+        $('share-recipe').value = JSON.stringify(window.CustomAvatarRecipe.load(), null, 2);
+        rebuild();
+        requestAnimationFrame(pump);
+    });
 })();

@@ -601,6 +601,8 @@ cold start that reads like a fault.
 that is a billing question, answered on a dashboard rather than in a response body. Inventing
 one and calling it *Available* would have been a new fiction replacing the one being removed,
 so the panel says *Budget left* and the constant says what it is in its own doc comment.
+*(Superseded by step 34: labelling an invented number honestly in a doc comment did not stop
+the panel from presenting it as a measurement. The budget is gone.)*
 
 The panel became two views, because a cloud model and a local one raise different questions --
 what have I spent, versus how fast is this and how much can it hold. They alternate while idle
@@ -1191,6 +1193,176 @@ per-engine attempt list either way — on success *and* on failure, because "whi
 spoke" is as useful as "why none did". The frontend plays it back through
 `voiceEngine.playTTSAudio`, the same function a real reply uses, on purpose: a test that
 passes through a private code path proves only that the private code path works.
+
+### Step 33: making it small, and making the wait honest — **shipped**
+
+*"The goal is for the actual app to be small (only dependencies are large). The interactions
+need to be quick and responsive with good feedback if that is not the case."*
+
+The app itself was never the weight. The measuring found two things carrying it and one
+thing lying about it.
+
+**three.js, 589 KB of which the HUD uses about forty functions.** The vendored bundle was
+the whole library. `scripts/build_vendor_three.sh` rebuilds it from the same pinned r128
+source with only the exports the frontend actually names, 603,445 bytes down to 435,994.
+The revision stays r128 on purpose: r152 changed colour management in a way that visibly
+alters what is already on screen, and how the avatar looks is close to the point of the
+project. `scripts/check_vendor_three.sh` greps the frontend for `THREE.Something` at
+CI time and fails if the bundle does not export it — so an avatar that reaches for a part
+that was trimmed is a failed check, not a button that throws when somebody presses it.
+
+**Nineteen avatar files loaded to show one.** Every page listed all of them in `<script>`
+tags: about 195 KB and eighteen requests, at launch, to put a single avatar on screen.
+`frontend/js/hologram/avatar-loader.js` is now the one place that says which avatar lives
+in which file, and fetches it the first time it is asked for. `core.js` gained
+`materialiseAvatar`, which builds an avatar if its file is present, starts the fetch if it
+is not, and rebuilds when it lands. The workbench still asks for all of them, because it
+is a picker over all of them. Repeating the list in three HTML files had already drifted —
+the same avatar was pinned to three different cache-busting versions — and one list cannot
+drift from itself. `scripts/check_avatar_loader.sh` globs the folder and fails on any file
+the manifest does not name, and any name with no file.
+
+Startup payload: **1317 KB across 39 files → 963 KB across 20**.
+
+**Debug symbols in the shipped binary.** `strip = true`, plus `opt-level = "s"`,
+`lto`, one codegen unit and `panic = "abort"` in the release profile. A backtrace from a
+release build is read from the source anyway. **12.98 MB → 10.54 MB.**
+
+**Drawing a window nobody is looking at.** The render loop ran sixty times a second while
+minimised, in the tray, or behind another window. One line in `animate.js` returns early
+when `document.hidden`, after the next frame is already requested, so it resumes on the
+frame after the window comes back with nothing to restart.
+
+**The wait.** A local model's first answer after launch takes as long as it takes to read
+the model off disk, and the entire feedback for that was a blinking cursor on an empty
+line — which says exactly the same thing at two seconds and at two minutes, one of which
+is normal and the other of which is a crash. `startWaitFeedback` in `app.js` puts three
+things under the unanswered question: a counter, so the wait is a number; on the first
+question of the session, the one sentence that explains it (*the model is being loaded into
+memory, which only happens once*); and past thirty seconds, that this is still normal.
+
+The subtlety is when to stop counting. The stream carries trace lines as well as the
+answer — `⚙ vault notes loaded: ...` goes out the instant the turn starts, before the model
+has been asked anything — so "a delta arrived" was already the wrong test, and the hologram
+had been leaving its THINKING state on it too. `withoutTraceLines` is the test now: the
+counter and the thinking state end when the model says a word of its own.
+
+**Three bugs found while looking.**
+
+`.hidden` did nothing to ten elements. Tailwind's `.hidden { display: none }` is one class;
+so is `.cyber-btn { display: inline-flex }` in A1theme.css, which loads after it. CSS
+settles a tie of equal specificity by source order, so the later file won and the element
+stayed on screen — including the three locked Trace Protocols avatars, which gave away the
+unlock they exist to wait for. `.hidden.hidden` is two classes and wins; the one responsive
+pairing in use is restored with a third. `scripts/check_hidden_utilities.sh` reads the
+`hidden <breakpoint>:<display>` pairings out of the markup and fails on one with no rule.
+
+Telemetry printed `23.456789012` in the HUD and `23.5` in the CLI, from the same reading.
+The rounding lived in the CLI's formatter. It now lives in `to_wire_json`, so both ends of
+the app agree about what the machine is doing.
+
+And the light theme was not readable. A proper WCAG audit of every text-bearing element,
+with the themes actually applied, found **34 failures on Solar** — almost all of them one
+cause: `--text-dim` was the ink mixed 62% towards the ground, which on a near-white page
+is `#a0a0a0`, about 2:1. 36% is the same idea at a readable weight. The rest were an
+alert card written for a dark ground (pale amber on translucent brown, which over white
+composites to a muddy grey), two bay controls wearing the page's ink instead of the
+projection bay's, and a heading in an accent colour that missed the line by a
+twentieth. Accents are now emitted twice: `--neon-*` as picked, for borders, fills and
+glows where contrast does not apply, and `--text-accent` / `--text-highlight` walked
+towards the ink until they read, for accents that are words. Any colour somebody mixes
+themselves gets the same treatment. **Solar, Eclipse and Cyberpunk now all measure zero
+failures**, and `scripts/check_theme_remap.sh` fails on a Tailwind text colour added to the
+markup and never mapped onto a theme variable — the exact mistake that is invisible in the
+dark theme the work is usually done in.
+
+### Step 34: a performance panel that measures something — **shipped**
+
+The operator's verdict on the telemetry panel: *"9 times out of 10 it's made up limits or
+numbers and nothing really meaningful happens here. The idea was to benchmark and see the
+amount of tok/s you generate locally to get an idea, and then on cloud models to track usage
+in some way or form."*
+
+They were right, and the audit is worth writing down because the failure was structural
+rather than a bug. `SESSION_TOKEN_BUDGET: u64 = 100_000` was a constant invented in
+`llm/mod.rs`. Three of the panel's readings were derived from it — *SESSION TOKENS* against a
+gauge bar, *Used: 1.3%*, *Budget left: 98.7k* — and every one of them was that constant being
+divided into and displayed back as though it had been measured. Nothing enforced it, no
+provider reported it, and on a local model, where tokens cost nothing, there was no budget to
+have any of left. The doc comment was honest about this. The panel was not, and the panel is
+what people read.
+
+The sparkline went the same way. Fifteen per-request token totals as a filled area chart is a
+shape, not a finding: nobody can act on "that reply was longer than this one", and with one
+reply recorded it drew a diagonal line across the panel that looked like a trend.
+
+**What replaced it is the two questions that were actually being asked.**
+
+**SPEED is a scoreboard, not a readout.** One row per model, ordered fastest first, built out
+of ordinary use with nothing extra run to fill it. A single live `15.7 tok/s` cannot answer
+the question worth asking, which is comparative — *is mistral faster than llama3 on this
+machine?* — and a row per model can. The average is **token-weighted**: total tokens over
+total generation time, not the mean of the per-reply rates, because a four-token "Yes." is
+mostly measurement noise and averaging rates would let it count for as much as the reply that
+actually shows what the model does.
+
+**A sample is only kept when the server timed it itself.** `record_benchmark_sample` requires
+both reported token counts and `eval_nanos`. Without the counts the numerator is a
+characters-over-four guess; without the server's own generation time the denominator is a wall
+clock that was also running while the model was read off disk. Either alone turns a speed
+ranking into a ranking of measurement error. Today that means Ollama. A server that reports
+neither never appears, and the panel says exactly why — an empty row is a true statement about
+what can be measured, and an invented one is not. *(An honest fallback for LM Studio is
+possible — time from first streamed token to last excludes the model load — but it has to
+survive tool-call rounds and the vault trace line that is streamed before the model is asked
+anything, so it is deliberately not in this change.)*
+
+**USAGE shows money where money exists.** `pricing.rs` multiplies reported counts by a
+published price. Three outcomes, worded differently on purpose and none of them `$0.00`: a
+local model says its tokens are free, a priced cloud model shows a figure, and an unpriced one
+says `unpriced` and points at the file to fix it. Matching is longest-prefix so a pinned build
+(`gpt-4o-mini-2024-07-18`) finds its base model, and longest wins because `gpt-4o` prefixes
+`gpt-4o-mini` and they are priced sixteen times apart. Costs round to five decimals, not to
+cents: a short exchange with a cheap model genuinely costs a fraction of a penny, and rounding
+that to `$0.00` would say the same thing the panel says about a free local model.
+
+**Prices are dated and overridable.** `PRICES_AS_OF` is shown beside any figure derived from
+the built-in table, because a six-month-old price is a guess. `model_prices.json` beside the
+database overrides or extends it, re-read on every tick so a correction lands without a
+restart, with a malformed file falling back to the built-ins rather than costing everything at
+zero. A model released after the table was written has no entry, and that is the correct
+outcome rather than a gap to fill with something plausible.
+
+**The headline number reads off the board, not off the last reply.** Live verification caught
+this one: with a cloud provider misconfigured, the panel showed `448.2 tok/s` — a genuine
+wall-clock measurement of a canned local error answer that no model had generated a token of
+— directly above a note describing the scoreboard. `last_tps` falls back to a wall clock
+whenever the provider reports no generation time, so it is exactly the figure the rest of this
+step argues against, and it was sitting in the largest text on the panel. The header and
+`ON THIS MACHINE` now both read the current model's row on the board, and show `--` when it
+has no row. A real number about the wrong thing is the failure mode this whole step exists to
+remove, and it had survived into the replacement.
+
+**An empty board has two causes, and the engine is what can tell them apart.** After RESET
+READINGS the panel said *"Ollama does not report how long it spent generating… Ollama does."*
+— a sentence that is both self-contradicting and the one a reader would act on. The frontend
+cannot distinguish "this provider can never be timed" from "nothing has been measured yet",
+so `UsageSnapshot` now carries `provider_times_itself` (from `providers::reports_generation_time`)
+and the two cases get opposite sentences. The same guard rail applies where the board is
+non-empty but the *current* model is absent from it: a cloud model sitting above a board of
+local rows now says why it is not on it, rather than leaving the reader to assume one of those
+rows is theirs.
+
+**RESET READINGS** exists because the numbers describe a machine and machines change — a new
+graphics card, a different quantisation, an Ollama release that got faster. Without it the old
+readings keep being averaged in for as long as the database survives.
+
+`scripts/check_panel_fields.sh` guards the class of bug this was. The panel read
+`used_percent`, `available_tokens` and `sparkline` for months after they stopped meaning
+anything and nothing complained, because JavaScript hands back `undefined` for a field that
+was never sent and `undefined` in a gauge width is a bar of zero width rather than an error.
+The check reads the field list out of `UsageSnapshot` at run time and fails the build on any
+`tokens.<field>` in `app.js` that the struct does not send.
 
 ## Where this stands
 

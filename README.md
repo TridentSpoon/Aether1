@@ -370,36 +370,68 @@ the controls on the right:
 IDLE, LISTENING, THINKING, SPEAKING -- and is always there, so the state never has to compete
 for room with anything else.
 
-## The telemetry panel
+## The model performance panel
 
 A cloud model and a local one raise different questions, so the panel has two views and
 alternates between them while nothing is happening. Once something is generating, it pins to
 whichever view describes what is doing the work. Clicking a tab holds it there.
 
-**USAGE** — what this session has spent. Tokens in and out, against a session budget.
+**SPEED** — how fast each model runs **on this machine**. One row per model, fastest first,
+with the bar scaled against the quickest one on the board rather than a fixed ceiling, so the
+comparison reads the same on a laptop running a 3B model and a desktop running a 70B one.
+
+The rows build themselves out of ordinary use — nothing extra is run to fill them — and the
+average is **weighted by tokens, not by reply**: a four-token "Yes." is mostly measurement
+noise, and counting it for as much as a five-hundred-token answer would make the board a
+ranking of measurement error. RESET READINGS throws the board away, which is what you want
+after a new graphics card or a different quantisation of the same model.
+
+A model only appears once it has been **timed by the server that ran it**. Ollama reports
+`eval_duration`, the time it actually spent generating; wall clock includes reading the model
+off disk and queueing behind another request, which makes a fast model look half as fast on
+its first reply and quicker on every one after — a cold start that reads like a fault. A
+server that reports no generation time simply never appears on the board, and the panel says
+so. An empty row is a true statement about what can be measured; an invented one is not.
+
+The big number at the top reads off that same board — the current model's measured average —
+and shows `--` when the current model has no row. It deliberately does **not** show the speed
+of the last reply, because that figure falls back to a wall clock whenever the provider
+reports no generation time of its own, and a wall clock will happily time a canned local
+answer that no model was involved in. A real number about the wrong thing, under a `tok/s`
+label, is the habit this panel was rebuilt to break.
+
+**USAGE** — what this session actually used, and what that cost.
 
 The counts are **what the provider reported**, not a guess: Ollama's `prompt_eval_count` and
 `eval_count`, the OpenAI-compatible `usage` object, Gemini's `usageMetadata`, and Anthropic's
-split across `message_start` and `message_delta`. Where a provider says nothing, the old
+split across `message_start` and `message_delta`. Where a provider says nothing, the
 four-characters-per-token estimate still fills the gap — but the panel says `estimated`
 rather than `counted`, because "1,204 tokens" and "about 1,200 tokens" are different claims
 and only one of them can be checked against a provider's own dashboard.
 
-The budget is **Aether1's own**, not a quota anyone enforces. No provider API returns "tokens
-you have left" — that is a billing question answered on a dashboard, not in a response body —
-so the panel says *Budget left* rather than implying the number came from anywhere but here.
+**Cost is shown only where cost exists.** A local model's tokens are free, and the panel says
+that rather than printing $0.00 — which would look identical to a cloud model nobody has
+priced. For a cloud model the figure is real token counts multiplied by the model's published
+price, shown in cents below a penny so a genuinely small cost does not round away to "free".
+Prices are stamped with when they were last checked, because a six-month-old price is a guess
+and you are entitled to know that before trusting it.
 
-**CAPACITY** — what a local model is and how fast it runs. Tokens per second, the context
-length, the parameter count and quantisation, and roughly how much context is left before the
-top of the conversation starts falling off the end.
+A model with no known price reads `unpriced`, not $0.00. To price it, drop a
+`model_prices.json` next to the database (`backend/aether1_memory.db`):
 
-Throughput is measured from the **model's own generation time** where the server reports one
-(Ollama does), not from wall clock. Wall clock includes loading the model off disk and waiting
-behind another request, which makes a fast model look slow on its first reply and quicker on
-every one after — a cold start that reads like a fault.
+```json
+{ "claude-opus-5": { "input_per_million": 15.0, "output_per_million": 75.0 } }
+```
 
-Nothing here is invented. A model that reports no context length shows `--` rather than a
-plausible default.
+Names match by prefix, so `gpt-4o-mini` covers `gpt-4o-mini-2024-07-18` too. The file is
+re-read every second, so a correction shows up without restarting. A typo falls back to the
+built-in prices with a line on the console rather than costing everything at zero.
+
+Nothing here is invented. There is **no session budget** — an earlier version of this panel
+divided against a 100,000-token figure hardcoded in the source and showed the result as
+"Used: 1.3%" and "Budget left: 98.7k", which was a made-up number being displayed back as a
+measurement. A model that reports no context length shows `--` rather than a plausible
+default.
 
 ## Rearranging the HUD
 

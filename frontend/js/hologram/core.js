@@ -32,6 +32,10 @@
  * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,
  * and the per-frame animation loop in animate.js -- all attached via HologramAvatar.prototype,
  * so load order in index.html matters: this file first, then the rest, before app.js runs.
+ *
+ * The avatar-*.js files are the exception: they are not in the page at launch at all. Each is
+ * fetched the first time its avatar is picked -- see avatar-loader.js and materialiseAvatar
+ * below -- so an avatar that exists but has never been chosen costs nothing to start up.
  */
 
 class HologramAvatar {
@@ -177,6 +181,14 @@ class HologramAvatar {
         // avatar-a1.js -- rather than a hand-modelled built-in like the six below.
         this.plugins = new Map();
 
+        // Which avatars have actually been built into this scene. Avatar files arrive on
+        // demand now (see js/hologram/avatar-loader.js), so "built" is no longer the same
+        // as "exists" -- this is what stops a second visit to an avatar building it twice.
+        this.builtAvatars = new Set();
+        // Avatar files currently in flight, so a second ask for one already being fetched
+        // waits for it rather than starting another request.
+        this.loadingAvatars = new Set();
+
         this.clock = null;
         this.lastClickTime = -999; // seconds on this.clock; drives the click-reaction pulse
 
@@ -263,13 +275,10 @@ class HologramAvatar {
         this.avatarZoomGroup = new THREE.Group();
         this.scene.add(this.avatarZoomGroup);
 
-        // Build all avatar architectures
-        this.buildHalcyAvatar();
-        this.buildArxLimesAvatar();
-        this.buildNexusAvatar();
-        this.buildRed9000Avatar();
-        this.buildArxLogosAvatar();
-        this.buildAltAvatar();
+        /* Every avatar used to be built here, all nineteen of them, to show one. Now only
+           whatever is already in the page gets built -- which at startup is the avatar being
+           worn and nothing else -- and setAvatar below fetches and builds the rest the first
+           time somebody picks one. */
         this.buildRegisteredAvatars();
 
         /* Initial avatar shape + colour setup (independent of each other). Tinting goes
@@ -343,6 +352,12 @@ class HologramAvatar {
     // Which 3D shape is visible / animated. Independent of color theme.
     setAvatar(avatar) {
         this.currentAvatar = avatar;
+        /* Its file may not be in the page yet -- they arrive on demand (see
+           js/hologram/avatar-loader.js). Build it if it is here, otherwise fetch it and come
+           back. The rest of this method still runs in the meantime, so the avatar being left
+           behind is hidden immediately rather than staying on screen until the new one's file
+           finishes loading, which would read as the click not registering. */
+        this.materialiseAvatar(avatar);
         // A registered avatar wins over every built-in, including the hAlcy fallback
         // below -- otherwise an unrecognised name would show hAlcy *and* the plug-in.
         const plugin = this.plugins.get(avatar);
@@ -568,20 +583,70 @@ class HologramAvatar {
        else's avatar file is exactly the code most likely to have a mistake in it, and
        the cost of that must not be a blank window. */
     buildRegisteredAvatars() {
-        HologramAvatar.avatarPlugins.forEach((def, id) => {
-            try {
-                const model = def.build(this.avatarApi());
-                if (!model || !model.group) {
-                    console.error(`Avatar "${id}": build() must return an object with a .group`);
-                    return;
-                }
-                model.group.visible = false;
-                this.zoomParentFor(id).add(model.group);
-                this.plugins.set(id, { def, model });
-            } catch (err) {
-                console.error(`Avatar "${id}" failed to build and was skipped:`, err);
+        HologramAvatar.avatarPlugins.forEach((def, id) => this.buildRegisteredAvatar(id));
+    }
+
+    /* One registered avatar, built into the scene hidden. Separate from the loop above
+       because an avatar file can now arrive long after the engine started -- the moment
+       somebody picks it -- and that one has to be built on its own. */
+    buildRegisteredAvatar(id) {
+        const def = HologramAvatar.avatarPlugins.get(id);
+        if (!def || this.plugins.has(id)) return false;
+        try {
+            const model = def.build(this.avatarApi());
+            if (!model || !model.group) {
+                console.error(`Avatar "${id}": build() must return an object with a .group`);
+                return false;
             }
+            model.group.visible = false;
+            this.zoomParentFor(id).add(model.group);
+            this.plugins.set(id, { def, model });
+            this.builtAvatars.add(id);
+            return true;
+        } catch (err) {
+            console.error(`Avatar "${id}" failed to build and was skipped:`, err);
+            return false;
+        }
+    }
+
+    /* Turn a name into geometry in this scene, if its file is here.
+     *
+     * Returns true once the avatar exists (or already did). False means the file has not
+     * arrived, in which case it is fetched and this runs again -- and, if the operator has
+     * not picked something else in the meantime, the avatar is shown. The palette is
+     * re-applied because a freshly built avatar is wearing whatever colours its own file
+     * chose, not the ones the HUD is set to.
+     */
+    materialiseAvatar(avatar) {
+        let id = HologramAvatar.canonicalAvatarId(avatar);
+        // A name this engine does not recognise has always shown hAlcy (see setAvatar and
+        // animate) -- so that is the file to fetch for it, not one that does not exist.
+        if (!HologramAvatar.avatarPlugins.has(id) && HologramAvatar.knownAvatarIds().indexOf(id) === -1) {
+            id = 'halcy';
+        }
+        if (this.builtAvatars.has(id)) return true;
+
+        if (HologramAvatar.avatarPlugins.has(id)) return this.buildRegisteredAvatar(id);
+
+        const builder = HologramAvatar.builderNameFor(id);
+        if (builder && typeof this[builder] === 'function') {
+            this[builder]();
+            this.builtAvatars.add(id);
+            return true;
+        }
+
+        if (this.loadingAvatars.has(id)) return false; // already on its way
+        this.loadingAvatars.add(id);
+        HologramAvatar.loadAvatar(id).then(() => {
+            this.loadingAvatars.delete(id);
+            // An engine thrown away while its avatar was in flight (the workbench disposes
+            // one per slider nudge) must not have geometry pushed into it afterwards.
+            if (this.disposed) return;
+            if (!this.materialiseAvatar(this.currentAvatar)) return; // the file failed; it reported itself
+            this.applyColorPalette();
+            this.setAvatar(this.currentAvatar);
         });
+        return false;
     }
 
     // Where a registered avatar's top-level group belongs: inside avatarZoomGroup for the

@@ -134,3 +134,34 @@ jobs:
             git diff --stat -- frontend/vendor/tailwind.css
             exit 1
           fi
+
+      # The three.js bundle contains only the parts the frontend asked for when it was
+      # built. A new THREE.Something added since is not a missing feature -- it is an
+      # avatar that throws the moment somebody picks it. Checked rather than rebuilt:
+      # the bundle is byte-identical only on the same esbuild version, so comparing it
+      # the way the stylesheet is compared would fail on an unrelated toolchain bump.
+      - name: Check the vendored three.js covers what the frontend uses
+        run: ./scripts/check_vendor_three.sh
+
+      # Avatar files are fetched by name when somebody picks one, so an avatar missing from
+      # the loader's list is not a broken build -- it is a button that does nothing, which
+      # nobody notices until they press it.
+      - name: Check every avatar file is reachable
+        run: ./scripts/check_avatar_loader.sh
+
+      # `hidden` on an element that a component stylesheet also gives a display to is a
+      # silent no-op -- the element stays on screen and only a person looking at it notices.
+      - name: Check the responsive hidden utilities still work
+        run: ./scripts/check_hidden_utilities.sh
+
+      # Tailwind's text colours are hard-coded for a dark ground. One that is never remapped
+      # to a theme variable is unreadable on the light theme and perfectly fine on the dark
+      # one the work was done in, so nobody sees it.
+      - name: Check every text colour follows the theme
+        run: ./scripts/check_theme_remap.sh
+
+      # A panel reading a field the engine stopped sending gets `undefined`, which renders
+      # as a zero rather than as an error -- a confident number derived from nothing, and
+      # only visible to someone looking at the panel.
+      - name: Check the performance panel only reads fields the engine sends
+        run: ./scripts/check_panel_fields.sh

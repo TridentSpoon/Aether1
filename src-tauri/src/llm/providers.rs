@@ -823,6 +823,18 @@ impl OpenAiCallBuilder {
     }
 }
 
+/// Whether this provider reports the time it spent generating, as distinct from the time
+/// the request took.
+///
+/// Only Ollama does, via `eval_duration` on the final object of its stream. It is the one
+/// clock that measures the model rather than the machine's disk and queue, so it is the
+/// only one the speed scoreboard will accept a sample from -- and the panel needs to be
+/// able to say "this provider cannot be timed" rather than leaving an empty board
+/// unexplained.
+pub fn reports_generation_time(provider: Provider) -> bool {
+    matches!(provider, Provider::Ollama)
+}
+
 /// Whether this provider documents `stream_options.include_usage`. LM Studio is left out
 /// deliberately: it is the local one, it is the one most likely to be an older build or a
 /// look-alike server, and a rejected request there costs a working setup.

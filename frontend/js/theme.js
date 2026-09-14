@@ -88,6 +88,51 @@
         return luminance(hex) > 0.5;
     }
 
+/* The one above answers "does this look light or dark", which is a different question from
+   "can this be read on that". WCAG's relative luminance is the second one: the same three
+   channels, gamma-corrected first and weighted the way the standard weights them. It is
+   only used for the contrast sum below -- every light-or-dark decision still asks
+   luminance(), which is cheaper and is what the eye means by bright. */
+    function relativeLuminance(hex) {
+        const c = toRgb(hex);
+        const f = [c.r, c.g, c.b].map((v) => {
+            v /= 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2];
+    }
+
+    /* 1 is the same colour twice, 21 is black on white. WCAG asks 4.5 of body-sized text. */
+    function contrast(a, b) {
+        const l1 = relativeLuminance(a);
+        const l2 = relativeLuminance(b);
+        return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+    }
+
+    /* WCAG asks 4.5:1 of body-sized text, and this aims a little past it. Almost no text in
+       the HUD sits on the page itself -- it sits on a panel, which is a shade lifted off the
+       ground, and measuring against the ground therefore flatters the answer by roughly a
+       tenth. Cyberpunk's purple cleared 4.62 against its near-black ground and still only
+       managed 4.35 on the panel in front of it. The margin is that gap, rounded up. */
+    const ACCENT_CONTRAST = 5.0;
+
+    /* An accent is chosen for how it looks next to the avatar, not for how it reads as a
+       word. Solar's purple on its near-white page measures 4.47:1 and Cyberpunk's measures
+       4.12:1 -- both a hair under the line, and both from presets that ship with the app, so
+       a colour somebody mixes themselves can land anywhere. This walks the accent towards
+       black on a light ground, or white on a dark one, in twentieths, and stops at the first
+       step that reads. A colour that already reads is returned untouched, which is the usual
+       case: nothing here repaints a palette that was fine. */
+    function readable(colour, background, target) {
+        if (contrast(colour, background) >= target) return colour;
+        const towards = isLight(background) ? '#000000' : '#ffffff';
+        for (let step = 1; step <= 20; step++) {
+            const out = mix(colour, towards, step / 20);
+            if (contrast(out, background) >= target) return out;
+        }
+        return towards;
+    }
+
     /* Cyberpunk's panels are the ground scaled up rather than mixed toward grey, which is what
        keeps a near-black with a blue cast reading as blue rather than drifting to slate. The
        added constant is a floor, so a background of pure black still produces panels you can
@@ -216,7 +261,22 @@
             '--neon-blue': mid,
             '--neon-purple': highlight,
             '--text-main': ink,
-            '--text-dim': mix(ink, background, light ? 0.62 : 0.45)
+            /* The two accents again, but guaranteed to read as text. The stylesheet uses
+               --neon-* for borders, fills and glows, where the preset's own colour is the
+               point and contrast does not apply, and these two wherever the accent is a
+               word somebody has to read. */
+            '--text-accent': readable(main, background, ACCENT_CONTRAST),
+            '--text-highlight': readable(highlight, background, ACCENT_CONTRAST),
+            /* The quiet half of the text -- labels, captions, units -- is the ink faded
+               towards the ground. How far it can fade before it stops being readable is not
+               the same in both directions. On a dark ground 45% lands around 6:1 against it,
+               comfortably past the 4.5:1 that WCAG asks of body text. On a light ground the
+               old 62% landed on #a0a0a0, which measures 2.1:1 on Solar's near-white page --
+               thirty-two separate labels across the HUD, every one of them below the line and
+               several of them ten pixels tall. 36% is the same idea at a readable weight:
+               about 5:1, still visibly quieter than the main ink, which is the whole point
+               of the colour. */
+            '--text-dim': mix(ink, background, light ? 0.36 : 0.45)
         };
 
         if (mode === 'cyberpunk') {

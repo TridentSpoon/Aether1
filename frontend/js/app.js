@@ -1,7 +1,7 @@
 /**
  * Main Frontend Application Logic for Project AETHER1.
  * Handles independently-selectable 3D Avatars (A1 monogram placeholder, R.E.D. 9000, The Nexus,
- * A.R.X.LIMES, hAlcy, A.R.X.LOGOS, A1ter_nul) and Color Themes, Token Telemetry Graph, Agent
+ * A.R.X.LIMES, hAlcy, A.R.X.LOGOS, A1ter_nul) and Color Themes, the Model Performance panel, Agent
  * Genesis, and Model Scanner.
  */
 
@@ -150,20 +150,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const elStatusBadge = document.getElementById('status-badge');
     const elClock = document.getElementById('live-clock');
 
-    // Token Telemetry Elements
+    // Model Performance Elements
     const elTps = document.getElementById('tps-val');
     const elSessionTokens = document.getElementById('session-tokens-val');
-    const elTokensGauge = document.getElementById('tokens-gauge-fill');
-    const elTokensUsedPct = document.getElementById('tokens-used-pct');
-    const elTokensAvail = document.getElementById('tokens-avail-val');
-    const tokensCanvas = document.getElementById('tokens-graph-canvas');
-    const tokensCanvasCtx = tokensCanvas ? tokensCanvas.getContext('2d') : null;
 
     // Audio Waveform Canvas
     const canvas = document.getElementById('audio-waveform');
     const canvasCtx = canvas ? canvas.getContext('2d') : null;
 
     let isWaitingForResponse = false;
+    /* True once an answer has actually come back in this run of the app. The only thing it
+       is used for is deciding whether to explain the first-run wait -- see
+       startWaitFeedback below. */
+    let hasAnsweredThisSession = false;
     let autoSpeak = true;
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
@@ -286,6 +285,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function setHologramAvatar(avatarName) {
         hologram.setAvatar(avatarName);
         setAvatarStructureLabel(avatarName);
+        /* A registered avatar names itself, and it can only do that once its file is here --
+           they arrive on demand now (see js/hologram/avatar-loader.js). Labelled twice rather
+           than waiting: the label for everything hand-modelled is right immediately above, and
+           the handful that name themselves correct a moment later instead of the whole HUD
+           pausing on a file fetch. */
+        if (window.HologramAvatar && HologramAvatar.loadAvatar) {
+            HologramAvatar.loadAvatar(avatarName).then(() => setAvatarStructureLabel(avatarName));
+        }
         // Push the change straight to the desktop sprite window (if open) instead of making
         // it discover this by polling localStorage -- see sprite.js's 'avatar-changed' listener.
         if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
@@ -517,13 +524,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    /* #rrggbb -> rgba(). Canvas has no notion of a colour with an alpha applied, and the
-       theme's three colours are opaque hex by design. */
-    function withAlpha(hex, alpha) {
-        const n = parseInt(hex.slice(1), 16);
-        return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-    }
-
     // Audio Waveform Visualizer
     function drawWaveform(freqData) {
         if (!canvasCtx || !canvas) return;
@@ -563,67 +563,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         canvasCtx.stroke();
         canvasCtx.shadowBlur = 0;
-    }
-
-    // Token Telemetry Sparkline Drawer
-    function drawTokenGraph(sparkline) {
-        if (!tokensCanvasCtx || !tokensCanvas) return;
-        const w = tokensCanvas.width;
-        const h = tokensCanvas.height;
-        tokensCanvasCtx.clearRect(0, 0, w, h);
-
-        if (!sparkline || sparkline.length === 0) {
-            sparkline = [0, 0, 0, 0, 0];
-        }
-
-        tokensCanvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-        tokensCanvasCtx.lineWidth = 1;
-        tokensCanvasCtx.beginPath();
-        tokensCanvasCtx.moveTo(0, h - 1);
-        tokensCanvasCtx.lineTo(w, h - 1);
-        tokensCanvasCtx.stroke();
-
-        const maxVal = Math.max(...sparkline, 100);
-        const step = w / Math.max(sparkline.length - 1, 1);
-
-        /* The token graph is drawn on a canvas, so it cannot inherit a CSS variable -- it has
-           to be told. It follows the highlight rather than the main colour so the graph stays
-           distinguishable from the gauges above it, which are all main. */
-        const lineColor = currentTheme.colours.highlight;
-        const fillColor = withAlpha(lineColor, 0.15);
-
-        tokensCanvasCtx.beginPath();
-        tokensCanvasCtx.moveTo(0, h);
-        sparkline.forEach((val, idx) => {
-            const x = idx * step;
-            const y = h - ((val / maxVal) * (h - 8)) - 4;
-            tokensCanvasCtx.lineTo(x, y);
-        });
-        tokensCanvasCtx.lineTo(w, h);
-        tokensCanvasCtx.fillStyle = fillColor;
-        tokensCanvasCtx.fill();
-
-        tokensCanvasCtx.beginPath();
-        tokensCanvasCtx.strokeStyle = lineColor;
-        tokensCanvasCtx.lineWidth = 2;
-        tokensCanvasCtx.shadowBlur = 6;
-        tokensCanvasCtx.shadowColor = lineColor;
-
-        sparkline.forEach((val, idx) => {
-            const x = idx * step;
-            const y = h - ((val / maxVal) * (h - 8)) - 4;
-            if (idx === 0) tokensCanvasCtx.moveTo(x, y);
-            else tokensCanvasCtx.lineTo(x, y);
-        });
-        tokensCanvasCtx.stroke();
-        tokensCanvasCtx.shadowBlur = 0;
-
-        tokensCanvasCtx.fillStyle = '#ffffff';
-        sparkline.forEach((val, idx) => {
-            const x = idx * step;
-            const y = h - ((val / maxVal) * (h - 8)) - 4;
-            tokensCanvasCtx.fillRect(x - 1.5, y - 1.5, 3, 3);
-        });
     }
 
     // Voice Callbacks
@@ -749,7 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
      * to a view that reads "--" is worse than not cycling. While a reply is being generated
      * it pins to whichever view matches what is answering. A click pins it too, for long
      * enough to read, and then the cycling resumes. */
-    const TELEMETRY_VIEWS = ['usage', 'capacity'];
+    const TELEMETRY_VIEWS = ['speed', 'usage'];
     const TELEMETRY_CYCLE_MS = 9000;
     const TELEMETRY_CLICK_HOLD_MS = 120000;
     let telemetryView = 'usage';
@@ -777,15 +716,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* Whether a view has anything worth showing. Usage needs a request to have happened;
-       capacity needs something local to have actually answered. */
+       speed needs something to have actually been measured on this machine. */
     function telemetryHasData(view, tokens) {
         if (!tokens) return view === 'usage';
         if (view === 'usage') return tokens.requests > 0;
-        return tokens.mode === 'local' && (!!tokens.capability || tokens.last_tps > 0);
+        const board = tokens.benchmarks || [];
+        return board.length > 0 || (tokens.mode === 'local' && !!tokens.capability);
     }
 
     function relevantTelemetryView(tokens) {
-        return tokens && tokens.mode === 'local' ? 'capacity' : 'usage';
+        return tokens && tokens.mode === 'local' ? 'speed' : 'usage';
     }
 
     function cycleTelemetryView() {
@@ -812,15 +752,31 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* The speed of whichever model is configured right now, as measured -- or null when
+       nothing measurable has been recorded for it. Reading it off the scoreboard is what
+       keeps the big number at the top and the note underneath it describing the same thing. */
+    function measuredTps(tokens) {
+        const row = (tokens.benchmarks || []).find(entry => entry.model === tokens.model);
+        return row ? row.average_tps : null;
+    }
+
     function updateTokenTelemetry(tokens) {
         if (!tokens) return;
         lastTokens = tokens;
 
-        if (elTps) elTps.textContent = `${tokens.last_tps || 0} TPS`;
+        /* The header shows the current model's measured speed -- its row on the scoreboard
+           -- and not `last_tps`. `last_tps` falls back to a wall clock when the provider
+           reports no generation time of its own, and that wall clock was also running while
+           the model was read off disk, or while a canned local reply was assembled with no
+           model involved at all. Such a figure is a real number about the wrong thing, and
+           putting it under a "tok/s" label is the habit this panel was rebuilt to break.
+           Blank rather than "0.0" before anything has been measured, because zero tokens per
+           second is a measurement and "nothing has been measured" is not. */
+        if (elTps) {
+            const tps = measuredTps(tokens);
+            elTps.textContent = tps === null ? '--' : `${tps} tok/s`;
+        }
         if (elSessionTokens) elSessionTokens.textContent = `${(tokens.total_session_tokens || 0).toLocaleString()}`;
-        if (elTokensUsedPct) elTokensUsedPct.textContent = `${tokens.used_percent}%`;
-        if (elTokensAvail) elTokensAvail.textContent = `${(tokens.available_tokens / 1000).toFixed(1)}k`;
-        if (elTokensGauge) elTokensGauge.style.width = `${tokens.used_percent}%`;
 
         const elIn = document.getElementById('tokens-in-val');
         const elOut = document.getElementById('tokens-out-val');
@@ -847,8 +803,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        updateCapacityView(tokens);
-        drawTokenGraph(tokens.sparkline);
+        updateSpeedView(tokens);
+        updateCostView(tokens);
 
         // A view showing nothing useful should give way to the one that is.
         if (!telemetryPinned && Date.now() >= telemetryHeldUntil && !telemetryHasData(telemetryView, tokens)) {
@@ -857,22 +813,97 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function updateCapacityView(tokens) {
-        const tps = document.getElementById('capacity-tps');
-        const gauge = document.getElementById('capacity-gauge-fill');
+    /* The scoreboard: every model this machine has been timed running, fastest first.
+       Rebuilt from the snapshot on each tick rather than diffed, because it is at most a
+       handful of rows and a diff would be more code than the thing it saves. */
+    function updateSpeedView(tokens) {
+        const board = document.getElementById('speed-board');
+        const current = document.getElementById('speed-current');
+        const note = document.getElementById('speed-note');
+        const capacityRow = document.getElementById('capacity-row');
         const context = document.getElementById('capacity-context');
         const size = document.getElementById('capacity-size');
-        const note = document.getElementById('capacity-note');
-        if (!tps) return;
+        if (!board) return;
 
+        const rows = tokens.benchmarks || [];
+        if (current) {
+            const tps = measuredTps(tokens);
+            current.textContent = tps === null ? '--' : `${tps} tok/s`;
+        }
+
+        const reset = document.getElementById('speed-reset');
+        if (reset) reset.classList.toggle('hidden', rows.length === 0);
+
+        board.textContent = '';
+        /* Bars are scaled against the fastest model on the board, not against a fixed
+           ceiling. The question is which of these is quicker than which, and a fixed scale
+           answers that worse the further the machine is from whatever number was picked. */
+        const fastest = rows.reduce((max, row) => Math.max(max, row.average_tps || 0), 0);
+        rows.forEach(row => {
+            const line = document.createElement('div');
+            line.className = 'speed-row';
+            line.title = `${row.samples} ${row.samples === 1 ? 'reply' : 'replies'} measured · best ${row.best_tps} tok/s · last used ${row.last_used}`;
+
+            const name = document.createElement('span');
+            name.className = 'speed-row-name';
+            // textContent, not innerHTML: a model name is a string from a server.
+            name.textContent = row.model;
+
+            const track = document.createElement('span');
+            track.className = 'speed-row-track';
+            const fill = document.createElement('span');
+            fill.className = 'speed-row-fill';
+            fill.style.width = `${fastest > 0 ? Math.max(4, (row.average_tps / fastest) * 100) : 0}%`;
+            if (tokens.model && row.model === tokens.model) fill.classList.add('speed-row-fill-current');
+            track.appendChild(fill);
+
+            const value = document.createElement('span');
+            value.className = 'speed-row-value';
+            value.textContent = `${row.average_tps}`;
+
+            line.append(name, track, value);
+            board.appendChild(line);
+        });
+
+        if (note) {
+            if (rows.length) {
+                const total = rows.reduce((sum, row) => sum + row.samples, 0);
+                let text = `Tokens per second, averaged over ${total} ${total === 1 ? 'reply' : 'replies'} the model timed itself. Higher is faster.`;
+                /* The board is a record of this machine, so it keeps showing models measured
+                   earlier even once the configured model has changed. Without this clause a
+                   cloud model would sit above a board of local ones with nothing saying why
+                   it is not on it -- the reader would reasonably assume one of those rows
+                   was the current model. */
+                if (measuredTps(tokens) === null) {
+                    text += tokens.mode === 'cloud'
+                        ? ` ${tokens.model || 'The current model'} is answering from ${tokens.provider || 'the cloud'}, so it is not on this board: speed there is mostly network and queueing, not this machine.`
+                        : ` ${tokens.model || 'The current model'} is not on this board yet — nothing it has answered could be timed.`;
+                }
+                note.textContent = text;
+            } else if (tokens.mode === 'local' && tokens.provider_times_itself) {
+                /* The board can fill, it just has not yet: a fresh install, or RESET
+                   READINGS a moment ago. Saying the provider cannot be timed here would be
+                   flatly false, and it is the sentence a reader would act on. */
+                note.textContent = `${tokens.model || 'This model'} is running here and can be timed. The board fills from ordinary use — send it a message and its speed appears.`;
+            } else if (tokens.mode === 'local') {
+                /* Deliberately specific about why it is empty. Only Ollama reports the time
+                   it spent generating, and without that the only clock available is a wall
+                   clock that was also running while the model was read off disk -- which
+                   would make every model look slower than it is, and the first reply after
+                   launch slowest of all. */
+                note.textContent = `${tokens.model || 'This model'} is answering on this machine, but ${tokens.provider || 'this server'} does not report how long it spent generating, so its speed cannot be measured honestly. Ollama does.`;
+            } else if (tokens.mode === 'offline') {
+                note.textContent = 'No model connected. Connect one in Settings.';
+            } else {
+                note.textContent = `Answering from ${tokens.provider || 'the cloud'}. Speed there is mostly network and queueing, not this machine, so it is not scored here.`;
+            }
+        }
+
+        /* Context and size are the model's own description of itself, which only a local
+           server offers and only some of them fill in. Hidden rather than shown as "--"
+           when there is nothing, so the panel is not two blanks tall for cloud models. */
         const capability = tokens.capability || null;
-        tps.textContent = tokens.last_tps ? `${tokens.last_tps} tok/s` : '-- tok/s';
-
-        /* The bar is throughput against 60 tok/s, which is roughly the point past which a
-           reply arrives faster than it can be read. It is a reading-speed reference, not a
-           limit, and it is deliberately not dressed up as a percentage of anything. */
-        if (gauge) gauge.style.width = `${Math.min(100, ((tokens.last_tps || 0) / 60) * 100)}%`;
-
+        if (capacityRow) capacityRow.classList.toggle('hidden', !capability);
         if (context) {
             context.textContent = capability && capability.context_tokens
                 ? `${Math.round(capability.context_tokens / 1024)}k`
@@ -884,20 +915,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 : [];
             size.textContent = parts.length ? parts.join(' ') : '--';
         }
+    }
 
-        if (note) {
-            if (tokens.mode !== 'local') {
-                note.textContent = tokens.mode === 'offline'
-                    ? 'No model connected. Connect one in Settings.'
-                    : `Answering from ${tokens.provider || 'the cloud'} — nothing is running on this machine.`;
-            } else if (capability && capability.context_tokens) {
-                const used = tokens.prompt_tokens || 0;
-                const room = Math.max(0, capability.context_tokens - used);
-                note.textContent = `${tokens.model || 'This model'} runs here. About ${room.toLocaleString()} tokens of context left before it starts forgetting the top of the conversation.`;
-            } else {
-                note.textContent = `${tokens.model || 'A local model'} is answering on this machine. It reports nothing about its own size or context.`;
-            }
+    /* What the session cost. Three genuinely different answers, and the difference between
+       them matters more than the number: free because it ran here, a real figure, or
+       unknown because nobody has told the app what this model charges. None of the three is
+       shown as $0.00. */
+    function updateCostView(tokens) {
+        const row = document.getElementById('cost-row');
+        const value = document.getElementById('cost-val');
+        const note = document.getElementById('cost-note');
+        if (!value || !note) return;
+
+        if (tokens.mode === 'offline') {
+            if (row) row.classList.add('hidden');
+            note.textContent = 'No model connected. Connect one in Settings.';
+            return;
         }
+
+        if (tokens.mode === 'local') {
+            if (row) row.classList.add('hidden');
+            note.textContent = `${tokens.model || 'This model'} runs on this machine. Its tokens cost nothing — the counts above are for size, not spend.`;
+            return;
+        }
+
+        if (row) row.classList.remove('hidden');
+        if (!tokens.cost) {
+            value.textContent = 'unpriced';
+            note.textContent = `Nobody has told Aether1 what ${tokens.model || 'this model'} charges. Add it to model_prices.json next to the database and the cost appears here.`;
+            return;
+        }
+
+        /* Five decimals of a dollar is not a price anyone wants to read, but two would show
+           a real fraction-of-a-penny cost as $0.00 -- the same thing this panel says about a
+           free local model. Below a cent it switches to cents so the number stays true and
+           still reads as an amount. */
+        const total = tokens.cost.total_usd;
+        if (total >= 0.01) {
+            value.textContent = `$${total.toFixed(2)}`;
+        } else if (total * 100 >= 0.005) {
+            value.textContent = `${(total * 100).toFixed(2)}c`;
+        } else {
+            /* A handful of tokens on a cheap model genuinely costs less than a hundredth of
+               a penny. Rounding that to "0.00c" would reintroduce, one unit down, exactly
+               the thing the branch above avoids: a real spend displayed as nothing. */
+            value.textContent = total > 0 ? '<0.01c' : '0.00c';
+        }
+
+        const basis = tokens.cost_fully_measured
+            ? 'from counts the provider reported'
+            : 'partly from estimated counts, so treat it as a rough figure';
+        note.textContent = `$${tokens.cost.input_usd.toFixed(5)} in + $${tokens.cost.output_usd.toFixed(5)} out, ${basis}. Prices as of ${tokens.prices_as_of}; the provider's own bill is the real answer.`;
     }
 
     // Updates the active LLM persona/identity (chat terminal label, sender names, settings
@@ -1453,6 +1521,86 @@ document.addEventListener('DOMContentLoaded', () => {
        re-probed before anything is refused. */
     let brainNeedsAttention = false;
 
+    /* The stream carries two different things down one pipe: the answer, and the trace
+       lines that say what the machine did on the way to it -- `\u2699 vault notes loaded: ...`,
+       `\u2699 read_file ...`. A vault trace goes out the instant the turn starts, before the
+       model has been asked anything, so treating it as "the answer has begun" retires the
+       waiting state while the wait is entirely ahead of you. Everything below asks this
+       instead of asking whether any delta arrived at all. */
+    const TRACE_LINE = /`\u2699[^`]*`/g;
+
+    function withoutTraceLines(text) {
+        return text.replace(TRACE_LINE, '').trim();
+    }
+
+    /* How long a wait has to get before the HUD stops just spinning and says something
+       about it. Thirty seconds is roughly where a person stops believing the machine is
+       working and starts believing it has hung. */
+    const WAIT_NUDGE_SECONDS = 30;
+
+    /* What an unanswered question looks like while it is unanswered.
+       Until now the entire answer to "is it doing anything?" was a blinking cursor on an
+       empty line, which says the same thing at two seconds and at two minutes. It is a
+       local model on somebody's own desktop: two minutes is a perfectly normal cold start
+       on a large model and a slow disk, and it is also exactly what a crash looks like.
+       Three things, in the order somebody needs them:
+         - a counter, so the wait is a number rather than a feeling;
+         - on the first question of the session, why this one is slow -- the model is being
+           read off disk into memory, once, and every answer after it is faster. Without
+           that line the first impression of the app is the slowest it will ever be;
+         - past thirty seconds, that this is still normal.
+       It lives in its own node under the reply body rather than in it, so the streamed
+       text that replaces the body's contents cannot wipe it, and so removing it is one
+       call. Returns the function that stops it, which is safe to call more than once --
+       it is called from the first delta and again from the finally block. */
+    function startWaitFeedback(replyDiv) {
+        const note = document.createElement('div');
+        note.className = 'wait-note';
+
+        const timer = document.createElement('div');
+        timer.className = 'wait-note-timer';
+        note.appendChild(timer);
+
+        if (!hasAnsweredThisSession) {
+            const first = document.createElement('div');
+            first.className = 'wait-note-line';
+            first.textContent = 'First question since launch. The model is being loaded into '
+                + 'memory, which only happens once -- this answer is always the slowest one.';
+            note.appendChild(first);
+        }
+
+        replyDiv.appendChild(note);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+
+        const started = Date.now();
+        let nudged = false;
+        let handle = null;
+
+        const tick = () => {
+            const seconds = Math.floor((Date.now() - started) / 1000);
+            timer.textContent = `thinking... ${seconds}s`;
+            if (seconds >= WAIT_NUDGE_SECONDS && !nudged) {
+                nudged = true;
+                const nudge = document.createElement('div');
+                nudge.className = 'wait-note-line';
+                nudge.textContent = 'Still working. A big model on a slow disk can take a '
+                    + 'minute or more to get its first word out -- nothing has gone wrong.';
+                note.appendChild(nudge);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        };
+
+        tick();
+        handle = setInterval(tick, 1000);
+
+        return function stop() {
+            if (handle === null) return;
+            clearInterval(handle);
+            handle = null;
+            note.remove();
+        };
+    }
+
     async function handleSendMessage(customPrompt = null) {
         const text = customPrompt || chatInput.value.trim();
         if (!text || isWaitingForResponse) return;
@@ -1493,7 +1641,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // The reply's own message node, created empty and filled in as deltas arrive --
         // the cursor class marks it as still being written.
         const replyDiv = appendMessage(currentAgentName, '');
-        replyDiv.classList.add('typing-cursor');
+        /* No typing cursor yet. It means "words are arriving", and while the wait note is
+           up no words are arriving -- two different claims about the same moment, one of
+           them false. The cursor goes on when the first real text does, below. */
+        const stopWaiting = startWaitFeedback(replyDiv);
 
         let rendered = '';
         let spoken = '';        // text already handed to TTS
@@ -1521,12 +1672,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const onDelta = (delta) => {
             if (!delta) return;
-            if (firstDelta) {
-                // Generation has actually started; stop pretending to think.
+            rendered += delta;
+            if (firstDelta && withoutTraceLines(rendered)) {
+                // The model has said an actual word -- not just a trace line about what is
+                // being loaded for it. Stop pretending to think, and stop counting: from
+                // here the arriving text is the feedback.
                 firstDelta = false;
+                stopWaiting();
+                replyDiv.classList.add('typing-cursor');
                 hologram.setState('IDLE');
             }
-            rendered += delta;
             replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
@@ -1541,6 +1696,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const data = await streamChat(text, 'default', onDelta);
+            // Something came back, so whatever loading was going to happen has happened:
+            // no later question in this session gets the first-run explanation.
+            hasAnsweredThisSession = true;
             const reply = data.reply;
             const agentName = data.agent_name;
 
@@ -1576,6 +1734,9 @@ document.addEventListener('DOMContentLoaded', () => {
             hologram.setState('IDLE');
             if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
         } finally {
+            // A reply that never streamed a delta -- an error, or a non-streaming
+            // transport -- leaves the counter running. This is the backstop.
+            stopWaiting();
             isWaitingForResponse = false;
         }
     }
@@ -3540,6 +3701,25 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             chatContainer.innerHTML = '';
             appendMessage(currentAgentName, 'Conversation logs cleared. Ready.');
+        }
+    });
+
+    /* Forgets every speed reading. Confirmed rather than instant: the readings are the only
+       record of how this machine performs, they take real conversations to rebuild, and the
+       button sits on a panel the operator may well be clicking around to read. */
+    document.getElementById('speed-reset')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        if (!confirm('Forget every model speed reading and start measuring again?')) return;
+        try {
+            if (IS_TAURI) {
+                await tauriInvoke('reset_benchmarks_rust');
+            } else {
+                await apiFetch('/api/benchmarks/reset', { method: 'POST' });
+            }
+            const board = document.getElementById('speed-board');
+            if (board) board.textContent = '';
+        } catch (err) {
+            console.warn('[AETHER1] could not reset the speed readings:', err);
         }
     });
 
