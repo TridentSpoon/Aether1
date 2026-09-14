@@ -75,10 +75,13 @@ or background) -- set the sizes and the motion, and press **Use this in Aether1*
 HUD picks it up immediately: the two windows share the saved recipe, so an open HUD
 updates the moment you save, with no reload.
 
-Some of the options in each tier are generic, built for the kit. Others are adapted
-pieces of the hand-built avatars whose designs are open for reuse this way -- White
-Rabbit, Operator, hAlcy, R.E.D. 9000, A.R.X.LIMES, A.R.X.LOGOS and A1ter_nul. (The Nexus
-/ Nexus Sent and A1 are not sources for the kit -- their designs stay theirs alone.) See
+pieces of the hand-built avatars. The rule is opt-out, not opt-in: every avatar's
+components are available to the kit -- and so to Genesis and the custom-avatar builder
+-- by default, including avatars still behind a Trace Protocol unlock. They stay out
+only when a reason is written down for it. The only current exceptions are the Nexus /
+Nexus Sent and A1, whose designs stay theirs alone. (`avatar-senti.js` is the Nexus Sent
+avatar under a different filename -- id `senti`, label "Nexus Sent" -- so it falls under
+this same exception, not a separate avatar left out by mistake.) See
 `js/hologram/parts.js` for the full catalogue.
 
 What is saved is a *recipe* — a few lines of settings, not code. A recipe can be pasted
@@ -134,6 +137,12 @@ does not take the HUD down with it.
   in `avatar-loader.js` (`'your-id': { file: 'avatar-your-id.js', v: 1 }`), and add a picker
   button with `data-avatar-val="your-id"`. Bump that `v` whenever you change the file, so
   browsers fetch the new one rather than the copy they already have.
+- **Add it to the kit too.** Per the opt-out rule above, adapt the new avatar's cores,
+  inner rings, outer rings and effects into `parts.js` as part of the same change --
+  a fresh, simplified build using `api.helpers`, not the original file's code (see the
+  note at the top of `parts.js`) -- so it's available to Genesis and the custom-avatar
+  builder from day one. Skip this only if the avatar is meant to stay exclusive, and
+  say so in `parts.js`'s exception list.
 
 **An avatar file is a program.** It runs with the same access as the rest of the page.
 Load files you wrote or trust — the same care you would give any script. A recipe is
