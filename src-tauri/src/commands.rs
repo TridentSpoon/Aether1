@@ -248,6 +248,17 @@ pub fn clear_messages(engine: &LlmEngine) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Throws away the model-speed scoreboard.
+///
+/// The readings describe a machine, and a machine changes -- a new graphics card, a
+/// different quantisation of the same model, an Ollama release that got faster. Without
+/// this the old numbers keep being averaged in with the new ones for as long as the
+/// database survives, and the scoreboard slowly becomes a record of a computer that no
+/// longer exists.
+pub fn reset_benchmarks(engine: &LlmEngine) -> Result<(), String> {
+    engine.db().clear_benchmarks().map_err(|e| e.to_string())
+}
+
 /// The persona catalogue Settings renders its list from. Static -- it depends on nothing but
 /// the enum -- but it goes through the same two transports as everything else rather than
 /// being written out a second time in the HTML, which is how the list and the behaviour

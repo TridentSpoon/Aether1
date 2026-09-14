@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=26">
+    <link rel="stylesheet" href="css/A1theme.css?v=27">
     <link rel="stylesheet" href="css/layout.css?v=1">
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
@@ -180,33 +180,48 @@
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
                     <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
                         <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        COGNITIVE TOKEN TELEMETRY
+                        MODEL PERFORMANCE
                     </h2>
-                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">0.0 TPS</span>
+                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">--</span>
                 </div>
 
                 <!-- Two views, because a cloud model and a local one raise different
-                     questions. Against an API the question is what you have spent; on your
-                     own hardware nothing is being spent and the question is how fast it runs
-                     and how much it can hold. The tabs alternate while nothing is happening
-                     and pin to whichever is in use once something is. -->
+                     questions. On your own hardware nothing is being spent and the question
+                     is how fast it runs; against an API the question is what it cost. The
+                     tabs alternate while nothing is happening and pin to whichever is in
+                     use once something is. -->
                 <div id="telemetry-tabs" class="flex gap-1 text-[10px] font-mono">
-                    <button type="button" class="telemetry-tab" data-telemetry-tab="usage" aria-pressed="true">USAGE</button>
-                    <button type="button" class="telemetry-tab" data-telemetry-tab="capacity" aria-pressed="false">CAPACITY</button>
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="speed" aria-pressed="true">SPEED</button>
+                    <button type="button" class="telemetry-tab" data-telemetry-tab="usage" aria-pressed="false">USAGE</button>
                 </div>
 
-                <!-- USAGE: what this session has spent. -->
-                <div class="space-y-1" data-telemetry-view="usage">
+                <!-- SPEED: how fast each model runs on this machine.
+                     A scoreboard rather than a single live reading, because the question
+                     worth answering is comparative -- "is mistral faster than llama3 here?"
+                     -- and one number in isolation cannot answer it. Rows accumulate from
+                     ordinary use; nothing extra is run to fill them. -->
+                <div class="space-y-1" data-telemetry-view="speed">
                     <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">SESSION TOKENS</span>
+                        <span class="text-slate-300">ON THIS MACHINE</span>
+                        <span id="speed-current" class="text-purple-300 font-bold">--</span>
+                    </div>
+                    <!-- Hidden until there is a board to reset. The readings describe this
+                         machine, so a new graphics card or a different quantisation makes
+                         the old ones worth throwing away rather than averaging in. -->
+                    <button type="button" id="speed-reset" class="speed-reset hidden" title="Forget every speed reading and start measuring again.">RESET READINGS</button>
+                    <div id="speed-board" class="space-y-1"></div>
+                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="speed-note">Nothing measured yet.</div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-400" id="capacity-row">
+                        <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
+                        <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
+                    </div>
+                </div>
+
+                <!-- USAGE: what this session has actually used, and what that cost. -->
+                <div class="space-y-1 hidden" data-telemetry-view="usage">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span class="text-slate-300">THIS SESSION</span>
                         <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
-                    </div>
-                    <div class="gauge-bar-track">
-                        <div id="tokens-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #7000ff, #b026ff); box-shadow: 0 0 8px rgba(176, 38, 255, 0.8);"></div>
-                    </div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
-                        <span>Used: <strong id="tokens-used-pct" class="text-purple-300">0%</strong></span>
-                        <span>Budget left: <strong id="tokens-avail-val" class="text-cyan-300">100k</strong></span>
                     </div>
                     <div class="flex justify-between text-[10px] font-mono text-slate-400">
                         <span>In: <strong id="tokens-in-val" class="text-cyan-300">0</strong> · Out: <strong id="tokens-out-val" class="text-cyan-300">0</strong></span>
@@ -215,37 +230,11 @@
                              claims and only one of them is checkable. -->
                         <span id="tokens-accounting" class="text-slate-500">--</span>
                     </div>
-                </div>
-
-                <!-- CAPACITY: what the local model is and what it can do. -->
-                <div class="space-y-1 hidden" data-telemetry-view="capacity">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">THROUGHPUT</span>
-                        <span id="capacity-tps" class="text-purple-300 font-bold">-- tok/s</span>
+                    <div class="flex justify-between text-xs font-mono pt-1" id="cost-row">
+                        <span class="text-slate-300">COST</span>
+                        <span id="cost-val" class="text-purple-300 font-bold">--</span>
                     </div>
-                    <div class="gauge-bar-track">
-                        <div id="capacity-gauge-fill" class="gauge-bar-fill" style="width: 0%; background: linear-gradient(90deg, #00b3ff, #00f0ff); box-shadow: 0 0 8px rgba(0, 240, 255, 0.8);"></div>
-                    </div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
-                        <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
-                        <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
-                    </div>
-                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="capacity-note">Nothing local is answering yet.</div>
-                </div>
-
-                <!-- Token History Graph / Canvas -->
-                <div class="space-y-1 pt-1">
-                    <div class="text-[10px] font-mono text-slate-400 flex justify-between">
-                        <!-- Sits outside both views because it is true of either: a history
-                             of how big each turn was. "Consumption" was only ever right for
-                             a metered provider, and on your own hardware nothing is being
-                             consumed. -->
-                        <span>TOKEN HISTORY</span>
-                        <span>BURST SPARKLINE</span>
-                    </div>
-                    <div class="bg-black/60 p-1.5 rounded border border-purple-500/30">
-                        <canvas id="tokens-graph-canvas" width="280" height="50" class="w-full"></canvas>
-                    </div>
+                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="cost-note">Nothing has been sent anywhere yet.</div>
                 </div>
             </div>
 
@@ -1183,7 +1172,7 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=41"></script>
+    <script src="js/app.js?v=45"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

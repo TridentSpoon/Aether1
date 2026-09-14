@@ -159,3 +159,9 @@ jobs:
       # one the work was done in, so nobody sees it.
       - name: Check every text colour follows the theme
         run: ./scripts/check_theme_remap.sh
+
+      # A panel reading a field the engine stopped sending gets `undefined`, which renders
+      # as a zero rather than as an error -- a confident number derived from nothing, and
+      # only visible to someone looking at the panel.
+      - name: Check the performance panel only reads fields the engine sends
+        run: ./scripts/check_panel_fields.sh

@@ -727,6 +727,12 @@ fn clear_messages_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
     commands::clear_messages(&engine)
 }
 
+/// Rust-native equivalent of POST /api/benchmarks/reset.
+#[tauri::command(async)]
+fn reset_benchmarks_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
+    commands::reset_benchmarks(&engine)
+}
+
 /// Rust-native equivalent of POST /api/vault/open.
 #[tauri::command(async)]
 fn open_vault_folder_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
@@ -1032,6 +1038,7 @@ fn main() {
             set_always_allowed_rust,
             get_messages_rust,
             clear_messages_rust,
+            reset_benchmarks_rust,
             open_vault_folder_rust,
             get_settings_rust,
             save_settings_rust,

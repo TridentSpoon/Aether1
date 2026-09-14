@@ -59,6 +59,29 @@ impl ActionStatus {
     }
 }
 
+/// What one model has been measured doing on this machine.
+///
+/// The scoreboard's row. Every number here is derived from replies the provider reported
+/// counts and a generation time for; nothing in it is estimated, which is why a model the
+/// operator has only talked to through a server that reports nothing never appears at all.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelBenchmark {
+    pub provider: String,
+    pub model: String,
+    /// How many replies this average is built from. Shown, because three samples and three
+    /// hundred are different levels of confidence in the same number.
+    pub samples: u64,
+    pub completion_tokens: u64,
+    /// Total tokens divided by total generation time -- see `record_benchmark` for why it
+    /// is weighted that way rather than being the mean of the per-reply rates.
+    pub average_tps: f64,
+    /// The best single reading, which is roughly what the model does once it is warm and
+    /// the machine is otherwise idle.
+    pub best_tps: f64,
+    pub last_tps: f64,
+    pub last_used: String,
+}
+
 /// One row of the action log.
 #[derive(Debug, Clone, Serialize)]
 pub struct ActionRecord {
@@ -145,6 +168,17 @@ impl MemoryDb {
                 status TEXT NOT NULL,
                 result TEXT,
                 undo_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS model_benchmarks (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                samples INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                generation_seconds REAL NOT NULL DEFAULT 0,
+                best_tps REAL NOT NULL DEFAULT 0,
+                last_tps REAL NOT NULL DEFAULT 0,
+                last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (provider, model)
             );",
         )?;
         db.migrate()?;
@@ -427,6 +461,92 @@ impl MemoryDb {
         let rows = stmt.query_map(params![limit], action_from_row)?;
         rows.collect()
     }
+
+    /// The directory the database lives in, which is also where hand-editable companion
+    /// files (the model price list) are looked for.
+    pub fn dir(&self) -> Option<&Path> {
+        self.db_path.parent()
+    }
+
+    /// Folds one reply into a model's running benchmark.
+    ///
+    /// Only replies whose token count and generation time both came from the provider
+    /// should reach this -- see `LlmEngine::record_benchmark_sample`. A sample built on a
+    /// character-count guess, or timed by a wall clock that includes loading the model off
+    /// disk, would make the scoreboard slower and less true the more it was used.
+    ///
+    /// Totals rather than a running average, because the average has to be token-weighted
+    /// to mean anything. Averaging the per-reply rates instead would let a four-token
+    /// "Yes." -- whose rate is mostly measurement noise -- count for as much as a
+    /// five-hundred-token essay.
+    pub fn record_benchmark(
+        &self,
+        provider: &str,
+        model: &str,
+        completion_tokens: u64,
+        generation_seconds: f64,
+    ) -> rusqlite::Result<()> {
+        // is_finite before the comparison, because a NaN duration compares false against
+        // everything -- including `<= 0.0` -- and would otherwise sail through to divide
+        // into a speed of NaN and sit at the top of a board ordered by speed.
+        if completion_tokens == 0 || !generation_seconds.is_finite() || generation_seconds <= 0.0 {
+            return Ok(());
+        }
+        let tps = completion_tokens as f64 / generation_seconds;
+        self.connect()?.execute(
+            "INSERT INTO model_benchmarks
+                 (provider, model, samples, completion_tokens, generation_seconds, best_tps, last_tps, last_used)
+             VALUES (?1, ?2, 1, ?3, ?4, ?5, ?5, CURRENT_TIMESTAMP)
+             ON CONFLICT(provider, model) DO UPDATE SET
+                 samples = samples + 1,
+                 completion_tokens = completion_tokens + ?3,
+                 generation_seconds = generation_seconds + ?4,
+                 best_tps = MAX(best_tps, ?5),
+                 last_tps = ?5,
+                 last_used = CURRENT_TIMESTAMP",
+            params![provider, model, completion_tokens, generation_seconds, tps],
+        )?;
+        Ok(())
+    }
+
+    /// Every model this machine has measured, fastest first.
+    ///
+    /// Ordered by the token-weighted average rather than by the best or most recent
+    /// reading, because the question the scoreboard answers is "which model is fast on this
+    /// machine", and a single lucky reply is not an answer to it.
+    pub fn benchmarks(&self) -> rusqlite::Result<Vec<ModelBenchmark>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT provider, model, samples, completion_tokens, generation_seconds, best_tps, last_tps, last_used \
+             FROM model_benchmarks WHERE generation_seconds > 0 \
+             ORDER BY (completion_tokens / generation_seconds) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let completion_tokens: u64 = row.get(3)?;
+            let generation_seconds: f64 = row.get(4)?;
+            let round = |v: f64| (v * 10.0).round() / 10.0;
+            Ok(ModelBenchmark {
+                provider: row.get(0)?,
+                model: row.get(1)?,
+                samples: row.get(2)?,
+                completion_tokens,
+                average_tps: round(completion_tokens as f64 / generation_seconds),
+                best_tps: round(row.get(5)?),
+                last_tps: round(row.get(6)?),
+                last_used: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Throws the scoreboard away. The readings are about a machine, and a machine changes
+    /// -- new graphics card, a different quantisation of the same model, Ollama updated --
+    /// so there has to be a way to stop averaging the old one in with the new.
+    pub fn clear_benchmarks(&self) -> rusqlite::Result<()> {
+        self.connect()?
+            .execute("DELETE FROM model_benchmarks", [])?;
+        Ok(())
+    }
 }
 
 /// Stored JSON that no longer parses (a hand-edited row, a schema change) becomes Null
@@ -463,6 +583,105 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_test_{name}_{}_{n}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(path).expect("temp db should open")
+    }
+
+    #[test]
+    fn a_model_accumulates_across_replies() {
+        let db = temp_db("bench_accumulate");
+        // 100 tokens in 10s, then 300 in 10s: 400 tokens across 20 seconds.
+        db.record_benchmark("Ollama", "mistral:latest", 100, 10.0)
+            .unwrap();
+        db.record_benchmark("Ollama", "mistral:latest", 300, 10.0)
+            .unwrap();
+
+        let board = db.benchmarks().unwrap();
+        assert_eq!(board.len(), 1, "the same model is one row, not two");
+        assert_eq!(board[0].samples, 2);
+        assert_eq!(board[0].completion_tokens, 400);
+        assert_eq!(board[0].average_tps, 20.0, "400 tokens over 20 seconds");
+        assert_eq!(board[0].best_tps, 30.0, "the faster of the two readings");
+        assert_eq!(board[0].last_tps, 30.0);
+    }
+
+    /// The average has to be token-weighted. A four-token "Yes." is mostly measurement
+    /// noise, and averaging the per-reply *rates* would let it count for as much as the
+    /// long reply that actually says what the model can do.
+    #[test]
+    fn the_average_is_weighted_by_tokens_not_by_reply() {
+        let db = temp_db("bench_weighted");
+        db.record_benchmark("Ollama", "m", 1000, 100.0).unwrap(); // 10 tok/s over a long reply
+        db.record_benchmark("Ollama", "m", 4, 0.02).unwrap(); //  200 tok/s over four tokens
+
+        let board = db.benchmarks().unwrap();
+        // Weighted: 1004 tokens / 100.02s ~= 10.0. Unweighted it would be about 105.
+        assert_eq!(board[0].average_tps, 10.0);
+    }
+
+    #[test]
+    fn the_board_is_ordered_fastest_first() {
+        let db = temp_db("bench_order");
+        db.record_benchmark("Ollama", "slow", 100, 20.0).unwrap();
+        db.record_benchmark("Ollama", "fast", 100, 2.0).unwrap();
+        db.record_benchmark("Ollama", "middling", 100, 5.0).unwrap();
+
+        let names: Vec<String> = db
+            .benchmarks()
+            .unwrap()
+            .into_iter()
+            .map(|b| b.model)
+            .collect();
+        assert_eq!(names, vec!["fast", "middling", "slow"]);
+    }
+
+    /// Two providers can serve a model of the same name (Ollama's llama3 and a hosted one),
+    /// and they are not the same measurement.
+    #[test]
+    fn the_same_model_on_two_providers_is_two_rows() {
+        let db = temp_db("bench_providers");
+        db.record_benchmark("Ollama", "llama3", 100, 10.0).unwrap();
+        db.record_benchmark("LM Studio", "llama3", 100, 5.0)
+            .unwrap();
+        assert_eq!(db.benchmarks().unwrap().len(), 2);
+    }
+
+    /// A reply with no tokens, or one that claims to have taken no time, would divide into
+    /// zero or infinity and put either on the scoreboard as a speed.
+    #[test]
+    fn a_sample_with_nothing_in_it_is_ignored() {
+        let db = temp_db("bench_empty");
+        db.record_benchmark("Ollama", "m", 0, 10.0).unwrap();
+        db.record_benchmark("Ollama", "m", 100, 0.0).unwrap();
+        db.record_benchmark("Ollama", "m", 100, -1.0).unwrap();
+        assert!(db.benchmarks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn resetting_empties_the_board() {
+        let db = temp_db("bench_reset");
+        db.record_benchmark("Ollama", "m", 100, 10.0).unwrap();
+        assert_eq!(db.benchmarks().unwrap().len(), 1);
+        db.clear_benchmarks().unwrap();
+        assert!(db.benchmarks().unwrap().is_empty());
+    }
+
+    /// A database written by a build from before the scoreboard existed must open and gain
+    /// the table, not fail on the first reading.
+    #[test]
+    fn an_older_database_gains_the_benchmark_table() {
+        let path = std::env::temp_dir().join(format!(
+            "aether1_test_bench_migrate_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        // Stand up a database with only the pre-scoreboard tables in it.
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+
+        let db = MemoryDb::open(&path).expect("an older database should still open");
+        db.record_benchmark("Ollama", "m", 100, 10.0).unwrap();
+        assert_eq!(db.benchmarks().unwrap().len(), 1);
     }
 
     #[test]

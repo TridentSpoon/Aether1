@@ -735,6 +735,82 @@ body {
     vertical-align: middle;
 }
 
+/* ---- Model speed scoreboard -----------------------------------------------
+   One row per model this machine has been timed running: name, a bar, and the
+   average in tokens per second. The bar is scaled against the fastest model on
+   the board rather than a fixed ceiling, so the comparison stays readable on a
+   laptop running a 3B model and on a desktop running a 70B one.
+
+   Grid rather than flex so the three columns line up down the board: a long
+   model name must not push its own number out of the column the number above
+   it is in. minmax(0, 1fr) on the bar, not 1fr, so a long name shrinks it
+   instead of overflowing the panel. */
+.speed-row {
+    display: grid;
+    grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) 2.6rem;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.625rem;
+}
+
+.speed-row-name {
+    color: var(--text-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.speed-row-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--tint-main);
+    border: 1px solid var(--border-neon);
+    overflow: hidden;
+}
+
+.speed-row-fill {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--neon-cyan);
+    transition: width 0.3s ease;
+}
+
+/* The model currently answering, so the row you are watching is findable at a
+   glance without having to read the names. */
+.speed-row-fill-current {
+    background: var(--neon-purple);
+    box-shadow: 0 0 6px var(--neon-purple);
+}
+
+/* A quiet control, not a button competing with the scoreboard it sits above.
+   It reads as a link until hovered, which is the weight a destructive-but-
+   recoverable action deserves here. */
+.speed-reset {
+    align-self: flex-start;
+    padding: 1px 0;
+    border: 0;
+    background: none;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.625rem;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: color 0.15s ease;
+}
+
+.speed-reset:hover {
+    color: var(--text-highlight);
+    text-decoration: underline;
+}
+
+.speed-row-value {
+    color: var(--text-dim);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 /* ---- Settings groups ------------------------------------------------------
    The Agent & System tab is six collapsible groups rather than one flat scroll.
    Written against the theme's own custom properties, like everything else here,
