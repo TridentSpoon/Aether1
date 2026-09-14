@@ -121,10 +121,12 @@ pub struct VoiceAdvice {
 /// these steps are an offer rather than a requirement.
 fn piper_steps(os: Os) -> Vec<Step> {
     let voices = Step::open(
-        "Download a voice",
-        "Voices are separate files. Pick one, download both the .onnx file and the \
-         .onnx.json next to it, and put them in the voices folder from the step above. \
-         en_GB-alba-medium or en_US-amy-medium are good, ordinary-sounding places to start.",
+        "Download a voice -- BOTH files",
+        "A voice is two files, and it will not work with only one of them. Open a voice \
+         folder and download the .onnx file AND the small .onnx.json sitting next to it, \
+         then put both in the voices folder from the step above. en_GB-alba-medium or \
+         en_US-amy-medium are good, ordinary-sounding places to start. Taking only the big \
+         .onnx is the usual reason a voice that looks installed never speaks.",
         "https://huggingface.co/rhasspy/piper-voices/tree/main/en",
     );
 
@@ -153,11 +155,27 @@ fn piper_steps(os: Os) -> Vec<Step> {
             voices,
         ],
         Os::Linux => vec![
+            Step::say(
+                "Careful: 'piper' is two different programs",
+                "Do NOT install the package called plainly 'piper'. On Arch, CachyOS and \
+                 several other distributions that name belongs to an app for configuring \
+                 gaming mice, which has nothing to do with speech. The one you want is \
+                 Piper TTS, and it is usually packaged as piper-tts.",
+            ),
             Step::run(
-                "Install Piper",
-                "Most distributions package it. Try your package manager first; if it is not \
-                 there, the releases page has a tarball that works anywhere.",
-                "sudo pacman -S piper-tts || sudo apt install piper-tts",
+                "Install Piper TTS",
+                "On Arch and CachyOS it lives in the AUR, so it needs an AUR helper rather \
+                 than pacman -- the line below is the Arch one. On Debian, Ubuntu and Mint, \
+                 use: sudo apt install piper-tts. If neither finds it, use the tarball step \
+                 below instead, which needs no package manager at all.",
+                "yay -S piper-tts-bin",
+            ),
+            Step::open(
+                "...or take the tarball, which works on any distribution",
+                "Download the file ending in linux_x86_64.tar.gz, unpack it, and copy the \
+                 piper program inside to ~/.local/bin (create that folder if it is not \
+                 there). Aether1 looks there as well as on your PATH.",
+                "https://github.com/rhasspy/piper/releases/latest",
             ),
             Step::say(
                 "Where the voices go",

@@ -1450,6 +1450,66 @@ on.
 the consent path one action at a time; nothing here makes the companion an agent that
 executes a plan. The gap named in step 26 stays named.
 
+### Step 36: two programs called piper, and a voice that is two files — **shipped**
+
+The operator, after step 35: *"voice could be due to the alma voice downloading. Piper is
+also a mouse app?"*
+
+Both halves of that are right, and between them they explain a complaint that has been
+standing since the voice work shipped: *"STILL voice eludes me, and that is with things
+installed."* It was not eluding them. Aether1 was reporting success and then producing
+silence, twice over, and the guide was sending them somewhere that does not exist.
+
+**`piper` is two unrelated programs.** [libratbag/piper](https://github.com/libratbag/piper)
+is a GTK application for configuring gaming mice. It is the one in Arch's official
+repositories, so on the operator's CachyOS box `pacman -S piper` installs a mouse utility,
+and a search for "piper linux" finds it first. Piper TTS is in the AUR as `piper-tts-bin`.
+Our own wizard was telling people to run `sudo pacman -S piper-tts`, which is not a package
+on Arch at all, and then falling through to `apt` on a machine that has no `apt`.
+
+Worse, `PIPER_BINARIES` listed `"piper"` **first**, so a machine with the mouse app and no
+Piper TTS found `/usr/bin/piper`, reported the good offline voice as installed, and then
+piped chat text into a mouse configurator. Reordering is not the fix — a box with only the
+mouse app still matches. `is_piper_tts` now asks each candidate `--help` and accepts it only
+if it mentions `--model` or `onnx`, which is the one flag a speech synthesiser cannot do
+without and a mouse configurator has no reason to mention. `--version` would not
+discriminate: both answer it. The result is cached in a `OnceLock`, because this spawns a
+process and `voice_status` is re-asked on every settings change.
+
+A binary that cannot be run, or that says nothing recognisable, is treated as not-Piper. The
+asymmetry is deliberate: a wrong "no" costs the OS voice instead of the better one, a wrong
+"yes" costs silence with a tick beside it, and silence with a tick is the exact failure this
+module exists to prevent.
+
+**A voice is two files.** Every voice on Hugging Face is a large `.onnx` and a small
+`.onnx.json` beside it, with separate download buttons, and Piper will not load the model
+without the sidecar. `piper_voice` accepted any `.onnx` it found — so the natural mistake of
+taking only the obvious file produced, again, a tick and then silence. `usable_voice` now
+requires the sidecar and a plausible size (`MIN_VOICE_BYTES`, one megabyte: the smallest
+real voices are the `x_low` models at five). The size check catches the other shape of the
+same problem — a download that stopped early, an error page saved under the model's name, a
+git-lfs pointer — each of which exists on disk and satisfies `exists()`.
+
+A configured path is checked exactly as an auto-detected one is. Pointing the setting at a
+half-downloaded file is as easy as leaving one in the folder, and trusting the setting
+because a human typed it would only move the silent failure somewhere harder to see.
+
+**Saying which.** `voice_problem` is split out from `usable_voice` so the failure names
+itself: *"en_GB-alba-medium.onnx is missing the small en_GB-alba-medium.onnx.json file that
+has to sit beside it"*, or *"is only 4 KB ... the download probably stopped early"*. The old
+message would have said "no .onnx voice was found" to someone looking directly at the voice
+file they had just downloaded, which is worse than saying nothing: it sends them to download
+it a second time.
+
+The wizard's Linux steps now lead with the warning about the name, give `yay -S
+piper-tts-bin` for Arch with `apt install piper-tts` named in the detail, offer the
+distribution-agnostic tarball as a peer route rather than a footnote, and retitle the voice
+step *"Download a voice -- BOTH files"*.
+
+**What this does not fix.** Piper is still a manual install: Aether1 does not fetch the
+binary or the voice for you, and every route above ends with a human unpacking something.
+That, not the diagnosis, is what would actually make this one step.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1465,17 +1525,19 @@ event log, honest token telemetry, and native tool calling.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Push-to-talk from outside the HUD.** The operator's standing complaint — *"STILL voice
-   eludes me, and that is with things installed"* — is the loudest thing left. Both engines
-   work; holding a key to talk from another application needs an OS-level press-and-hold the
-   global-shortcut plugin does not express yet.
-2. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
+1. **Fetching Piper and a voice automatically.** Step 36 made the failures legible; it did
+   not remove them. Every route to the good voice still ends with a human downloading a
+   tarball and two files by hand, which is the remaining half of *"STILL voice eludes me."*
+2. **Push-to-talk from outside the HUD.** Both engines work; holding a key to talk from
+   another application needs an OS-level press-and-hold the global-shortcut plugin does not
+   express yet.
+3. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-3. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
+4. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
    it changes what the thing feels like more than its cost suggests.
-4. **Step 19, several local models.** A stated core requirement, and still deliberately not
+5. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
    download path it would need already exist in `setup.rs`.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
-which is correct: what they should be depends on the four above.
+which is correct: what they should be depends on those above.

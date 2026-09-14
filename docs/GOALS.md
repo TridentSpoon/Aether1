@@ -176,9 +176,13 @@ Built (steps 1–12, 14, 20–35 of [IMPLEMENTATION.md](IMPLEMENTATION.md)):
 
 Missing, against the three things above:
 
+- **The good voice is still a manual install.** Piper's binary and its voice files are
+  fetched by hand, from a project whose name collides with an unrelated gaming-mouse app.
+  Step 36 made every failure along that path say what is wrong instead of reporting success
+  and going quiet, but the path itself is still four manual steps.
 - **The hotkey doesn't reach the microphone.** Push-to-talk works while the HUD has focus;
   holding a key to talk from another application needs an OS-level press-and-hold that the
-  global-shortcut plugin doesn't express yet. This is the loudest gap left.
+  global-shortcut plugin doesn't express yet.
 - **It proposes actions, it doesn't run errands.** Pillar 2's *change* and *do* verbs go
   through the consent path one action at a time. Nothing yet turns "clear out the build
   caches" into a plan with several steps in it.
