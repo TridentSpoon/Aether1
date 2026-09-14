@@ -13,6 +13,17 @@
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
     <link rel="stylesheet" href="css/A1theme.css?v=24">
     <link rel="stylesheet" href="css/layout.css?v=1">
+    <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
+         `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
+         layout.css hide everything but that one panel with no flash of the full three-column
+         HUD first. See the [data-solo-panel] rules in css/layout.css and the script further
+         down that adds .solo-target to the matching panel once it exists in the DOM. -->
+    <script>
+        (function () {
+            var m = /(?:^|[?&])panel=([a-z]+)(?:&|$)/.exec(location.search);
+            if (m) document.documentElement.setAttribute('data-solo-panel', m[1]);
+        })();
+    </script>
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
@@ -177,6 +188,7 @@
             <!-- Token Usage & Availability Telemetry -->
             <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens">
                 <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+                <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Token Telemetry in its own window">⧉</button>
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
                     <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
                         <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
@@ -252,6 +264,7 @@
             <!-- Hardware Telemetry -->
             <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware">
                 <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+                <button type="button" class="panel-undock" data-undock="hardware" title="Open this panel in its own window" aria-label="Open Hardware Telemetry in its own window">⧉</button>
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
                     <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider flex items-center gap-1.5">
                         <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg>
@@ -327,6 +340,7 @@
             <!-- Tactical Commands -->
             <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands">
                 <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+                <button type="button" class="panel-undock" data-undock="commands" title="Open this panel in its own window" aria-label="Open Quick Commands in its own window">⧉</button>
                 <h3 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">
                     TACTICAL QUICK COMMANDS
                 </h3>
@@ -353,6 +367,12 @@
         <section class="hud-column" data-column="1">
         <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <!-- Unlike the other panels' Undock, this one doesn't open a bordered copy of
+                 itself -- it opens the existing floating "Desktop Sprite" window (see
+                 toggle_sprite_window_rust): transparent, undecorated, always-on-top,
+                 click-to-chat. Same avatar, same "undock this panel" idea, just with the
+                 presentation that actually suits sitting on top of your desktop. -->
+            <button type="button" class="panel-undock" data-undock="hologram" title="Float the avatar on your desktop (Desktop Sprite Mode)" aria-label="Float the avatar on your desktop">⧉</button>
             <div id="hologram-viewport" class="w-full h-full min-h-[300px] flex items-center justify-center relative cursor-grab active:cursor-grabbing"></div>
 
             <div class="viewport-label absolute top-3 left-3 text-[10px] font-mono pointer-events-none">
@@ -379,6 +399,7 @@
         <section class="hud-column" data-column="2">
         <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col rounded overflow-hidden" data-panel="chat">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <button type="button" class="panel-undock" data-undock="chat" title="Open this panel in its own window" aria-label="Open the Neural Dialogue Stream in its own window">⧉</button>
             <div class="bg-slate-950/60 border-b border-cyan-500/20 px-4 py-2.5 flex items-center justify-between">
                 <div class="flex items-center gap-2">
                     <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
@@ -404,6 +425,15 @@
         </section>
 
     </main>
+
+    <!-- Solo-panel corner control: only shown in a window opened by open_panel_window_rust
+         (see the inline bootstrap script in <head> and initSoloPanel() in app.js). A
+         decorated window like this one has no other way to ask to stay on top of others --
+         the "(optionally)" in an undocked panel's always-on-top pane. -->
+    <label id="solo-pin-control" class="hidden flex fixed top-1.5 right-1.5 z-50 items-center gap-1.5 text-[10px] font-mono text-cyan-300 bg-slate-950/80 border border-cyan-500/30 rounded px-2 py-1 cursor-pointer select-none">
+        <input id="solo-pin-checkbox" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+        📌 Always on top
+    </label>
 
     <!-- THE CHIN BAR. One slim strip along the bottom that is always there, so what the
          companion is doing right now never has to win space against anything else. -->
