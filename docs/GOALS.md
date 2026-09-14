@@ -54,8 +54,9 @@ history, because nothing leaves the machine when you do.
 
 ### 2. It can actually interact with your PC
 
-This is the capability the project is really about, and the one Aether1 does not have yet.
-Today the companion can *describe* your system; the goal is that it can *work* it:
+This is the capability the project is really about, and the one furthest from finished.
+The companion can now *see* your system and run a short list of programs that look at it;
+the goal is that it can *work* it:
 
 - **See** — files, processes, logs, journal entries, hardware state, what crashed and why.
 - **Change** — settings and dotfiles, package installs, services started and stopped,
@@ -69,11 +70,16 @@ that changes the machine is proposed as a plan you approve before it executes, a
 executed action is logged where you can see and undo it. An agent with root and no brakes
 is a liability; an agent that shows you its plan first is a colleague.
 
-### 3. It remembers, and becomes yours
+**Consent that never learns is its own kind of failure**, though. An assistant that asks the
+same question about the same folder forever is not being careful, it is being broken, and
+the operator will switch the whole layer off to make it stop. The answer is not a looser
+prompt but a wider *field*: each speciality reads the folders its job needs without asking,
+you add folders to that speciality in Settings, and the request stops coming up. What no
+setting can widen is the list of files that are never read — passwords, keys, and Aether1's
+own database — which sits below the domain check and beats a domain, an approval and an
+elevation alike.
 
-Aether1 already writes chat history and explicit `remember that …` facts to a local SQLite
-store (`src-tauri/src/llm/db.rs`). That is a start, but a database is the wrong home for
-the part of memory that matters.
+### 3. It remembers, and becomes yours
 
 **Durable memory is a folder of plain text files** — a vault, in your home directory,
 that you can open in any editor, keep in Obsidian, search with `grep`, version with `git`,
@@ -85,6 +91,12 @@ loaded.
 
 SQLite keeps what it is genuinely good for and nothing else: chat transcripts, settings,
 and the action log — high-volume, queryable, uninteresting to read by hand.
+
+Both of those are now true rather than planned. The vault exists, primes the companion, is
+written back to, and — since step 35 — receives every conversation as a dated note under
+`daily/`, automatically and without a prompt, because asking you to approve your own
+conversation being remembered is a question with only one answer. It can be switched off,
+after which conversations stay in the database and nowhere else.
 
 **The notes link to each other, which means the mind map already exists.** Wiki-style
 links between notes are what Obsidian, Logseq and every other tool of that family render as
@@ -134,31 +146,46 @@ it knows, wearing whichever of the personas you chose.
 
 ## Where we are today
 
-Built (steps 1–5 of [IMPLEMENTATION.md](IMPLEMENTATION.md)):
+Built (steps 1–12, 14, 20–35 of [IMPLEMENTATION.md](IMPLEMENTATION.md)):
 
 - Multi-provider engine — Ollama, OpenAI-compatible, Gemini, Anthropic — streaming, with
-  provider auto-detection and one-click model pulls (`llm/providers.rs`,
-  `model_scanner.rs`).
+  provider auto-detection, one-click model pulls, hardware-aware model suggestions and a
+  local-only mode that refuses to leave the machine (`llm/providers.rs`, `model_scanner.rs`,
+  `setup.rs`).
 - Reachable without the HUD: global hotkey, `aether1 prompt|status|say|toggle`, and a
   headless HTTP/WebSocket mode (`cli.rs`, `hotkey.rs`, `server.rs`).
 - Tools behind a path guard and a consent path: read-only ones run freely, anything that
   changes the machine is proposed and waits for approval, and everything is logged with
-  who allowed it and how to undo it (`tools/`, `llm/db.rs`).
+  who allowed it and how to undo it (`tools/`, `llm/db.rs`). Native tool-calling wire
+  formats where the provider has them, a prompt-level fallback where it doesn't.
+- Specialities rather than costumes: each persona reads the folders its job needs, asks
+  once per request for anything else, and can have folders added to its field in Settings
+  so it stops asking. The never-read list sits below all of it (`tools/domain.rs`,
+  `tools/fs_guard.rs`).
+- A command runner that ships usable: a short starter allowlist of programs that can only
+  look at the machine, never change it, every run still proposed for approval
+  (`tools/mutating.rs`).
+- The vault: a folder of markdown notes it primes from, writes back to, searches and
+  archives — and a dated note per day holding every conversation, written automatically
+  (`vault/`).
 - Speech in and out without the network, given a local engine: Piper for synthesis,
   whisper.cpp for recognition, hold-Space to talk (`llm/tts.rs`, `llm/stt.rs`).
-- Cross-platform host telemetry, personas with per-persona voices, identity forging,
-  holographic avatars and HUD, tray presence, setup/packaging scripts.
+- Cross-platform host telemetry, a model-performance scoreboard built from real requests,
+  the theme engine, personas with per-persona voices, identity forging, holographic avatars
+  and HUD, tray presence, setup/packaging scripts.
 
 Missing, against the three things above:
 
-- **Memory is a database, not a vault.** Key-value facts and raw transcript: no notes, no
-  index, no retrieval, no consolidation, no observed facts, and nothing you can open in an
-  editor.
 - **The hotkey doesn't reach the microphone.** Push-to-talk works while the HUD has focus;
   holding a key to talk from another application needs an OS-level press-and-hold that the
-  global-shortcut plugin doesn't express yet.
+  global-shortcut plugin doesn't express yet. This is the loudest gap left.
+- **It proposes actions, it doesn't run errands.** Pillar 2's *change* and *do* verbs go
+  through the consent path one action at a time. Nothing yet turns "clear out the build
+  caches" into a plan with several steps in it.
 - **Thin context.** Telemetry reaches the prompt; logs, crashes, and the working
-  environment do not.
+  environment do not (step 13).
+- **One model at a time.** Choosing between several local models by what the question needs
+  is a stated core requirement and deliberately not started (step 19).
 
 ## Target architecture
 
@@ -181,23 +208,26 @@ output of capability.
 `aether1` CLI with `prompt`, `status`, `say` and `toggle`; streaming responses end to end
 so speech starts before generation finishes.
 
-**Phase 1b — A voice that works with the network unplugged.** Local speech synthesis and
-local speech recognition, and hold-a-key push-to-talk instead of a microphone deciding for
-itself when you meant it. This is the correction that makes principle 2 true.
+**Phase 1b — A voice that works with the network unplugged.** *(shipped, bar the global
+press-and-hold)* Local speech synthesis and local speech recognition, and hold-a-key
+push-to-talk instead of a microphone deciding for itself when you meant it. This is the
+correction that makes principle 2 true.
 
-**Phase 2 — Hands.** The tool/consent layer, then a first tool set: read files, inspect
-processes and services, change Aether1's own settings, and a vetted command runner. Native
-tool-calling wire formats for the providers that support them, with a prompt-level fallback
-for local models that don't.
+**Phase 2 — Hands.** *(shipped)* The tool/consent layer, then a first tool set: read files,
+inspect processes and services, change Aether1's own settings, and a vetted command runner.
+Native tool-calling wire formats for the providers that support them, with a prompt-level
+fallback for local models that don't.
 
-**Phase 3 — The vault.** Durable memory moves out of SQLite and into a folder of notes with
-an index at its root, which the companion primes itself from and writes back to as you
-work. Retrieval over the notes, session consolidation into notes rather than transcript,
-observed-habit capture, decay. No memory browser to build: the browser is your editor.
+**Phase 3 — The vault.** *(shipped)* Durable memory moves out of SQLite and into a folder of
+notes with an index at its root, which the companion primes itself from and writes back to
+as you work. Retrieval over the notes, session consolidation into notes rather than
+transcript, observed-habit capture, decay. No memory browser to build: the browser is your
+editor.
 
-**Phase 4 — Situation.** Crash and journal capture wired to the tray, so the companion is
-the first responder with the failing process already in context. AI telemetry — provider,
-model, tokens, spend — beside the hardware HUD it already resembles.
+**Phase 4 — Situation.** *(half shipped)* AI telemetry — provider, model, tokens, spend —
+beside the hardware HUD it already resembles, measured rather than invented. Still to do:
+crash and journal capture wired to the tray, so the companion is the first responder with
+the failing process already in context.
 
 **Phase 5 — Reach beyond itself.** Hand a task to whichever coding agent or CLI tool is
 installed and narrate the result. Possibly an MCP client, to borrow the existing tool
@@ -221,18 +251,25 @@ persona/palette identity the rest of your system can follow.
 
 ## Open questions
 
-- How wide is the command runner by default — read-only until explicitly widened, or a
-  curated allowlist out of the box? Where does "approve once" end and "approve always"
-  begin?
+- ~~How wide is the command runner by default?~~ **Settled:** a curated starter allowlist
+  of programs where no argument can change the machine, seeded once so clearing it stays
+  cleared. Every run is still proposed. And "approve always" applies to *tools* and to
+  *folders within a speciality's field*, never to running a command — `run_command` cannot
+  be pre-approved by any path.
 - Retrieval over a folder of notes: does the index plus the existing `read_file` /
   `list_dir` tools get far enough on its own, or does it need a real search index — and if
   so, grep-shaped or embeddings? Embeddings mean a second model resident in RAM alongside
   the chat model.
-- Where does the vault live, and who owns its layout? An Obsidian-compatible folder is the
-  obvious default, but the notes have to stay useful to someone who has never opened
-  Obsidian.
-- Provider-native tool calling per provider, or one normalised shape that loses fidelity on
-  some? And what do we do for small local models that tool-call badly?
+- ~~Where does the vault live, and who owns its layout?~~ **Settled:** a plain folder in
+  your home directory, set in Settings, with an index at its root, `daily/` for
+  conversations, and wiki-links between notes. Obsidian renders it; nothing requires it.
+- ~~Provider-native tool calling, or one normalised shape?~~ **Settled:** native where the
+  provider offers it, one prompt-level fallback where it doesn't (step 8). What to do about
+  small local models that tool-call badly is still open, and is part of the multi-model
+  question below.
+- Where may models live? **Settled for now:** this machine, or another on your LAN, and no
+  further. Nothing about that is technically forced; it is the boundary the project is
+  drawn around.
 - MCP client, or a first-party tool set? The first buys an ecosystem; the second keeps the
   consent model entirely ours.
 - Windows: crash capture and command execution are the most Linux-shaped parts of the

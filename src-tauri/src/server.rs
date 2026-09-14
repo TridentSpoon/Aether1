@@ -110,6 +110,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/actions/{id}/undo", post(undo_action))
         .route("/api/actions/{id}/reject", post(reject_action))
         .route("/api/tools/always-allow", post(set_always_allowed))
+        .route(
+            "/api/persona/access",
+            get(persona_access).post(set_persona_access),
+        )
         .route("/api/messages", get(get_messages).delete(clear_messages))
         .route("/api/benchmarks/reset", post(reset_benchmarks))
         .route("/api/vault/open", post(open_vault_folder))
@@ -379,6 +383,24 @@ async fn reject_action(
 ) -> Result<StatusCode, (StatusCode, String)> {
     commands::reject_action(&state.engine, id)
         .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+async fn persona_access(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::persona_access(&state.engine))
+}
+
+#[derive(Deserialize)]
+struct PersonaAccessRequest {
+    paths: Vec<String>,
+}
+
+async fn set_persona_access(
+    State(state): State<AppState>,
+    Json(req): Json<PersonaAccessRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::set_persona_access(&state.engine, req.paths)
+        .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 

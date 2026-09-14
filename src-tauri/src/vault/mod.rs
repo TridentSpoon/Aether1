@@ -431,6 +431,77 @@ pub fn remember(db: &MemoryDb, fact: &str) -> Result<String, String> {
     Ok(relative_name(db, &path))
 }
 
+/// Setting controlling whether conversations are written to `daily/`.
+const JOURNAL_SETTING: &str = "vault_journal";
+
+/// How much of one side of an exchange is kept in the day's note.
+///
+/// The journal is a record of what was discussed, not a second transcript -- the database
+/// already holds every message in full. A long reply is cut here so that a fortnight of
+/// conversations stays something a person can actually read, and so that priming (which
+/// may load a daily note) is not handed a wall of text.
+const MAX_JOURNAL_CHARS: usize = 1200;
+
+/// Whether conversations are journalled. On unless the operator turns it off.
+pub fn journal_enabled(db: &MemoryDb) -> bool {
+    db.get_setting_bool(JOURNAL_SETTING, true)
+}
+
+/// Appends one exchange to today's note in `daily/`, and returns its name.
+///
+/// This is the vault writing to its own folder as a matter of course, which is why it is a
+/// plain function rather than a tool the model calls: nothing here is the model's decision,
+/// there is no path to choose, and asking the operator to approve their own conversation
+/// being remembered would be a consent prompt with no question in it. The consent that
+/// matters is the setting above, given once.
+///
+/// Best-effort by design. A conversation that has already happened is not undone by a full
+/// disk, so a failure to write is reported to the caller and never to the operator mid-reply.
+pub fn journal_exchange(
+    db: &MemoryDb,
+    agent_name: &str,
+    prompt: &str,
+    reply: &str,
+) -> Result<String, String> {
+    if !journal_enabled(db) {
+        return Err("journalling is switched off".to_string());
+    }
+    let prompt = prompt.trim();
+    let reply = reply.trim();
+    if prompt.is_empty() && reply.is_empty() {
+        return Err("nothing was said".to_string());
+    }
+
+    let root = ensure(db)?;
+    let (date, time) = db.local_now();
+    let path = root.join("daily").join(format!("{date}.md"));
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+
+    let mut contents = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+        format!(
+            "# {date}\n\nWhat was discussed on this day, oldest first. Written automatically; \
+             edit or delete any of it freely, and fold what matters into a note of its own.\n"
+        )
+    });
+    if !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    contents.push_str(&format!(
+        "\n## {time}\n\n**You:** {}\n\n**{agent_name}:** {}\n",
+        truncate_chars(prompt, MAX_JOURNAL_CHARS),
+        truncate_chars(reply, MAX_JOURNAL_CHARS),
+    ));
+
+    std::fs::write(&path, contents)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+
+    Ok(relative_name(db, &path))
+}
+
 /// Adds a link to INDEX.md if it isn't already there. Best-effort: failing to update the
 /// index is not a reason to lose what was being remembered.
 fn link_from_index(root: &Path, note: &str, description: &str) {
@@ -569,6 +640,79 @@ mod tests {
         )
         .unwrap();
         (db, dir.join("vault"))
+    }
+
+    /// The point of the feature: an ordinary exchange ends up as markdown in a folder the
+    /// operator can open, with both halves of it readable.
+    #[test]
+    fn a_conversation_becomes_a_note_in_the_day_folder() {
+        let (db, root) = fixture("journal");
+        ensure(&db).unwrap();
+
+        let name = journal_exchange(
+            &db,
+            "HALCY",
+            "what is eating my disk?",
+            "Your cache is 40GB.",
+        )
+        .unwrap();
+        assert!(name.starts_with("daily/"), "filed under the day: {name}");
+
+        let written = std::fs::read_to_string(root.join(&name)).unwrap();
+        assert!(written.contains("what is eating my disk?"), "{written}");
+        assert!(written.contains("Your cache is 40GB."), "{written}");
+        assert!(
+            written.contains("**HALCY:**"),
+            "the agent is named: {written}"
+        );
+    }
+
+    /// A second exchange joins the first rather than replacing it. Overwriting would lose
+    /// the day, and losing the day silently is worse than never having written it.
+    #[test]
+    fn a_second_exchange_is_added_to_the_same_day() {
+        let (db, root) = fixture("journal_append");
+        ensure(&db).unwrap();
+
+        let first = journal_exchange(&db, "HALCY", "first question", "first answer").unwrap();
+        let second = journal_exchange(&db, "HALCY", "second question", "second answer").unwrap();
+        assert_eq!(first, second, "the same day is the same note");
+
+        let written = std::fs::read_to_string(root.join(&second)).unwrap();
+        assert!(written.contains("first question"), "{written}");
+        assert!(written.contains("second question"), "{written}");
+    }
+
+    /// Switched off means nothing is written at all -- not a shorter note, not an empty
+    /// file. The setting is the consent, so it has to be the whole of it.
+    #[test]
+    fn journalling_off_writes_nothing() {
+        let (db, root) = fixture("journal_off");
+        ensure(&db).unwrap();
+        db.set_setting(JOURNAL_SETTING, &serde_json::json!(false))
+            .unwrap();
+
+        assert!(journal_exchange(&db, "HALCY", "a question", "an answer").is_err());
+        let daily = root.join("daily");
+        let count = std::fs::read_dir(&daily).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(count, 0, "nothing was filed");
+    }
+
+    /// A long reply is cut rather than pasted in whole. The database already holds every
+    /// message in full; this folder is the part a person reads.
+    #[test]
+    fn a_long_reply_is_trimmed_in_the_note() {
+        let (db, root) = fixture("journal_long");
+        ensure(&db).unwrap();
+
+        let huge = "x".repeat(MAX_JOURNAL_CHARS * 3);
+        let name = journal_exchange(&db, "HALCY", "go on", &huge).unwrap();
+        let written = std::fs::read_to_string(root.join(&name)).unwrap();
+        assert!(
+            written.chars().count() < huge.chars().count(),
+            "the note is shorter than the reply it records"
+        );
+        assert!(written.contains('…'), "and says it was cut: {written}");
     }
 
     /// What the HUD says under an answer starts here: every note priming pasted in is a note

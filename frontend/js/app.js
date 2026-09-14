@@ -1436,6 +1436,54 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* The selected speciality's reading field, and the folders the operator has added to it.
+       Kept out of the bulk settings payload on purpose: every folder is checked against the
+       path guard as it is saved, and a list that is half-refused has something to report
+       back that a fire-and-forget settings write has nowhere to put. */
+    async function loadPersonaAccess() {
+        const box = document.getElementById('setting-persona-roots');
+        const who = document.getElementById('persona-roots-who');
+        if (!box) return;
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('persona_access_rust')
+                : await (await apiFetch('/api/persona/access')).json();
+            box.value = (data.extra_roots || []).join(', ');
+            if (who) who.textContent = (data.speciality || 'it').toUpperCase();
+            const note = document.getElementById('persona-roots-note');
+            if (note && data.declared_field) {
+                note.dataset.field = data.declared_field;
+            }
+        } catch (e) {
+            /* A field that cannot be read is left alone rather than blanked: showing an
+               empty box would look like "no folders are granted", which is a different
+               statement from "this could not be loaded". */
+            console.warn('[AETHER1] Could not load the persona reading field:', e);
+        }
+    }
+
+    /* Saves the folder list and returns whatever was refused, so the caller can say so.
+       Returns null when there was nothing to save or the call itself failed. */
+    async function savePersonaAccess() {
+        const box = document.getElementById('setting-persona-roots');
+        if (!box) return null;
+        const paths = box.value.split(',').map(p => p.trim()).filter(Boolean);
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('set_persona_access_rust', { paths })
+                : await (await apiFetch('/api/persona/access', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paths })
+                })).json();
+            box.value = (data.accepted || []).join(', ');
+            return data;
+        } catch (e) {
+            console.warn('[AETHER1] Could not save the persona reading field:', e);
+            return null;
+        }
+    }
+
     async function setAlwaysAllowed(tool, allowed) {
         if (IS_TAURI) return tauriInvoke('set_always_allowed_rust', { tool, allowed });
         return toolsApi('/api/tools/always-allow', {
@@ -3286,6 +3334,9 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-stt-model').value = s.stt_model_path || '';
             document.getElementById('setting-stt-language').value = s.stt_language || 'en';
             document.getElementById('setting-vault-path').value = s.vault_path || '';
+            // Absent means on, matching vault::journal_enabled -- a setting that has never
+            // been saved must not read as "off" here when the vault is in fact writing.
+            document.getElementById('setting-vault-journal').checked = s.vault_journal !== false;
             document.getElementById('setting-local-only').checked = s.local_only === true;
             // After the checkbox is set, not before: loadVoiceStatus is what discovers an
             // environment-forced mode and overrides the saved value on screen.
@@ -3293,6 +3344,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-tools').checked = s.tools_enabled === true;
             document.getElementById('setting-command-allowlist').value =
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
+            loadPersonaAccess();
             document.getElementById('setting-autospeak').checked = s.auto_speak !== false;
             autoSpeak = s.auto_speak !== false;
             // enable_sfx has been a stored setting -- and one the companion itself is
@@ -3404,6 +3456,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 stt_language: document.getElementById('setting-stt-language').value.trim() || 'en',
                 local_only: document.getElementById('setting-local-only').checked,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
+                vault_journal: document.getElementById('setting-vault-journal').checked,
                 // Sent only from the native app: the browser fallback has no window for the
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.
@@ -3439,6 +3492,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify(payload)
                 });
                 if (!resp.ok) throw new Error(`settings save failed: ${resp.status}`);
+            }
+            // After the settings, never before: the folder list attaches to the speciality
+            // that was just saved, so sending it first would file it under the old one.
+            const access = await savePersonaAccess();
+            if (access && (access.refused || []).length) {
+                appendMessage(currentAgentName,
+                    `⚠️ These folders were not added: ${access.refused.join('; ')}`);
             }
             // The mode changes what the two speech engines mean, so the readout under them
             // is re-asked rather than left describing the settings as they were.

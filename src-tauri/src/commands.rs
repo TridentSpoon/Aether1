@@ -44,6 +44,17 @@ pub fn generate_response_streamed(
     let agent_name = engine.agent_name();
     engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
 
+    // The exchange goes into the vault as well as the database, because the two are for
+    // different things: the database is the transcript, and the vault is the part the
+    // operator can open, edit and keep. Failure is reported here and nowhere else -- a
+    // reply that was generated has been generated, and a full disk is not a reason to
+    // replace it with an error.
+    if let Err(e) = crate::vault::journal_exchange(engine.db(), &agent_name, &prompt, &reply) {
+        if crate::vault::journal_enabled(engine.db()) {
+            eprintln!("[AETHER1] Could not write the conversation to the vault: {e}");
+        }
+    }
+
     Ok(serde_json::json!({
         "reply": reply,
         "agent_name": agent_name,
@@ -290,6 +301,10 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "stt_model_path": "",
         "stt_language": "en",
         "vault_path": "",
+        // On unless it has been switched off: see vault::journal_enabled. Stated here as
+        // well so the box in Settings starts ticked on a fresh install rather than
+        // starting blank and describing the opposite of what the vault actually does.
+        "vault_journal": true,
         // The HUD saves this alongside its own browser copy so the two agree; without a
         // default the key simply wouldn't come back on a fresh install, and the page would
         // have nothing to reconcile against.
@@ -374,6 +389,44 @@ pub fn reject_action(engine: &LlmEngine, id: i64) -> Result<(), String> {
 /// Adds or removes a tool from the list the operator has stopped being asked about.
 pub fn set_always_allowed(engine: &LlmEngine, tool: String, allowed: bool) -> Result<(), String> {
     tools::consent::set_always_allowed(engine.db(), tools::registry(), &tool, allowed)
+}
+
+/// What the selected persona reads without asking, and the folders the operator has added
+/// to that.
+///
+/// Reported for the *selected* persona rather than a named one, for the same reason
+/// `ToolContext::new` reads it from settings: there is one answer to "which persona is
+/// running", and a panel that let you edit a different one's field than the one in use
+/// would be a setting that appears not to work.
+pub fn persona_access(engine: &LlmEngine) -> Value {
+    let db = engine.db();
+    let key = db.get_setting_string("persona_type", "default");
+    let persona = llm::Persona::from_key(&key);
+    serde_json::json!({
+        "persona": persona.key(),
+        "speciality": persona.short_name(),
+        "declared_field": persona.domain().field(),
+        "extra_roots": tools::domain::extra_roots(db, &persona),
+        "max_extra_roots": tools::domain::MAX_EXTRA_ROOTS,
+    })
+}
+
+/// Replaces the folders in the selected persona's field.
+///
+/// Returns what was accepted and what was refused rather than failing on the first bad
+/// entry: someone correcting four folders should not lose the three that were right because
+/// of the one that was mistyped.
+pub fn set_persona_access(engine: &LlmEngine, paths: Vec<String>) -> Result<Value, String> {
+    let db = engine.db();
+    let key = db.get_setting_string("persona_type", "default");
+    let persona = llm::Persona::from_key(&key);
+    let (accepted, refused) = tools::domain::set_extra_roots(db, &persona, &paths)?;
+    Ok(serde_json::json!({
+        "persona": persona.key(),
+        "speciality": persona.short_name(),
+        "accepted": accepted,
+        "refused": refused,
+    }))
 }
 
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling

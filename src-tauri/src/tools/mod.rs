@@ -17,7 +17,7 @@ pub mod consent;
 pub mod domain;
 mod eventlog;
 pub(crate) mod fs_guard;
-mod mutating;
+pub mod mutating;
 mod notes;
 pub mod protocol;
 

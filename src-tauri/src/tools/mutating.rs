@@ -264,9 +264,56 @@ impl Tool for SetSetting {
 
 // -------------------------------------------------------------- run_command
 
-/// Setting holding the programs the operator has allowed. Empty by default: an allowlist
-/// that starts populated is a decision made on someone's behalf.
+/// Setting holding the programs the operator has allowed.
 pub(super) const ALLOWLIST_SETTING: &str = "command_allowlist";
+
+/// Set once, on the first run, to record that the starter list below has been offered.
+const SEEDED_SETTING: &str = "command_allowlist_seeded";
+
+/// The programs a fresh install starts with.
+///
+/// An empty allowlist is the safest possible default and it was the wrong one: every
+/// request to run anything was refused, which reads as a companion that cannot touch the
+/// machine at all rather than as a setting waiting to be filled in. So the list starts with
+/// something, and the rule for what may be on it is strict enough to state in one line:
+///
+/// **no argument to any of these programs can change the machine.**
+///
+/// That rule is what keeps this defensible, and it excludes almost everything people reach
+/// for first. `systemctl` is out because `systemctl stop` is a thing, `git` because
+/// `git reset --hard` is, `docker`, `ipconfig`, `hostname` and `date` likewise -- the
+/// allowlist matches on the program's name and the model chooses the arguments, so a
+/// program with one destructive subcommand is a destructive program. What is left only
+/// looks: what is mounted, what is running, what this machine is.
+///
+/// Every one of these still goes through the full approval path on every single call --
+/// `run_command` refuses to be pre-approved (see `always_allowable`). This grants the
+/// companion the right to *ask*, which is all it was missing.
+#[cfg(windows)]
+pub const STARTER_ALLOWLIST: &[&str] = &["systeminfo", "tasklist", "driverquery", "whoami"];
+#[cfg(not(windows))]
+pub const STARTER_ALLOWLIST: &[&str] = &[
+    "uname", "uptime", "df", "free", "lsblk", "lscpu", "lspci", "lsusb", "nproc", "arch", "ps",
+    "whoami", "id",
+];
+
+/// Puts the starter list in place on a fresh install, once and never again.
+///
+/// The flag is what makes "once" true. An operator who clears the list is not offering an
+/// empty box to be helpfully refilled on the next launch -- they are saying no, and a
+/// default that reasserts itself is not a default, it is a policy.
+pub fn seed_starter_allowlist(db: &crate::llm::MemoryDb) {
+    if db.get_setting_bool(SEEDED_SETTING, false) {
+        return;
+    }
+    if db.get_setting(ALLOWLIST_SETTING).ok().flatten().is_none() {
+        let _ = db.set_setting(
+            ALLOWLIST_SETTING,
+            &serde_json::json!(STARTER_ALLOWLIST.to_vec()),
+        );
+    }
+    let _ = db.set_setting(SEEDED_SETTING, &serde_json::json!(true));
+}
 
 pub fn command_allowlist(db: &crate::llm::MemoryDb) -> Vec<String> {
     db.get_setting(ALLOWLIST_SETTING)
@@ -420,6 +467,87 @@ impl Tool for RunCommand {
 mod tests {
     use super::*;
     use crate::llm::MemoryDb;
+
+    /// A fresh install can ask to run something. The empty list was the safest default and
+    /// the wrong one -- it made every request fail identically, which reads as "this cannot
+    /// touch the machine" rather than "this needs a setting".
+    #[test]
+    fn a_fresh_install_starts_with_a_few_programs_allowed() {
+        let (db, _dir) = fixture("seed_allowlist");
+        assert!(command_allowlist(&db).is_empty(), "nothing before seeding");
+
+        seed_starter_allowlist(&db);
+        let list = command_allowlist(&db);
+        assert!(!list.is_empty(), "the starter list is in place");
+        assert_eq!(list, STARTER_ALLOWLIST.to_vec());
+    }
+
+    /// An operator who clears the list means it. A default that comes back on the next
+    /// launch is not a default, it is a policy, and it would silently undo a decision made
+    /// deliberately in a settings panel.
+    #[test]
+    fn clearing_the_allowlist_survives_the_next_start() {
+        let (db, _dir) = fixture("seed_respects_empty");
+        seed_starter_allowlist(&db);
+        db.set_setting(ALLOWLIST_SETTING, &json!(Vec::<String>::new()))
+            .unwrap();
+
+        seed_starter_allowlist(&db);
+        assert!(
+            command_allowlist(&db).is_empty(),
+            "an empty list the operator chose stays empty"
+        );
+    }
+
+    /// The rule that makes the starter list defensible, asserted rather than trusted to a
+    /// comment: no entry may be a program with a subcommand that changes the machine. The
+    /// allowlist matches on name only -- the model picks the arguments -- so one
+    /// destructive subcommand makes the whole program destructive.
+    #[test]
+    fn nothing_on_the_starter_list_can_change_the_machine() {
+        const NEVER: &[&str] = &[
+            "systemctl",
+            "git",
+            "docker",
+            "pacman",
+            "apt",
+            "dnf",
+            "npm",
+            "pip",
+            "rm",
+            "mv",
+            "cp",
+            "chmod",
+            "chown",
+            "kill",
+            "mount",
+            "ipconfig",
+            "netsh",
+            "reg",
+            "sc",
+            "hostname",
+            "date",
+            "shutdown",
+            "reboot",
+            "curl",
+            "wget",
+            "ssh",
+            "sudo",
+        ];
+        for program in STARTER_ALLOWLIST {
+            assert!(
+                !NEVER.contains(program),
+                "{program} has arguments that change the machine and must not ship allowed"
+            );
+        }
+    }
+
+    /// run_command is never pre-approvable, starter list or not. The list grants the right
+    /// to ask; it does not grant the right to run.
+    #[test]
+    fn the_starter_list_does_not_make_run_command_pre_approvable() {
+        assert!(!RunCommand.always_allowable());
+    }
 
     fn fixture(name: &str) -> (MemoryDb, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("aether1_mut_{name}_{}", std::process::id()));

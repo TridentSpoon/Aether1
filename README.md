@@ -562,9 +562,17 @@ click from being open in your own editor. (In a browser tab it copies the path i
 a tab on your phone cannot open a folder on your desktop, and pretending otherwise would be
 worse than saying so.)
 
-Writing to the vault always shows you an approval card first — what it wants to record, and
-where. The one exception is `remember that …`, which writes straight through: that is your own
-instruction, and asking you to approve your own sentence would be ceremony rather than consent.
+**Your conversations are in there too.** Every exchange is appended to a note named after
+today's date inside `daily/`, as it happens, with no approval card. That is deliberate: this
+only ever writes into the folder that exists to hold your memory, and asking you to approve
+your own conversation being remembered would be a question with one answer. There is a
+checkbox for it under the vault path in Settings — **Keep a dated note of each conversation**
+— and switching it off means conversations stay inside the app and nowhere else.
+
+Writing *facts about you* to the vault is different, and still shows you an approval card
+first — what it wants to record, and where. The one exception is `remember that …`, which
+writes straight through: that is your own instruction, and asking you to approve your own
+sentence would be ceremony rather than consent.
 
 ## Personas
 
@@ -592,6 +600,14 @@ own, so it leaves yours alone.
 A persona reads its own field automatically. Everything else — another tool, or a path outside
 that field — is shown to you first and runs only if you approve it, **for that one call**. The
 next call asks again. There is no elevated mode and no timed grant.
+
+**If it keeps asking about the same folder, widen the field instead of approving forever.**
+Settings has a box — *Folders it may read without asking* — under the persona picker. Put a
+folder in it (`~/Projects, ~/Documents`, comma separated) and that persona stops asking about
+it. The list belongs to the persona selected above it and to no other, because a list that
+widened everything at once would leave the specialities on screen while quietly deleting the
+point of them. Up to twelve folders each. Anything the guard would refuse is refused as you
+save it, with the reason shown, rather than being stored and failing later.
 
 | Persona | Reads without asking |
 |---|---|
@@ -627,6 +643,30 @@ Two things this does *not* change. Every persona has the same tools available �
 decides what runs without a prompt, not what is possible. And the paths Aether1 never reads at
 all (SSH and GPG keys, cloud credentials, `/etc/shadow`, and the rest) stay off limits inside a
 persona's own field and after an approval alike: a field can only narrow.
+
+### Running programs
+
+Aether1 can run programs on your machine, and it starts able to run a few. The list is in
+Settings under **Programs it may ask to run**, and on a fresh install it holds only programs
+that *look* at the machine and cannot change it:
+
+- **Linux and macOS:** `uname`, `uptime`, `df`, `free`, `lsblk`, `lscpu`, `lspci`, `lsusb`,
+  `nproc`, `arch`, `ps`, `whoami`, `id`
+- **Windows:** `systeminfo`, `tasklist`, `driverquery`, `whoami`
+
+The rule behind that list is stricter than it looks: **no option you could give any of those
+programs changes anything**. That is why `systemctl` is not on it (it has `stop`), nor `git`
+(it has `reset --hard`), nor `ipconfig` (it has `/release`), nor even `hostname` or `date`,
+which set as well as show. The list matches on the program's *name* only, and the AI chooses
+what to put after it — so one destructive option is enough to keep a program off.
+
+Add whatever you like to the box, or empty it to allow nothing. It is seeded once, on first
+run, so emptying it stays empty.
+
+**Every run still asks you first, always.** Being on the list makes a command something the
+companion may *propose*; it never makes one run by itself. Running a command is the one thing
+that cannot be put on "don't ask me again", no matter what you tick. There is also no shell
+behind it — no pipes, no redirects, no wildcards, no chaining two commands with `&&`.
 
 ### How it asks for a tool
 

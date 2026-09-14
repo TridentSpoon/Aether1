@@ -324,6 +324,26 @@ impl MemoryDb {
         }
     }
 
+    /// Today's date and the time right now, in the machine's own timezone, as
+    /// `("2026-09-14", "14:32")`.
+    ///
+    /// SQLite rather than a date crate: the database is already open on every path that
+    /// needs this, and the alternative is a dependency carried into the binary for two
+    /// strings. `localtime` matters -- a journal note filed under yesterday's date because
+    /// the machine is west of UTC is a note the operator cannot find by looking for the day
+    /// it happened on.
+    pub fn local_now(&self) -> (String, String) {
+        self.connect()
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT date('now', 'localtime'), strftime('%H:%M', 'now', 'localtime')",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+            })
+            .unwrap_or_else(|_| ("unknown-date".to_string(), "??:??".to_string()))
+    }
+
     /// Removes a setting, so it falls back to its default. Used by undo, where "there was
     /// no value before" has to be restorable as faithfully as an old value would be.
     pub fn delete_setting(&self, key: &str) -> rusqlite::Result<()> {
