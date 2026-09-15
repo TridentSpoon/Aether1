@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=27">
+    <link rel="stylesheet" href="css/A1theme.css?v=28">
     <link rel="stylesheet" href="css/layout.css?v=2">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
@@ -356,9 +356,10 @@
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <!-- Unlike the other panels' Undock, this one doesn't open a bordered copy of
                  itself -- it opens the existing floating "Desktop Sprite" window (see
-                 toggle_sprite_window_rust): transparent, undecorated, always-on-top,
-                 click-to-chat. Same avatar, same "undock this panel" idea, just with the
-                 presentation that actually suits sitting on top of your desktop. -->
+                 toggle_sprite_window_rust): transparent, undecorated, always-on-top, and a
+                 live mirror of this same hologram (setAvatarState/pushAudioToSprite in
+                 app.js push its state and audio across), not a second, separate avatar. This
+                 panel goes quiet while it's out there -- see #hologram-floating-notice below. -->
             <button type="button" class="panel-undock" data-undock="hologram" title="Float the avatar on your desktop (Desktop Sprite Mode)" aria-label="Float the avatar on your desktop">⧉</button>
             <div id="hologram-viewport" class="w-full h-full min-h-[300px] flex items-center justify-center relative cursor-grab active:cursor-grabbing"></div>
 
@@ -368,6 +369,15 @@
             <div class="viewport-label absolute top-3 right-3 text-[10px] font-mono pointer-events-none">
                 HOLOGRAM: ACTIVE
             </div>
+
+            <!-- Replaces the whole panel above while the avatar is floating on the desktop as
+                 the sprite -- shown/hidden purely by the .avatar-floating class setHologramFloating
+                 (js/app.js) toggles on the panel; see the matching rules in A1theme.css. -->
+            <button type="button" id="hologram-floating-notice" class="hologram-floating-notice" title="Bring the avatar back into this window" aria-label="Bring the floating avatar back into this window">
+                <span class="hologram-floating-notice-icon" aria-hidden="true">⧉</span>
+                <span>Avatar is floating on your desktop.</span>
+                <span class="hologram-floating-notice-sub">Click to bring it back into this window.</span>
+            </button>
 
             <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent">
                 <div class="flex items-center gap-2 mb-1.5" title="Manual zoom -- how big the avatar reads on screen">
@@ -750,9 +760,9 @@
                 </h3>
                 <div class="flex items-center gap-2">
                     <input id="setting-sprite-mode" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                    <label for="setting-sprite-mode" class="text-xs font-mono text-slate-300">Float the avatar on your desktop, PNGTuber-style -- click it to chat, drag it anywhere</label>
+                    <label for="setting-sprite-mode" class="text-xs font-mono text-slate-300">Float the avatar on your desktop -- a live mirror of this HUD's hologram, drag it anywhere, click it to bring this window back</label>
                 </div>
-                <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. Toggle applies once you click Save Changes below.</span>
+                <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. The hologram panel above goes quiet while it's out there. Toggle applies once you click Save Changes below.</span>
             </div>
 
             <!-- SECTION: AGENT IDENTITY & GENESIS (identity is as much "customisation" as the
@@ -1223,7 +1233,7 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=47"></script>
+    <script src="js/app.js?v=48"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=2"></script>
 </body>

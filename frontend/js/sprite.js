@@ -1,8 +1,14 @@
 /**
  * Desktop Sprite window logic for Project AETHER1.
  * A small transparent, always-on-top, undecorated window (see src-tauri/src/main.rs's
- * build_sprite_window) showing just the hologram avatar, PNGTuber-style -- click it to chat,
- * drag it around the desktop, or reopen the full HUD.
+ * build_sprite_window) showing just the hologram avatar -- click it to bring the main HUD
+ * forward, drag it around the desktop, or reopen the full HUD from its topbar button.
+ *
+ * This is a pure mirror of the main window's hologram, not a second, separate avatar: it has
+ * no chat of its own. Whatever the main HUD's avatar is doing -- which shape, which colours,
+ * IDLE/LISTENING/THINKING/SPEAKING, the audio it's reacting to -- arrives here over Tauri
+ * events the main window pushes the moment it changes (see setHologramAvatar, paintTheme,
+ * setAvatarState and pushAudioToSprite in js/app.js). This window only ever reads them.
  *
  * This window only ever exists inside the native Tauri app (a browser tab can't be
  * transparent/always-on-top/frameless), so unlike app.js there's no IS_TAURI branching here --
@@ -11,19 +17,10 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     const hologram = new HologramAvatar('hologram-viewport');
-    const voiceEngine = new VoiceAudioEngine();
-    voiceEngine.sfxEnabled = false; // the sprite stays quiet -- SFX is a main-HUD touch
 
     const viewportEl = document.getElementById('hologram-viewport');
-    const bubbleEl = document.getElementById('sprite-bubble');
-    const chatBar = document.getElementById('sprite-chat-bar');
-    const chatInput = document.getElementById('sprite-chat-input');
     const btnHud = document.getElementById('sprite-btn-hud');
     const btnClose = document.getElementById('sprite-btn-close');
-
-    let autoSpeak = true;
-    let isWaitingForResponse = false;
-    let bubbleTimer = null;
 
     async function tauriInvoke(cmd, args) {
         if (!window.__TAURI__ || !window.__TAURI__.core) {
@@ -32,81 +29,24 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.__TAURI__.core.invoke(cmd, args);
     }
 
-    voiceEngine.onStateChange = (state) => hologram.setState(state);
-    voiceEngine.onAudioFrequency = (data) => hologram.updateAudioData(data);
-
-    function showBubble(text) {
-        clearTimeout(bubbleTimer);
-        bubbleEl.textContent = text;
-        bubbleEl.classList.remove('hidden');
-        bubbleTimer = setTimeout(() => bubbleEl.classList.add('hidden'), 9000);
-    }
-
-    function toggleChatBar() {
-        const willShow = chatBar.classList.contains('hidden');
-        chatBar.classList.toggle('hidden');
-        if (willShow) chatInput.focus();
+    function showMainHud() {
+        tauriInvoke('show_main_window_rust').catch((err) => console.warn('Could not open main HUD', err));
     }
 
     // Dragging: the window has no native title bar, so start an OS-level drag on mousedown
     // over the avatar (Tauri's usual pattern for custom-titlebar dragging -- see
     // start_window_drag_rust). If the user doesn't actually move the pointer, the browser
-    // still fires a normal click afterward, which opens the chat bar instead.
+    // still fires a normal click afterward -- this is a mirror, not a control surface, so a
+    // plain click's job is to raise the real conversation instead of opening one here.
     viewportEl.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         tauriInvoke('start_window_drag_rust').catch(() => {});
     });
-    viewportEl.addEventListener('click', toggleChatBar);
-
-    async function synthesizeSpeechUrl(text) {
-        try {
-            const path = await tauriInvoke('generate_speech_rust', { text, voice: null });
-            return window.__TAURI__.core.convertFileSrc(path);
-        } catch (e) {
-            console.warn('Sprite TTS synthesis failed', e);
-            return null;
-        }
-    }
-
-    async function sendMessage() {
-        const text = chatInput.value.trim();
-        if (!text || isWaitingForResponse) return;
-        chatInput.value = '';
-
-        isWaitingForResponse = true;
-        hologram.setState('THINKING');
-
-        try {
-            const data = await tauriInvoke('generate_response_rust', { prompt: text, sessionId: 'default' });
-            const audioUrl = autoSpeak ? await synthesizeSpeechUrl(data.reply) : null;
-            showBubble(data.reply);
-
-            if (audioUrl) {
-                await voiceEngine.playTTSAudio(audioUrl);
-            } else {
-                hologram.setState('IDLE');
-            }
-        } catch (e) {
-            console.error('Sprite chat error', e);
-            showBubble(`⚠️ ${e.message || e}`);
-            hologram.setState('IDLE');
-        } finally {
-            isWaitingForResponse = false;
-        }
-    }
-
-    chatInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            sendMessage();
-        } else if (e.key === 'Escape') {
-            chatBar.classList.add('hidden');
-        }
-    });
+    viewportEl.addEventListener('click', showMainHud);
 
     btnHud.addEventListener('click', (e) => {
         e.stopPropagation();
-        tauriInvoke('show_main_window_rust').catch((err) => console.warn('Could not open main HUD', err));
+        showMainHud();
     });
 
     btnClose.addEventListener('click', async (e) => {
@@ -157,6 +97,16 @@ document.addEventListener('DOMContentLoaded', () => {
             Aether1Theme.paint(document, theme.mode, theme.colours);
             hologram.setColorPalette(Aether1Theme.paletteFor(theme.colours));
         }).catch((e) => console.warn('Could not listen for color theme changes', e));
+
+        // The live mirror: whatever the main HUD's avatar is doing right now, not this
+        // window's own idea of it -- see setAvatarState/pushAudioToSprite in app.js.
+        window.__TAURI__.event.listen('hologram-state-changed', (event) => {
+            hologram.setState(event.payload.state);
+        }).catch((e) => console.warn('Could not listen for hologram state changes', e));
+
+        window.__TAURI__.event.listen('hologram-audio-changed', (event) => {
+            hologram.updateAudioData(event.payload.data);
+        }).catch((e) => console.warn('Could not listen for hologram audio changes', e));
     }
 
     // localStorage fires this in *other* windows of the same origin -- same live-update
@@ -168,8 +118,4 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hologram.currentAvatar !== 'custom') return;
         refreshCustomAvatarIfStale();
     });
-
-    tauriInvoke('get_settings_rust').then((data) => {
-        autoSpeak = data.settings.auto_speak !== false;
-    }).catch((e) => console.warn('Could not load settings for sprite', e));
 });
