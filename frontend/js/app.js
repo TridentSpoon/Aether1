@@ -3310,6 +3310,21 @@ document.addEventListener('DOMContentLoaded', () => {
         notice.addEventListener('click', () => setDesktopSpriteMode(false));
     }
 
+    // The sprite has no chat of its own (see js/sprite.js) and its viewport is otherwise
+    // spoken for by window-dragging, so clicking the avatar there instead asks this window
+    // to toggle push-to-talk -- the same start/stop startTalking/stopTalking already do for
+    // held Space or the mic button, just requested from the desktop instead of the HUD.
+    function initSpriteListenBridge() {
+        if (!IS_TAURI || !window.__TAURI__ || !window.__TAURI__.event) return;
+        window.__TAURI__.event.listen('sprite-toggle-listen', () => {
+            if (talkHeld) {
+                stopTalking();
+            } else {
+                startTalking();
+            }
+        }).catch((e) => console.warn('Could not listen for sprite listen-toggle requests', e));
+    }
+
     // Every panel's "Undock" button opens it in its own solo-panel window (see
     // open_panel_window_rust) -- except the hologram's, which turns on Desktop Sprite
     // Mode instead: the avatar leaves this window entirely and reappears as the floating
@@ -3920,6 +3935,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initSoloPanel();
     initPanelUndock();
     initHologramFloatingNotice();
+    initSpriteListenBridge();
 
     document.body.addEventListener('click', () => {
         voiceEngine.playSFX('boot');

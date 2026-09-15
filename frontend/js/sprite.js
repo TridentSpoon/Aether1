@@ -1,14 +1,18 @@
 /**
  * Desktop Sprite window logic for Project AETHER1.
  * A small transparent, always-on-top, undecorated window (see src-tauri/src/main.rs's
- * build_sprite_window) showing just the hologram avatar -- click it to bring the main HUD
- * forward, drag it around the desktop, or reopen the full HUD from its topbar button.
+ * build_sprite_window) showing just the hologram avatar -- click it to toggle push-to-talk
+ * listening in the main HUD, drag it around the desktop, reopen the full HUD from its topbar
+ * button, or use the always-visible power button to send the avatar back into the main window.
  *
  * This is a pure mirror of the main window's hologram, not a second, separate avatar: it has
  * no chat of its own. Whatever the main HUD's avatar is doing -- which shape, which colours,
  * IDLE/LISTENING/THINKING/SPEAKING, the audio it's reacting to -- arrives here over Tauri
  * events the main window pushes the moment it changes (see setHologramAvatar, paintTheme,
- * setAvatarState and pushAudioToSprite in js/app.js). This window only ever reads them.
+ * setAvatarState and pushAudioToSprite in js/app.js). This window only ever reads them, with
+ * one exception: a click on the avatar asks the main window to start or stop listening (see
+ * initSpriteListenBridge in js/app.js) -- the mirror can request, but never decide, what the
+ * real conversation does.
  *
  * This window only ever exists inside the native Tauri app (a browser tab can't be
  * transparent/always-on-top/frameless), so unlike app.js there's no IS_TAURI branching here --
@@ -20,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const viewportEl = document.getElementById('hologram-viewport');
     const btnHud = document.getElementById('sprite-btn-hud');
-    const btnClose = document.getElementById('sprite-btn-close');
+    const btnPower = document.getElementById('sprite-btn-power');
 
     async function tauriInvoke(cmd, args) {
         if (!window.__TAURI__ || !window.__TAURI__.core) {
@@ -33,23 +37,34 @@ document.addEventListener('DOMContentLoaded', () => {
         tauriInvoke('show_main_window_rust').catch((err) => console.warn('Could not open main HUD', err));
     }
 
+    // Asks the main HUD to start or stop push-to-talk listening -- it decides which, since
+    // this window has no idea whether the HUD is already mid-capture (see
+    // initSpriteListenBridge in js/app.js).
+    function toggleListening() {
+        if (!window.__TAURI__ || !window.__TAURI__.event) return;
+        window.__TAURI__.event.emit('sprite-toggle-listen').catch((err) => console.warn('Could not request listening toggle', err));
+    }
+
     // Dragging: the window has no native title bar, so start an OS-level drag on mousedown
     // over the avatar (Tauri's usual pattern for custom-titlebar dragging -- see
     // start_window_drag_rust). If the user doesn't actually move the pointer, the browser
-    // still fires a normal click afterward -- this is a mirror, not a control surface, so a
-    // plain click's job is to raise the real conversation instead of opening one here.
+    // still fires a normal click afterward -- that click's job is to toggle listening in the
+    // real conversation rather than starting one here.
     viewportEl.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         tauriInvoke('start_window_drag_rust').catch(() => {});
     });
-    viewportEl.addEventListener('click', showMainHud);
+    viewportEl.addEventListener('click', toggleListening);
 
     btnHud.addEventListener('click', (e) => {
         e.stopPropagation();
         showMainHud();
     });
 
-    btnClose.addEventListener('click', async (e) => {
+    // Always visible, unlike the topbar (which only fades in on hover): this is the one
+    // control that turns the sprite off, so it needs to be findable without first discovering
+    // that hovering reveals a topbar at all.
+    btnPower.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
             await tauriInvoke('save_settings_rust', { settings: { desktop_sprite_enabled: false } });

@@ -14,7 +14,7 @@
     <script src="js/theme.js?v=5"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
-    <link rel="stylesheet" href="css/sprite.css?v=3">
+    <link rel="stylesheet" href="css/sprite.css?v=4">
 </head>
 <body>
     <div id="sprite-root">
@@ -22,8 +22,11 @@
 
         <div id="sprite-topbar">
             <button id="sprite-btn-hud" title="Open main HUD">⧉</button>
-            <button id="sprite-btn-close" title="Close sprite">✕</button>
         </div>
+
+        <!-- Always visible (unlike #sprite-topbar, which only fades in on hover): the one way
+             to turn the sprite off, so it stays findable without hovering first. -->
+        <button id="sprite-btn-power" title="Send the avatar back to the main window" aria-label="Turn off the desktop sprite and send the avatar back to the main window">⏻</button>
     </div>
 
     <!-- Same hologram engine as the main HUD (see index.html's own script block for the
@@ -37,6 +40,6 @@
          being repeated in this page, sprite.html and avatar-lab.html. -->
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=38"></script>
-    <script src="js/sprite.js?v=7"></script>
+    <script src="js/sprite.js?v=8"></script>
 </body>
 </html>
