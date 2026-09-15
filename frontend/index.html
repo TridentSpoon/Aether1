@@ -12,10 +12,10 @@
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
     <link rel="stylesheet" href="css/A1theme.css?v=27">
-    <link rel="stylesheet" href="css/layout.css?v=1">
+    <link rel="stylesheet" href="css/layout.css?v=2">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
-         layout.css hide everything but that one panel with no flash of the full three-column
+         layout.css hide everything but that one panel with no flash of the full panel grid
          HUD first. See the [data-solo-panel] rules in css/layout.css and the script further
          down that adds .solo-target to the matching panel once it exists in the DOM. -->
     <script>
@@ -180,15 +180,14 @@
         </div>
     </header>
 
-    <!-- MAIN DASHBOARD CONTENT (3-COLUMN HUD) -->
-    <main id="hud-layout" class="flex-1 p-4 overflow-hidden z-10">
-        
-        <!-- LEFT PANEL: MODEL PERFORMANCE & SYSTEM GAUGES (3 Cols) -->
-        <section class="hud-column" data-column="0">
-            <!-- Model speed scoreboard and token/cost accounting -->
-            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens">
-                <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
-                <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Model Performance in its own window">⧉</button>
+    <!-- MAIN DASHBOARD CONTENT (FREE-FORM PANEL GRID) -->
+    <main id="hud-layout" class="flex-1 p-4 overflow-auto z-10">
+
+        <!-- Token Usage & Availability Telemetry -->
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens" data-grid-col="1" data-grid-row="1" data-grid-w="4" data-grid-h="11">
+            <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
+            <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Token Telemetry in its own window">⧉</button>
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
                     <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
                         <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
@@ -250,10 +249,11 @@
                 </div>
             </div>
 
-            <!-- Hardware Telemetry -->
-            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware">
-                <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
-                <button type="button" class="panel-undock" data-undock="hardware" title="Open this panel in its own window" aria-label="Open Hardware Telemetry in its own window">⧉</button>
+        <!-- Hardware Telemetry -->
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware" data-grid-col="1" data-grid-row="12" data-grid-w="4" data-grid-h="9">
+            <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
+            <button type="button" class="panel-undock" data-undock="hardware" title="Open this panel in its own window" aria-label="Open Hardware Telemetry in its own window">⧉</button>
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
                     <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider flex items-center gap-1.5">
                         <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg>
@@ -326,36 +326,34 @@
                 </div>
             </div>
 
-            <!-- Tactical Commands -->
-            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands">
-                <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
-                <button type="button" class="panel-undock" data-undock="commands" title="Open this panel in its own window" aria-label="Open Quick Commands in its own window">⧉</button>
-                <h3 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">
-                    TACTICAL QUICK COMMANDS
-                </h3>
-                <div class="grid grid-cols-2 gap-2 text-xs font-mono">
-                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="status">
-                        📊 Status
-                    </button>
-                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="diagnostics">
-                        🩺 Diagnostics
-                    </button>
-                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="show memories">
-                        🧠 Memories
-                    </button>
-                    <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="help">
-                        ❓ Help Info
-                    </button>
-                </div>
+        <!-- Tactical Commands -->
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands" data-grid-col="1" data-grid-row="21" data-grid-w="4" data-grid-h="6">
+            <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
+            <button type="button" class="panel-undock" data-undock="commands" title="Open this panel in its own window" aria-label="Open Quick Commands in its own window">⧉</button>
+            <h3 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">
+                TACTICAL QUICK COMMANDS
+            </h3>
+            <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="status">
+                    📊 Status
+                </button>
+                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="diagnostics">
+                    🩺 Diagnostics
+                </button>
+                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="show memories">
+                    🧠 Memories
+                </button>
+                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="help">
+                    ❓ Help Info
+                </button>
             </div>
-        </section>
-
-        <div class="col-resizer" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize these columns. Double-click to reset." aria-label="Resize columns"></div>
+        </div>
 
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
-        <section class="hud-column" data-column="1">
-        <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram">
+        <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-grid-col="5" data-grid-row="1" data-grid-w="4" data-grid-h="37">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <!-- Unlike the other panels' Undock, this one doesn't open a bordered copy of
                  itself -- it opens the existing floating "Desktop Sprite" window (see
                  toggle_sprite_window_rust): transparent, undecorated, always-on-top,
@@ -383,14 +381,11 @@
                 <canvas id="audio-waveform" width="360" height="36" class="w-full"></canvas>
             </div>
         </div>
-        </section>
-
-        <div class="col-resizer" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize these columns. Double-click to reset." aria-label="Resize columns"></div>
 
         <!-- RIGHT PANEL: NEURAL TERMINAL & CHAT CONSOLE -->
-        <section class="hud-column" data-column="2">
-        <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col rounded overflow-hidden" data-panel="chat">
+        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="chat" data-grid-col="9" data-grid-row="1" data-grid-w="4" data-grid-h="37">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="chat" title="Open this panel in its own window" aria-label="Open the Neural Dialogue Stream in its own window">⧉</button>
             <div class="bg-slate-950/60 border-b border-cyan-500/20 px-4 py-2.5 flex items-center justify-between">
                 <div class="flex items-center gap-2">
@@ -414,7 +409,6 @@
                 </div>
             </div>
         </div>
-        </section>
 
     </main>
 
@@ -745,7 +739,7 @@
                 <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
                     🧱 HUD LAYOUT
                 </h3>
-                <span class="text-[11px] font-mono text-slate-400 block">Drag a panel by the dotted strip along its top to move it, within a column or into another one. Drag the dividers between the columns to make one wider. Both are remembered.</span>
+                <span class="text-[11px] font-mono text-slate-400 block">Drag a panel by the dotted strip along its top to move it anywhere on the grid, like rearranging home-screen widgets. Drag the corner handle to resize it. Both are remembered.</span>
                 <button id="btn-reset-layout" type="button" class="cyber-btn text-xs py-1.5 px-3">Reset panels to their default places</button>
             </div>
 
@@ -1231,6 +1225,6 @@
     <script src="js/voice.js?v=17"></script>
     <script src="js/app.js?v=47"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
-    <script src="js/layout.js?v=1"></script>
+    <script src="js/layout.js?v=2"></script>
 </body>
 </html>
