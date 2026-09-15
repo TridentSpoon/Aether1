@@ -169,6 +169,21 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
+    /* Which conversation the chat box is talking into.
+       Kept in localStorage so closing the window and coming back lands you in the
+       conversation you were having rather than silently starting a new one -- an app that
+       forgets which room you were in every time you shut the door is not remembering
+       anything. "default" is where everything said before conversations existed lives, so
+       an operator upgrading opens the app and finds their history exactly where it was.
+       Ids are validated in Rust before they reach the database, so a hand-edited
+       localStorage value gets an error rather than somebody else's transcript. */
+    const SESSION_KEY = 'aether_session_id';
+    let currentSessionId = localStorage.getItem(SESSION_KEY) || 'default';
+    function setCurrentSession(id) {
+        currentSessionId = id;
+        try { localStorage.setItem(SESSION_KEY, id); } catch (e) { /* private mode: this run only */ }
+    }
+
     /* The wordmark. Once the companion has a name of its own, that is what the top-left of
        the window should say -- it is the thing you are talking to. Turning over to
        AETHER1 PLATFORM every so often is how the product it runs on stays visible without
@@ -1774,7 +1789,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         try {
-            const data = await streamChat(text, 'default', onDelta);
+            const data = await streamChat(text, currentSessionId, onDelta);
             // Something came back, so whatever loading was going to happen has happened:
             // no later question in this session gets the first-run explanation.
             hasAnsweredThisSession = true;
@@ -3562,9 +3577,9 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadChatHistory() {
         try {
             const msgs = IS_TAURI
-                ? await tauriInvoke('get_messages_rust', { limit: 25 })
+                ? await tauriInvoke('get_messages_rust', { limit: 25, sessionId: currentSessionId })
                 : await (async () => {
-                    const resp = await apiFetch('/api/messages?limit=25');
+                    const resp = await apiFetch(`/api/messages?limit=25&session_id=${encodeURIComponent(currentSessionId)}`);
                     if (!resp.ok) throw new Error(`messages request failed: ${resp.status}`);
                     return resp.json();
                 })();
@@ -4294,6 +4309,190 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* -------------------------------------------------------------------- */
+    /* Conversations.                                                       */
+    /*                                                                      */
+    /* A conversation is a transcript with a name. Switching to one reloads  */
+    /* the chat box from it and points every later message at it; the model  */
+    /* is only ever handed the history of the one it is answering in, so a   */
+    /* conversation is a privacy boundary and not only a filing cabinet.     */
+    /*                                                                      */
+    /* Nothing here is reachable by the companion. There is no tool for any  */
+    /* of it and none of it is in the settings allowlist -- it cannot start, */
+    /* switch, rename or delete a conversation, the same way it cannot turn  */
+    /* its own tools or panels on.                                          */
+    /* -------------------------------------------------------------------- */
+    const sessionsModal = document.getElementById('sessions-modal');
+    const sessionsList = document.getElementById('sessions-list');
+    const sessionsCount = document.getElementById('sessions-count');
+
+    async function fetchSessions() {
+        if (IS_TAURI) return tauriInvoke('list_sessions_rust');
+        const resp = await apiFetch('/api/sessions');
+        if (!resp.ok) throw new Error(`conversations request failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function mintSession() {
+        if (IS_TAURI) return tauriInvoke('new_session_rust');
+        const resp = await apiFetch('/api/sessions/new', { method: 'POST' });
+        if (!resp.ok) throw new Error(`could not start a conversation: ${resp.status}`);
+        return (await resp.json()).session_id;
+    }
+
+    async function renameSession(id, title) {
+        if (IS_TAURI) return tauriInvoke('rename_session_rust', { sessionId: id, title });
+        const resp = await apiFetch('/api/sessions/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: id, title }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+    }
+
+    async function deleteSession(id) {
+        if (IS_TAURI) return tauriInvoke('delete_session_rust', { sessionId: id });
+        const resp = await apiFetch('/api/sessions/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: id }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+    }
+
+    /* Turns a database timestamp into something a person reads. SQLite hands back UTC
+       without saying so, which every browser then reads as local time and shows an hour or
+       ten out; the Z is what tells it the truth. */
+    function whenText(raw) {
+        if (!raw) return '';
+        const t = Date.parse(raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`);
+        if (Number.isNaN(t)) return raw;
+        const d = new Date(t);
+        const mins = Math.round((Date.now() - t) / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return `${mins} min ago`;
+        if (mins < 60 * 24) return `${Math.round(mins / 60)} h ago`;
+        return d.toLocaleDateString();
+    }
+
+    function renderSessions(rows) {
+        sessionsList.textContent = '';
+        sessionsCount.textContent = rows.length === 1
+            ? '1 conversation'
+            : `${rows.length} conversations`;
+
+        if (rows.length === 0) {
+            const p = document.createElement('p');
+            p.className = 'text-[11px] font-mono text-slate-500';
+            p.textContent = 'Nothing yet. Say something and this fills in.';
+            sessionsList.appendChild(p);
+            return;
+        }
+
+        rows.forEach((row) => {
+            const here = row.id === currentSessionId;
+            const wrap = document.createElement('div');
+            wrap.className = here
+                ? 'flex items-center gap-2 border border-cyan-400/60 bg-cyan-950/40 rounded p-2'
+                : 'flex items-center gap-2 border border-cyan-500/20 hover:border-cyan-500/50 rounded p-2';
+
+            const open = document.createElement('button');
+            open.className = 'flex-1 min-w-0 text-left cursor-pointer';
+            const title = document.createElement('div');
+            title.className = 'font-mono text-xs text-cyan-200 truncate';
+            title.textContent = row.title;
+            const meta = document.createElement('div');
+            meta.className = 'font-mono text-[10px] text-slate-500';
+            const msgWord = row.messages === 1 ? 'message' : 'messages';
+            meta.textContent = `${row.messages} ${msgWord} · ${whenText(row.last)}${here ? ' · you are here' : ''}`;
+            open.append(title, meta);
+            open.addEventListener('click', () => switchToSession(row.id));
+
+            const rename = document.createElement('button');
+            rename.className = 'shrink-0 text-[11px] font-mono text-slate-400 hover:text-cyan-300 cursor-pointer';
+            rename.textContent = '✎';
+            rename.title = 'Give this conversation a name';
+            rename.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                const next = prompt('Name this conversation (leave empty to go back to its first line):', row.named ? row.title : '');
+                if (next === null) return;
+                try {
+                    await renameSession(row.id, next);
+                    renderSessions(await fetchSessions());
+                } catch (err) {
+                    alert(`Could not rename it: ${err.message || err}`);
+                }
+            });
+
+            const remove = document.createElement('button');
+            remove.className = 'shrink-0 text-[11px] font-mono text-slate-400 hover:text-red-400 cursor-pointer';
+            remove.textContent = '🗑';
+            remove.title = 'Delete this conversation';
+            remove.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                /* Named so the operator sees which one they are about to lose. This deletes
+                   the transcript outright -- the vault notes for those days stay, because
+                   those are the part that was meant to be kept. */
+                if (!confirm(`Delete "${row.title}" and everything said in it? This cannot be undone.`)) return;
+                try {
+                    await deleteSession(row.id);
+                    /* Deleting the room you are standing in leaves you nowhere, so step
+                       into a fresh one before the list redraws. */
+                    if (row.id === currentSessionId) {
+                        setCurrentSession(await mintSession());
+                        await loadChatHistory();
+                    }
+                    renderSessions(await fetchSessions());
+                } catch (err) {
+                    alert(`Could not delete it: ${err.message || err}`);
+                }
+            });
+
+            wrap.append(open, rename, remove);
+            sessionsList.appendChild(wrap);
+        });
+    }
+
+    async function switchToSession(id) {
+        voiceEngine.playSFX('click');
+        setCurrentSession(id);
+        sessionsModal.classList.add('hidden');
+        await loadChatHistory();
+    }
+
+    async function openSessions() {
+        voiceEngine.playSFX('click');
+        sessionsModal.classList.remove('hidden');
+        sessionsList.textContent = '';
+        try {
+            renderSessions(await fetchSessions());
+        } catch (err) {
+            sessionsList.textContent = '';
+            const p = document.createElement('p');
+            p.className = 'text-[11px] font-mono text-amber-300';
+            p.textContent = `Could not read the conversations: ${err.message || err}`;
+            sessionsList.appendChild(p);
+        }
+    }
+
+    document.getElementById('btn-conversations')?.addEventListener('click', openSessions);
+    document.getElementById('btn-close-sessions')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        sessionsModal.classList.add('hidden');
+    });
+    document.getElementById('btn-session-new')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        try {
+            /* A new conversation is an id and nothing else. It starts existing when
+               something is said in it, which is why it is not in the list yet. */
+            setCurrentSession(await mintSession());
+            sessionsModal.classList.add('hidden');
+            await loadChatHistory();
+        } catch (err) {
+            alert(`Could not start a new conversation: ${err.message || err}`);
+        }
+    });
+
     document.getElementById('btn-notes')?.addEventListener('click', openNotesReader);
     document.getElementById('btn-read-notes')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
@@ -4525,9 +4724,9 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.playSFX('click');
         if (confirm("Clear conversation logs?")) {
             if (IS_TAURI) {
-                await tauriInvoke('clear_messages_rust');
+                await tauriInvoke('clear_messages_rust', { sessionId: currentSessionId });
             } else {
-                await apiFetch('/api/messages', { method: 'DELETE' });
+                await apiFetch(`/api/messages?session_id=${encodeURIComponent(currentSessionId)}`, { method: 'DELETE' });
             }
             chatContainer.innerHTML = '';
             appendMessage(currentAgentName, 'Conversation logs cleared. Ready.');

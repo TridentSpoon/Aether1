@@ -19,6 +19,24 @@ pub struct Message {
     pub timestamp: String,
 }
 
+/// One conversation, as the history list sees it. The list is derived from the messages
+/// table rather than kept as its own bookkeeping, so a session that exists only because
+/// something was said in it -- including the original hard-coded "default" -- shows up
+/// without a migration dance, and a row can never go stale against its own transcript.
+///
+/// `title` is the operator's own name for the conversation when they set one, and the
+/// opening line of it when they haven't. Nothing here is written by the model.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: String,
+    /// True when `title` is the operator's, false when it's the fallback first line.
+    pub named: bool,
+    pub messages: u32,
+    pub started: String,
+    pub last: String,
+}
+
 /// Where an action stands. Every tool call the companion makes gets a row in action_log,
 /// so this is also the record of what it did on the operator's behalf -- the thing the
 /// memory browser and the undo path in later steps both read.
@@ -127,6 +145,24 @@ pub struct MemoryEntry {
     pub category: String,
 }
 
+/// The name a conversation gets when the operator hasn't given it one: its opening line,
+/// squeezed onto a single row. Truncation counts characters rather than bytes, because a
+/// byte slice through a multi-byte character would panic, and the first thing anyone says
+/// to their companion is exactly the sort of line that carries an emoji or an accent.
+fn summarise(first_line: &str) -> String {
+    const MAX_CHARS: usize = 48;
+    let flat: String = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return "New conversation".to_string();
+    }
+    if flat.chars().count() <= MAX_CHARS {
+        return flat;
+    }
+    let mut out: String = flat.chars().take(MAX_CHARS).collect();
+    out.push('\u{2026}');
+    out
+}
+
 pub struct MemoryDb {
     db_path: PathBuf,
 }
@@ -148,6 +184,11 @@ impl MemoryDb {
                 text TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 metadata TEXT
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS long_term_memory (
                 key TEXT PRIMARY KEY,
@@ -256,6 +297,80 @@ impl MemoryDb {
             "DELETE FROM messages WHERE session_id = ?1",
             params![session_id],
         )?;
+        Ok(())
+    }
+
+    /// Every conversation that has anything in it, newest activity first.
+    ///
+    /// The join runs the other way round from what you might expect: messages is the
+    /// source of truth and sessions only supplies a title, because a title is the one
+    /// thing that can't be recovered from the transcript. A session row without messages
+    /// is not a conversation yet and deliberately doesn't appear.
+    pub fn list_sessions(&self, limit: u32) -> rusqlite::Result<Vec<SessionSummary>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT m.session_id, \
+                    s.title, \
+                    COUNT(m.id), \
+                    MIN(m.timestamp), \
+                    MAX(m.timestamp), \
+                    ( SELECT text FROM messages f \
+                      WHERE f.session_id = m.session_id AND f.sender = 'user' \
+                      ORDER BY f.id LIMIT 1 ) \
+             FROM messages m \
+             LEFT JOIN sessions s ON s.id = m.session_id \
+             GROUP BY m.session_id \
+             ORDER BY MAX(m.id) DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            let id: String = row.get(0)?;
+            let title: Option<String> = row.get(1)?;
+            let first: Option<String> = row.get(5)?;
+            let named = title.as_ref().is_some_and(|t| !t.trim().is_empty());
+            let title = if named {
+                title.unwrap_or_default().trim().to_string()
+            } else {
+                summarise(first.as_deref().unwrap_or(""))
+            };
+            Ok(SessionSummary {
+                id,
+                title,
+                named,
+                messages: row.get(2)?,
+                started: row.get(3)?,
+                last: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Names a conversation. An empty title removes the operator's name for it, which puts
+    /// the list back on the fallback first line rather than leaving a blank row.
+    pub fn set_session_title(&self, session_id: &str, title: &str) -> rusqlite::Result<()> {
+        let conn = self.connect()?;
+        let title = title.trim();
+        if title.is_empty() {
+            conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+            return Ok(());
+        }
+        conn.execute(
+            "INSERT INTO sessions (id, title) VALUES (?1, ?2) \
+             ON CONFLICT(id) DO UPDATE SET title = excluded.title",
+            params![session_id, title],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes a conversation outright: the transcript and the title together. This is the
+    /// operator's own delete, so it takes the messages with it -- a conversation you asked
+    /// to be gone that leaves its words behind in the database is not gone.
+    pub fn delete_session(&self, session_id: &str) -> rusqlite::Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM messages WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
         Ok(())
     }
 
@@ -603,6 +718,96 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_test_{name}_{}_{n}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(path).expect("temp db should open")
+    }
+
+    #[test]
+    fn a_conversation_appears_because_something_was_said_in_it() {
+        let db = temp_db("sessions_derived");
+        db.add_message("default", "user", "hello there").unwrap();
+        db.add_message("default", "halcy", "hello yourself")
+            .unwrap();
+        db.add_message("c9", "user", "second room").unwrap();
+
+        let rows = db.list_sessions(50).unwrap();
+        assert_eq!(rows.len(), 2, "two sessions have messages in them");
+        assert_eq!(rows[0].id, "c9", "newest activity first");
+        assert_eq!(rows[0].title, "second room", "the opening line names it");
+        assert!(!rows[0].named, "nobody named it, so this is the fallback");
+        let older = &rows[1];
+        assert_eq!(older.messages, 2, "both sides of the exchange are counted");
+        assert_eq!(
+            older.title, "hello there",
+            "the title is the first thing the operator said, not the reply"
+        );
+    }
+
+    #[test]
+    fn a_name_survives_and_an_empty_name_gives_the_first_line_back() {
+        let db = temp_db("sessions_title");
+        db.add_message("c1", "user", "how do I mount a drive")
+            .unwrap();
+
+        db.set_session_title("c1", "  Disk notes  ").unwrap();
+        let rows = db.list_sessions(50).unwrap();
+        assert_eq!(rows[0].title, "Disk notes", "trimmed, and the operator's");
+        assert!(rows[0].named);
+
+        db.set_session_title("c1", "   ").unwrap();
+        let rows = db.list_sessions(50).unwrap();
+        assert_eq!(
+            rows[0].title, "how do I mount a drive",
+            "clearing the name falls back rather than leaving a blank row"
+        );
+        assert!(!rows[0].named);
+    }
+
+    #[test]
+    fn deleting_a_conversation_takes_its_words_with_it() {
+        let db = temp_db("sessions_delete");
+        db.add_message("c1", "user", "keep me").unwrap();
+        db.add_message("c2", "user", "delete me").unwrap();
+        db.set_session_title("c2", "Doomed").unwrap();
+
+        db.delete_session("c2").unwrap();
+
+        let rows = db.list_sessions(50).unwrap();
+        assert_eq!(rows.len(), 1, "only the survivor is listed");
+        assert_eq!(rows[0].id, "c1");
+        assert!(
+            db.get_messages("c2", 50).unwrap().is_empty(),
+            "a conversation asked to be gone leaves no transcript behind"
+        );
+    }
+
+    #[test]
+    fn one_conversation_cannot_see_another() {
+        let db = temp_db("sessions_isolation");
+        db.add_message("c1", "user", "my bank pin is 1234").unwrap();
+        db.add_message("c2", "user", "what is the weather").unwrap();
+
+        let seen = db.get_messages("c2", 50).unwrap();
+        assert_eq!(seen.len(), 1, "only this conversation's own history");
+        assert_eq!(seen[0].text, "what is the weather");
+    }
+
+    #[test]
+    fn a_long_opening_line_is_cut_on_a_character_not_a_byte() {
+        // Every one of these is multi-byte, so a byte-index truncation would panic.
+        let long = "\u{e9}".repeat(200);
+        let cut = summarise(&long);
+        assert_eq!(
+            cut.chars().count(),
+            49,
+            "48 characters plus the ellipsis that says there is more"
+        );
+        assert!(cut.ends_with('\u{2026}'));
+
+        assert_eq!(
+            summarise("  what   is\n  this  "),
+            "what is this",
+            "a title is one line, however the message was typed"
+        );
+        assert_eq!(summarise(""), "New conversation");
     }
 
     #[test]

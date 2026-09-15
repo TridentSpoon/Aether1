@@ -1704,6 +1704,55 @@ than a label.
 **Nothing new is exposed.** No route, no command, no tool: this is a second reader for a
 scan that already shipped, and read-only for the same reason the reader is.
 
+### Step 41: conversations you can reopen — **shipped**
+
+The `messages` table has carried a `session_id` column since the first Rust commit, and every
+caller passed the literal `"default"` into it. There was exactly one conversation, growing
+forever, and the only thing you could do with it was delete it. **💬 Conversations** in the
+HUD menu is the rest of that column: a list of every conversation with something in it, a way
+back into any of them, a ＋ New that starts a clean one, and a name you can give one.
+
+**The list is derived, not kept.** `list_sessions` reads the `messages` table and left-joins
+`sessions` for a title, rather than maintaining its own row per conversation. Two things fall
+out of that. Every conversation that already existed on disk — including the original
+`"default"`, ninety-four messages deep on the development machine — appears the first time
+the panel is opened, with no migration and no backfill. And a listing can never disagree with
+its own transcript: there is no row to go stale, because the only thing the `sessions` table
+stores is the one thing a transcript cannot supply, which is the operator's name for it. A
+conversation with no name is titled by the first thing the *operator* said in it, not the
+first thing the companion replied.
+
+**A bad id is refused, never repaired.** `valid_session_id` takes 1–64 characters of
+`[A-Za-z0-9_-]` and returns an error for anything else. The tempting alternative — strip the
+characters you don't like and carry on — is the dangerous one: a sanitiser turns a bad id
+into a *different valid id*, so the caller reads one conversation while writing to another,
+and nothing anywhere reports a problem. `None` still means `"default"`, so every caller that
+predates sessions keeps working untouched. The gate sits at the `commands.rs` boundary, which
+is the one place both transports pass through.
+
+**A conversation is a privacy boundary, not just a filing cabinet.** The model is handed the
+history of the session it is answering in — `get_messages(session_id, 8)`, as it always was —
+and has no way to reach across to another one or to learn that another one exists. That
+holds because of what is *absent*: no tool lists, opens, renames, deletes or switches a
+conversation, and nothing was added to `SETTABLE`. The companion cannot change which
+conversation it is in, exactly as it cannot switch its own tools or panels on.
+
+**Deleting takes the words with it.** A conversation the operator asked to be gone that
+leaves its transcript sitting in the database is not gone, so `delete_session` removes the
+messages and the title together. `"default"` is the one id it refuses, because that is the
+fallback every session-unaware caller lands in — deleting it would not remove a conversation
+so much as empty the one the app falls back to, and **🗑️ Clear conversation** is the honest
+name for that.
+
+**The id is a clock, not a secret.** There is no `rand`, `uuid` or `chrono` crate in this
+build, and this does not need one: ids are minted one at a time by a single operator on a
+single machine, and are never guessed at, never authorise anything and never cross a machine
+boundary. `SystemTime` nanoseconds in base 36 is the whole requirement.
+
+**The journal is deliberately untouched.** The dated vault notes stay per-day and
+per-exchange. Threading session boundaries through them would turn a journal into a
+transcript, and the journal is the part that was meant to be readable a year later.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1713,7 +1762,7 @@ the vault as what to do next, and all three shipped some time ago.*
 registry, the read-only loop, the consent path, mutating tools and undo). Phase 3 entire (the
 vault, priming from it, writing back, search and archiving, and — since step 35 — every
 conversation folded into a dated note without being asked, and since steps 39–40 read and
-drawn inside the app). Plus local-only mode, the theme
+drawn inside the app, and since step 41 kept in conversations you can reopen). Plus local-only mode, the theme
 engine, the top bar, personas as specialities, per-persona access with per-request elevation
 *and* operator-widened fields, a command allowlist that ships usable, reading the Windows
 event log, honest token telemetry, and native tool calling.

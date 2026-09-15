@@ -751,14 +751,49 @@ fn set_always_allowed_rust(
 }
 
 #[tauri::command(async)]
-fn get_messages_rust(engine: tauri::State<LlmEngine>, limit: Option<u32>) -> Vec<llm::Message> {
-    commands::get_messages(&engine, limit)
+fn get_messages_rust(
+    engine: tauri::State<LlmEngine>,
+    limit: Option<u32>,
+    session_id: Option<String>,
+) -> Result<Vec<llm::Message>, String> {
+    commands::get_messages(&engine, limit, session_id)
 }
 
 /// Rust-native equivalent of DELETE /api/messages (backend/main.py).
 #[tauri::command(async)]
-fn clear_messages_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
-    commands::clear_messages(&engine)
+fn clear_messages_rust(
+    engine: tauri::State<LlmEngine>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    commands::clear_messages(&engine, session_id)
+}
+
+/// The history list. Counterpart of GET /api/sessions.
+#[tauri::command(async)]
+fn list_sessions_rust(engine: tauri::State<LlmEngine>) -> Result<Vec<llm::SessionSummary>, String> {
+    commands::list_sessions(&engine)
+}
+
+/// Counterpart of POST /api/sessions/new. Mints an id and writes nothing.
+#[tauri::command(async)]
+fn new_session_rust() -> String {
+    commands::new_session()
+}
+
+/// Counterpart of POST /api/sessions/rename.
+#[tauri::command(async)]
+fn rename_session_rust(
+    engine: tauri::State<LlmEngine>,
+    session_id: Option<String>,
+    title: String,
+) -> Result<(), String> {
+    commands::rename_session(&engine, session_id, title)
+}
+
+/// Counterpart of POST /api/sessions/delete.
+#[tauri::command(async)]
+fn delete_session_rust(engine: tauri::State<LlmEngine>, session_id: String) -> Result<(), String> {
+    commands::delete_session(&engine, session_id)
 }
 
 /// Rust-native equivalent of POST /api/benchmarks/reset.
@@ -1175,6 +1210,10 @@ fn main() {
             set_persona_access_rust,
             get_messages_rust,
             clear_messages_rust,
+            list_sessions_rust,
+            new_session_rust,
+            rename_session_rust,
+            delete_session_rust,
             reset_benchmarks_rust,
             open_vault_folder_rust,
             vault_notes_rust,

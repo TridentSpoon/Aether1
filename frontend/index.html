@@ -172,6 +172,7 @@
                     <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
                     <button id="btn-setup" class="hud-slideout-action" role="menuitem">🧠 Set up the AI</button>
                     <button id="btn-voice-setup" class="hud-slideout-action" role="menuitem">🗣 Set up the voice</button>
+                    <button id="btn-conversations" class="hud-slideout-action" role="menuitem">💬 Conversations</button>
                     <button id="btn-notes" class="hud-slideout-action" role="menuitem">📓 Notes</button>
                     <button id="btn-activity" class="hud-slideout-action" role="menuitem">📜 Activity</button>
                     <button id="btn-clear-chat" class="hud-slideout-action" role="menuitem">🗑️ Clear conversation</button>
@@ -455,6 +456,33 @@
                 and recorded a way back can be undone here.
             </p>
             <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
+        </div>
+    </div>
+
+    <!-- CONVERSATIONS -- the history list, and the way back into an old one.
+         Every conversation is a separate transcript. That is a convenience, and it is also
+         a wall: the companion is given the history of the conversation it is answering in
+         and has no way to reach another one, or to learn that another one exists. Nothing
+         on this panel is a tool. It cannot start a conversation, switch to one, rename one
+         or delete one -- those are the operator's, the same way the module switches and the
+         tool permissions are. -->
+    <div id="sessions-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-3 max-h-[92vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    💬 CONVERSATIONS
+                </h2>
+                <div class="flex items-center gap-2">
+                    <button id="btn-session-new" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">＋ New</button>
+                    <button id="btn-close-sessions" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
+                </div>
+            </div>
+            <p class="text-[11px] font-mono text-slate-400">
+                Click one to pick up where you left off. A new conversation starts with a clean
+                slate — it remembers your notes, but not what was said in the others.
+            </p>
+            <div id="sessions-list" class="flex-1 overflow-y-auto space-y-1 pr-1 min-h-0"></div>
+            <div id="sessions-count" class="text-[10px] font-mono text-slate-500"></div>
         </div>
     </div>
 

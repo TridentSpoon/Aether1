@@ -120,6 +120,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
             get(persona_access).post(set_persona_access),
         )
         .route("/api/messages", get(get_messages).delete(clear_messages))
+        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/new", post(new_session))
+        .route("/api/sessions/rename", post(rename_session))
+        .route("/api/sessions/delete", post(delete_session))
         .route("/api/benchmarks/reset", post(reset_benchmarks))
         .route("/api/vault/open", post(open_vault_folder))
         .route("/api/vault/notes", get(vault_notes))
@@ -278,7 +282,8 @@ async fn chat(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let engine = state.engine.clone();
     let message = req.message;
-    let session_id = req.session_id.unwrap_or_else(|| "default".to_string());
+    let session_id =
+        commands::valid_session_id(req.session_id).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let session_id_for_result = session_id.clone();
 
     let mut result = {
@@ -635,29 +640,84 @@ async fn start_local_server(State(state): State<AppState>) -> Json<serde_json::V
 #[derive(Deserialize)]
 struct LimitQuery {
     limit: Option<u32>,
+    session_id: Option<String>,
 }
 
 async fn get_messages(
     State(state): State<AppState>,
     Query(q): Query<LimitQuery>,
-) -> Json<Vec<llm::Message>> {
+) -> Result<Json<Vec<llm::Message>>, (StatusCode, String)> {
     let engine = state.engine.clone();
-    Json(
-        tokio::task::spawn_blocking(move || commands::get_messages(&engine, q.limit))
+    let rows =
+        tokio::task::spawn_blocking(move || commands::get_messages(&engine, q.limit, q.session_id))
             .await
-            .unwrap_or_default(),
-    )
+            .map_err(internal_error)?
+            // A refused conversation id is the caller's mistake, not the server's.
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(rows))
 }
 
 async fn clear_messages(
     State(state): State<AppState>,
+    Query(q): Query<LimitQuery>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let engine = state.engine.clone();
-    tokio::task::spawn_blocking(move || commands::clear_messages(&engine))
+    tokio::task::spawn_blocking(move || commands::clear_messages(&engine, q.session_id))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "status": "cleared" })))
+}
+
+#[derive(Deserialize)]
+struct SessionBody {
+    session_id: Option<String>,
+    title: Option<String>,
+}
+
+async fn list_sessions(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<llm::SessionSummary>>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let rows = tokio::task::spawn_blocking(move || commands::list_sessions(&engine))
         .await
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(serde_json::json!({ "status": "cleared" })))
+    Ok(Json(rows))
+}
+
+/// Mints an id and writes nothing. Deliberately a POST even though it has no side effect
+/// on the database, because it is not idempotent -- asking twice is asking for two
+/// conversations -- and a GET that returns something different every time is a trap for
+/// every cache between here and the page.
+async fn new_session() -> Json<Value> {
+    Json(serde_json::json!({ "session_id": commands::new_session() }))
+}
+
+async fn rename_session(
+    State(state): State<AppState>,
+    Json(req): Json<SessionBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let title = req.title.unwrap_or_default();
+    tokio::task::spawn_blocking(move || commands::rename_session(&engine, req.session_id, title))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "status": "renamed" })))
+}
+
+async fn delete_session(
+    State(state): State<AppState>,
+    Json(req): Json<SessionBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let id = req.session_id.unwrap_or_default();
+    tokio::task::spawn_blocking(move || commands::delete_session(&engine, id))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
 async fn reset_benchmarks(
@@ -851,7 +911,16 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
         return;
     };
 
-    let session_id = req.session_id.unwrap_or_else(|| "default".to_string());
+    let Ok(session_id) = commands::valid_session_id(req.session_id) else {
+        let _ = socket
+            .send(Message::Text(
+                serde_json::json!({"type": "error", "error": "bad conversation id"})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        return;
+    };
     let engine = state.engine.clone();
     let message = req.message;
 
