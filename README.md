@@ -670,6 +670,14 @@ decides what runs without a prompt, not what is possible. And the paths Aether1 
 all (SSH and GPG keys, cloud credentials, `/etc/shadow`, and the rest) stay off limits inside a
 persona's own field and after an approval alike: a field can only narrow.
 
+**Settings describes your machine, not a generic one.** The help text under *Let it look at
+this computer* names `/etc`, `/proc` and `/var/log` on Linux, and the Windows event logs and
+`System32\drivers\etc` on Windows. It asks the running copy of Aether1 which it is, never the
+browser — so when you open the HUD on a Windows laptop pointed at a Linux desktop, you get the
+Linux wording, because the Linux machine is the one being described. The same goes for the
+setup and voice guides, and for the folders named when no Piper voice or Whisper model can be
+found.
+
 ### Running programs
 
 Aether1 can run programs on your machine, and it starts able to run a few. The list is in

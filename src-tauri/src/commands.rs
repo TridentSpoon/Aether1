@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::llm::{self, ActionRecord, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
+use crate::setup;
 use crate::tools;
 
 pub fn generate_response(
@@ -322,7 +323,12 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
                 .or_insert_with(|| value.clone());
         }
     }
-    serde_json::json!({ "settings": settings })
+    // Alongside the settings, not inside them: the operating system is not a preference,
+    // it is a fact about the machine, and putting it in `settings` would make it look
+    // saveable. It rides along here because the Settings page needs it for the same
+    // reason the setup wizard does -- to describe *this* machine's folders and programs
+    // rather than a guess drawn from whatever browser is pointed at it.
+    serde_json::json!({ "settings": settings, "os": setup::Os::current() })
 }
 
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {
@@ -594,4 +600,39 @@ pub fn voice_status(engine: &LlmEngine) -> Value {
         },
         "offline_capable": speech_out.is_ok() && speech_in.is_ok(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Settings panel rewrites its own help text from this field -- which folders the
+    /// companion may read, which programs it is worth naming -- so that the page describes
+    /// the machine Aether1 is running on rather than the one whose browser is pointed at
+    /// it. See applyOsWording() in frontend/js/app.js. Losing the field here does not break
+    /// the page, it makes it quietly vague, which is the kind of regression nothing else
+    /// would catch.
+    #[test]
+    fn the_settings_response_says_which_machine_this_is() {
+        let path = std::env::temp_dir().join(format!(
+            "aether1_settings_os_test_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = llm::MemoryDb::open(&path).expect("temp db should open");
+        let engine = LlmEngine::new(db);
+
+        let response = get_settings(&engine);
+
+        let os = response["os"].as_str().expect("os should be a string");
+        assert!(
+            ["windows", "mac", "linux"].contains(&os),
+            "unexpected os {os:?}"
+        );
+        // Beside the settings, not inside them: a fact about the machine is not something
+        // the operator can save.
+        assert!(response["settings"]["os"].is_null());
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

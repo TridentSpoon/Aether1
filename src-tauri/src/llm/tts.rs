@@ -38,6 +38,16 @@ pub const CLOUD_NAME: &str = "Microsoft's online voice";
 /// alone does not fix that -- see `is_piper_tts`, which is what actually decides.
 const PIPER_BINARIES: &[&str] = &["piper-tts", "piper_tts", "piper"];
 /// Where a Piper voice is looked for when no path is configured.
+///
+/// The `~/.local/share` entries are on both lists on purpose: installer/aether1.iss puts
+/// the bundled voice in `%USERPROFILE%\.local\share\piper\voices` on Windows too, so
+/// that one location means the same thing everywhere. The `/usr` entries are the ones
+/// that do not exist on Windows, and listing them there is worse than useless -- this
+/// list is printed verbatim in the "no voice found" message, so an operator staring at
+/// it would be sent looking in folders their machine cannot have.
+#[cfg(windows)]
+const PIPER_VOICE_DIRS: &[&str] = &["~/.local/share/piper/voices", "~/.local/share/piper"];
+#[cfg(not(windows))]
 const PIPER_VOICE_DIRS: &[&str] = &[
     "~/.local/share/piper/voices",
     "~/.local/share/piper",
@@ -642,6 +652,18 @@ pub fn generate_speech_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list is printed verbatim when nothing is found, so every entry has to be a
+    /// place this platform could actually put the file. A Unix absolute path on Windows
+    /// sends the operator hunting through a folder tree that cannot exist, which is a
+    /// worse outcome than saying nothing at all.
+    #[test]
+    fn every_named_folder_is_one_this_platform_can_have() {
+        for dir in PIPER_VOICE_DIRS {
+            let plausible = dir.starts_with('~') || !cfg!(windows);
+            assert!(plausible, "{dir} cannot exist on Windows");
+        }
+    }
 
     #[test]
     fn sanitize_strips_markdown() {

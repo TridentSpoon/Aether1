@@ -1510,6 +1510,47 @@ step *"Download a voice -- BOTH files"*.
 binary or the voice for you, and every route above ends with a human unpacking something.
 That, not the diagnosis, is what would actually make this one step.
 
+### Step 37: describing the machine it is actually on — **shipped**
+
+The operator, from the Windows laptop: *"Is it possible to hide linux specific things on the
+windows install and vice versa?"*
+
+It already was, in the places built with the question in mind. `Os::current()` drives the
+setup wizard and the voice wizard, `STARTER_ALLOWLIST` is two lists chosen at compile time,
+and `tools/domain.rs::directories()` resolves every symbolic root — `SystemLogs`,
+`ServiceState`, `NetworkConfig` — to real Windows or Unix paths. What leaked was everything
+downstream of that: the parts written as static text, where nobody had to decide.
+
+**The Settings panel had no idea what it was running on.** The help under *Let it look at
+this computer* named `/etc`, `/proc` and `/var/log` in hard-coded markup, and the allowlist
+box suggested `git, docker, systemctl`. On Windows the first is a claim about folders that
+cannot exist — and an operator has no way to check it, so it is not a cosmetic slip but a
+false statement about what the companion can reach. The second was wrong on both platforms
+for a different reason: those three programs are precisely the ones `STARTER_ALLOWLIST`
+turns away, because each has a destructive subcommand. The box's own rule was contradicted
+by the example printed inside it.
+
+`get_settings` now returns `os` **beside** the settings rather than inside them — the
+operating system is a fact about the machine, not a preference, and a key inside `settings`
+would look saveable. `applyOsWording()` in app.js keys the two strings off it. The markup
+keeps wording that is true everywhere and specific nowhere, so a backend too old to send the
+field, or one built for a platform not in the table, reads vague instead of wrong.
+
+The answer comes from the backend for the reason already written on `Os::current`: when the
+Windows laptop browses to the Linux desktop's HUD, the machine being described is the Linux
+one. `navigator.platform` would have got that exactly backwards, and this project's whole
+serve-to-a-browser story is that arrangement.
+
+**Two constants were leaking the same way.** `PIPER_VOICE_DIRS` and whisper's `MODEL_DIRS`
+are printed verbatim in the "nothing found" messages, and both listed `/usr/share/...` on
+Windows. The `~/.local/share` entries stay on both lists on purpose — installer/aether1.iss
+writes the bundled voice and model to `%USERPROFILE%\.local\share\...`, so that one
+location means the same thing on every platform — but the `/usr` entries are now
+`#[cfg(not(windows))]`, with a test asserting every named folder is one this platform could
+have. Sending someone hunting through a folder tree that cannot exist is worse than saying
+nothing, and it is the same failure mode step 36 was about: a message that is confidently
+unhelpful.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and

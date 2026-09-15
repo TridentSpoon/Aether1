@@ -1091,8 +1091,12 @@
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
                             Lets the AI read files, list directories and check processes to answer you.
-                            Only your home directory, <span class="text-cyan-300">/etc</span>,
-                            <span class="text-cyan-300">/proc</span> and <span class="text-cyan-300">/var/log</span>;
+                            <!-- Named folders are filled in by applyOsWording() in app.js, because
+                                 which ones exist depends on the machine Aether1 is running on --
+                                 see tools/domain.rs::directories(). The wording below is the
+                                 no-JavaScript fallback: true on every platform, specific on none. -->
+                            <span id="tools-readable-roots">Only your home directory and the
+                            system's own log and configuration folders</span>;
                             never passwords or keys. Every use is recorded in the Activity Log.
                             Nothing is changed without you approving it first.
                         </p>
@@ -1100,7 +1104,8 @@
 
                     <div class="space-y-1 pt-1">
                         <label for="setting-command-allowlist" class="text-xs font-mono text-cyan-300 block">PROGRAMS IT MAY ASK TO RUN</label>
-                        <input id="setting-command-allowlist" type="text" placeholder="e.g. git, docker, systemctl" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <!-- The placeholder is replaced per-platform by applyOsWording() in app.js. -->
+                        <input id="setting-command-allowlist" type="text" placeholder="e.g. ping" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
                             Comma separated. Starts with a few programs that can only look at this
                             machine, never change it &mdash; add your own, or empty the box to allow
@@ -1229,7 +1234,7 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=47"></script>
+    <script src="js/app.js?v=48"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

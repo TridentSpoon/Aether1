@@ -3300,6 +3300,51 @@ document.addEventListener('DOMContentLoaded', () => {
         return personaCataloguePromise;
     }
 
+    /// Wording that only makes sense on one operating system, keyed by the one the backend
+    /// says it is running on.
+    ///
+    /// Two rules hold here. The folders have to be the ones this machine actually has --
+    /// see tools/domain.rs::directories(), which resolves the same symbolic roots to real
+    /// Windows and Unix paths -- because a help line naming /etc on Windows is not a small
+    /// cosmetic slip: it tells the operator the app can reach somewhere that cannot exist,
+    /// and they have no way to check. And the answer comes from the *backend*, never from
+    /// navigator.platform, for the reason written on Os::current in setup.rs: when the
+    /// Windows laptop browses to the Linux desktop's HUD, the machine being described is
+    /// the Linux one.
+    /// The example programs are deliberately ones that only look: the box's own rule is
+    /// that no option you could pass the program changes anything, and `git`, `docker` and
+    /// `systemctl` -- the previous examples here -- are the three the starter list turns
+    /// away for exactly that reason. An example that contradicts the rule beside it teaches
+    /// the wrong lesson to the one person reading it most carefully.
+    const OS_WORDING = {
+        windows: {
+            readableRoots: "Only your user folder, the Windows event logs and the network " +
+                "configuration files in System32",
+            allowlistPlaceholder: "e.g. ping, nslookup",
+        },
+        mac: {
+            readableRoots: "Only your home folder, /etc and the system logs",
+            allowlistPlaceholder: "e.g. ping, dig",
+        },
+        linux: {
+            readableRoots: "Only your home directory, /etc, /proc and /var/log",
+            allowlistPlaceholder: "e.g. ping, dig",
+        },
+    };
+
+    /// Applies OS_WORDING to the Settings panel. An unrecognised or missing `os` leaves the
+    /// markup alone, which is why index.html ships wording that is true everywhere: a
+    /// backend too old to send the field, or one built for a platform not listed above,
+    /// should read vague rather than wrong.
+    function applyOsWording(os) {
+        const wording = OS_WORDING[os];
+        if (!wording) return;
+        const roots = document.getElementById('tools-readable-roots');
+        if (roots) roots.textContent = wording.readableRoots;
+        const allowlist = document.getElementById('setting-command-allowlist');
+        if (allowlist) allowlist.placeholder = wording.allowlistPlaceholder;
+    }
+
     async function loadSettings() {
         try {
             // Before any saved value is applied to the field: setting .value to a persona
@@ -3314,6 +3359,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 })();
 
             const s = data.settings;
+            // Before the fields: this only rewrites static help text, but doing it first
+            // means the panel is never briefly describing the wrong machine.
+            applyOsWording(data.os);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-provider').value = s.llm_provider || 'offline';
