@@ -33,6 +33,7 @@
     <script src="js/avatar-unlocks.js?v=1"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
+    <link rel="stylesheet" href="vendor/xterm/xterm.css?v=1">
 </head>
 <body class="bg-cyber-dark text-slate-100 flex flex-col h-screen select-none">
     <div class="scanlines"></div>
@@ -359,6 +360,40 @@
                     🎮 Game Mode: OFF
                 </button>
             </div>
+        </div>
+
+        <!-- THE OPERATOR'S TERMINAL.
+             A real shell on a real pty -- which is the point, because a terminal that
+             cannot be prompted is not a terminal: sudo has to be able to ask for a
+             password and yay has to be able to ask which package you meant.
+
+             It is yours and not the companion's, and that is structural rather than a
+             promise. There is no tool that reaches it, so there is no name the model can
+             emit that arrives at a shell. There is no HTTP route, so --serve and --lan
+             expose nothing here -- which is why this panel is removed outright, not
+             merely disabled, when the HUD is running in a browser. And nothing it prints
+             is written to the database, the vault or the action log, so there is no file
+             the companion can be pointed at afterwards to read what you did.
+             See src-tauri/src/terminal.rs and scripts/check_terminal_isolation.sh. -->
+        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="terminal" data-panel-name="Terminal" data-grid-col="1" data-grid-row="27" data-grid-w="4" data-grid-h="11">
+            <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
+            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
+            <button type="button" class="panel-undock" data-undock="terminal" title="Open this panel in its own window" aria-label="Open the terminal in its own window">⧉</button>
+            <div class="flex items-center justify-between px-4 pt-4 pb-2 gap-2">
+                <h3 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">
+                    TERMINAL
+                </h3>
+                <span id="terminal-state" class="font-mono text-[10px] text-slate-500">not started</span>
+            </div>
+            <div class="px-4 pb-2">
+                <button id="btn-terminal-start" class="cyber-btn text-[11px] py-1 px-2">▶ Start a shell</button>
+            </div>
+            <!-- xterm draws into this. It is sized by the panel, and the shell is told
+                 whenever that changes, which is what makes less and htop redraw properly. -->
+            <div id="terminal-surface" class="flex-1 min-h-0 px-2 pb-2 hidden"></div>
+            <p id="terminal-note" class="px-4 pb-3 text-[10px] font-mono text-slate-500 leading-relaxed">
+                Your own shell, in the window. Aether1 cannot see it or type into it.
+            </p>
         </div>
 
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
@@ -1428,8 +1463,11 @@
     <script src="js/hologram/animate.js?v=39"></script>
     <script src="js/voice.js?v=17"></script>
     <script src="js/notes-graph.js?v=1"></script>
-    <script src="js/app.js?v=51"></script>
+    <script src="vendor/xterm/xterm.js?v=1"></script>
+    <script src="vendor/xterm/addon-fit.js?v=1"></script>
+    <script src="js/terminal.js?v=1"></script>
+    <script src="js/app.js?v=52"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
-    <script src="js/layout.js?v=3"></script>
+    <script src="js/layout.js?v=5"></script>
 </body>
 </html>

@@ -30,6 +30,7 @@ mod paths;
 mod serve_auth;
 mod server;
 mod setup;
+mod terminal;
 mod tools;
 mod vault;
 mod voice_download;
@@ -41,6 +42,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde::Deserialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -751,6 +754,92 @@ fn set_always_allowed_rust(
     commands::set_always_allowed(&engine, tool, allowed)
 }
 
+/* -------------------------------------------------------------------------- */
+/* The operator's terminal.                                                    */
+/*                                                                             */
+/* These four commands are the *only* way into terminal.rs, and they are        */
+/* declared here rather than in commands.rs on purpose. commands.rs is the      */
+/* shared layer both transports call: anything put there is reachable from      */
+/* server.rs, which means reachable over HTTP and, with --lan, over the         */
+/* network. A #[tauri::command] registered in this file has no such second      */
+/* door -- `--serve` returns from main() before tauri::Builder is ever          */
+/* constructed, so in a headless run this code is not merely unrouted, it is    */
+/* never reached at all.                                                       */
+/*                                                                             */
+/* There is deliberately no tool wrapping any of this. The companion has no     */
+/* name it can emit that arrives here.                                         */
+/* -------------------------------------------------------------------------- */
+
+/// Opens a terminal and starts streaming it to the window that asked.
+///
+/// Output leaves here as a `terminal-output` event and goes nowhere else: not to the
+/// database, not to the vault, not to the action log. That is what stops the transcript of
+/// what the operator did in their own terminal from becoming a file the companion could
+/// later be pointed at.
+///
+/// The bytes are base64 on the way across because a pty emits escape sequences and
+/// half-characters, and Tauri's event payloads are JSON -- which would mangle both. The
+/// frontend hands them to the terminal emulator still encoded.
+#[tauri::command(async)]
+fn terminal_open_rust(
+    app: tauri::AppHandle,
+    terminals: tauri::State<terminal::Handle>,
+    rows: u16,
+    cols: u16,
+) -> Result<String, String> {
+    let output_app = app.clone();
+    let exit_app = app.clone();
+    terminal::open(
+        &terminals,
+        rows,
+        cols,
+        move |id, bytes| {
+            let _ = output_app.emit(
+                "terminal-output",
+                serde_json::json!({
+                    "id": id,
+                    "bytes": BASE64.encode(bytes),
+                }),
+            );
+        },
+        move |id| {
+            let _ = exit_app.emit("terminal-exit", serde_json::json!({ "id": id }));
+        },
+    )
+}
+
+/// Keystrokes from the window, base64 for the same reason as the output: a terminal's input
+/// includes control bytes and escape sequences, not just text.
+#[tauri::command(async)]
+fn terminal_write_rust(
+    terminals: tauri::State<terminal::Handle>,
+    id: String,
+    bytes: String,
+) -> Result<(), String> {
+    let decoded = BASE64
+        .decode(bytes.as_bytes())
+        .map_err(|_| "that keystroke did not arrive intact".to_string())?;
+    terminal::write(&terminals, &id, &decoded)
+}
+
+#[tauri::command(async)]
+fn terminal_resize_rust(
+    terminals: tauri::State<terminal::Handle>,
+    id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    terminal::resize(&terminals, &id, rows, cols)
+}
+
+#[tauri::command(async)]
+fn terminal_close_rust(
+    terminals: tauri::State<terminal::Handle>,
+    id: String,
+) -> Result<(), String> {
+    terminal::close(&terminals, &id)
+}
+
 #[tauri::command(async)]
 fn get_messages_rust(
     engine: tauri::State<LlmEngine>,
@@ -1121,6 +1210,9 @@ const PANEL_WINDOWS: &[(&str, &str, f64, f64)] = &[
     ("hardware", "Hardware Telemetry", 380.0, 560.0),
     ("commands", "Quick Commands", 340.0, 260.0),
     ("chat", "Neural Dialogue Stream", 480.0, 680.0),
+    // Wider and shorter than the rest: 80 columns is what a terminal is for, and a shell
+    // squeezed into a 380px column wraps every second command.
+    ("terminal", "Terminal", 760.0, 520.0),
 ];
 
 /// Rust-native "undock" for any HUD panel that isn't the hologram: opens a normal, decorated,
@@ -1259,6 +1351,11 @@ fn main() {
         ))
         .manage(llm_engine)
         .manage(background_services::ManagedOllama::default())
+        // Only the native app ever has this. `--serve` returns from main() long before
+        // here, so in a headless run the map of live terminals does not exist to be
+        // reached -- the isolation is a fact about the process, not a check that has to be
+        // remembered.
+        .manage(terminal::Handle::default())
         .invoke_handler(tauri::generate_handler![
             generate_response_rust,
             generate_response_streaming_rust,
@@ -1291,6 +1388,10 @@ fn main() {
             new_session_rust,
             rename_session_rust,
             delete_session_rust,
+            terminal_open_rust,
+            terminal_write_rust,
+            terminal_resize_rust,
+            terminal_close_rust,
             reset_benchmarks_rust,
             open_vault_folder_rust,
             vault_notes_rust,

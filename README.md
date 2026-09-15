@@ -479,24 +479,28 @@ default.
 
 ## Rearranging the HUD
 
-The main window is three columns of panels, and both what is in them and how wide
-they are is yours to change.
+The main window is a free-form grid, a bit like the home screen on a phone: every panel
+has a place on it and a size, and both are yours to change.
 
-- **Move a panel:** drag it by the dotted strip along its top edge. Drop it above or
-  below another panel, or in a different column -- a glowing line shows where it will
-  land. If you empty a column completely it shrinks to a narrow strip labelled
-  DROP A PANEL HERE, so you can always put something back.
-- **Resize the columns:** drag the divider between two of them. Only those two
-  change; the third stays where it is. Double-click a divider to put the widths back.
-- **Keyboard:** tab to a panel's grip and use the arrow keys to move it, or to a
-  divider and use left/right to resize.
-
+- **Move a panel:** drag it by the dotted strip along its top edge. Drop it anywhere
+  there is room.
+- **Resize a panel:** drag the little handle in its bottom-right corner. It grows until
+  it would run into a neighbour, then stops rather than shoving anything aside.
+- **Keyboard:** tab to a panel's grip and use the arrow keys to move it.
 - **Switch a panel off entirely:** Settings → **Panels to show**, in the HUD LAYOUT
   section. Untick one and it is gone — not hidden behind something, *not running*. The
   avatar in particular genuinely stops drawing when its panel is off, rather than carrying
   on burning the graphics card behind a box you cannot see.
 
-All three are remembered on this machine and survive a restart, and none of them is saved
+**Resizing the window resizes the panels.** Sideways it always has: a panel that takes a
+third of the width takes a third of the width at any size. Up and down it now does too --
+the shipped arrangement is scaled to fit the height of the window, so on a laptop screen you
+see the whole avatar instead of scrolling down to find the bottom of it. There is a floor:
+on a very short window the panels stop shrinking, because a panel squeezed past the point of
+being readable is worse than a scrollbar. Narrower than about 1000 pixels the grid gives up
+on arranging things altogether and stacks everything into one readable column.
+
+All of this is remembered on this machine and survives a restart, and none of it is saved
 with your settings — a layout is a property of the screen you are sitting at, so a second
 machine pointed at the same companion can be arranged completely differently. Settings has a
 **Reset panels to their default places** button when you want the original layout back,
@@ -795,6 +799,48 @@ Either way you see the same thing: a one-line trace of what actually ran, and th
 Because a persona now carries access, the companion cannot change its own persona, avatar or
 directive — those settings are out of reach of `set_aether_setting`, alongside API keys and its
 own permissions. "Switch persona to Security" is not something it may approve itself into.
+
+## Your own terminal
+
+There is a terminal in the HUD. It is a real one — the same shell you get from a terminal
+app, running as you, in your home folder, with a proper keyboard attached to it. `sudo` can
+ask you for your password. `yay` can ask you which package you meant. `htop` and `less`
+redraw when you resize the panel. That is the whole point: a box that only runs a command
+and prints what came back is not a terminal, and the moment you need it, it fails you.
+
+Click **▶ Start a shell** in the Terminal panel and type. Type `exit`, or press the button
+again, and it closes. If you don't want it there at all, switch the panel off like any other
+(**Rearranging the HUD**, above).
+
+### It is yours, and only yours
+
+The obvious worry about putting a shell inside an AI companion is the AI. So it was built so
+that your companion cannot reach it — not "is not allowed to", cannot:
+
+- **It is not a tool.** There is no `run_in_terminal` for the model to ask for. Nothing you
+  say in a conversation, and nothing the model reads from a web page or a note, can put a
+  character into it. The refusal list that already keeps the AI out of its own permissions
+  and its own conversations now keeps it out of the terminal too.
+- **It is not on the network.** The terminal exists only in the desktop app. It has no
+  address — there is no route for it in the browser server, so there is nothing to reach
+  over your LAN even with `--lan` on and a pairing token in hand. The code that runs it
+  isn't merely unrouted in `--serve` mode; that mode returns before the desktop app is ever
+  built, so it is never loaded at all. Open the HUD in a browser and the panel isn't there.
+- **Nothing is written down.** What you type and what comes back go from your keyboard to
+  the shell and back to the screen. None of it is stored, logged, put in the vault, or added
+  to the conversation the model sees.
+
+`scripts/check_terminal_isolation.sh` checks all three every time CI runs, so a future
+change that quietly connects the terminal to the AI fails the build rather than shipping.
+
+### One thing that came with it
+
+Shells keep a history file — `~/.bash_history` and friends — which is a verbatim record of
+every command you have typed, and people type passwords and API keys into commands. Your
+home folder is somewhere the AI may read, so until now it could have read that file. It
+can't any more: history files are on the same permanent deny list as your SSH keys, which no
+setting, persona or approval of yours can lift. That was true before there was a terminal
+here; building one made it urgent, because Aether1 would now be writing that file itself.
 
 ## Making your own avatar
 

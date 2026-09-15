@@ -8,8 +8,16 @@
  */
 
 #hud-layout {
-  /* Keep these in sync with the ROW_PX/GAP_PX/COLS constants in layout.js --
-     the drag math converts pointer pixels to cells using these same numbers. */
+  /* Keep --grid-cols and --grid-gap in sync with the COLS/GAP_PX constants in
+     layout.js -- the drag math converts pointer pixels to cells using these
+     same numbers.
+
+     --cell-h is different: it is a starting value that layout.js overwrites on
+     every window resize, so that the default arrangement fills the window
+     height instead of running off the bottom of a short screen. The value here
+     is what the grid uses before that script has run, and what it falls back to
+     if the script never runs at all -- so it is the old fixed row height, which
+     is a layout that works rather than one that collapses. */
   --grid-cols: 12;
   --cell-h: 24px;
   --grid-gap: 10px;

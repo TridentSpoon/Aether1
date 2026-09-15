@@ -4582,6 +4582,71 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    /* -------------------------------------------------------------------- */
+    /* The terminal.                                                        */
+    /*                                                                      */
+    /* A real shell on a real pty, and the one part of this app the         */
+    /* companion cannot reach: no tool names it, no HTTP route exposes it,  */
+    /* and nothing it prints is written anywhere the companion can read.    */
+    /* scripts/check_terminal_isolation.sh fails the build if any of those  */
+    /* three stops being true.                                              */
+    /*                                                                      */
+    /* In a browser the panel is removed from the DOM rather than disabled. */
+    /* There is no route behind it there, and a terminal that looks like it */
+    /* works is worse than no terminal at all -- it also keeps it out of    */
+    /* the module switch list, which would otherwise offer to turn on       */
+    /* something that cannot exist.                                         */
+    /* -------------------------------------------------------------------- */
+    const terminalPanel = document.querySelector('[data-panel="terminal"]');
+    if (terminalPanel && !IS_TAURI) {
+        terminalPanel.remove();
+    } else if (terminalPanel) {
+        const terminalSurface = document.getElementById('terminal-surface');
+        const terminalState = document.getElementById('terminal-state');
+        const terminalNote = document.getElementById('terminal-note');
+        const btnTerminalStart = document.getElementById('btn-terminal-start');
+        let shell = null;
+
+        const setState = (text) => { if (terminalState) terminalState.textContent = text; };
+
+        btnTerminalStart?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            if (shell && shell.running()) {
+                /* The button is the whole control surface, so it has to be able to undo
+                   itself -- otherwise closing a shell means closing the app. */
+                await shell.stop();
+                terminalSurface.classList.add('hidden');
+                terminalNote?.classList.remove('hidden');
+                btnTerminalStart.textContent = '▶ Start a shell';
+                setState('not started');
+                return;
+            }
+            try {
+                terminalSurface.classList.remove('hidden');
+                terminalNote?.classList.add('hidden');
+                if (!shell) {
+                    shell = Aether1Terminal.mount(terminalSurface, {
+                        invoke: tauriInvoke,
+                        listen: (name, handler) => window.__TAURI__.event.listen(name, handler),
+                        onState: setState,
+                    });
+                }
+                await shell.start();
+                btnTerminalStart.textContent = '⏹ Close the shell';
+            } catch (err) {
+                terminalSurface.classList.add('hidden');
+                terminalNote?.classList.remove('hidden');
+                setState('could not start');
+                console.warn('Could not start a shell', err);
+                alert(`Could not start a shell: ${err.message || err}`);
+            }
+        });
+
+        /* A panel switched off has no layout box, so xterm cannot measure it; switched
+           back on it needs to be told its size before the shell draws at the old one. */
+        document.addEventListener('aether1:panels-changed', () => shell?.fit());
+    }
+
     document.getElementById('btn-notes')?.addEventListener('click', openNotesReader);
     document.getElementById('btn-read-notes')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');

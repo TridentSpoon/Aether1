@@ -1753,6 +1753,114 @@ boundary. `SystemTime` nanoseconds in base 36 is the whole requirement.
 per-exchange. Threading session boundaries through them would turn a journal into a
 transcript, and the journal is the part that was meant to be readable a year later.
 
+### Step 42: a terminal that is the operator's alone — **shipped**
+
+A shell in the HUD, and the reason it took care rather than an afternoon: every other feature
+in this codebase is built to be *reachable* — two transports, a tool the model can ask for, a
+route the browser can call — and this one had to be built to be unreachable, by the model and
+by the network both, without that being a promise anybody has to take on trust.
+
+**It is a pty, not a command runner.** `src-tauri/src/terminal.rs` opens a real pseudo-
+terminal through `portable-pty` and spawns the operator's `$SHELL -l` in it. The cheaper
+design — run a command, capture stdout, print it — fails exactly when it matters: `sudo`
+cannot prompt for a password, `yay` cannot ask which package, `less` cannot page and `htop`
+cannot draw, because none of them will do any of that unless something on the other end is a
+terminal. `it_is_a_terminal_and_not_a_command_runner` asserts that `test -t 0` inside the
+shell reports `ON-A-TTY`, which is the property the whole panel rests on.
+
+**The isolation is structural, not a policy.** Three separate facts, each of which would be
+enough on its own:
+
+- *No tool.* Nothing in `src-tauri/src/tools/` mentions the terminal, so there is no tool for
+  the model to ask for and nothing a prompt — or a web page, or a note the model reads — can
+  steer into it. This is the same absence that keeps the AI out of `tools_enabled`, its own
+  panels and, since step 41, its own conversations.
+- *No route.* The four commands live in `main.rs`, not `commands.rs`. That is the one
+  deliberate break in this codebase's "shared implementation, two transports" rule, and it is
+  the point: `commands.rs` is what `server.rs` calls, so anything put there is reachable over
+  HTTP and, with `--lan`, over the network. Better still, `main()` handles
+  `Invocation::Serve` by calling `server::run` and *returning before `tauri::Builder` is ever
+  constructed* — so in a headless run the terminal code is not merely unrouted, it is never
+  reached, and the Tauri-managed `Terminals` map has no way to come into existence.
+- *No record.* `terminal.rs` touches no database, no vault and no action log. Keystrokes go
+  to the shell and bytes come back to the screen; nothing in between is kept, which also
+  means nothing about the session can later be read back into a prompt.
+
+`scripts/check_terminal_isolation.sh` asserts all three in CI — including that `main.rs`
+still contains `terminal_open_rust`, so the other greps cannot pass by the terminal having
+quietly been deleted.
+
+**The bug worth recording.** The first working version leaked a reader thread and a zombie
+child per terminal, and a shell that had exited still looked alive in the panel forever. A
+pty reports end-of-file on the master only when the *last* slave handle closes, and `Session`
+was holding the whole `PtyPair` — so the parent's copy of the slave kept the read loop from
+ever returning zero. `Session` now stores only the master and `open()` does `drop(pair.slave)`
+immediately after `spawn_command`. `the_shell_exiting_reports_itself` is the regression test,
+and it failed by *timing out* rather than by asserting, which is what makes this class of bug
+worth a test rather than a code read.
+
+**Ceilings before ioctls.** `MAX_SESSIONS = 8` means a runaway frontend hits a wall instead
+of forking shells forever, and `clamp_size` bounds rows and columns to 1..2000 before either
+reaches a `TIOCSWINSZ` — a size is a number that arrives from the page, and a number that
+arrives from the page gets clamped where it lands, not where it is used.
+
+**Browser mode removes the panel rather than disabling it.** `app.js` deletes the
+`data-panel="terminal"` element outright when it is not running under Tauri. There is no
+route behind it there, and a terminal that looks like it works is worse than no terminal; it
+also keeps it out of the module-switch list, which is built from the DOM. Switching panels
+now dispatches `aether1:panels-changed`, which is what tells xterm to re-fit when the
+terminal is switched back on.
+
+**A leak that predated the terminal, closed with it.** The home folder is a readable root for
+`fs_guard`, and shell history files were not on any deny list — so the companion could read
+`~/.bash_history`, which is a verbatim record of every command the operator has typed, and
+people type API keys and passwords into commands. `DENIED_NAMES` now covers the bash, zsh,
+sh, python, node, psql, mysql and sqlite history files, `.lesshst` and PowerShell's
+`ConsoleHost_history.txt`, on the same permanent list as SSH keys — beyond the reach of
+domain, approval, elevation or any operator setting. The shell is not asked to stop keeping
+history; that file is the operator's own tool. Building a terminal into the app made this
+urgent rather than theoretical, because Aether1 is now the thing writing that file.
+
+### Step 43: the grid follows the window in both directions — **shipped**
+
+Columns were `minmax(0, 1fr)` and rows were a flat `24px`, so the HUD had always been half
+responsive: panels tracked the window's width and ignored its height entirely. Measured, the
+default arrangement wanted 1248px of panel and 1280px of page — on a 1000px-tall window the
+avatar panel stayed 1248px tall and more than a third of it sat below the fold, and the
+window getting taller bought dead space rather than bigger panels.
+
+`--cell-h` is now computed by `layout.js` on every resize instead of being a constant, so the
+shipped arrangement fills the height it is given. Three things make that safe rather than
+clever:
+
+**It is scaled against the default layout, not the live one.** `DESIGN_ROWS` is the lowest
+row the markup reaches (37), captured from `data-grid-*` alongside the existing defaults.
+Scaling against the *current* placement is the obvious move and the wrong one: the grid would
+then always exactly fill the window, so dragging a panel taller would shrink every row to
+compensate and the panel would not visibly grow — a resize handle that appears not to work.
+Against a fixed reference the shipped layout fits at any height and an operator who builds
+something taller gets a scrollbar, which is what they asked for by building it.
+
+**The clamp is the interesting part, not the arithmetic.** `ROW_PX_MIN = 14` is where the
+grid stops shrinking and lets the window scroll instead; below it panels stop being readable,
+and a scrollbar is the honest failure. `ROW_PX_MAX = 48` keeps a very large monitor from
+handing panels height their contents have no use for. The result rounds *down*: half a pixel
+of generosity per row is 37 half-pixels of overflow, and a scrollbar offering eleven pixels
+of nothing is worse than eleven pixels of margin.
+
+**The drag math reads the same number.** `ROW_PX` was a constant used in exactly one place —
+`metrics().rowPitch` — so it became the live `rowPx` and the pointer-to-cell conversion
+follows the scale for free. Verified by dragging a resize handle three row-pitches at both
+24px and 14px rows and checking the panel grew by exactly three cells each time; the risk
+being guarded against is a grid that looks right and no longer lines up with the mouse.
+
+Below 1024px the existing media query replaces the grid with a stacked column, where rows are
+not used at all, so `fitRowHeight` removes the property and stands down rather than computing
+a number nothing reads. `--cell-h: 24px` stays in the stylesheet as the value the grid uses
+before the script runs and falls back to if it never does — a layout that works rather than
+one that collapses. Resize events are coalesced to one pass per frame, and that pass ends by
+dispatching `aether1:panels-changed`, which is how the terminal hears that its box moved.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1762,8 +1870,9 @@ the vault as what to do next, and all three shipped some time ago.*
 registry, the read-only loop, the consent path, mutating tools and undo). Phase 3 entire (the
 vault, priming from it, writing back, search and archiving, and — since step 35 — every
 conversation folded into a dated note without being asked, and since steps 39–40 read and
-drawn inside the app, and since step 41 kept in conversations you can reopen). Plus local-only mode, the theme
-engine, the top bar, personas as specialities, per-persona access with per-request elevation
+drawn inside the app, and since step 41 kept in conversations you can reopen). Plus, since
+step 42, a real terminal in the HUD that the companion provably cannot reach. Plus local-only
+mode, the theme engine, the top bar, personas as specialities, per-persona access with per-request elevation
 *and* operator-widened fields, a command allowlist that ships usable, reading the Windows
 event log, honest token telemetry, and native tool calling.
 
