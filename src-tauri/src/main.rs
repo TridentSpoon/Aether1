@@ -913,10 +913,7 @@ fn set_game_mode_rust(
         let was_managed = managed_ollama.is_managed();
         engine
             .db()
-            .set_setting(
-                "_game_mode_stopped_ollama",
-                &serde_json::json!(was_managed),
-            )
+            .set_setting("_game_mode_stopped_ollama", &serde_json::json!(was_managed))
             .map_err(|e| e.to_string())?;
         background_services::stop_managed_ollama(&managed_ollama);
         if let Some(window) = app.get_webview_window(MAIN_LABEL) {
