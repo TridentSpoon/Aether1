@@ -115,36 +115,61 @@ pub struct VoiceAdvice {
     pub needs_attention: bool,
 }
 
-/// Where to get Piper, per operating system. Piper has no installer: it is a zip with a
-/// binary in it, plus a voice file, and both have to be put somewhere the machine looks.
-/// That is a lot to ask, which is exactly why the OS voice exists as a fallback and why
-/// these steps are an offer rather than a requirement.
+/// Where to get Piper, per operating system. Piper is two separate things: a program,
+/// which has to come from a package manager because it runs, and a voice, which is a pair
+/// of data files Aether1 now fetches itself. Only the first half is still a chore, which
+/// is why the OS voice exists as a fallback and why these steps are an offer rather than
+/// a requirement.
 fn piper_steps(os: Os) -> Vec<Step> {
-    let voices = Step::open(
-        "Download a voice -- BOTH files",
-        "A voice is two files, and it will not work with only one of them. Open a voice \
-         folder and download the .onnx file AND the small .onnx.json sitting next to it, \
-         then put both in the voices folder from the step above. en_GB-alba-medium or \
-         en_US-amy-medium are good, ordinary-sounding places to start. Taking only the big \
-         .onnx is the usual reason a voice that looks installed never speaks.",
+    // The voice is the one half of this Aether1 can do for somebody, and "Pick a better
+    // voice" is sitting directly beneath these steps in the same panel. A voice is two
+    // files and it does not work with only one of them, which was far and away the most
+    // common way the by-hand route went wrong -- so the button is the step now, and the
+    // manual route is kept underneath for anyone who wants a voice outside the short list.
+    let voices = Step::say(
+        "Pick a voice below -- Aether1 fetches it",
+        "Under these steps there is a short list of voices with a Download button beside \
+         each. Aether1 downloads both of the files a voice is made of, into the folder it \
+         already looks in, and shows you a bar while it does. Nothing is installed and \
+         nothing is run: a voice file is sound, not a program.",
+    );
+
+    let voices_by_hand = Step::open(
+        "...or fetch a voice by hand",
+        "Only needed for a voice that is not on the list -- another language, say. Open a \
+         voice folder and download the .onnx file AND the small .onnx.json sitting next to \
+         it, then put both in ~/.local/share/piper/voices. Taking only the big .onnx is the \
+         usual reason a voice that looks installed never speaks.",
         "https://huggingface.co/rhasspy/piper-voices/tree/main/en",
     );
 
     match os {
         Os::Windows => vec![
+            Step::run(
+                "Install Piper",
+                "Piper is maintained as a Python package now, and this is the shortest route \
+                 on Windows. Open Command Prompt and paste the line below. If Windows says \
+                 there is no python, install it from the Microsoft Store first, then try \
+                 again.",
+                "python -m pip install piper-tts",
+            ),
             Step::open(
-                "Download Piper",
-                "Open this page and download the file ending in windows_amd64.zip. Unzip it \
-                 anywhere you like -- your Documents folder is fine.",
+                "...or take the old ready-made zip",
+                "Only if the line above will not run. This is the last ready-made Windows \
+                 build the original project made before it was archived -- it still works, \
+                 but it is frozen. Download the file ending in windows_amd64.zip and unzip \
+                 it anywhere; your Documents folder is fine.",
                 "https://github.com/rhasspy/piper/releases/latest",
             ),
             Step::say(
                 "Put it where Aether1 looks",
-                "Move the unzipped piper folder so that piper.exe sits inside it, then add \
-                 that folder to your PATH -- or simply copy piper.exe next to Aether1's own \
-                 program. Aether1 looks for a command called piper, piper-tts or piper_tts.",
+                "Only for the zip route. Move the unzipped piper folder so that piper.exe \
+                 sits inside it, then add that folder to your PATH -- or simply copy \
+                 piper.exe next to Aether1's own program. Aether1 looks for a command called \
+                 piper, piper-tts or piper_tts.",
             ),
             voices,
+            voices_by_hand,
         ],
         Os::Mac => vec![
             Step::run(
@@ -153,6 +178,7 @@ fn piper_steps(os: Os) -> Vec<Step> {
                 "brew install piper-tts",
             ),
             voices,
+            voices_by_hand,
         ],
         Os::Linux => vec![
             Step::say(
@@ -170,11 +196,20 @@ fn piper_steps(os: Os) -> Vec<Step> {
                  below instead, which needs no package manager at all.",
                 "yay -S piper-tts-bin",
             ),
+            Step::run(
+                "...or install it with pip, which works on any distribution",
+                "Piper is maintained as a Python package now, so this route needs no \
+                 package that your distribution has to carry. It installs into your own \
+                 account, not system-wide.",
+                "python3 -m pip install --user piper-tts",
+            ),
             Step::open(
-                "...or take the tarball, which works on any distribution",
-                "Download the file ending in linux_x86_64.tar.gz, unpack it, and copy the \
-                 piper program inside to ~/.local/bin (create that folder if it is not \
-                 there). Aether1 looks there as well as on your PATH.",
+                "...or take the old ready-made tarball",
+                "Last resort, and frozen: this is the final ready-made Linux build the \
+                 original project made before it was archived. Download the file ending in \
+                 linux_x86_64.tar.gz, unpack it, and copy the piper program inside to \
+                 ~/.local/bin (create that folder if it is not there). Aether1 looks there \
+                 as well as on your PATH.",
                 "https://github.com/rhasspy/piper/releases/latest",
             ),
             Step::say(
@@ -184,6 +219,7 @@ fn piper_steps(os: Os) -> Vec<Step> {
                  one if it does not exist -- that is the one that needs no permissions.",
             ),
             voices,
+            voices_by_hand,
         ],
     }
 }

@@ -61,6 +61,14 @@
     const state = new Map();
     const byId = new Map(panels.map((p) => [p.dataset.panel, p]));
 
+    /* Panels switched off in Settings. Held as ids rather than as a class on the
+       element so the grid can ask "is this one on the screen at all" without
+       reading the DOM in the middle of a drag. A panel in here is display:none
+       (see .panel-off in css/layout.css), which means it is genuinely not
+       running: a hidden WebGL canvas has no layout box, and animate.js skips a
+       frame for a canvas with no layout box. */
+    const off = new Set();
+
     function apply(panel) {
         const rect = state.get(panel.dataset.panel);
         if (!rect) return;
@@ -82,6 +90,10 @@
     function overlapsAny(rect, excludeId) {
         for (const [id, other] of state) {
             if (id === excludeId) continue;
+            /* A panel that is switched off is not on the screen, so it cannot be
+               in the way of one that is. Without this, dragging around a HUD with
+               half its panels off would keep bouncing off empty space. */
+            if (off.has(id)) continue;
             if (collides(rect, other)) return true;
         }
         return false;
@@ -130,7 +142,16 @@
         const out = {};
         for (const [id, rect] of state) out[id] = rect;
         try {
-            localStorage.setItem(STORE_KEY, JSON.stringify({ version: STORE_VERSION, panels: out }));
+            /* Stored as the list of panels switched OFF rather than the list left
+               on. A panel added to the HUD in a later version is then on by
+               default for somebody with a saved layout, instead of silently
+               missing because their stored "on" list was written before it
+               existed. */
+            localStorage.setItem(STORE_KEY, JSON.stringify({
+                version: STORE_VERSION,
+                panels: out,
+                off: Array.from(off),
+            }));
         } catch (err) {
             /* A full or disabled store costs the operator a remembered layout and
                nothing else, so it is not worth interrupting them over. */
@@ -148,7 +169,7 @@
         if (!parsed || parsed.version !== STORE_VERSION || typeof parsed.panels !== 'object' || !parsed.panels) {
             return null;
         }
-        return parsed.panels;
+        return parsed;
     }
 
     function isValidRect(rect) {
@@ -163,7 +184,15 @@
 
     function applySaved() {
         seedDefaults();
-        const saved = load();
+        const stored = load();
+        const saved = stored && stored.panels;
+        /* The off-set first: the placement pass below asks overlapsAny which
+           panels are in the way, and a panel switched off is not in the way. */
+        off.clear();
+        if (stored && Array.isArray(stored.off)) {
+            stored.off.filter((id) => byId.has(id)).forEach((id) => off.add(id));
+        }
+        applyVisibility();
         if (saved) {
             /* An id in the saved layout that no longer exists in the markup is
                simply skipped -- an old layout must never be able to break a
@@ -181,6 +210,53 @@
             }
         }
         applyAll();
+        renderToggles();
+    }
+
+    // ---- Which panels exist at all ------------------------------------------
+
+    function applyVisibility() {
+        panels.forEach((panel) => {
+            panel.classList.toggle('panel-off', off.has(panel.dataset.panel));
+        });
+    }
+
+    /* The human name for a panel, for the checkbox beside it. Falls back to the
+       id, which is at least something, rather than to an empty label. */
+    function panelLabel(panel) {
+        return panel.dataset.panelName || panel.dataset.panel;
+    }
+
+    function setPanelOn(id, on) {
+        if (on) off.delete(id); else off.add(id);
+        applyVisibility();
+        save();
+        settle();
+    }
+
+    /* One checkbox per panel, built from the markup rather than from a list kept
+       here -- a panel added to index.html turns up in this list without anyone
+       having to remember to write it down twice. */
+    function renderToggles() {
+        const host = document.getElementById('panel-toggles');
+        if (!host) return;
+        host.textContent = '';
+        panels.forEach((panel) => {
+            const id = panel.dataset.panel;
+            const row = document.createElement('label');
+            row.className = 'flex items-center gap-2 cursor-pointer';
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = !off.has(id);
+            box.className = 'rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0';
+            box.addEventListener('change', () => setPanelOn(id, box.checked));
+            const text = document.createElement('span');
+            text.className = 'text-[11px] font-mono text-slate-300';
+            text.textContent = panelLabel(panel);
+            row.appendChild(box);
+            row.appendChild(text);
+            host.appendChild(row);
+        });
     }
 
     function resetLayout() {
@@ -188,7 +264,13 @@
             localStorage.removeItem(STORE_KEY);
         } catch (err) { /* nothing to undo */ }
         seedDefaults();
+        /* Reset means the HUD as shipped, which includes every panel being on --
+           a reset that left a panel switched off would look like it had not
+           worked to the one person most likely to be pressing it. */
+        off.clear();
+        applyVisibility();
         applyAll();
+        renderToggles();
         settle();
     }
 

@@ -2233,8 +2233,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* One row. Built as nodes, never as markup: the model name and the status word both
-       come from whatever the model server said, and they are going onto the page. */
-    function renderDownloadRow(d) {
+       come from whatever the model server said, and they are going onto the page.
+
+       `onClear` is how the voice downloads borrow this row: same bar, same words, but the
+       ✕ has to reach their own registry. Defaulting it to the model one would have made
+       a voice row quietly clear nothing, which is exactly the kind of button this file
+       refuses to draw elsewhere. */
+    function renderDownloadRow(d, onClear = null) {
         const row = document.createElement('div');
         row.className = 'setup-download';
         row.dataset.phase = d.phase;
@@ -2260,6 +2265,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clear.textContent = '✕';
             clear.title = 'Clear this from the list';
             clear.addEventListener('click', async () => {
+                if (onClear) { await onClear(); return; }
                 await forgetDownload(d.model).catch(() => null);
                 await refreshDownloads();
             });
@@ -2586,6 +2592,9 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const advice = await fetchVoiceAdvice();
             renderVoiceAdvice(advice);
+            // Not awaited: the verdict above is the answer somebody opened this for, and
+            // it should not wait on a list of optional extras to appear underneath it.
+            renderVoiceCatalogue(advice).catch(() => null);
             return advice;
         } catch (e) {
             if (voiceHeadline) voiceHeadline.textContent = 'Could not check this computer.';
@@ -2674,12 +2683,215 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Picking a voice.                                                     */
+    /*                                                                      */
+    /* Only the voice file is fetched here, never the engine: a .onnx is    */
+    /* numbers handed to a program the operator installed themselves, so a  */
+    /* bad one costs garbled speech. Downloading the engine would be        */
+    /* downloading something that runs, which is a different risk and is    */
+    /* deliberately left to the package manager in the steps above.         */
+
+    const voicePicker = document.getElementById('voice-picker');
+    const voicePickerNote = document.getElementById('voice-picker-note');
+    const voicePickerList = document.getElementById('voice-picker-list');
+    const voicePickerDownloads = document.getElementById('voice-picker-downloads');
+
+    // The note the markup ships with, kept so local-only can replace it and the next
+    // refresh can put it back rather than leaving a stale refusal on screen.
+    const VOICE_PICKER_NOTE = voicePickerNote ? voicePickerNote.textContent : '';
+
+    let voicePollTimer = null;
+    // Voices that reached the end while this panel was open, so the wizard is re-probed
+    // exactly once each rather than on every tick after one lands.
+    const settledVoices = new Set();
+
+    async function fetchVoiceCatalogue() {
+        if (IS_TAURI) return tauriInvoke('voice_catalogue_rust');
+        const resp = await apiFetch('/api/voice/catalogue');
+        if (!resp.ok) throw new Error(`voice list failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function forgetVoiceDownload(voice) {
+        if (IS_TAURI) return tauriInvoke('forget_voice_download_rust', { voice });
+        const resp = await apiFetch(`/api/voice/download/forget?voice=${encodeURIComponent(voice)}`,
+            { method: 'POST' });
+        if (!resp.ok) throw new Error(`could not clear: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function fetchVoiceDownloads() {
+        if (IS_TAURI) return tauriInvoke('voice_download_status_rust');
+        const resp = await apiFetch('/api/voice/downloads');
+        if (!resp.ok) throw new Error(`voice downloads failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* One catalogue row. Nodes rather than markup, for the same reason the model rows
+       are: every word of this comes from the backend and is going onto the page. */
+    function renderVoiceOption(voice, downloadable) {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2 flex-wrap';
+
+        const mark = document.createElement('span');
+        mark.className = voice.installed ? 'text-green-400 text-[11px]' : 'text-slate-600 text-[11px]';
+        mark.textContent = voice.installed ? '✔' : '·';
+        row.appendChild(mark);
+
+        const name = document.createElement('span');
+        name.className = 'text-[11px] font-mono text-cyan-100 flex-1 min-w-0';
+        name.textContent = voice.label;
+        row.appendChild(name);
+
+        const size = document.createElement('span');
+        size.className = 'text-[10px] font-mono text-slate-500';
+        size.textContent = voice.installed ? 'already here' : voice.size_hint;
+        row.appendChild(size);
+
+        if (!voice.installed) {
+            const get = document.createElement('button');
+            get.type = 'button';
+            get.className = 'cyber-btn text-[10px] py-1 px-2';
+            get.textContent = '⬇ Download';
+            get.disabled = !downloadable;
+            get.addEventListener('click', () => startVoiceDownload(voice.name, get));
+            row.appendChild(get);
+        }
+
+        return row;
+    }
+
+    /* The catalogue. `local_only` is asked of the advice rather than guessed at, and the
+       buttons go dead with a reason beside them -- a button that silently refuses is how
+       someone ends up thinking the app is broken rather than doing as it was told. */
+    async function renderVoiceCatalogue(advice) {
+        if (!voicePicker || !voicePickerList) return;
+
+        const data = await fetchVoiceCatalogue().catch(() => null);
+        const voices = (data && data.voices) || [];
+        if (!voices.length) { voicePicker.classList.add('hidden'); return; }
+
+        const downloadable = !(advice && advice.local_only);
+        if (voicePickerNote) {
+            voicePickerNote.textContent = downloadable
+                ? VOICE_PICKER_NOTE
+                : 'Local-only mode is on, so Aether1 will not fetch anything. Switch it off in ' +
+                  'Settings, or copy a voice into the folder named above by hand.';
+        }
+
+        voicePickerList.innerHTML = '';
+        for (const voice of voices) voicePickerList.appendChild(renderVoiceOption(voice, downloadable));
+        voicePicker.classList.remove('hidden');
+    }
+
+    function renderVoiceDownloads(list) {
+        if (!voicePickerDownloads) return;
+        voicePickerDownloads.innerHTML = '';
+        // The same row the model downloads use, so a bar means the same thing in both
+        // places. It reads `model`, so the voice name goes in under that name.
+        for (const d of list) voicePickerDownloads.appendChild(renderDownloadRow({
+            model: d.voice,
+            phase: d.phase,
+            detail: d.detail,
+            completed: d.completed,
+            total: d.total,
+            percent: d.percent,
+            error: d.error,
+        }, async () => {
+            await forgetVoiceDownload(d.voice).catch(() => null);
+            await refreshVoiceDownloads();
+        }));
+    }
+
+    async function refreshVoiceDownloads() {
+        if (!voicePickerDownloads) return [];
+        const data = await fetchVoiceDownloads().catch(() => null);
+        const list = (data && data.downloads) || [];
+        renderVoiceDownloads(list);
+
+        let landed = false;
+        for (const d of list) {
+            if (d.phase !== 'done' && d.phase !== 'failed') continue;
+            if (settledVoices.has(d.voice)) continue;
+            settledVoices.add(d.voice);
+            landed = true;
+        }
+
+        if (landed) {
+            const failed = list.find(d => d.phase === 'failed');
+            const done = list.filter(d => d.phase === 'done').map(d => d.voice);
+            // A voice that just landed changes what the probe would say, so ask it again
+            // rather than leaving the verdict above describing the machine as it was.
+            const advice = await refreshVoiceAdvice();
+            if (failed) {
+                setVoiceStatus(`⚠ ${failed.voice}: ${failed.error || 'the download failed'}`, 'bad');
+            } else if (done.length) {
+                voiceEngine.playSFX('incoming');
+                setVoiceStatus(
+                    `✔ ${done.join(', ')} downloaded. ${advice && advice.speaking && advice.speaking.working
+                        ? 'Press "Say something" to hear it.'
+                        : 'Piper itself is still missing -- follow the steps above, then check again.'}`,
+                    'good');
+            }
+        }
+
+        if (!list.some(d => d.phase !== 'done' && d.phase !== 'failed')) stopVoicePoll();
+        return list;
+    }
+
+    function startVoicePoll() {
+        stopVoicePoll();
+        voicePollTimer = setInterval(() => { refreshVoiceDownloads(); }, 1000);
+    }
+
+    function stopVoicePoll() {
+        if (voicePollTimer) { clearInterval(voicePollTimer); voicePollTimer = null; }
+    }
+
+    /* Starting one. Nothing here waits on the download: the bar appears immediately and
+       fills in as bytes arrive, and closing this panel does not stop it. */
+    async function startVoiceDownload(name, button) {
+        voiceEngine.playSFX('click');
+        if (button) button.disabled = true;
+        settledVoices.delete(name);
+        setVoiceStatus(`Starting the download of ${name}...`, 'busy');
+
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('start_voice_download_rust', { voice: name })
+                : await (async () => {
+                    const resp = await apiFetch(`/api/voice/download?voice=${encodeURIComponent(name)}`,
+                        { method: 'POST' });
+                    if (!resp.ok) throw new Error(`could not start: ${resp.status}`);
+                    return resp.json();
+                })();
+
+            if (!data.ok) {
+                setVoiceStatus(data.message || 'That voice could not be started.', 'bad');
+                if (button) button.disabled = false;
+                return;
+            }
+            setVoiceStatus(`Downloading ${name}. You can leave this open — it carries on either way.`, 'busy');
+            await refreshVoiceDownloads();
+            startVoicePoll();
+        } catch (e) {
+            setVoiceStatus(`Could not start that download: ${e.message || e}`, 'bad');
+            if (button) button.disabled = false;
+        }
+    }
+
     function openVoiceWizard() {
         if (!voiceModal) return;
         voiceEngine.playSFX('click');
         voiceModal.classList.remove('hidden');
         renderVoiceAttempts(null);
         refreshVoiceAdvice();
+        // A download started earlier is still going whether or not this panel was open,
+        // so the first thing it does is ask rather than assume there is nothing running.
+        refreshVoiceDownloads().then(list => {
+            if (list.some(d => d.phase !== 'done' && d.phase !== 'failed')) startVoicePoll();
+        }).catch(() => null);
     }
 
     document.getElementById('btn-voice-setup')?.addEventListener('click', openVoiceWizard);
@@ -2688,6 +2900,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnVoiceEnable) btnVoiceEnable.addEventListener('click', handleVoiceEnable);
     document.getElementById('btn-close-voice')?.addEventListener('click', () => {
         voiceModal.classList.add('hidden');
+        // Only the asking stops. The download itself runs on its own thread in the
+        // backend and finishes whether this panel is open or not.
+        stopVoicePoll();
     });
     document.getElementById('btn-open-voice-settings')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
@@ -3373,6 +3588,51 @@ document.addEventListener('DOMContentLoaded', () => {
         return personaCataloguePromise;
     }
 
+    /// Wording that only makes sense on one operating system, keyed by the one the backend
+    /// says it is running on.
+    ///
+    /// Two rules hold here. The folders have to be the ones this machine actually has --
+    /// see tools/domain.rs::directories(), which resolves the same symbolic roots to real
+    /// Windows and Unix paths -- because a help line naming /etc on Windows is not a small
+    /// cosmetic slip: it tells the operator the app can reach somewhere that cannot exist,
+    /// and they have no way to check. And the answer comes from the *backend*, never from
+    /// navigator.platform, for the reason written on Os::current in setup.rs: when the
+    /// Windows laptop browses to the Linux desktop's HUD, the machine being described is
+    /// the Linux one.
+    /// The example programs are deliberately ones that only look: the box's own rule is
+    /// that no option you could pass the program changes anything, and `git`, `docker` and
+    /// `systemctl` -- the previous examples here -- are the three the starter list turns
+    /// away for exactly that reason. An example that contradicts the rule beside it teaches
+    /// the wrong lesson to the one person reading it most carefully.
+    const OS_WORDING = {
+        windows: {
+            readableRoots: "Only your user folder, the Windows event logs and the network " +
+                "configuration files in System32",
+            allowlistPlaceholder: "e.g. ping, nslookup",
+        },
+        mac: {
+            readableRoots: "Only your home folder, /etc and the system logs",
+            allowlistPlaceholder: "e.g. ping, dig",
+        },
+        linux: {
+            readableRoots: "Only your home directory, /etc, /proc and /var/log",
+            allowlistPlaceholder: "e.g. ping, dig",
+        },
+    };
+
+    /// Applies OS_WORDING to the Settings panel. An unrecognised or missing `os` leaves the
+    /// markup alone, which is why index.html ships wording that is true everywhere: a
+    /// backend too old to send the field, or one built for a platform not listed above,
+    /// should read vague rather than wrong.
+    function applyOsWording(os) {
+        const wording = OS_WORDING[os];
+        if (!wording) return;
+        const roots = document.getElementById('tools-readable-roots');
+        if (roots) roots.textContent = wording.readableRoots;
+        const allowlist = document.getElementById('setting-command-allowlist');
+        if (allowlist) allowlist.placeholder = wording.allowlistPlaceholder;
+    }
+
     async function loadSettings() {
         try {
             // Before any saved value is applied to the field: setting .value to a persona
@@ -3387,6 +3647,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 })();
 
             const s = data.settings;
+            // Before the fields: this only rewrites static help text, but doing it first
+            // means the panel is never briefly describing the wrong machine.
+            applyOsWording(data.os);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-provider').value = s.llm_provider || 'offline';
@@ -3708,6 +3971,338 @@ document.addEventListener('DOMContentLoaded', () => {
     btnMic.addEventListener('mouseleave', () => stopTalking());
     btnMic.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); });
     btnMic.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); });
+
+    /* ------------------------------------------------------------------ */
+    /* Reading the vault.                                                   */
+    /*                                                                      */
+    /* The notes are plain markdown on disk and always have been -- Obsidian */
+    /* or any editor opens the same folder, and the [[links]] between notes  */
+    /* were written to be read that way. This is for when you do not want to */
+    /* leave the app to look something up.                                   */
+    /*                                                                      */
+    /* Read-only, deliberately. Notes are changed through the companion's    */
+    /* tools, which ask before they change anything and record a way back;   */
+    /* a reader that could also save would be a second way into the same     */
+    /* folder with neither of those things attached to it.                   */
+    /*                                                                      */
+    /* Nothing here builds markup out of note text. A note can contain       */
+    /* anything -- the companion wrote half of it and you wrote the rest --  */
+    /* so every piece of it reaches the page as a text node.                 */
+    /* ------------------------------------------------------------------ */
+
+    const notesModal = document.getElementById('notes-modal');
+    const notesList = document.getElementById('notes-list');
+    const notesBody = document.getElementById('notes-body');
+    const notesTitle = document.getElementById('notes-title');
+    const notesCount = document.getElementById('notes-count');
+    const notesSearch = document.getElementById('notes-search');
+    const notesBacklinks = document.getElementById('notes-backlinks');
+    const btnNotesBack = document.getElementById('btn-notes-back');
+
+    /* Where we came from, so Back after following a [[link]] means something. Capped
+       because it is a browsing convenience, not a history anybody audits. */
+    let noteTrail = [];
+    let notesCache = [];
+
+    async function fetchNotes() {
+        if (IS_TAURI) return tauriInvoke('vault_notes_rust');
+        const res = await apiFetch('/api/vault/notes');
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        return res.json();
+    }
+
+    async function fetchNote(name) {
+        if (IS_TAURI) return tauriInvoke('vault_note_rust', { name });
+        const res = await apiFetch(`/api/vault/note?name=${encodeURIComponent(name)}`);
+        if (!res.ok) throw new Error(res.status === 404 ? 'no such note' : `status ${res.status}`);
+        return res.json();
+    }
+
+    async function fetchNoteSearch(query) {
+        if (IS_TAURI) return tauriInvoke('vault_search_rust', { query });
+        const res = await apiFetch(`/api/vault/search?q=${encodeURIComponent(query)}`);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        return res.json();
+    }
+
+    function noteAge(seconds) {
+        if (!seconds) return '';
+        const mins = Math.max(0, Math.round((Date.now() / 1000 - seconds) / 60));
+        if (mins < 60) return `${mins}m ago`;
+        if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+        return `${Math.round(mins / 1440)}d ago`;
+    }
+
+    /* One row in the list. The ★ marks a note the companion reads at the start of every
+       single turn, which is worth being able to see: those three are the ones where a
+       stray line changes every answer it gives. */
+    function renderNoteRow(note, meta) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'w-full text-left px-2 py-1.5 rounded border border-cyan-500/20 ' +
+            'bg-slate-900/50 hover:border-cyan-400/60 hover:bg-slate-800/60 cursor-pointer';
+        const name = document.createElement('div');
+        name.className = 'font-mono text-[11px] text-cyan-200 truncate';
+        name.textContent = (note.core ? '★ ' : '') + note.name;
+        row.appendChild(name);
+        const sub = document.createElement('div');
+        sub.className = 'font-mono text-[10px] text-slate-500 truncate';
+        sub.textContent = meta;
+        row.appendChild(sub);
+        row.addEventListener('click', () => {
+            noteTrail = [];
+            openNote(note.name);
+        });
+        return row;
+    }
+
+    function renderNoteList(notes) {
+        notesList.textContent = '';
+        notesCache = notes;
+        if (!notes.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-[11px] font-mono text-slate-500';
+            empty.textContent = 'No notes yet. They appear as you talk.';
+            notesList.appendChild(empty);
+            notesCount.textContent = '';
+            return;
+        }
+        notes.forEach((n) => {
+            const size = n.bytes < 1024 ? `${n.bytes} B` : `${Math.round(n.bytes / 1024)} KB`;
+            notesList.appendChild(renderNoteRow(n, `${size} · ${noteAge(n.modified)}`));
+        });
+        notesCount.textContent = `${notes.length} note${notes.length === 1 ? '' : 's'}`;
+    }
+
+    function renderSearchResults(results) {
+        notesList.textContent = '';
+        const hits = (results && results.hits) || [];
+        if (!hits.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-[11px] font-mono text-slate-500';
+            empty.textContent = 'Nothing matched.';
+            notesList.appendChild(empty);
+            notesCount.textContent = '';
+            return;
+        }
+        hits.forEach((h) => {
+            notesList.appendChild(renderNoteRow({ name: h.note, core: false }, h.snippet));
+        });
+        /* `partial` means the scan hit its cap before the end of the vault, so saying
+           "3 results" without saying that would be claiming to have looked everywhere. */
+        notesCount.textContent = results.partial
+            ? `${hits.length} of the first ${results.scanned} notes`
+            : `${hits.length} match${hits.length === 1 ? '' : 'es'}`;
+    }
+
+    /* The inline bits of a line: **bold**, *italic*, `code` and [[links]]. Appends text
+       nodes and elements to `parent`; nothing here ever touches innerHTML. */
+    function renderInline(parent, text, onLink) {
+        const pattern = /\[\[([^\]\n]+)\]\]|`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*/g;
+        let last = 0;
+        let m;
+        while ((m = pattern.exec(text)) !== null) {
+            if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+            if (m[1] !== undefined) {
+                /* A wiki link. The part before a | is the note; the part after is what the
+                   writer wanted it called. */
+                const target = m[1].split('|')[0].trim();
+                const label = (m[1].split('|')[1] || target).trim();
+                const a = document.createElement('a');
+                a.className = 'text-cyan-300 underline decoration-cyan-500/40 cursor-pointer hover:text-cyan-100';
+                a.textContent = label;
+                a.addEventListener('click', (e) => { e.preventDefault(); onLink(target); });
+                parent.appendChild(a);
+            } else if (m[2] !== undefined) {
+                const c = document.createElement('code');
+                c.className = 'font-mono text-[12px] text-cyan-200 bg-slate-950/70 rounded px-1';
+                c.textContent = m[2];
+                parent.appendChild(c);
+            } else if (m[3] !== undefined) {
+                const b = document.createElement('strong');
+                b.className = 'text-cyan-100';
+                b.textContent = m[3];
+                parent.appendChild(b);
+            } else {
+                const i = document.createElement('em');
+                i.textContent = m[4];
+                parent.appendChild(i);
+            }
+            last = pattern.lastIndex;
+        }
+        if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+    }
+
+    /* A markdown renderer small enough to read in one sitting, rather than a library.
+       The vault writes a known and narrow subset -- headings, lists, quotes, tables as
+       plain lines, fenced code -- and a full parser would mean inheriting its opinions
+       about raw HTML in particular, which is the one opinion that matters here. */
+    function renderMarkdown(into, text, onLink) {
+        into.textContent = '';
+        const lines = text.split('\n');
+        let list = null;
+        let fence = null;
+        for (const line of lines) {
+            if (line.trimStart().startsWith('```')) {
+                if (fence) { into.appendChild(fence); fence = null; } else {
+                    fence = document.createElement('pre');
+                    fence.className = 'font-mono text-[11px] text-cyan-200 bg-slate-950/70 rounded p-2 overflow-x-auto my-2';
+                }
+                continue;
+            }
+            if (fence) { fence.appendChild(document.createTextNode(line + '\n')); continue; }
+
+            const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+            const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+            if (!bullet && list) { into.appendChild(list); list = null; }
+
+            if (heading) {
+                const h = document.createElement(`h${Math.min(4, heading[1].length + 1)}`);
+                h.className = 'font-orbitron text-cyan-300 mt-3 mb-1 ' +
+                    (heading[1].length === 1 ? 'text-sm' : 'text-xs');
+                renderInline(h, heading[2], onLink);
+                into.appendChild(h);
+            } else if (bullet) {
+                if (!list) {
+                    list = document.createElement('ul');
+                    list.className = 'list-disc pl-5 space-y-0.5 my-1 text-[13px]';
+                }
+                const li = document.createElement('li');
+                renderInline(li, bullet[1], onLink);
+                list.appendChild(li);
+            } else if (line.trim() === '') {
+                continue;
+            } else if (line.startsWith('>')) {
+                const q = document.createElement('blockquote');
+                q.className = 'border-l-2 border-cyan-500/40 pl-2 text-slate-400 my-1 text-[13px]';
+                renderInline(q, line.replace(/^>\s?/, ''), onLink);
+                into.appendChild(q);
+            } else {
+                const p = document.createElement('p');
+                p.className = 'my-1 text-[13px]';
+                renderInline(p, line, onLink);
+                into.appendChild(p);
+            }
+        }
+        if (list) into.appendChild(list);
+        if (fence) into.appendChild(fence);
+    }
+
+    function showNoteError(message) {
+        notesBody.textContent = '';
+        const p = document.createElement('p');
+        p.className = 'text-[11px] font-mono text-amber-300';
+        p.textContent = message;
+        notesBody.appendChild(p);
+        notesBacklinks.classList.add('hidden');
+    }
+
+    async function openNote(name) {
+        notesTitle.textContent = name;
+        try {
+            const view = await fetchNote(name);
+            renderMarkdown(notesBody, view.text, (target) => {
+                /* A link the note names but nobody has written yet resolves to nothing.
+                   Say so rather than opening an empty page or failing silently. */
+                const link = (view.links || []).find((l) => l.target === target);
+                if (link && !link.note) {
+                    showNoteError(`"${target}" is linked from here but no such note exists yet.`);
+                    notesTitle.textContent = target;
+                    return;
+                }
+                noteTrail.push(name);
+                if (noteTrail.length > 50) noteTrail.shift();
+                openNote(link && link.note ? link.note : target);
+            });
+            if (view.truncated) {
+                const cut = document.createElement('p');
+                cut.className = 'text-[11px] font-mono text-amber-300 mt-3';
+                cut.textContent = 'This note is too big to show all of — open the folder to read the rest.';
+                notesBody.appendChild(cut);
+            }
+            notesBody.scrollTop = 0;
+            renderBacklinks(view.backlinks || []);
+        } catch (err) {
+            showNoteError(`Could not open that note: ${err.message || err}`);
+        }
+        btnNotesBack.classList.toggle('hidden', noteTrail.length === 0);
+    }
+
+    /* What points *at* this note. The links out of a note are in the text where you can
+       see them; the ones pointing in are the half of the graph a plain editor hides. */
+    function renderBacklinks(names) {
+        notesBacklinks.textContent = '';
+        if (!names.length) { notesBacklinks.classList.add('hidden'); return; }
+        notesBacklinks.classList.remove('hidden');
+        const label = document.createElement('div');
+        label.className = 'text-cyan-300';
+        label.textContent = `Linked from (${names.length}):`;
+        notesBacklinks.appendChild(label);
+        const row = document.createElement('div');
+        row.className = 'flex flex-wrap gap-x-3 gap-y-1';
+        names.forEach((n) => {
+            const a = document.createElement('a');
+            a.className = 'text-cyan-400 underline decoration-cyan-500/40 cursor-pointer hover:text-cyan-100';
+            a.textContent = n;
+            a.addEventListener('click', () => {
+                noteTrail.push(notesTitle.textContent);
+                openNote(n);
+            });
+            row.appendChild(a);
+        });
+        notesBacklinks.appendChild(row);
+    }
+
+    btnNotesBack.addEventListener('click', () => {
+        const previous = noteTrail.pop();
+        if (previous) openNote(previous);
+        btnNotesBack.classList.toggle('hidden', noteTrail.length === 0);
+    });
+
+    /* Typing runs the same search the companion uses on the vault, so what you find here
+       is what it would have found. Debounced: every keystroke scanning the folder would
+       make a big vault feel broken. */
+    let notesSearchTimer = null;
+    notesSearch.addEventListener('input', () => {
+        clearTimeout(notesSearchTimer);
+        const query = notesSearch.value.trim();
+        notesSearchTimer = setTimeout(async () => {
+            if (!query) { renderNoteList(notesCache); return; }
+            try {
+                renderSearchResults(await fetchNoteSearch(query));
+            } catch (err) {
+                console.warn('Note search failed:', err);
+            }
+        }, 250);
+    });
+
+    async function openNotesReader() {
+        voiceEngine.playSFX('click');
+        notesModal.classList.remove('hidden');
+        notesSearch.value = '';
+        noteTrail = [];
+        btnNotesBack.classList.add('hidden');
+        try {
+            renderNoteList(await fetchNotes());
+        } catch (err) {
+            notesList.textContent = '';
+            const p = document.createElement('p');
+            p.className = 'text-[11px] font-mono text-amber-300';
+            p.textContent = `Could not read the notes folder: ${err.message || err}`;
+            notesList.appendChild(p);
+        }
+    }
+
+    document.getElementById('btn-notes')?.addEventListener('click', openNotesReader);
+    document.getElementById('btn-read-notes')?.addEventListener('click', () => {
+        settingsModal.classList.add('hidden');
+        openNotesReader();
+    });
+    document.getElementById('btn-notes-open-folder')?.addEventListener('click', openVaultFolder);
+    document.getElementById('btn-close-notes').addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        notesModal.classList.add('hidden');
+    });
 
     const btnActivity = document.getElementById('btn-activity');
     const activityModal = document.getElementById('activity-modal');

@@ -33,6 +33,7 @@ use crate::llm::{self, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
 use crate::serve_auth::{self, ServeAuth, Setup};
+use crate::vault;
 
 #[derive(Clone)]
 struct AppState {
@@ -102,6 +103,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/setup/download", post(start_download))
         .route("/api/setup/downloads", get(download_status))
         .route("/api/setup/download/forget", post(forget_download))
+        .route("/api/voice/catalogue", get(voice_catalogue))
+        .route("/api/voice/download", post(start_voice_download))
+        .route("/api/voice/downloads", get(voice_download_status))
+        .route("/api/voice/download/forget", post(forget_voice_download))
         .route("/api/setup/start-server", post(start_local_server))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
@@ -117,6 +122,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/messages", get(get_messages).delete(clear_messages))
         .route("/api/benchmarks/reset", post(reset_benchmarks))
         .route("/api/vault/open", post(open_vault_folder))
+        .route("/api/vault/notes", get(vault_notes))
+        .route("/api/vault/note", get(vault_note))
+        .route("/api/vault/graph", get(vault_graph))
+        .route("/api/vault/search", get(vault_search))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
         .route("/api/stt", post(stt))
@@ -580,6 +589,36 @@ async fn forget_download(Query(q): Query<DownloadQuery>) -> Json<serde_json::Val
     Json(commands::forget_download(q.model_name.unwrap_or_default()))
 }
 
+#[derive(Deserialize)]
+struct VoiceQuery {
+    voice: Option<String>,
+}
+
+async fn voice_catalogue() -> Json<serde_json::Value> {
+    Json(commands::voice_catalogue())
+}
+
+async fn start_voice_download(
+    State(state): State<AppState>,
+    Query(q): Query<VoiceQuery>,
+) -> Json<serde_json::Value> {
+    let engine = state.engine.clone();
+    let voice = q.voice.unwrap_or_default();
+    Json(
+        tokio::task::spawn_blocking(move || commands::start_voice_download(&engine, voice))
+            .await
+            .expect("start_voice_download panicked"),
+    )
+}
+
+async fn voice_download_status() -> Json<serde_json::Value> {
+    Json(commands::voice_download_status())
+}
+
+async fn forget_voice_download(Query(q): Query<VoiceQuery>) -> Json<serde_json::Value> {
+    Json(commands::forget_voice_download(q.voice.unwrap_or_default()))
+}
+
 // Spawns the `ollama` already installed on this machine, with a fixed argument and no
 // shell. Exposed here as well as over IPC because the browser fallback hits the same dead
 // end as the native app does -- a server that is installed, not running, and nothing able
@@ -644,6 +683,63 @@ async fn open_vault_folder(
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(serde_json::json!({ "status": "opened" })))
+}
+
+/// The reader's four routes. All read-only, and all bound by the same rule as the rest of
+/// the server: over `--lan` they are behind the pairing token, and they can no more reach
+/// outside the vault folder than the companion's own tools can -- vault::reader checks
+/// every name it is handed, both for its shape and, after canonicalising, for where it
+/// actually lands.
+async fn vault_notes(State(state): State<AppState>) -> Json<Vec<vault::reader::NoteSummary>> {
+    let engine = state.engine.clone();
+    Json(
+        tokio::task::spawn_blocking(move || commands::vault_notes(&engine))
+            .await
+            .unwrap_or_default(),
+    )
+}
+
+#[derive(Deserialize)]
+struct NoteQuery {
+    name: String,
+}
+
+async fn vault_note(
+    State(state): State<AppState>,
+    Query(q): Query<NoteQuery>,
+) -> Result<Json<vault::reader::NoteView>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let view = tokio::task::spawn_blocking(move || commands::vault_note(&engine, &q.name))
+        .await
+        .map_err(internal_error)?
+        // A refused name is the caller's mistake, not the server's: 404 rather than 500,
+        // and the same answer whether the note is missing or the path was never allowed,
+        // so a probe cannot use the difference to map the disk.
+        .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(Json(view))
+}
+
+async fn vault_graph(State(state): State<AppState>) -> Json<Value> {
+    let engine = state.engine.clone();
+    let graph = tokio::task::spawn_blocking(move || commands::vault_graph(&engine)).await;
+    Json(match graph {
+        Ok(g) => serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    })
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
+async fn vault_search(State(state): State<AppState>, Query(sq): Query<SearchQuery>) -> Json<Value> {
+    let engine = state.engine.clone();
+    Json(
+        tokio::task::spawn_blocking(move || commands::vault_search(&engine, &sq.q))
+            .await
+            .unwrap_or_else(|_| serde_json::json!({})),
+    )
 }
 
 async fn get_settings(State(state): State<AppState>) -> Json<Value> {

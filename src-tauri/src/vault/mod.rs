@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::llm::MemoryDb;
 
 pub mod consulted;
+pub mod reader;
 pub mod search;
 
 /// Cuts `text` to at most `limit` *characters*, adding an ellipsis when it does.
@@ -434,13 +435,19 @@ pub fn remember(db: &MemoryDb, fact: &str) -> Result<String, String> {
 /// Setting controlling whether conversations are written to `daily/`.
 const JOURNAL_SETTING: &str = "vault_journal";
 
-/// How much of one side of an exchange is kept in the day's note.
+/// When the day's note is full enough to start another one.
 ///
-/// The journal is a record of what was discussed, not a second transcript -- the database
-/// already holds every message in full. A long reply is cut here so that a fortnight of
-/// conversations stays something a person can actually read, and so that priming (which
-/// may load a daily note) is not handed a wall of text.
-const MAX_JOURNAL_CHARS: usize = 1200;
+/// Nothing is ever cut. The journal used to trim each side of an exchange to 1200
+/// characters on the grounds that the database held the full text anyway -- but the
+/// database is the part you cannot open, so what that really meant was that the readable
+/// copy was the incomplete one. It is verbatim now.
+///
+/// Verbatim needs a ceiling somewhere, though, and this is the honest place for it: a note
+/// larger than `search::MAX_NOTE_BYTES` is skipped by the vault's own search, so an
+/// unusually talkative day would quietly become the one day the companion cannot find
+/// anything in. Rather than truncate, the day rolls into `2026-09-15-2.md` and carries on.
+/// Comfortably under that limit so a single enormous exchange cannot push a note past it.
+const ROLL_NOTE_AT_BYTES: u64 = 256 * 1024;
 
 /// Whether conversations are journalled. On unless the operator turns it off.
 pub fn journal_enabled(db: &MemoryDb) -> bool {
@@ -474,32 +481,56 @@ pub fn journal_exchange(
 
     let root = ensure(db)?;
     let (date, time) = db.local_now();
-    let path = root.join("daily").join(format!("{date}.md"));
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
-    }
+    let daily = root.join("daily");
+    std::fs::create_dir_all(&daily)
+        .map_err(|e| format!("could not create {}: {e}", daily.display()))?;
+    let path = note_for_day(&daily, &date);
 
     let mut contents = std::fs::read_to_string(&path).unwrap_or_else(|_| {
         format!(
-            "# {date}\n\nWhat was discussed on this day, oldest first. Written automatically; \
-             edit or delete any of it freely, and fold what matters into a note of its own.\n"
+            "# {date}\n\nWhat was said on this day, word for word, oldest first. Written \
+             automatically; edit or delete any of it freely, and fold what matters into a \
+             note of its own.\n"
         )
     });
     if !contents.ends_with('\n') {
         contents.push('\n');
     }
     contents.push_str(&format!(
-        "\n## {time}\n\n**You:** {}\n\n**{agent_name}:** {}\n",
-        truncate_chars(prompt, MAX_JOURNAL_CHARS),
-        truncate_chars(reply, MAX_JOURNAL_CHARS),
+        "\n## {time}\n\n**You:** {prompt}\n\n**{agent_name}:** {reply}\n"
     ));
 
     std::fs::write(&path, contents)
         .map_err(|e| format!("could not write {}: {e}", path.display()))?;
 
     Ok(relative_name(db, &path))
+}
+
+/// Which note today's exchange is appended to.
+///
+/// Normally `<date>.md`. Once that has grown past `ROLL_NOTE_AT_BYTES` the day continues in
+/// `<date>-2.md`, then `-3`, and so on -- so a long day becomes several readable notes
+/// rather than one the search will not open. The suffix keeps the date at the front, which
+/// is what makes a folder of these sort into the order they happened.
+///
+/// Walks forward from the newest part rather than counting files, so a part deleted from
+/// the middle of a day cannot send today's writing back into an older one.
+fn note_for_day(daily: &Path, date: &str) -> PathBuf {
+    let mut path = daily.join(format!("{date}.md"));
+    let mut part = 1_u32;
+    loop {
+        let full = std::fs::metadata(&path).is_ok_and(|m| m.len() >= ROLL_NOTE_AT_BYTES);
+        if !full {
+            return path;
+        }
+        part += 1;
+        // A day that has somehow reached this many parts is a runaway rather than a
+        // conversation. Keeping the last one is better than looping forever.
+        if part > 999 {
+            return path;
+        }
+        path = daily.join(format!("{date}-{part}.md"));
+    }
 }
 
 /// Adds a link to INDEX.md if it isn't already there. Best-effort: failing to update the
@@ -698,21 +729,50 @@ mod tests {
         assert_eq!(count, 0, "nothing was filed");
     }
 
-    /// A long reply is cut rather than pasted in whole. The database already holds every
-    /// message in full; this folder is the part a person reads.
+    /// The point of the change: a long reply is written out in full. The readable copy
+    /// being the incomplete one was the whole complaint.
     #[test]
-    fn a_long_reply_is_trimmed_in_the_note() {
+    fn a_long_reply_is_written_out_in_full() {
         let (db, root) = fixture("journal_long");
         ensure(&db).unwrap();
 
-        let huge = "x".repeat(MAX_JOURNAL_CHARS * 3);
+        let huge = "x".repeat(20_000);
         let name = journal_exchange(&db, "HALCY", "go on", &huge).unwrap();
         let written = std::fs::read_to_string(root.join(&name)).unwrap();
+        assert!(written.contains(&huge), "the reply is there word for word");
+        assert!(!written.contains('…'), "and nothing was cut: {name}");
+    }
+
+    /// A day long enough to outgrow one note continues in the next rather than being
+    /// truncated -- and every part stays small enough for the vault's own search to open.
+    #[test]
+    fn a_very_long_day_rolls_into_a_second_note() {
+        let (db, root) = fixture("journal_roll");
+        ensure(&db).unwrap();
+
+        // Each exchange is a good fraction of the roll threshold, so this takes a handful
+        // of turns rather than thousands.
+        let chunk = "y".repeat(64 * 1024);
+        let mut names = Vec::new();
+        for _ in 0..8 {
+            names.push(journal_exchange(&db, "HALCY", "go on", &chunk).unwrap());
+        }
+
+        let first = &names[0];
+        let last = names.last().unwrap();
+        assert_ne!(first, last, "the day rolled into another note: {names:?}");
         assert!(
-            written.chars().count() < huge.chars().count(),
-            "the note is shorter than the reply it records"
+            last.contains("-2") || last.contains("-3"),
+            "numbered: {last}"
         );
-        assert!(written.contains('…'), "and says it was cut: {written}");
+
+        for name in &names {
+            let size = std::fs::metadata(root.join(name)).unwrap().len();
+            assert!(
+                size < 512 * 1024,
+                "{name} is {size} bytes -- the search would skip it"
+            );
+        }
     }
 
     /// What the HUD says under an answer starts here: every note priming pasted in is a note

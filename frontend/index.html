@@ -172,6 +172,7 @@
                     <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
                     <button id="btn-setup" class="hud-slideout-action" role="menuitem">🧠 Set up the AI</button>
                     <button id="btn-voice-setup" class="hud-slideout-action" role="menuitem">🗣 Set up the voice</button>
+                    <button id="btn-notes" class="hud-slideout-action" role="menuitem">📓 Notes</button>
                     <button id="btn-activity" class="hud-slideout-action" role="menuitem">📜 Activity</button>
                     <button id="btn-clear-chat" class="hud-slideout-action" role="menuitem">🗑️ Clear conversation</button>
                     <button id="btn-settings" class="hud-slideout-action" role="menuitem">⚙️ Settings</button>
@@ -184,7 +185,7 @@
     <main id="hud-layout" class="flex-1 p-4 overflow-auto z-10">
 
         <!-- Token Usage & Availability Telemetry -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens" data-grid-col="1" data-grid-row="1" data-grid-w="4" data-grid-h="11">
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens" data-panel-name="Model performance" data-grid-col="1" data-grid-row="1" data-grid-w="4" data-grid-h="11">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Token Telemetry in its own window">⧉</button>
@@ -250,7 +251,7 @@
             </div>
 
         <!-- Hardware Telemetry -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware" data-grid-col="1" data-grid-row="12" data-grid-w="4" data-grid-h="9">
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware" data-panel-name="Hardware telemetry" data-grid-col="1" data-grid-row="12" data-grid-w="4" data-grid-h="9">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="hardware" title="Open this panel in its own window" aria-label="Open Hardware Telemetry in its own window">⧉</button>
@@ -327,7 +328,7 @@
             </div>
 
         <!-- Tactical Commands -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands" data-grid-col="1" data-grid-row="21" data-grid-w="4" data-grid-h="6">
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands" data-panel-name="Quick commands" data-grid-col="1" data-grid-row="21" data-grid-w="4" data-grid-h="6">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="commands" title="Open this panel in its own window" aria-label="Open Quick Commands in its own window">⧉</button>
@@ -351,7 +352,7 @@
         </div>
 
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
-        <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-grid-col="5" data-grid-row="1" data-grid-w="4" data-grid-h="37">
+        <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-panel-name="The avatar" data-grid-col="5" data-grid-row="1" data-grid-w="4" data-grid-h="37">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <!-- Unlike the other panels' Undock, this one doesn't open a bordered copy of
@@ -393,7 +394,7 @@
         </div>
 
         <!-- RIGHT PANEL: NEURAL TERMINAL & CHAT CONSOLE -->
-        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="chat" data-grid-col="9" data-grid-row="1" data-grid-w="4" data-grid-h="37">
+        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="chat" data-panel-name="Conversation" data-grid-col="9" data-grid-row="1" data-grid-w="4" data-grid-h="37">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="chat" title="Open this panel in its own window" aria-label="Open the Neural Dialogue Stream in its own window">⧉</button>
@@ -454,6 +455,47 @@
                 and recorded a way back can be undone here.
             </p>
             <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
+        </div>
+    </div>
+
+    <!-- THE NOTES READER -- the vault, read inside Aether1.
+         Read-only on purpose, and that is a boundary rather than a missing feature: notes
+         are changed through the tools, behind the consent path, with a way back. A reader
+         that could also write would be a second door into the same folder that nothing
+         had approved. The folder is still just markdown on disk, so Obsidian or any
+         editor opens the same notes; this is for when you do not want to leave. -->
+    <div id="notes-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-5xl p-6 rounded-lg space-y-3 max-h-[92vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    📓 NOTES
+                </h2>
+                <div class="flex items-center gap-2">
+                    <button id="btn-notes-open-folder" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Folder</button>
+                    <button id="btn-close-notes" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
+                </div>
+            </div>
+            <div class="flex gap-4 flex-1 min-h-0">
+                <!-- The list. Search runs the same search the companion itself uses on the
+                     vault, so what you find here is what it would have found. -->
+                <div class="w-64 shrink-0 flex flex-col gap-2 min-h-0">
+                    <input id="notes-search" type="search" placeholder="Search your notes…"
+                           class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-xs text-cyan-100 font-mono">
+                    <div id="notes-list" class="flex-1 overflow-y-auto space-y-1 pr-1"></div>
+                    <div id="notes-count" class="text-[10px] font-mono text-slate-500"></div>
+                </div>
+                <!-- The note. -->
+                <div class="flex-1 min-w-0 flex flex-col gap-2">
+                    <div class="flex items-center gap-2 min-h-[1.5rem]">
+                        <button id="btn-notes-back" class="hidden text-[11px] font-mono text-cyan-300 hover:text-cyan-100 cursor-pointer">← Back</button>
+                        <span id="notes-title" class="font-mono text-xs text-cyan-300 truncate"></span>
+                    </div>
+                    <div id="notes-body" class="flex-1 overflow-y-auto bg-slate-900/60 border border-cyan-500/20 rounded p-4 text-sm text-slate-200 leading-relaxed note-render">
+                        <p class="text-xs font-mono text-slate-500">Pick a note on the left.</p>
+                    </div>
+                    <div id="notes-backlinks" class="hidden text-[11px] font-mono text-slate-400 border-t border-cyan-500/20 pt-2 space-y-1"></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -563,6 +605,24 @@
                 <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">🔊 SPEAKING OUT LOUD</h3>
                 <div id="voice-speaking" class="voice-half"></div>
                 <ol id="voice-speaking-steps" class="space-y-2"></ol>
+
+                <!-- Piper needs two separate things, and only one of them is a program.
+                     The engine is a package-manager job and stays in the steps above;
+                     a voice is a pair of files Aether1 can fetch for itself, so it
+                     offers to. Hidden until the catalogue loads -- an empty box with a
+                     heading on it is just a question nobody asked. -->
+                <div id="voice-picker" class="hidden bg-slate-900/60 border border-cyan-500/20 rounded p-3 space-y-2">
+                    <div class="font-orbitron text-[11px] font-bold text-cyan-300 tracking-wider">PICK A BETTER VOICE</div>
+                    <p id="voice-picker-note" class="text-[11px] font-mono text-slate-400 leading-snug">
+                        These are voice files for Piper &mdash; recordings turned into numbers,
+                        not programs. Aether1 saves them in its own voices folder; nothing is
+                        installed, nothing is run, and you still need Piper itself from the
+                        steps above for them to be used.
+                    </p>
+                    <div id="voice-picker-list" class="space-y-1.5"></div>
+                    <div id="voice-picker-downloads" class="space-y-2"></div>
+                </div>
+
             </div>
 
             <!-- Listening. No fallback engine exists for this half, so missing is a fault. -->
@@ -751,6 +811,20 @@
                 </h3>
                 <span class="text-[11px] font-mono text-slate-400 block">Drag a panel by the dotted strip along its top to move it anywhere on the grid, like rearranging home-screen widgets. Drag the corner handle to resize it. Both are remembered.</span>
                 <button id="btn-reset-layout" type="button" class="cyber-btn text-xs py-1.5 px-3">Reset panels to their default places</button>
+
+                <!-- Which panels exist at all. Filled in by layout.js from the markup, so a
+                     panel added to the HUD appears here without anyone having to remember
+                     to list it twice. Screen-local like the rest of this section: it is a
+                     property of this display, not of the companion, so it is not saved with
+                     the settings and a second screen can be arranged differently. -->
+                <div class="pt-1 space-y-1">
+                    <span class="text-[11px] font-mono text-cyan-300 block">Panels to show</span>
+                    <div id="panel-toggles" class="space-y-1"></div>
+                    <p class="text-[10px] font-mono text-slate-500 leading-snug">
+                        A panel you switch off is not running: the avatar stops drawing, and
+                        nothing hidden here is being kept up to date behind your back.
+                    </p>
+                </div>
             </div>
 
             <!-- SECTION: DESKTOP SPRITE MODE (native desktop app only -- see IS_TAURI below) -->
@@ -1056,6 +1130,7 @@
                         <label for="setting-vault-path" class="text-xs font-mono text-cyan-300 block">NOTES FOLDER</label>
                         <input id="setting-vault-path" type="text" placeholder="~/Aether1Vault" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                         <div class="flex items-center gap-2">
+                            <button id="btn-read-notes" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📓 Read Them Here</button>
                             <button id="open-vault-folder" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Open Folder</button>
                             <span id="vault-folder-status" class="text-[10px] font-mono text-slate-400"></span>
                         </div>
@@ -1070,8 +1145,10 @@
                             <label for="setting-vault-journal" class="text-xs font-mono text-slate-300">Keep a dated note of each conversation</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Every exchange is added to a note named after today's date, inside
-                            <span class="text-cyan-300">daily</span> in the folder above. No approval is
+                            Every exchange is added <em>word for word</em> to a note named after
+                            today's date, inside <span class="text-cyan-300">daily</span> in the folder
+                            above &mdash; nothing is shortened. A day long enough to outgrow one note
+                            carries on in the next one. No approval is
                             asked, because this only ever writes into its own folder. Switch it off and
                             conversations stay in the app and nowhere else. Everything else &mdash; what
                             it decides to remember <em>about</em> you &mdash; is still only written with
@@ -1095,8 +1172,12 @@
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
                             Lets the AI read files, list directories and check processes to answer you.
-                            Only your home directory, <span class="text-cyan-300">/etc</span>,
-                            <span class="text-cyan-300">/proc</span> and <span class="text-cyan-300">/var/log</span>;
+                            <!-- Named folders are filled in by applyOsWording() in app.js, because
+                                 which ones exist depends on the machine Aether1 is running on --
+                                 see tools/domain.rs::directories(). The wording below is the
+                                 no-JavaScript fallback: true on every platform, specific on none. -->
+                            <span id="tools-readable-roots">Only your home directory and the
+                            system's own log and configuration folders</span>;
                             never passwords or keys. Every use is recorded in the Activity Log.
                             Nothing is changed without you approving it first.
                         </p>
@@ -1104,7 +1185,8 @@
 
                     <div class="space-y-1 pt-1">
                         <label for="setting-command-allowlist" class="text-xs font-mono text-cyan-300 block">PROGRAMS IT MAY ASK TO RUN</label>
-                        <input id="setting-command-allowlist" type="text" placeholder="e.g. git, docker, systemctl" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <!-- The placeholder is replaced per-platform by applyOsWording() in app.js. -->
+                        <input id="setting-command-allowlist" type="text" placeholder="e.g. ping" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
                             Comma separated. Starts with a few programs that can only look at this
                             machine, never change it &mdash; add your own, or empty the box to allow
@@ -1231,10 +1313,10 @@
          js/hologram/avatar-loader.js -- the list of files now lives there, once, instead of
          being repeated in this page, sprite.html and avatar-lab.html. -->
     <script src="js/hologram/avatar-loader.js?v=1"></script>
-    <script src="js/hologram/animate.js?v=38"></script>
+    <script src="js/hologram/animate.js?v=39"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=49"></script>
+    <script src="js/app.js?v=50"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
-    <script src="js/layout.js?v=2"></script>
+    <script src="js/layout.js?v=3"></script>
 </body>
 </html>

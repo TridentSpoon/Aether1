@@ -28,6 +28,14 @@ use std::process::Command;
 /// whisper.cpp's CLI has been renamed more than once; distributions ship at least these.
 const WHISPER_BINARIES: &[&str] = &["whisper-cli", "whisper-cpp", "whisper", "main"];
 /// Where a model is looked for when none is configured.
+///
+/// Split by platform for the same reason as PIPER_VOICE_DIRS in tts.rs: this list is
+/// printed verbatim when no model is found, and `/usr/share` on Windows is an instruction
+/// to go and look somewhere that cannot exist. The `~` entries stay on both lists --
+/// installer/aether1.iss writes the bundled model to `%USERPROFILE%\.local\share\whisper`.
+#[cfg(windows)]
+const MODEL_DIRS: &[&str] = &["~/.local/share/whisper", "~/.cache/whisper"];
+#[cfg(not(windows))]
 const MODEL_DIRS: &[&str] = &[
     "~/.local/share/whisper",
     "~/.cache/whisper",
@@ -274,6 +282,18 @@ pub fn stage_audio(cache_dir: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list is printed verbatim when nothing is found, so every entry has to be a
+    /// place this platform could actually put the file. A Unix absolute path on Windows
+    /// sends the operator hunting through a folder tree that cannot exist, which is a
+    /// worse outcome than saying nothing at all.
+    #[test]
+    fn every_named_folder_is_one_this_platform_can_have() {
+        for dir in MODEL_DIRS {
+            let plausible = dir.starts_with('~') || !cfg!(windows);
+            assert!(plausible, "{dir} cannot exist on Windows");
+        }
+    }
 
     #[test]
     fn timestamps_are_stripped_and_lines_joined() {

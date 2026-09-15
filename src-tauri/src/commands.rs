@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::llm::{self, ActionRecord, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
+use crate::setup;
 use crate::tools;
 
 pub fn generate_response(
@@ -154,6 +155,35 @@ pub fn download_status() -> Value {
 /// Clears one finished or failed row out of the list. Never touches a running one.
 pub fn forget_download(model_name: String) -> Value {
     serde_json::json!({ "ok": crate::downloads::forget(&model_name) })
+}
+
+/// The voices Aether1 can fetch, and which of them are already here.
+pub fn voice_catalogue() -> Value {
+    serde_json::json!({ "voices": crate::voice_download::catalogue() })
+}
+
+/// Starts fetching one voice by name, returning immediately with its first state.
+///
+/// The name is the whole input, and `voice_download::start` refuses any that is not in its
+/// own table -- so nothing arriving from the HUD becomes part of a URL or a path. The
+/// local-only refusal lives there too rather than here, because this is not the only door:
+/// keeping it beside the thing that opens the connection means it cannot be walked around.
+pub fn start_voice_download(engine: &LlmEngine, voice: String) -> Value {
+    match crate::voice_download::start(engine.db(), &voice) {
+        Ok(fetch) => serde_json::json!({ "ok": true, "download": fetch }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    }
+}
+
+/// Every voice download this session knows about. Polled about once a second while a bar is
+/// on screen, so it stays a cheap read for the same reason `download_status` does.
+pub fn voice_download_status() -> Value {
+    serde_json::json!({ "downloads": crate::voice_download::snapshot() })
+}
+
+/// Clears one finished or failed voice row. Never touches a running one.
+pub fn forget_voice_download(voice: String) -> Value {
+    serde_json::json!({ "ok": crate::voice_download::forget(&voice) })
 }
 
 /// Starts the local model server when it is installed but not running.
@@ -322,7 +352,12 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
                 .or_insert_with(|| value.clone());
         }
     }
-    serde_json::json!({ "settings": settings })
+    // Alongside the settings, not inside them: the operating system is not a preference,
+    // it is a fact about the machine, and putting it in `settings` would make it look
+    // saveable. It rides along here because the Settings page needs it for the same
+    // reason the setup wizard does -- to describe *this* machine's folders and programs
+    // rather than a guess drawn from whatever browser is pointed at it.
+    serde_json::json!({ "settings": settings, "os": setup::Os::current() })
 }
 
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {
@@ -352,6 +387,47 @@ pub fn tool_catalog(engine: &LlmEngine) -> Value {
 /// folder-manager window to a remote browser, only to the desktop this process is on.
 pub fn open_vault_folder(engine: &LlmEngine) -> Result<(), String> {
     crate::vault::open_folder(engine.db())
+}
+
+/// Every note in the vault, newest first, for the reader panel's list.
+///
+/// Read-only, all three of these. The vault is changed through the tools -- with the
+/// consent path and undo behind them -- and a reader that could also write would be a
+/// second door into the same folder that nothing had approved.
+pub fn vault_notes(engine: &LlmEngine) -> Vec<crate::vault::reader::NoteSummary> {
+    crate::vault::reader::notes(engine.db())
+}
+
+/// One note: its text, the links in it, and the notes pointing back at it.
+pub fn vault_note(
+    engine: &LlmEngine,
+    name: &str,
+) -> Result<crate::vault::reader::NoteView, String> {
+    crate::vault::reader::read(engine.db(), name)
+}
+
+/// The vault as a graph, for drawing.
+pub fn vault_graph(engine: &LlmEngine) -> crate::vault::reader::Graph {
+    crate::vault::reader::graph(engine.db())
+}
+
+/// The same search the companion itself uses on the vault, handed to the operator.
+///
+/// Built into JSON here rather than derived on `search::Hit`, because the hit carries a
+/// modified time that exists only to break ties between two equally good matches; it is
+/// ranking machinery, not something the reader has any use for.
+pub fn vault_search(engine: &LlmEngine, query: &str) -> Value {
+    let results = crate::vault::search::search(engine.db(), query);
+    serde_json::json!({
+        "hits": results.hits.iter().map(|h| serde_json::json!({
+            "note": h.note,
+            "score": h.score,
+            "heading": h.heading,
+            "snippet": h.snippet,
+        })).collect::<Vec<_>>(),
+        "scanned": results.scanned,
+        "partial": results.partial,
+    })
 }
 
 /// The record of what the companion has actually done, newest first.
@@ -594,4 +670,39 @@ pub fn voice_status(engine: &LlmEngine) -> Value {
         },
         "offline_capable": speech_out.is_ok() && speech_in.is_ok(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Settings panel rewrites its own help text from this field -- which folders the
+    /// companion may read, which programs it is worth naming -- so that the page describes
+    /// the machine Aether1 is running on rather than the one whose browser is pointed at
+    /// it. See applyOsWording() in frontend/js/app.js. Losing the field here does not break
+    /// the page, it makes it quietly vague, which is the kind of regression nothing else
+    /// would catch.
+    #[test]
+    fn the_settings_response_says_which_machine_this_is() {
+        let path = std::env::temp_dir().join(format!(
+            "aether1_settings_os_test_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = llm::MemoryDb::open(&path).expect("temp db should open");
+        let engine = LlmEngine::new(db);
+
+        let response = get_settings(&engine);
+
+        let os = response["os"].as_str().expect("os should be a string");
+        assert!(
+            ["windows", "mac", "linux"].contains(&os),
+            "unexpected os {os:?}"
+        );
+        // Beside the settings, not inside them: a fact about the machine is not something
+        // the operator can save.
+        assert!(response["settings"]["os"].is_null());
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

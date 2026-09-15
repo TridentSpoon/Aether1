@@ -38,6 +38,16 @@ pub const CLOUD_NAME: &str = "Microsoft's online voice";
 /// alone does not fix that -- see `is_piper_tts`, which is what actually decides.
 const PIPER_BINARIES: &[&str] = &["piper-tts", "piper_tts", "piper"];
 /// Where a Piper voice is looked for when no path is configured.
+///
+/// The `~/.local/share` entries are on both lists on purpose: installer/aether1.iss puts
+/// the bundled voice in `%USERPROFILE%\.local\share\piper\voices` on Windows too, so
+/// that one location means the same thing everywhere. The `/usr` entries are the ones
+/// that do not exist on Windows, and listing them there is worse than useless -- this
+/// list is printed verbatim in the "no voice found" message, so an operator staring at
+/// it would be sent looking in folders their machine cannot have.
+#[cfg(windows)]
+const PIPER_VOICE_DIRS: &[&str] = &["~/.local/share/piper/voices", "~/.local/share/piper"];
+#[cfg(not(windows))]
 const PIPER_VOICE_DIRS: &[&str] = &[
     "~/.local/share/piper/voices",
     "~/.local/share/piper",
@@ -246,6 +256,15 @@ pub fn piper_binary() -> Option<PathBuf> {
         .clone()
 }
 
+/// Where a voice Aether1 fetched for itself is written.
+///
+/// The first entry of PIPER_VOICE_DIRS, and deliberately the same folder on every platform
+/// -- installer/aether1.iss already writes the bundled voice to the Windows spelling of it.
+/// One writable location that needs no permissions, so a download never has to ask for any.
+pub fn voices_dir() -> PathBuf {
+    crate::paths::expand_home(PIPER_VOICE_DIRS[0])
+}
+
 /// Smallest a real Piper voice can be. The smallest published voices are the `x_low`
 /// models at a little over 5 MB; anything under a megabyte is a download that stopped
 /// early, an HTML error page saved with the wrong name, or a git-lfs pointer file -- all of
@@ -272,7 +291,7 @@ fn usable_voice(onnx: &Path) -> bool {
 /// "No voice found" is the wrong sentence to show someone staring at a voice file they
 /// definitely downloaded, and being told the wrong thing is worse than being told nothing:
 /// they go and download it again.
-fn voice_problem(onnx: &Path) -> Option<String> {
+pub(crate) fn voice_problem(onnx: &Path) -> Option<String> {
     let name = onnx
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -642,6 +661,18 @@ pub fn generate_speech_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list is printed verbatim when nothing is found, so every entry has to be a
+    /// place this platform could actually put the file. A Unix absolute path on Windows
+    /// sends the operator hunting through a folder tree that cannot exist, which is a
+    /// worse outcome than saying nothing at all.
+    #[test]
+    fn every_named_folder_is_one_this_platform_can_have() {
+        for dir in PIPER_VOICE_DIRS {
+            let plausible = dir.starts_with('~') || !cfg!(windows);
+            assert!(plausible, "{dir} cannot exist on Windows");
+        }
+    }
 
     #[test]
     fn sanitize_strips_markdown() {
