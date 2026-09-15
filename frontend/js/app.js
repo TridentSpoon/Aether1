@@ -4279,6 +4279,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function openNotesReader() {
         voiceEngine.playSFX('click');
         notesModal.classList.remove('hidden');
+        showReaderView();
         notesSearch.value = '';
         noteTrail = [];
         btnNotesBack.classList.add('hidden');
@@ -4299,9 +4300,104 @@ document.addEventListener('DOMContentLoaded', () => {
         openNotesReader();
     });
     document.getElementById('btn-notes-open-folder')?.addEventListener('click', openVaultFolder);
+
+    /* -------------------------------------------------------------------- */
+    /* The graph.                                                           */
+    /*                                                                      */
+    /* The same notes, drawn instead of listed: a dot per note, a line per   */
+    /* [[link]]. It is the one view that shows what a list cannot -- which   */
+    /* notes everything points at, and which ones are drifting on their own  */
+    /* because nothing links to them any more.                              */
+    /*                                                                      */
+    /* The drawing lives in js/notes-graph.js and does no fetching. This is  */
+    /* the only place that knows whether the answer comes over IPC or HTTP,  */
+    /* which is the same split every other feature here uses.               */
+    /* -------------------------------------------------------------------- */
+
+    const notesReaderView = document.getElementById('notes-reader-view');
+    const notesGraphView = document.getElementById('notes-graph-view');
+    const notesGraphCanvas = document.getElementById('notes-graph-canvas');
+    const notesGraphCount = document.getElementById('notes-graph-count');
+    const notesGraphNote = document.getElementById('notes-graph-note');
+    const btnNotesGraph = document.getElementById('btn-notes-graph');
+
+    /* Mounted on first use and kept, so flipping between the list and the
+       picture does not re-run the layout and hand you a different arrangement
+       of the same vault every time. */
+    let noteGraph = null;
+    let graphShowing = false;
+
+    async function fetchGraph() {
+        if (IS_TAURI) return tauriInvoke('vault_graph_rust');
+        const res = await apiFetch('/api/vault/graph');
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        return res.json();
+    }
+
+    function showReaderView() {
+        graphShowing = false;
+        notesGraphView.classList.add('hidden');
+        notesReaderView.classList.remove('hidden');
+        if (noteGraph) noteGraph.stop();
+        if (btnNotesGraph) btnNotesGraph.textContent = '🕸 Graph';
+    }
+
+    async function showGraphView() {
+        graphShowing = true;
+        notesReaderView.classList.add('hidden');
+        notesGraphView.classList.remove('hidden');
+        if (btnNotesGraph) btnNotesGraph.textContent = '📄 List';
+        if (!noteGraph) {
+            noteGraph = window.Aether1NoteGraph.mount(notesGraphCanvas, {
+                onOpenNote: (name) => {
+                    /* Clicking a dot is asking to read that note, so it lands in
+                       the reader rather than opening something over the graph. */
+                    showReaderView();
+                    noteTrail = [];
+                    openNote(name);
+                },
+            });
+        } else {
+            noteGraph.resume();
+        }
+        notesGraphCount.textContent = 'Reading the folder…';
+        notesGraphNote.classList.add('hidden');
+        try {
+            const graph = await fetchGraph();
+            const nodes = (graph.nodes || []).length;
+            const edges = (graph.edges || []).length;
+            notesGraphCount.textContent =
+                `${nodes} note${nodes === 1 ? '' : 's'} · ${edges} link${edges === 1 ? '' : 's'}`;
+            if (graph.partial) {
+                /* Being told the picture is incomplete matters more than the
+                   picture: a missing line here looks exactly like a note nobody
+                   linked, and those two things mean opposite things. */
+                notesGraphNote.textContent =
+                    'This vault is bigger than the graph shows — only the first notes found are drawn.';
+                notesGraphNote.classList.remove('hidden');
+            }
+            noteGraph.show(graph);
+        } catch (err) {
+            notesGraphCount.textContent = `Could not read the notes folder: ${err.message || err}`;
+        }
+    }
+
+    btnNotesGraph?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        if (graphShowing) showReaderView();
+        else showGraphView();
+    });
+
+    document.getElementById('btn-notes-graph-fit')?.addEventListener('click', () => {
+        if (noteGraph) noteGraph.fit();
+    });
+
     document.getElementById('btn-close-notes').addEventListener('click', () => {
         voiceEngine.playSFX('click');
         notesModal.classList.add('hidden');
+        /* Closed means stopped. The canvas keeps its layout, so this is the one
+           place that has to say so. */
+        if (noteGraph) noteGraph.stop();
     });
 
     const btnActivity = document.getElementById('btn-activity');

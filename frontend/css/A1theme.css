@@ -386,7 +386,7 @@
   color: var(--neon-green);
 }
 
-[data-theme] :is(.text-amber-400,
+[data-theme] :is(.text-amber-400, .text-amber-300,
   .text-yellow-300):not(.color-theme-btn):not(.avatar-btn):not(.theme-mode-btn) {
   color: var(--neon-amber);
 }
