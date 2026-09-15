@@ -65,16 +65,56 @@ if not exist "%BIN%" (
 
     echo No release build found. Building AETHER1 ^(first build can take a few minutes^)...
     pushd src-tauri
-    cargo build --release
+    set "BUILD_LOG=%TEMP%\aether1_build_%RANDOM%.log"
+    cargo build --release > "!BUILD_LOG!" 2>&1
     set BUILD_ERRORLEVEL=!ERRORLEVEL!
+    type "!BUILD_LOG!"
     popd
 
     if not "!BUILD_ERRORLEVEL!"=="0" (
         echo.
-        echo Build failed ^(exit code !BUILD_ERRORLEVEL!^) -- see the errors above.
+        REM --- errorlevel 4551 from rustc/cargo means Windows itself refused to launch
+        REM     the compiler (Smart App Control or a managed WDAC/AppLocker policy), not
+        REM     a problem with AETHER1's code -- a plain "build failed" message here would
+        REM     send people chasing a bug in the repo instead of their Windows settings.
+        findstr /C:"Application Control policy has blocked this file" "!BUILD_LOG!" >nul 2>&1
+        if not errorlevel 1 (
+            echo ======================================================================
+            echo   Windows blocked rustc.exe from running
+            echo ======================================================================
+            echo.
+            echo   This is NOT a problem with AETHER1's code. Windows itself refused to
+            echo   launch the Rust compiler ^(error 4551, "Application Control policy
+            echo   has blocked this file"^). This is almost always one of:
+            echo.
+            echo     1. Smart App Control ^(on by default on many new/reset Windows 11
+            echo        installs^) blocking rustc.exe because it isn't signed the way
+            echo        Microsoft-trusted binaries are.
+            echo     2. A company-managed PC's WDAC/AppLocker policy that only allows
+            echo        programs to run from approved folders ^(e.g. Program Files^),
+            echo        which excludes your .rustup folder under your user profile.
+            echo.
+            echo   To check: Settings -^> Privacy ^& security -^> Windows Security -^>
+            echo   App ^& browser control -^> Smart App Control. If it's On and shows
+            echo   "Evaluation", you can turn it off there.
+            echo.
+            echo   If this is a work/managed laptop, this is IT's call -- ask them to
+            echo   allow-list rustc.exe/cargo.exe or your .rustup/.cargo folders.
+            echo.
+            echo   Workaround: reinstall rustup after pointing it at a system path
+            echo   Windows already trusts instead of your user profile, e.g.:
+            echo     setx RUSTUP_HOME C:\ProgramData\rustup
+            echo     setx CARGO_HOME C:\ProgramData\cargo
+            echo   then open a NEW terminal and reinstall from https://rustup.rs
+            echo ======================================================================
+        ) else (
+            echo Build failed ^(exit code !BUILD_ERRORLEVEL!^) -- see the errors above.
+        )
+        del "!BUILD_LOG!" >nul 2>&1
         pause
         exit /b 1
     )
+    del "!BUILD_LOG!" >nul 2>&1
     if not exist "%BIN%" (
         echo.
         echo Build reported success but %BIN% still doesn't exist -- something's wrong

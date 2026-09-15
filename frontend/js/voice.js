@@ -36,6 +36,15 @@ class VoiceAudioEngine {
                 this.analyser = this.audioCtx.createAnalyser();
                 this.analyser.fftSize = 128;
                 this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+                // A gain stage between the analyser and the speakers, wired once here
+                // rather than reconnected on every clip. It lets a silent voice self-test
+                // (see runVoiceStartupSelfTest in app.js) mute what's actually heard while
+                // the analyser -- which taps the signal upstream of this node -- still
+                // sees the real decoded audio, so it can tell a genuine synthesis/playback
+                // failure from a clip that simply wasn't meant to be heard.
+                this.gainNode = this.audioCtx.createGain();
+                this.analyser.connect(this.gainNode);
+                this.gainNode.connect(this.audioCtx.destination);
             }
         } catch (e) {
             console.warn("Web Audio API not supported", e);
@@ -174,7 +183,25 @@ class VoiceAudioEngine {
         return new Blob([buffer], { type: 'audio/wav' });
     }
 
-    async playTTSAudio(audioUrl) {
+    /**
+     * Plays one TTS clip and reports what actually happened, not just whether a JS
+     * exception was thrown: `signalDetected` (via the analyser, which taps the signal
+     * upstream of the gain node so this still works when muted) says whether real,
+     * non-zero audio was ever decoded -- distinguishing a clip that genuinely played from
+     * one that "succeeded" into a broken output device and produced silence. That gap is
+     * exactly what let TTS failures go unnoticed before: `audio.play()` resolving, or
+     * `onended` firing, only ever meant no exception was thrown, never that anything was
+     * actually heard.
+     *
+     * `opts.audible` (default true) controls whether the clip is actually heard through
+     * the gain node; pass false to run the exact same check silently (see
+     * runVoiceStartupSelfTest in app.js). The returned promise always resolves (never
+     * rejects) with `{ played, error, signalDetected }` -- `signalDetected` is `null` when
+     * there is no analyser to ask (Web Audio unsupported).
+     */
+    async playTTSAudio(audioUrl, opts = {}) {
+        const audible = opts.audible !== false;
+
         if (this.currentAudio) {
             this.currentAudio.pause();
             this.currentAudio = null;
@@ -184,15 +211,26 @@ class VoiceAudioEngine {
             await this.audioCtx.resume();
         }
 
+        if (this.gainNode) {
+            this.gainNode.gain.value = audible ? 1 : 0;
+        }
+
         return new Promise((resolve) => {
             const audio = new Audio(audioUrl);
             this.currentAudio = audio;
+
+            let signalDetected = false;
+            let playbackError = null;
+            // A byte frequency bin sits at 0-255; real decoded audio -- even a quiet
+            // sentence -- clears a few counts somewhere across the spectrum, so this
+            // threshold only fails to trip on genuine silence (a muted device, an empty
+            // clip, a pipeline that produced nothing).
+            const SIGNAL_THRESHOLD = 2;
 
             if (this.audioCtx && this.analyser) {
                 try {
                     const source = this.audioCtx.createMediaElementSource(audio);
                     source.connect(this.analyser);
-                    this.analyser.connect(this.audioCtx.destination);
                 } catch (e) {
                     // Fallback if CORS or already connected
                 }
@@ -205,16 +243,20 @@ class VoiceAudioEngine {
                 if (!this.currentAudio || this.currentAudio.paused) return;
                 if (this.analyser) {
                     this.analyser.getByteFrequencyData(this.dataArray);
+                    if (!signalDetected) {
+                        for (let i = 0; i < this.dataArray.length; i++) {
+                            if (this.dataArray[i] > SIGNAL_THRESHOLD) {
+                                signalDetected = true;
+                                break;
+                            }
+                        }
+                    }
                     if (this.onAudioFrequency) this.onAudioFrequency(this.dataArray);
                 }
                 requestAnimationFrame(pollFrequency);
             };
 
-            audio.onplay = () => {
-                pollFrequency();
-            };
-
-            audio.onended = () => {
+            const finish = () => {
                 this.currentAudio = null;
                 // Mid-queue, the next clip is about to start: staying SPEAKING keeps the
                 // avatar steady across the seam. enqueueTTS emits IDLE when it drains.
@@ -222,19 +264,28 @@ class VoiceAudioEngine {
                     if (this.onStateChange) this.onStateChange('IDLE');
                     if (this.onAudioFrequency) this.onAudioFrequency(new Uint8Array(64));
                 }
-                resolve();
+                resolve({
+                    played: !playbackError,
+                    error: playbackError,
+                    signalDetected: this.analyser ? signalDetected : null,
+                });
             };
 
+            audio.onplay = () => {
+                pollFrequency();
+            };
+
+            audio.onended = finish;
+
             audio.onerror = () => {
-                this.currentAudio = null;
-                if (this.onStateChange) this.onStateChange('IDLE');
-                resolve();
+                playbackError = (audio.error && audio.error.message) || 'audio element error';
+                finish();
             };
 
             audio.play().catch(e => {
                 console.warn("Audio playback blocked or failed:", e);
-                if (this.onStateChange) this.onStateChange('IDLE');
-                resolve();
+                playbackError = (e && e.message) || String(e);
+                finish();
             });
         });
     }
