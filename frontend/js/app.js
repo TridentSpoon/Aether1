@@ -565,9 +565,39 @@ document.addEventListener('DOMContentLoaded', () => {
         canvasCtx.shadowBlur = 0;
     }
 
+    // Whether the desktop sprite window is currently open -- kept in sync with the
+    // "Float the avatar on your desktop" setting (see setHologramFloating below) so the two
+    // push functions that follow know whether anyone is listening before bothering to emit.
+    let desktopSpriteEnabled = false;
+
+    /* Sets the hologram's state and, if the desktop sprite is open, mirrors it there over a
+       Tauri event -- the same "push, don't poll" pattern setHologramAvatar already uses for
+       avatar changes. Every hologram.setState call in this file goes through here instead of
+       calling the hologram directly, so the sprite always shows what the main window's avatar
+       is actually doing (IDLE/LISTENING/THINKING/SPEAKING) rather than running its own idea
+       of "busy" from a separate conversation. */
+    function setAvatarState(newState) {
+        hologram.setState(newState);
+        if (desktopSpriteEnabled && window.__TAURI__ && window.__TAURI__.event) {
+            window.__TAURI__.event.emit('hologram-state-changed', { state: newState }).catch(() => {});
+        }
+    }
+
+    // Audio data arrives every animation frame; emitting all of it across the Tauri IPC
+    // boundary for a window that mostly isn't open would be wasted work, so this both gates
+    // on the sprite actually being open and thins the frames it does send -- the sprite's
+    // reactive glow doesn't need 60fps to read as alive.
+    let audioFrameCount = 0;
+    function pushAudioToSprite(freqData) {
+        if (!desktopSpriteEnabled || !window.__TAURI__ || !window.__TAURI__.event) return;
+        audioFrameCount = (audioFrameCount + 1) % 3;
+        if (audioFrameCount !== 0) return;
+        window.__TAURI__.event.emit('hologram-audio-changed', { data: Array.from(freqData) }).catch(() => {});
+    }
+
     // Voice Callbacks
     voiceEngine.onStateChange = (state) => {
-        hologram.setState(state);
+        setAvatarState(state);
         // THINKING and SPEAKING are the states where something is actually answering, and
         // the panel should be showing whichever half of itself describes what is doing it.
         setTelemetryBusy(state === 'THINKING' || state === 'SPEAKING');
@@ -592,6 +622,7 @@ document.addEventListener('DOMContentLoaded', () => {
     voiceEngine.onAudioFrequency = (data) => {
         hologram.updateAudioData(data);
         drawWaveform(data);
+        pushAudioToSprite(data);
     };
 
     // Live Telemetry -- a Tauri event in the native app (see the background thread in
@@ -1124,11 +1155,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (talkHeld || isWaitingForResponse) return;
         talkHeld = true;
         voiceEngine.stopSpeech(); // talking over the companion interrupts it
-        hologram.setState('LISTENING');
+        setAvatarState('LISTENING');
         const started = await voiceEngine.startCapture();
         if (!started) {
             talkHeld = false;
-            hologram.setState('IDLE');
+            setAvatarState('IDLE');
             appendMessage(currentAgentName, '⚠️ No microphone available.');
         }
     }
@@ -1683,7 +1714,7 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.stopSpeech(); // a new question supersedes anything still being spoken
 
         isWaitingForResponse = true;
-        hologram.setState('THINKING');
+        setAvatarState('THINKING');
         if (voiceEngine.onStateChange) voiceEngine.onStateChange('THINKING');
 
         // The reply's own message node, created empty and filled in as deltas arrive --
@@ -1728,7 +1759,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 firstDelta = false;
                 stopWaiting();
                 replyDiv.classList.add('typing-cursor');
-                hologram.setState('IDLE');
+                setAvatarState('IDLE');
             }
             replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -1770,7 +1801,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // If speech never actually got queued (autoSpeak off, or every synthesis attempt
             // failed) nothing else is going to bring the hologram out of THINKING -- do it here.
             if (!audioQueued) {
-                hologram.setState('IDLE');
+                setAvatarState('IDLE');
                 if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
             }
         } catch (e) {
@@ -1779,7 +1810,7 @@ document.addEventListener('DOMContentLoaded', () => {
             replyDiv.bodyDiv.innerHTML = formatMarkdown(
                 rendered ? `${rendered}\n\n⚠️ System Error: ${e.message || e}` : `⚠️ System Error: ${e.message || e}`
             );
-            hologram.setState('IDLE');
+            setAvatarState('IDLE');
             if (voiceEngine.onStateChange) voiceEngine.onStateChange('IDLE');
         } finally {
             // A reply that never streamed a delta -- an error, or a non-streaming
@@ -1796,7 +1827,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         voiceEngine.playSFX('boot');
-        hologram.setState('THINKING');
+        setAvatarState('THINKING');
 
         try {
             let data;
@@ -1835,11 +1866,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (audioUrl && autoSpeak) {
                 await voiceEngine.playTTSAudio(audioUrl);
             } else {
-                hologram.setState('IDLE');
+                setAvatarState('IDLE');
             }
         } catch (e) {
             alert(`Genesis Error: ${e.message || e}`);
-            hologram.setState('IDLE');
+            setAvatarState('IDLE');
         }
     }
 
@@ -3244,25 +3275,67 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // The hologram panel's own visual state: while the avatar is floating on the desktop as
+    // the sprite, this panel goes quiet instead of drawing a second live hologram nobody
+    // asked for -- see the [data-panel="hologram"].avatar-floating rules in A1theme.css and
+    // the #hologram-floating-notice button in index.html that this reveals in its place.
+    function setHologramFloating(floating) {
+        desktopSpriteEnabled = floating;
+        const panel = document.querySelector('[data-panel="hologram"]');
+        if (panel) panel.classList.toggle('avatar-floating', floating);
+    }
+
+    // Turns Desktop Sprite Mode on or off: persists the setting, tells Rust to open/close the
+    // window, and updates this panel's own floating state to match. Shared by the panel's
+    // Undock button (turns it on), the floating notice's "bring it back" click (turns it
+    // off), and kept in sync with whatever the Settings modal's own Save button does (see
+    // saveSettings) so all three ways of reaching this agree on what's showing.
+    async function setDesktopSpriteMode(enabled) {
+        const spriteModeToggle = document.getElementById('setting-sprite-mode');
+        if (spriteModeToggle) spriteModeToggle.checked = enabled;
+        try {
+            await tauriInvoke('save_settings_rust', { settings: { desktop_sprite_enabled: enabled } });
+            await tauriInvoke('toggle_sprite_window_rust', { enabled });
+        } catch (e) {
+            console.warn('Could not toggle Desktop Sprite Mode', e);
+        }
+        setHologramFloating(enabled);
+    }
+
+    // The floating notice that replaces the hologram panel's live content while the avatar
+    // is out on the desktop -- clicking it is the way back, short of reopening Settings.
+    function initHologramFloatingNotice() {
+        const notice = document.getElementById('hologram-floating-notice');
+        if (!notice) return;
+        notice.addEventListener('click', () => setDesktopSpriteMode(false));
+    }
+
+    // The sprite has no chat of its own (see js/sprite.js) and its viewport is otherwise
+    // spoken for by window-dragging, so clicking the avatar there instead asks this window
+    // to toggle push-to-talk -- the same start/stop startTalking/stopTalking already do for
+    // held Space or the mic button, just requested from the desktop instead of the HUD.
+    function initSpriteListenBridge() {
+        if (!IS_TAURI || !window.__TAURI__ || !window.__TAURI__.event) return;
+        window.__TAURI__.event.listen('sprite-toggle-listen', () => {
+            if (talkHeld) {
+                stopTalking();
+            } else {
+                startTalking();
+            }
+        }).catch((e) => console.warn('Could not listen for sprite listen-toggle requests', e));
+    }
+
     // Every panel's "Undock" button opens it in its own solo-panel window (see
     // open_panel_window_rust) -- except the hologram's, which turns on Desktop Sprite
-    // Mode instead. The avatar already has a dedicated floating window built for exactly
-    // this (transparent, click-to-chat, drag-anywhere); a second, plainer window showing
-    // the same avatar would just be a worse copy of it.
+    // Mode instead: the avatar leaves this window entirely and reappears as the floating
+    // desktop sprite, a live mirror of this same hologram rather than a second, separate one.
     function initPanelUndock() {
         if (!IS_TAURI) return;
         document.querySelectorAll('[data-undock]').forEach((btn) => {
-            btn.addEventListener('click', async () => {
+            btn.addEventListener('click', () => {
                 const id = btn.dataset.undock;
                 if (id === 'hologram') {
-                    const spriteModeToggle = document.getElementById('setting-sprite-mode');
-                    if (spriteModeToggle) spriteModeToggle.checked = true;
-                    try {
-                        await tauriInvoke('save_settings_rust', { settings: { desktop_sprite_enabled: true } });
-                        await tauriInvoke('toggle_sprite_window_rust', { enabled: true });
-                    } catch (e) {
-                        console.warn('Could not enable Desktop Sprite Mode', e);
-                    }
+                    setDesktopSpriteMode(true);
                     return;
                 }
                 tauriInvoke('open_panel_window_rust', { panel: id })
@@ -3363,6 +3436,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
             if (spriteModeToggle) spriteModeToggle.checked = s.desktop_sprite_enabled === true;
+            // The Rust side reopens the sprite window itself on launch if it was left on
+            // (see the sprite_was_enabled check in main.rs's setup()) -- this just makes the
+            // panel agree with that from the moment settings load, instead of drawing a live
+            // hologram here too until something else happens to call setHologramFloating.
+            setHologramFloating(s.desktop_sprite_enabled === true);
         } catch (e) {
             console.warn("Could not load settings", e);
         }
@@ -3485,6 +3563,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (IS_TAURI) {
                 await tauriInvoke('save_settings_rust', { settings: payload.settings });
                 await tauriInvoke('toggle_sprite_window_rust', { enabled: payload.settings.desktop_sprite_enabled });
+                setHologramFloating(payload.settings.desktop_sprite_enabled);
             } else {
                 const resp = await apiFetch('/api/settings', {
                     method: 'POST',
@@ -3855,6 +3934,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initSpriteMode();
     initSoloPanel();
     initPanelUndock();
+    initHologramFloatingNotice();
+    initSpriteListenBridge();
 
     document.body.addEventListener('click', () => {
         voiceEngine.playSFX('boot');
