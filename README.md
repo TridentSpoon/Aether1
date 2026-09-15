@@ -612,6 +612,25 @@ with a Save button would be a second way into the same folder with neither of th
 attached. To edit a note yourself, open the folder — it is your folder, and it is just
 markdown.
 
+### More than one conversation
+
+**💬 Conversations** in the ☰ menu is the list of everything you have talked about. Click one
+to pick up exactly where you left off, or **＋ New** to start a fresh one. The ✎ gives a
+conversation a name — until you do, it is named after the first thing you said in it — and
+the 🗑 deletes one along with everything said in it.
+
+Conversations do not leak into each other. Your companion is given the history of the one it
+is answering in and nothing else, so a new conversation genuinely starts clean. It still has
+your notes — those are the part that is meant to carry across — but not what was said next
+door. That is useful when you want to change the subject without dragging an hour of
+something else along, and it matters when you would rather one conversation simply never came
+up in another.
+
+It is yours to move around in, not the companion's. It cannot start a conversation, switch to
+one, rename one or delete one, in the same way it cannot switch its own tools on. The app
+remembers which conversation you were in, so closing the window and coming back puts you back
+where you were rather than somewhere new.
+
 **How it finds things.** `INDEX.md`, `profile.md` and `machine.md` are loaded into every
 conversation; everything else it goes and reads when the question calls for it. Once the vault
 outgrows its index it searches instead, ranking by *where* a word appears rather than by how

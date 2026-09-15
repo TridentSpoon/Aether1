@@ -16,7 +16,7 @@ pub mod tts;
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub use db::{ActionRecord, ActionStatus, MemoryDb, Message, ModelBenchmark};
+pub use db::{ActionRecord, ActionStatus, MemoryDb, Message, ModelBenchmark, SessionSummary};
 pub use genesis::Identity;
 use persona::Provider;
 // Re-exported because commands.rs serves the persona catalogue to the HUD: the Settings list

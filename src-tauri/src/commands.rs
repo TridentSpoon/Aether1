@@ -33,7 +33,7 @@ pub fn generate_response_streamed(
     if prompt.trim().is_empty() {
         return Err("Empty message".to_string());
     }
-    let session_id = session_id.unwrap_or_else(|| "default".to_string());
+    let session_id = valid_session_id(session_id)?;
 
     engine.add_message(&session_id, "user", &prompt);
     // Opened and drained around the one call that reads the vault, so the notes reported
@@ -275,17 +275,133 @@ pub fn static_info() -> Value {
     })
 }
 
-pub fn get_messages(engine: &LlmEngine, limit: Option<u32>) -> Vec<llm::Message> {
-    engine
-        .db()
-        .get_messages("default", limit.unwrap_or(50))
-        .unwrap_or_default()
+/// The one gate every session id passes through before it reaches SQL.
+///
+/// It refuses rather than repairs. A sanitiser that strips the characters it doesn't like
+/// turns a bad id into a *different valid one*, and the conversation the operator asked
+/// for silently becomes somebody else's -- reading one transcript while writing another.
+/// An error is the honest answer. `None` still means the original "default", so every
+/// caller that predates sessions keeps working untouched.
+///
+/// The character set is deliberately narrower than SQLite needs: ids are generated here,
+/// never typed, so there is nothing to lose by allowing only what a generated id contains.
+pub fn valid_session_id(session_id: Option<String>) -> Result<String, String> {
+    let Some(raw) = session_id else {
+        return Ok(DEFAULT_SESSION.to_string());
+    };
+    let id = raw.trim();
+    if id.is_empty() {
+        return Ok(DEFAULT_SESSION.to_string());
+    }
+    if id.len() > 64 {
+        return Err("Conversation id is too long".to_string());
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Conversation id has characters that aren't allowed".to_string());
+    }
+    Ok(id.to_string())
 }
 
-pub fn clear_messages(engine: &LlmEngine) -> Result<(), String> {
+/// The conversation everything landed in before conversations existed. Kept as the
+/// fallback so the history already on disk stays reachable instead of being orphaned.
+pub const DEFAULT_SESSION: &str = "default";
+
+/// How many conversations the history list will show. A hard ceiling rather than paging:
+/// the list is for finding the conversation you remember, and past a few hundred rows
+/// nobody is scrolling anyway.
+const MAX_SESSIONS: u32 = 200;
+
+/// Every conversation with something in it, newest first.
+///
+/// Note what is *not* here: no tool, and nothing in the settings allowlist. The companion
+/// cannot list, open, rename, delete or switch conversations. A session is a privacy
+/// boundary as much as a convenience -- the model is given the history of the session it
+/// is answering in and has no way to reach across to another one, or even to learn that
+/// another one exists.
+pub fn list_sessions(engine: &LlmEngine) -> Result<Vec<llm::SessionSummary>, String> {
     engine
         .db()
-        .clear_history("default")
+        .list_sessions(MAX_SESSIONS)
+        .map_err(|e| e.to_string())
+}
+
+/// Mints an id for a new conversation. Nothing is written: a conversation starts existing
+/// when something is said in it, which is why the history list is derived from messages.
+///
+/// The id is the clock in nanoseconds, in base 36. There is no `uuid` or `rand` crate in
+/// this build and this does not need one -- ids are minted by a single operator on a
+/// single machine, one at a time, and are never guessed at, never used as a secret, and
+/// never shared between machines. Uniqueness against a monotonic-enough clock is the whole
+/// requirement, and the id is not used as an authorisation token anywhere.
+pub fn new_session() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut n = nanos;
+    let mut out = Vec::new();
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    while n > 0 {
+        out.push(DIGITS[(n % 36) as usize]);
+        n /= 36;
+    }
+    out.reverse();
+    let tail = String::from_utf8(out).unwrap_or_else(|_| "0".to_string());
+    format!("c{tail}")
+}
+
+pub fn rename_session(
+    engine: &LlmEngine,
+    session_id: Option<String>,
+    title: String,
+) -> Result<(), String> {
+    let session_id = valid_session_id(session_id)?;
+    if title.chars().count() > 200 {
+        return Err("That name is too long".to_string());
+    }
+    engine
+        .db()
+        .set_session_title(&session_id, &title)
+        .map_err(|e| e.to_string())
+}
+
+/// Deletes a conversation and everything said in it.
+///
+/// "default" is refused, because it is the fallback every session-unaware caller lands in:
+/// deleting it doesn't remove a conversation so much as empty the one the app falls back
+/// to. Clearing it is still available through `clear_messages`, which is the honest name
+/// for what that would be.
+pub fn delete_session(engine: &LlmEngine, session_id: String) -> Result<(), String> {
+    let session_id = valid_session_id(Some(session_id))?;
+    if session_id == DEFAULT_SESSION {
+        return Err("The first conversation can be cleared, but not deleted".to_string());
+    }
+    engine
+        .db()
+        .delete_session(&session_id)
+        .map_err(|e| e.to_string())
+}
+
+pub fn get_messages(
+    engine: &LlmEngine,
+    limit: Option<u32>,
+    session_id: Option<String>,
+) -> Result<Vec<llm::Message>, String> {
+    let session_id = valid_session_id(session_id)?;
+    Ok(engine
+        .db()
+        .get_messages(&session_id, limit.unwrap_or(50))
+        .unwrap_or_default())
+}
+
+pub fn clear_messages(engine: &LlmEngine, session_id: Option<String>) -> Result<(), String> {
+    let session_id = valid_session_id(session_id)?;
+    engine
+        .db()
+        .clear_history(&session_id)
         .map_err(|e| e.to_string())
 }
 
@@ -704,5 +820,32 @@ mod tests {
         assert!(response["settings"]["os"].is_null());
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_bad_conversation_id_is_refused_rather_than_repaired() {
+        // The whole point: none of these come back as a *different* valid id, because a
+        // sanitiser would quietly hand the caller somebody else's transcript.
+        assert!(valid_session_id(Some("../../etc/passwd".into())).is_err());
+        assert!(valid_session_id(Some("c1'; DROP TABLE messages--".into())).is_err());
+        assert!(valid_session_id(Some("c 1".into())).is_err());
+        assert!(valid_session_id(Some("x".repeat(65))).is_err());
+
+        assert_eq!(valid_session_id(None).unwrap(), "default");
+        assert_eq!(
+            valid_session_id(Some("   ".into())).unwrap(),
+            "default",
+            "an empty id means the caller didn't say, not that they said nothing"
+        );
+        assert_eq!(valid_session_id(Some("c1a-b_2".into())).unwrap(), "c1a-b_2");
+    }
+
+    #[test]
+    fn minted_ids_are_distinct_and_pass_their_own_gate() {
+        let a = new_session();
+        let b = new_session();
+        assert_ne!(a, b, "two conversations asked for are two conversations");
+        assert_eq!(valid_session_id(Some(a.clone())).unwrap(), a);
+        assert!(a.starts_with('c'), "never empty, even at the epoch");
     }
 }
