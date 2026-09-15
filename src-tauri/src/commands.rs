@@ -389,6 +389,47 @@ pub fn open_vault_folder(engine: &LlmEngine) -> Result<(), String> {
     crate::vault::open_folder(engine.db())
 }
 
+/// Every note in the vault, newest first, for the reader panel's list.
+///
+/// Read-only, all three of these. The vault is changed through the tools -- with the
+/// consent path and undo behind them -- and a reader that could also write would be a
+/// second door into the same folder that nothing had approved.
+pub fn vault_notes(engine: &LlmEngine) -> Vec<crate::vault::reader::NoteSummary> {
+    crate::vault::reader::notes(engine.db())
+}
+
+/// One note: its text, the links in it, and the notes pointing back at it.
+pub fn vault_note(
+    engine: &LlmEngine,
+    name: &str,
+) -> Result<crate::vault::reader::NoteView, String> {
+    crate::vault::reader::read(engine.db(), name)
+}
+
+/// The vault as a graph, for drawing.
+pub fn vault_graph(engine: &LlmEngine) -> crate::vault::reader::Graph {
+    crate::vault::reader::graph(engine.db())
+}
+
+/// The same search the companion itself uses on the vault, handed to the operator.
+///
+/// Built into JSON here rather than derived on `search::Hit`, because the hit carries a
+/// modified time that exists only to break ties between two equally good matches; it is
+/// ranking machinery, not something the reader has any use for.
+pub fn vault_search(engine: &LlmEngine, query: &str) -> Value {
+    let results = crate::vault::search::search(engine.db(), query);
+    serde_json::json!({
+        "hits": results.hits.iter().map(|h| serde_json::json!({
+            "note": h.note,
+            "score": h.score,
+            "heading": h.heading,
+            "snippet": h.snippet,
+        })).collect::<Vec<_>>(),
+        "scanned": results.scanned,
+        "partial": results.partial,
+    })
+}
+
 /// The record of what the companion has actually done, newest first.
 pub fn recent_actions(engine: &LlmEngine, limit: Option<u32>) -> Vec<ActionRecord> {
     engine

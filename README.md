@@ -588,6 +588,19 @@ Aether1Vault/
 Notes link to each other with `[[wiki links]]`, which is what turns the folder into a graph —
 open it in Obsidian and the graph view *is* a picture of what your companion knows.
 
+**You can read them inside Aether1 too.** Menu → **📓 Notes**, or the **Read Them Here**
+button beside the folder path in Settings. You get the list of notes, the note itself with
+its headings and formatting laid out properly, every `[[link]]` clickable, and — the part a
+plain editor hides — a *Linked from* line at the bottom showing which other notes point at
+the one you are reading. The search box runs the same search the companion itself uses, so
+what you find is what it would have found.
+
+It reads and never writes. Notes are changed by asking the companion to change them, which
+goes through the same approval and undo as anything else it does to your files; a reader
+with a Save button would be a second way into the same folder with neither of those things
+attached. To edit a note yourself, open the folder — it is your folder, and it is just
+markdown.
+
 **How it finds things.** `INDEX.md`, `profile.md` and `machine.md` are loaded into every
 conversation; everything else it goes and reads when the question calls for it. Once the vault
 outgrows its index it searches instead, ranking by *where* a word appears rather than by how

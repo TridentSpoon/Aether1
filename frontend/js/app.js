@@ -3893,6 +3893,338 @@ document.addEventListener('DOMContentLoaded', () => {
     btnMic.addEventListener('touchstart', (e) => { e.preventDefault(); startTalking(); });
     btnMic.addEventListener('touchend', (e) => { e.preventDefault(); stopTalking(); });
 
+    /* ------------------------------------------------------------------ */
+    /* Reading the vault.                                                   */
+    /*                                                                      */
+    /* The notes are plain markdown on disk and always have been -- Obsidian */
+    /* or any editor opens the same folder, and the [[links]] between notes  */
+    /* were written to be read that way. This is for when you do not want to */
+    /* leave the app to look something up.                                   */
+    /*                                                                      */
+    /* Read-only, deliberately. Notes are changed through the companion's    */
+    /* tools, which ask before they change anything and record a way back;   */
+    /* a reader that could also save would be a second way into the same     */
+    /* folder with neither of those things attached to it.                   */
+    /*                                                                      */
+    /* Nothing here builds markup out of note text. A note can contain       */
+    /* anything -- the companion wrote half of it and you wrote the rest --  */
+    /* so every piece of it reaches the page as a text node.                 */
+    /* ------------------------------------------------------------------ */
+
+    const notesModal = document.getElementById('notes-modal');
+    const notesList = document.getElementById('notes-list');
+    const notesBody = document.getElementById('notes-body');
+    const notesTitle = document.getElementById('notes-title');
+    const notesCount = document.getElementById('notes-count');
+    const notesSearch = document.getElementById('notes-search');
+    const notesBacklinks = document.getElementById('notes-backlinks');
+    const btnNotesBack = document.getElementById('btn-notes-back');
+
+    /* Where we came from, so Back after following a [[link]] means something. Capped
+       because it is a browsing convenience, not a history anybody audits. */
+    let noteTrail = [];
+    let notesCache = [];
+
+    async function fetchNotes() {
+        if (IS_TAURI) return tauriInvoke('vault_notes_rust');
+        const res = await apiFetch('/api/vault/notes');
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        return res.json();
+    }
+
+    async function fetchNote(name) {
+        if (IS_TAURI) return tauriInvoke('vault_note_rust', { name });
+        const res = await apiFetch(`/api/vault/note?name=${encodeURIComponent(name)}`);
+        if (!res.ok) throw new Error(res.status === 404 ? 'no such note' : `status ${res.status}`);
+        return res.json();
+    }
+
+    async function fetchNoteSearch(query) {
+        if (IS_TAURI) return tauriInvoke('vault_search_rust', { query });
+        const res = await apiFetch(`/api/vault/search?q=${encodeURIComponent(query)}`);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        return res.json();
+    }
+
+    function noteAge(seconds) {
+        if (!seconds) return '';
+        const mins = Math.max(0, Math.round((Date.now() / 1000 - seconds) / 60));
+        if (mins < 60) return `${mins}m ago`;
+        if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+        return `${Math.round(mins / 1440)}d ago`;
+    }
+
+    /* One row in the list. The ★ marks a note the companion reads at the start of every
+       single turn, which is worth being able to see: those three are the ones where a
+       stray line changes every answer it gives. */
+    function renderNoteRow(note, meta) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'w-full text-left px-2 py-1.5 rounded border border-cyan-500/20 ' +
+            'bg-slate-900/50 hover:border-cyan-400/60 hover:bg-slate-800/60 cursor-pointer';
+        const name = document.createElement('div');
+        name.className = 'font-mono text-[11px] text-cyan-200 truncate';
+        name.textContent = (note.core ? '★ ' : '') + note.name;
+        row.appendChild(name);
+        const sub = document.createElement('div');
+        sub.className = 'font-mono text-[10px] text-slate-500 truncate';
+        sub.textContent = meta;
+        row.appendChild(sub);
+        row.addEventListener('click', () => {
+            noteTrail = [];
+            openNote(note.name);
+        });
+        return row;
+    }
+
+    function renderNoteList(notes) {
+        notesList.textContent = '';
+        notesCache = notes;
+        if (!notes.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-[11px] font-mono text-slate-500';
+            empty.textContent = 'No notes yet. They appear as you talk.';
+            notesList.appendChild(empty);
+            notesCount.textContent = '';
+            return;
+        }
+        notes.forEach((n) => {
+            const size = n.bytes < 1024 ? `${n.bytes} B` : `${Math.round(n.bytes / 1024)} KB`;
+            notesList.appendChild(renderNoteRow(n, `${size} · ${noteAge(n.modified)}`));
+        });
+        notesCount.textContent = `${notes.length} note${notes.length === 1 ? '' : 's'}`;
+    }
+
+    function renderSearchResults(results) {
+        notesList.textContent = '';
+        const hits = (results && results.hits) || [];
+        if (!hits.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-[11px] font-mono text-slate-500';
+            empty.textContent = 'Nothing matched.';
+            notesList.appendChild(empty);
+            notesCount.textContent = '';
+            return;
+        }
+        hits.forEach((h) => {
+            notesList.appendChild(renderNoteRow({ name: h.note, core: false }, h.snippet));
+        });
+        /* `partial` means the scan hit its cap before the end of the vault, so saying
+           "3 results" without saying that would be claiming to have looked everywhere. */
+        notesCount.textContent = results.partial
+            ? `${hits.length} of the first ${results.scanned} notes`
+            : `${hits.length} match${hits.length === 1 ? '' : 'es'}`;
+    }
+
+    /* The inline bits of a line: **bold**, *italic*, `code` and [[links]]. Appends text
+       nodes and elements to `parent`; nothing here ever touches innerHTML. */
+    function renderInline(parent, text, onLink) {
+        const pattern = /\[\[([^\]\n]+)\]\]|`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*/g;
+        let last = 0;
+        let m;
+        while ((m = pattern.exec(text)) !== null) {
+            if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+            if (m[1] !== undefined) {
+                /* A wiki link. The part before a | is the note; the part after is what the
+                   writer wanted it called. */
+                const target = m[1].split('|')[0].trim();
+                const label = (m[1].split('|')[1] || target).trim();
+                const a = document.createElement('a');
+                a.className = 'text-cyan-300 underline decoration-cyan-500/40 cursor-pointer hover:text-cyan-100';
+                a.textContent = label;
+                a.addEventListener('click', (e) => { e.preventDefault(); onLink(target); });
+                parent.appendChild(a);
+            } else if (m[2] !== undefined) {
+                const c = document.createElement('code');
+                c.className = 'font-mono text-[12px] text-cyan-200 bg-slate-950/70 rounded px-1';
+                c.textContent = m[2];
+                parent.appendChild(c);
+            } else if (m[3] !== undefined) {
+                const b = document.createElement('strong');
+                b.className = 'text-cyan-100';
+                b.textContent = m[3];
+                parent.appendChild(b);
+            } else {
+                const i = document.createElement('em');
+                i.textContent = m[4];
+                parent.appendChild(i);
+            }
+            last = pattern.lastIndex;
+        }
+        if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+    }
+
+    /* A markdown renderer small enough to read in one sitting, rather than a library.
+       The vault writes a known and narrow subset -- headings, lists, quotes, tables as
+       plain lines, fenced code -- and a full parser would mean inheriting its opinions
+       about raw HTML in particular, which is the one opinion that matters here. */
+    function renderMarkdown(into, text, onLink) {
+        into.textContent = '';
+        const lines = text.split('\n');
+        let list = null;
+        let fence = null;
+        for (const line of lines) {
+            if (line.trimStart().startsWith('```')) {
+                if (fence) { into.appendChild(fence); fence = null; } else {
+                    fence = document.createElement('pre');
+                    fence.className = 'font-mono text-[11px] text-cyan-200 bg-slate-950/70 rounded p-2 overflow-x-auto my-2';
+                }
+                continue;
+            }
+            if (fence) { fence.appendChild(document.createTextNode(line + '\n')); continue; }
+
+            const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+            const bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+            if (!bullet && list) { into.appendChild(list); list = null; }
+
+            if (heading) {
+                const h = document.createElement(`h${Math.min(4, heading[1].length + 1)}`);
+                h.className = 'font-orbitron text-cyan-300 mt-3 mb-1 ' +
+                    (heading[1].length === 1 ? 'text-sm' : 'text-xs');
+                renderInline(h, heading[2], onLink);
+                into.appendChild(h);
+            } else if (bullet) {
+                if (!list) {
+                    list = document.createElement('ul');
+                    list.className = 'list-disc pl-5 space-y-0.5 my-1 text-[13px]';
+                }
+                const li = document.createElement('li');
+                renderInline(li, bullet[1], onLink);
+                list.appendChild(li);
+            } else if (line.trim() === '') {
+                continue;
+            } else if (line.startsWith('>')) {
+                const q = document.createElement('blockquote');
+                q.className = 'border-l-2 border-cyan-500/40 pl-2 text-slate-400 my-1 text-[13px]';
+                renderInline(q, line.replace(/^>\s?/, ''), onLink);
+                into.appendChild(q);
+            } else {
+                const p = document.createElement('p');
+                p.className = 'my-1 text-[13px]';
+                renderInline(p, line, onLink);
+                into.appendChild(p);
+            }
+        }
+        if (list) into.appendChild(list);
+        if (fence) into.appendChild(fence);
+    }
+
+    function showNoteError(message) {
+        notesBody.textContent = '';
+        const p = document.createElement('p');
+        p.className = 'text-[11px] font-mono text-amber-300';
+        p.textContent = message;
+        notesBody.appendChild(p);
+        notesBacklinks.classList.add('hidden');
+    }
+
+    async function openNote(name) {
+        notesTitle.textContent = name;
+        try {
+            const view = await fetchNote(name);
+            renderMarkdown(notesBody, view.text, (target) => {
+                /* A link the note names but nobody has written yet resolves to nothing.
+                   Say so rather than opening an empty page or failing silently. */
+                const link = (view.links || []).find((l) => l.target === target);
+                if (link && !link.note) {
+                    showNoteError(`"${target}" is linked from here but no such note exists yet.`);
+                    notesTitle.textContent = target;
+                    return;
+                }
+                noteTrail.push(name);
+                if (noteTrail.length > 50) noteTrail.shift();
+                openNote(link && link.note ? link.note : target);
+            });
+            if (view.truncated) {
+                const cut = document.createElement('p');
+                cut.className = 'text-[11px] font-mono text-amber-300 mt-3';
+                cut.textContent = 'This note is too big to show all of — open the folder to read the rest.';
+                notesBody.appendChild(cut);
+            }
+            notesBody.scrollTop = 0;
+            renderBacklinks(view.backlinks || []);
+        } catch (err) {
+            showNoteError(`Could not open that note: ${err.message || err}`);
+        }
+        btnNotesBack.classList.toggle('hidden', noteTrail.length === 0);
+    }
+
+    /* What points *at* this note. The links out of a note are in the text where you can
+       see them; the ones pointing in are the half of the graph a plain editor hides. */
+    function renderBacklinks(names) {
+        notesBacklinks.textContent = '';
+        if (!names.length) { notesBacklinks.classList.add('hidden'); return; }
+        notesBacklinks.classList.remove('hidden');
+        const label = document.createElement('div');
+        label.className = 'text-cyan-300';
+        label.textContent = `Linked from (${names.length}):`;
+        notesBacklinks.appendChild(label);
+        const row = document.createElement('div');
+        row.className = 'flex flex-wrap gap-x-3 gap-y-1';
+        names.forEach((n) => {
+            const a = document.createElement('a');
+            a.className = 'text-cyan-400 underline decoration-cyan-500/40 cursor-pointer hover:text-cyan-100';
+            a.textContent = n;
+            a.addEventListener('click', () => {
+                noteTrail.push(notesTitle.textContent);
+                openNote(n);
+            });
+            row.appendChild(a);
+        });
+        notesBacklinks.appendChild(row);
+    }
+
+    btnNotesBack.addEventListener('click', () => {
+        const previous = noteTrail.pop();
+        if (previous) openNote(previous);
+        btnNotesBack.classList.toggle('hidden', noteTrail.length === 0);
+    });
+
+    /* Typing runs the same search the companion uses on the vault, so what you find here
+       is what it would have found. Debounced: every keystroke scanning the folder would
+       make a big vault feel broken. */
+    let notesSearchTimer = null;
+    notesSearch.addEventListener('input', () => {
+        clearTimeout(notesSearchTimer);
+        const query = notesSearch.value.trim();
+        notesSearchTimer = setTimeout(async () => {
+            if (!query) { renderNoteList(notesCache); return; }
+            try {
+                renderSearchResults(await fetchNoteSearch(query));
+            } catch (err) {
+                console.warn('Note search failed:', err);
+            }
+        }, 250);
+    });
+
+    async function openNotesReader() {
+        voiceEngine.playSFX('click');
+        notesModal.classList.remove('hidden');
+        notesSearch.value = '';
+        noteTrail = [];
+        btnNotesBack.classList.add('hidden');
+        try {
+            renderNoteList(await fetchNotes());
+        } catch (err) {
+            notesList.textContent = '';
+            const p = document.createElement('p');
+            p.className = 'text-[11px] font-mono text-amber-300';
+            p.textContent = `Could not read the notes folder: ${err.message || err}`;
+            notesList.appendChild(p);
+        }
+    }
+
+    document.getElementById('btn-notes')?.addEventListener('click', openNotesReader);
+    document.getElementById('btn-read-notes')?.addEventListener('click', () => {
+        settingsModal.classList.add('hidden');
+        openNotesReader();
+    });
+    document.getElementById('btn-notes-open-folder')?.addEventListener('click', openVaultFolder);
+    document.getElementById('btn-close-notes').addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        notesModal.classList.add('hidden');
+    });
+
     const btnActivity = document.getElementById('btn-activity');
     const activityModal = document.getElementById('activity-modal');
     btnActivity.addEventListener('click', () => {

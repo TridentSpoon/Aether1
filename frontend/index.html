@@ -172,6 +172,7 @@
                     <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
                     <button id="btn-setup" class="hud-slideout-action" role="menuitem">🧠 Set up the AI</button>
                     <button id="btn-voice-setup" class="hud-slideout-action" role="menuitem">🗣 Set up the voice</button>
+                    <button id="btn-notes" class="hud-slideout-action" role="menuitem">📓 Notes</button>
                     <button id="btn-activity" class="hud-slideout-action" role="menuitem">📜 Activity</button>
                     <button id="btn-clear-chat" class="hud-slideout-action" role="menuitem">🗑️ Clear conversation</button>
                     <button id="btn-settings" class="hud-slideout-action" role="menuitem">⚙️ Settings</button>
@@ -450,6 +451,47 @@
                 and recorded a way back can be undone here.
             </p>
             <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
+        </div>
+    </div>
+
+    <!-- THE NOTES READER -- the vault, read inside Aether1.
+         Read-only on purpose, and that is a boundary rather than a missing feature: notes
+         are changed through the tools, behind the consent path, with a way back. A reader
+         that could also write would be a second door into the same folder that nothing
+         had approved. The folder is still just markdown on disk, so Obsidian or any
+         editor opens the same notes; this is for when you do not want to leave. -->
+    <div id="notes-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel w-full max-w-5xl p-6 rounded-lg space-y-3 max-h-[92vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    📓 NOTES
+                </h2>
+                <div class="flex items-center gap-2">
+                    <button id="btn-notes-open-folder" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Folder</button>
+                    <button id="btn-close-notes" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
+                </div>
+            </div>
+            <div class="flex gap-4 flex-1 min-h-0">
+                <!-- The list. Search runs the same search the companion itself uses on the
+                     vault, so what you find here is what it would have found. -->
+                <div class="w-64 shrink-0 flex flex-col gap-2 min-h-0">
+                    <input id="notes-search" type="search" placeholder="Search your notes…"
+                           class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-xs text-cyan-100 font-mono">
+                    <div id="notes-list" class="flex-1 overflow-y-auto space-y-1 pr-1"></div>
+                    <div id="notes-count" class="text-[10px] font-mono text-slate-500"></div>
+                </div>
+                <!-- The note. -->
+                <div class="flex-1 min-w-0 flex flex-col gap-2">
+                    <div class="flex items-center gap-2 min-h-[1.5rem]">
+                        <button id="btn-notes-back" class="hidden text-[11px] font-mono text-cyan-300 hover:text-cyan-100 cursor-pointer">← Back</button>
+                        <span id="notes-title" class="font-mono text-xs text-cyan-300 truncate"></span>
+                    </div>
+                    <div id="notes-body" class="flex-1 overflow-y-auto bg-slate-900/60 border border-cyan-500/20 rounded p-4 text-sm text-slate-200 leading-relaxed note-render">
+                        <p class="text-xs font-mono text-slate-500">Pick a note on the left.</p>
+                    </div>
+                    <div id="notes-backlinks" class="hidden text-[11px] font-mono text-slate-400 border-t border-cyan-500/20 pt-2 space-y-1"></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1084,6 +1126,7 @@
                         <label for="setting-vault-path" class="text-xs font-mono text-cyan-300 block">NOTES FOLDER</label>
                         <input id="setting-vault-path" type="text" placeholder="~/Aether1Vault" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                         <div class="flex items-center gap-2">
+                            <button id="btn-read-notes" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📓 Read Them Here</button>
                             <button id="open-vault-folder" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Open Folder</button>
                             <span id="vault-folder-status" class="text-[10px] font-mono text-slate-400"></span>
                         </div>
@@ -1268,7 +1311,7 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=39"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=49"></script>
+    <script src="js/app.js?v=50"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=2"></script>
 </body>

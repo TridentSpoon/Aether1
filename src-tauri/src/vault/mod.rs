@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::llm::MemoryDb;
 
 pub mod consulted;
+pub mod reader;
 pub mod search;
 
 /// Cuts `text` to at most `limit` *characters*, adding an ellipsis when it does.

@@ -773,6 +773,33 @@ fn open_vault_folder_rust(engine: tauri::State<LlmEngine>) -> Result<(), String>
     commands::open_vault_folder(&engine)
 }
 
+/// Rust-native equivalent of GET /api/vault/notes.
+#[tauri::command(async)]
+fn vault_notes_rust(engine: tauri::State<LlmEngine>) -> Vec<vault::reader::NoteSummary> {
+    commands::vault_notes(&engine)
+}
+
+/// Rust-native equivalent of GET /api/vault/note?name=...
+#[tauri::command(async)]
+fn vault_note_rust(
+    engine: tauri::State<LlmEngine>,
+    name: String,
+) -> Result<vault::reader::NoteView, String> {
+    commands::vault_note(&engine, &name)
+}
+
+/// Rust-native equivalent of GET /api/vault/graph.
+#[tauri::command(async)]
+fn vault_graph_rust(engine: tauri::State<LlmEngine>) -> vault::reader::Graph {
+    commands::vault_graph(&engine)
+}
+
+/// Rust-native equivalent of GET /api/vault/search?q=...
+#[tauri::command(async)]
+fn vault_search_rust(engine: tauri::State<LlmEngine>, query: String) -> serde_json::Value {
+    commands::vault_search(&engine, &query)
+}
+
 /// Rust-native equivalent of GET /api/settings (backend/main.py) -- same default-filling
 /// behavior, so a fresh install (no settings rows yet) still gets sensible values.
 #[tauri::command(async)]
@@ -1146,6 +1173,10 @@ fn main() {
             clear_messages_rust,
             reset_benchmarks_rust,
             open_vault_folder_rust,
+            vault_notes_rust,
+            vault_note_rust,
+            vault_graph_rust,
+            vault_search_rust,
             get_settings_rust,
             save_settings_rust,
             generate_speech_rust,

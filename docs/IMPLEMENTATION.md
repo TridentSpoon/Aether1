@@ -1602,6 +1602,52 @@ that project ships no pre-built binaries — so `pip install piper-tts` is now t
 route on every platform and the old release zips are labelled for what they are: the last
 ready-made builds the original project made, frozen.
 
+### Step 39: reading the vault without leaving — **shipped**
+
+The vault was always readable: it is markdown in a folder, and Obsidian opens it. The
+operator's question was whether it could be read *in Aether1*, and the honest answer was
+that everything needed already existed on disk and nothing exposed it.
+
+**Read-only is a boundary, not a missing half.** `vault/reader.rs` does not write, rename,
+create or delete, and no part of it can be extended to without that being a visible change.
+Notes are changed through the tools — `write_note`, `archive_note` and the rest — which ask
+before they touch a file and record a way back. A reader with a Save button would be a
+second door into the same folder with neither the consent path nor the undo attached to it,
+and the first thing that door would be used for is `profile.md`, which is loaded into every
+single conversation.
+
+**Every name is checked twice, and the second check is the one that matters.**
+`vault::resolve_note` refuses an empty, absolute or non-`.md` name and any `..` or `.`
+segment, all before a filesystem call is made. That is a check on the *shape* of a name,
+and shape is exactly what a symlink defeats: `link.md` sitting inside the vault and
+pointing at `~/.ssh/id_ed25519` is a perfectly ordinary relative name. So every read also
+goes through `vault::note_in_vault`, which canonicalises both sides and asks where the path
+actually lands. Both are pinned by tests rather than left to be inferred from the code, and
+the HTTP route answers 404 identically for a note that does not exist and a name that was
+never allowed — a probe cannot use the difference between those two answers to map the
+disk.
+
+**Links are resolved by name, and the unresolved ones are reported rather than hidden.**
+`[[profile]]` means `profile.md` wherever it currently lives, which is what lets a note be
+archived without breaking a single link pointing at it. A link naming a note nobody has
+written yet comes back with `note: null` and the reader says so, because a link to a note
+that does not exist is usually the companion telling you what it meant to write next.
+Backlinks — which notes point *at* this one — are the half of the graph an editor hides,
+and they are the reason `reader.rs` scans the folder rather than just reading one file.
+
+**The markdown renderer is small on purpose.** Note text is written half by the operator
+and half by the model, and it ends up on a page: a full markdown library would mean
+inheriting its opinions about raw HTML, which is the one opinion that matters here. The
+renderer in `app.js` handles headings, lists, quotes, fenced code, `**bold**`, `*italic*`,
+`` `code` `` and `[[links]]`, and every piece of note text reaches the page as a text node.
+A note containing `<script>` renders the word `<script>`. That is checked in a browser, not
+assumed.
+
+Four routes, wired through all three transports as everything here is: `/api/vault/notes`,
+`/api/vault/note`, `/api/vault/graph` and `/api/vault/search`, with `vault_*_rust`
+alongside them. The graph route has no UI yet — it is step 40's — and is shipped now
+because it is the same scan the backlinks already do.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
