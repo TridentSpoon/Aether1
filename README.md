@@ -479,24 +479,28 @@ default.
 
 ## Rearranging the HUD
 
-The main window is three columns of panels, and both what is in them and how wide
-they are is yours to change.
+The main window is a free-form grid, a bit like the home screen on a phone: every panel
+has a place on it and a size, and both are yours to change.
 
-- **Move a panel:** drag it by the dotted strip along its top edge. Drop it above or
-  below another panel, or in a different column -- a glowing line shows where it will
-  land. If you empty a column completely it shrinks to a narrow strip labelled
-  DROP A PANEL HERE, so you can always put something back.
-- **Resize the columns:** drag the divider between two of them. Only those two
-  change; the third stays where it is. Double-click a divider to put the widths back.
-- **Keyboard:** tab to a panel's grip and use the arrow keys to move it, or to a
-  divider and use left/right to resize.
-
+- **Move a panel:** drag it by the dotted strip along its top edge. Drop it anywhere
+  there is room.
+- **Resize a panel:** drag the little handle in its bottom-right corner. It grows until
+  it would run into a neighbour, then stops rather than shoving anything aside.
+- **Keyboard:** tab to a panel's grip and use the arrow keys to move it.
 - **Switch a panel off entirely:** Settings → **Panels to show**, in the HUD LAYOUT
   section. Untick one and it is gone — not hidden behind something, *not running*. The
   avatar in particular genuinely stops drawing when its panel is off, rather than carrying
   on burning the graphics card behind a box you cannot see.
 
-All three are remembered on this machine and survive a restart, and none of them is saved
+**Resizing the window resizes the panels.** Sideways it always has: a panel that takes a
+third of the width takes a third of the width at any size. Up and down it now does too --
+the shipped arrangement is scaled to fit the height of the window, so on a laptop screen you
+see the whole avatar instead of scrolling down to find the bottom of it. There is a floor:
+on a very short window the panels stop shrinking, because a panel squeezed past the point of
+being readable is worse than a scrollbar. Narrower than about 1000 pixels the grid gives up
+on arranging things altogether and stacks everything into one readable column.
+
+All of this is remembered on this machine and survives a restart, and none of it is saved
 with your settings — a layout is a property of the screen you are sitting at, so a second
 machine pointed at the same companion can be arranged completely differently. Settings has a
 **Reset panels to their default places** button when you want the original layout back,

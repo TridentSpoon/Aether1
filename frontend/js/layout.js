@@ -22,8 +22,20 @@
        css/layout.css -- the drag/resize math converts pointer pixels to
        cells using these same numbers. */
     const COLS = 12;
-    const ROW_PX = 24;
     const GAP_PX = 10;
+
+    /* Row height is not a constant. Columns have always been twelfths of the
+       window, so panels follow its width; rows were a fixed 24px, so they
+       followed nothing -- the default arrangement wanted about 1250px of height
+       and simply ran off the bottom of any ordinary laptop, avatar and all.
+       ROW_PX_MIN/MAX bound what a row may be scaled to: below the floor a panel
+       stops being readable, so the grid stops shrinking and the window scrolls
+       instead, which is the honest failure; above the ceiling a huge monitor
+       would be handing panels height their contents have no use for. */
+    const ROW_PX_MIN = 14;
+    const ROW_PX_MAX = 48;
+    const ROW_PX_FALLBACK = 24;
+    let rowPx = ROW_PX_FALLBACK;
 
     /* A panel smaller than this is not a panel, it is a sliver you cannot
        read and cannot easily grab your way out of. */
@@ -54,6 +66,20 @@
             h: parseInt(panel.dataset.gridH, 10) || 12,
         });
     });
+
+    /* How many rows the arrangement in index.html reaches down to. This is what
+       a row is scaled against, and it is deliberately taken from the defaults
+       rather than from where the panels are now. Scaling against the live
+       layout would make the grid always exactly fill the window, which sounds
+       better and is worse: drag a panel taller and every row would shrink to
+       compensate, so the panel would not actually get any bigger and the resize
+       handle would feel broken. Against a fixed reference, the shipped layout
+       fits the window at any height, and an operator who builds something
+       taller than it gets a scrollbar -- which is what they asked for. */
+    const DESIGN_ROWS = Math.max(
+        1,
+        ...Array.from(defaults.values(), (d) => d.row + d.h - 1)
+    );
 
     /* Live placement, keyed by panel id. This is the single source of truth
        for where things are; the custom properties on each panel are only a
@@ -286,6 +312,63 @@
         window.dispatchEvent(new Event('resize'));
     }
 
+    // ---- Fitting the grid to the window ---------------------------------------
+
+    /* Below this width the grid gives way to a single stacked column (see the
+       media query in css/layout.css), where rows are not used at all and
+       scaling one would be scaling nothing. Kept in step with that query. */
+    const GRID_MIN_WIDTH = 1024;
+
+    /* Work out how tall a row has to be for DESIGN_ROWS of them, and the gaps
+       between them, to fill the space the grid actually has. Returns the height
+       clamped into the readable range, so this never reports a row so short
+       that panels become slivers. */
+    function fitRowHeight() {
+        if (window.innerWidth < GRID_MIN_WIDTH) {
+            rowPx = ROW_PX_FALLBACK;
+            layout.style.removeProperty('--cell-h');
+            return;
+        }
+        const cs = getComputedStyle(layout);
+        const padTop = parseFloat(cs.paddingTop) || 0;
+        const padBottom = parseFloat(cs.paddingBottom) || 0;
+        /* clientHeight rather than scrollHeight: the question is how much room
+           is on the screen, not how much the panels currently take up -- using
+           the latter would feed the answer back into itself and never settle. */
+        const available = layout.clientHeight - padTop - padBottom;
+        const gaps = GAP_PX * (DESIGN_ROWS - 1);
+        const ideal = (available - gaps) / DESIGN_ROWS;
+        if (!Number.isFinite(ideal) || ideal <= 0) return;
+        /* Rounded down, not to nearest: half a pixel too generous per row is
+           thirty-seven half-pixels of overflow, and a scrollbar that appears to
+           show you eleven pixels of nothing is worse than eleven pixels of
+           margin at the bottom. */
+        rowPx = Math.floor(Math.min(ROW_PX_MAX, Math.max(ROW_PX_MIN, ideal)));
+        layout.style.setProperty('--cell-h', rowPx + 'px');
+    }
+
+    /* Resize events arrive faster than anything useful can be done with them --
+       a dragged window corner fires one per frame or more -- and the work here
+       reads layout, so doing it per event would thrash. One pass per frame, and
+       only if a frame is not already booked. */
+    let fitQueued = false;
+    function queueFit() {
+        if (fitQueued) return;
+        fitQueued = true;
+        requestAnimationFrame(() => {
+            fitQueued = false;
+            fitRowHeight();
+            /* Panels that measure themselves -- the terminal sizes its shell
+               from its box -- need to hear about it after the row height has
+               landed, not before. */
+            document.dispatchEvent(new CustomEvent('aether1:panels-changed', {
+                detail: { id: null, on: null, reason: 'window-resize' },
+            }));
+        });
+    }
+
+    window.addEventListener('resize', queueFit);
+
     // ---- Grid geometry --------------------------------------------------------
 
     function metrics() {
@@ -299,7 +382,7 @@
             left: rect.left + padLeft,
             top: rect.top + padTop,
             colPitch: (contentWidth + GAP_PX) / COLS,
-            rowPitch: ROW_PX + GAP_PX,
+            rowPitch: rowPx + GAP_PX,
         };
     }
 
@@ -497,5 +580,6 @@
     const resetButton = document.getElementById('btn-reset-layout');
     if (resetButton) resetButton.addEventListener('click', resetLayout);
 
+    fitRowHeight();
     applySaved();
 })();

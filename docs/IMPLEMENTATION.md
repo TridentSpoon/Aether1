@@ -1821,6 +1821,46 @@ domain, approval, elevation or any operator setting. The shell is not asked to s
 history; that file is the operator's own tool. Building a terminal into the app made this
 urgent rather than theoretical, because Aether1 is now the thing writing that file.
 
+### Step 43: the grid follows the window in both directions — **shipped**
+
+Columns were `minmax(0, 1fr)` and rows were a flat `24px`, so the HUD had always been half
+responsive: panels tracked the window's width and ignored its height entirely. Measured, the
+default arrangement wanted 1248px of panel and 1280px of page — on a 1000px-tall window the
+avatar panel stayed 1248px tall and more than a third of it sat below the fold, and the
+window getting taller bought dead space rather than bigger panels.
+
+`--cell-h` is now computed by `layout.js` on every resize instead of being a constant, so the
+shipped arrangement fills the height it is given. Three things make that safe rather than
+clever:
+
+**It is scaled against the default layout, not the live one.** `DESIGN_ROWS` is the lowest
+row the markup reaches (37), captured from `data-grid-*` alongside the existing defaults.
+Scaling against the *current* placement is the obvious move and the wrong one: the grid would
+then always exactly fill the window, so dragging a panel taller would shrink every row to
+compensate and the panel would not visibly grow — a resize handle that appears not to work.
+Against a fixed reference the shipped layout fits at any height and an operator who builds
+something taller gets a scrollbar, which is what they asked for by building it.
+
+**The clamp is the interesting part, not the arithmetic.** `ROW_PX_MIN = 14` is where the
+grid stops shrinking and lets the window scroll instead; below it panels stop being readable,
+and a scrollbar is the honest failure. `ROW_PX_MAX = 48` keeps a very large monitor from
+handing panels height their contents have no use for. The result rounds *down*: half a pixel
+of generosity per row is 37 half-pixels of overflow, and a scrollbar offering eleven pixels
+of nothing is worse than eleven pixels of margin.
+
+**The drag math reads the same number.** `ROW_PX` was a constant used in exactly one place —
+`metrics().rowPitch` — so it became the live `rowPx` and the pointer-to-cell conversion
+follows the scale for free. Verified by dragging a resize handle three row-pitches at both
+24px and 14px rows and checking the panel grew by exactly three cells each time; the risk
+being guarded against is a grid that looks right and no longer lines up with the mouse.
+
+Below 1024px the existing media query replaces the grid with a stacked column, where rows are
+not used at all, so `fitRowHeight` removes the property and stands down rather than computing
+a number nothing reads. `--cell-h: 24px` stays in the stylesheet as the value the grid uses
+before the script runs and falls back to if it never does — a layout that works rather than
+one that collapses. Resize events are coalesced to one pass per frame, and that pass ends by
+dispatching `aether1:panels-changed`, which is how the terminal hears that its box moved.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
