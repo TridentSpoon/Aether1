@@ -27,6 +27,17 @@ HologramAvatar.prototype.animate = function() {
        carrying on, not one that stopped when you looked away. */
     if (typeof document !== 'undefined' && document.hidden) return;
 
+    /* The same argument one level down: the window can be visible while this
+       particular panel is switched off in Settings. `offsetParent` is null for an
+       element with no layout box, which is exactly what `display: none` on any
+       ancestor produces -- so this needs to know nothing about panels, and holds
+       for a collapsed column or a hidden tab just as well. Guarded because a
+       `position: fixed` canvas also reports null, and the desktop sprite window
+       uses one. */
+    const canvas = this.renderer && this.renderer.domElement;
+    if (canvas && canvas.offsetParent === null &&
+        getComputedStyle(canvas).position !== 'fixed') return;
+
     const elapsedTime = this.clock.getElapsedTime();
 
     let audioSum = 0;

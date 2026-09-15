@@ -491,9 +491,16 @@ they are is yours to change.
 - **Keyboard:** tab to a panel's grip and use the arrow keys to move it, or to a
   divider and use left/right to resize.
 
-Both are remembered on this machine and survive a restart. Settings has a
-**Reset panels to their default places** button when you want the original layout
-back.
+- **Switch a panel off entirely:** Settings → **Panels to show**, in the HUD LAYOUT
+  section. Untick one and it is gone — not hidden behind something, *not running*. The
+  avatar in particular genuinely stops drawing when its panel is off, rather than carrying
+  on burning the graphics card behind a box you cannot see.
+
+All three are remembered on this machine and survive a restart, and none of them is saved
+with your settings — a layout is a property of the screen you are sitting at, so a second
+machine pointed at the same companion can be arranged completely differently. Settings has a
+**Reset panels to their default places** button when you want the original layout back,
+which also switches every panel back on.
 
 ## Themes
 
@@ -606,8 +613,12 @@ click from being open in your own editor. (In a browser tab it copies the path i
 a tab on your phone cannot open a folder on your desktop, and pretending otherwise would be
 worse than saying so.)
 
-**Your conversations are in there too.** Every exchange is appended to a note named after
-today's date inside `daily/`, as it happens, with no approval card. That is deliberate: this
+**Your conversations are in there too, word for word.** Every exchange is appended to a note
+named after today's date inside `daily/`, as it happens, with no approval card, and nothing
+is shortened on the way in. A day talkative enough to outgrow one note carries on in
+`2026-09-15-2.md` rather than being cut — partly so each note stays readable, and partly
+because a note past half a megabyte is one the companion's own search will not open, and the
+one day it cannot search should not be the day you said the most. That is deliberate: this
 only ever writes into the folder that exists to hold your memory, and asking you to approve
 your own conversation being remembered would be a question with one answer. There is a
 checkbox for it under the vault path in Settings — **Keep a dated note of each conversation**

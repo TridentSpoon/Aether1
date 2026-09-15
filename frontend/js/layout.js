@@ -46,6 +46,14 @@
         return Array.from(column.querySelectorAll(':scope > [data-panel]'));
     }
 
+    /* Only the panels actually on screen. A switched-off panel keeps its place in
+       the column so that switching it back on returns it where it was rather than
+       to a default -- but as far as "is this column empty" is concerned it is not
+       there, because the operator cannot see it. */
+    function visiblePanelsOf(column) {
+        return panelsOf(column).filter((p) => !p.classList.contains('panel-off'));
+    }
+
     function allPanels() {
         return Array.from(layout.querySelectorAll('[data-panel]'));
     }
@@ -61,7 +69,7 @@
 
     function markEmptyColumns() {
         columns.forEach((column, i) => {
-            const empty = panelsOf(column).length === 0;
+            const empty = visiblePanelsOf(column).length === 0;
             const wasEmpty = column.classList.contains('is-empty');
             column.classList.toggle('is-empty', empty);
             if (empty && !wasEmpty) {
@@ -82,9 +90,15 @@
 
     function save() {
         const state = {
-            version: 1,
+            version: 2,
             columns: columns.map((column) => panelsOf(column).map((p) => p.dataset.panel)),
             widths: columns.map((column, i) => stashedWidth[i] ?? columnWidth(i)),
+            /* Stored as the list of panels switched OFF rather than the list left on.
+               A panel added to the HUD in a later version is then on by default for
+               somebody with a saved layout, instead of silently missing because their
+               stored "on" list was written before it existed. */
+            off: allPanels().filter((p) => p.classList.contains('panel-off'))
+                .map((p) => p.dataset.panel),
         };
         try {
             localStorage.setItem(STORE_KEY, JSON.stringify(state));
@@ -102,7 +116,11 @@
         } catch (err) {
             return null;
         }
-        if (!state || state.version !== 1 || !Array.isArray(state.columns)) return null;
+        /* Version 1 is read as well as 2: it is the same shape without `off`, and an
+           operator who arranged their HUD before panels could be switched off should
+           not have that arrangement thrown away for it. */
+        if (!state || (state.version !== 1 && state.version !== 2)) return null;
+        if (!Array.isArray(state.columns)) return null;
         return state;
     }
 
@@ -121,6 +139,11 @@
             state.widths.every((w) => Number.isFinite(w) && w > 0)) {
             applyWidths(state.widths);
         }
+
+        const off = new Set(Array.isArray(state.off) ? state.off : []);
+        allPanels().forEach((panel) => {
+            setPanelOn(panel, !off.has(panel.dataset.panel));
+        });
 
         const byId = new Map(allPanels().map((p) => [p.dataset.panel, p]));
         const placed = new Set();
@@ -155,6 +178,9 @@
             localStorage.removeItem(STORE_KEY);
         } catch (err) { /* nothing to undo */ }
         applyWidths(DEFAULT_WIDTHS);
+        // "Default places" includes being there at all -- a reset that left a panel
+        // switched off would look like a reset that did not work.
+        allPanels().forEach((panel) => setPanelOn(panel, true));
         allPanels().forEach((panel) => {
             const home = columns[defaultHome.get(panel.dataset.panel) ?? 0];
             if (home) home.appendChild(panel);
@@ -170,6 +196,7 @@
             });
         });
         markEmptyColumns();
+        renderToggles();
         settle();
     }
 
@@ -383,6 +410,57 @@
         });
     });
 
+    // ---- Switching a panel off ----------------------------------------------
+
+    /* Off is a class rather than the `hidden` attribute or an inline style, so the
+       stylesheet keeps the last word and nothing here has to know how a panel is
+       laid out. The panel stays in the DOM and stays in its column: switching it
+       back on must return it where it was, and a panel that was removed and
+       re-inserted would come back at the bottom. */
+    function setPanelOn(panel, on) {
+        panel.classList.toggle('panel-off', !on);
+    }
+
+    function panelLabel(panel) {
+        return panel.dataset.panelName || panel.dataset.panel;
+    }
+
+    /* One checkbox per panel, built from the markup rather than from a list kept
+       here -- adding a panel to index.html gives it a switch for free, the same way
+       `defaultHome` already gives it a home for free. */
+    function renderToggles() {
+        const host = document.getElementById('panel-toggles');
+        if (!host) return;
+        host.innerHTML = '';
+
+        allPanels().forEach((panel) => {
+            const id = panel.dataset.panel;
+            const row = document.createElement('label');
+            row.className = 'flex items-center gap-2 cursor-pointer';
+
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.className = 'rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0';
+            box.checked = !panel.classList.contains('panel-off');
+            box.addEventListener('change', () => {
+                setPanelOn(panel, box.checked);
+                markEmptyColumns();
+                // A panel coming back gets its scroll position and its canvas size
+                // put right, the same as one that has just been dragged.
+                settle();
+                save();
+            });
+            row.appendChild(box);
+
+            const text = document.createElement('span');
+            text.className = 'text-[11px] font-mono text-slate-300';
+            text.textContent = panelLabel(panel);
+            row.appendChild(text);
+
+            host.appendChild(row);
+        });
+    }
+
     // ---- Wiring -------------------------------------------------------------
 
     const resetButton = document.getElementById('btn-reset-layout');
@@ -390,4 +468,5 @@
 
     applySaved();
     markEmptyColumns();
+    renderToggles();
 })();

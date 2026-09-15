@@ -186,7 +186,7 @@
         <!-- LEFT PANEL: MODEL PERFORMANCE & SYSTEM GAUGES (3 Cols) -->
         <section class="hud-column" data-column="0">
             <!-- Model speed scoreboard and token/cost accounting -->
-            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens">
+            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens" data-panel-name="Model performance">
                 <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
                 <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Model Performance in its own window">⧉</button>
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
@@ -251,7 +251,7 @@
             </div>
 
             <!-- Hardware Telemetry -->
-            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware">
+            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware" data-panel-name="Hardware telemetry">
                 <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
                 <button type="button" class="panel-undock" data-undock="hardware" title="Open this panel in its own window" aria-label="Open Hardware Telemetry in its own window">⧉</button>
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
@@ -327,7 +327,7 @@
             </div>
 
             <!-- Tactical Commands -->
-            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands">
+            <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands" data-panel-name="Quick commands">
                 <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
                 <button type="button" class="panel-undock" data-undock="commands" title="Open this panel in its own window" aria-label="Open Quick Commands in its own window">⧉</button>
                 <h3 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">
@@ -354,7 +354,7 @@
 
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
         <section class="hud-column" data-column="1">
-        <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram">
+        <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-panel-name="The avatar">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <!-- Unlike the other panels' Undock, this one doesn't open a bordered copy of
                  itself -- it opens the existing floating "Desktop Sprite" window (see
@@ -389,7 +389,7 @@
 
         <!-- RIGHT PANEL: NEURAL TERMINAL & CHAT CONSOLE -->
         <section class="hud-column" data-column="2">
-        <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col rounded overflow-hidden" data-panel="chat">
+        <div class="hud-panel movable-panel panel-grow grip-inset flex flex-col rounded overflow-hidden" data-panel="chat" data-panel-name="Conversation">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-undock" data-undock="chat" title="Open this panel in its own window" aria-label="Open the Neural Dialogue Stream in its own window">⧉</button>
             <div class="bg-slate-950/60 border-b border-cyan-500/20 px-4 py-2.5 flex items-center justify-between">
@@ -763,6 +763,21 @@
                     🧱 HUD LAYOUT
                 </h3>
                 <span class="text-[11px] font-mono text-slate-400 block">Drag a panel by the dotted strip along its top to move it, within a column or into another one. Drag the dividers between the columns to make one wider. Both are remembered.</span>
+
+                <!-- Which panels exist at all. Filled in by layout.js from the markup, so a
+                     panel added to the HUD appears here without anyone having to remember
+                     to list it twice. Screen-local like the rest of this section: it is a
+                     property of this display, not of the companion, so it is not saved with
+                     the settings and a second screen can be arranged differently. -->
+                <div class="pt-1 space-y-1">
+                    <span class="text-[11px] font-mono text-cyan-300 block">Panels to show</span>
+                    <div id="panel-toggles" class="space-y-1"></div>
+                    <p class="text-[10px] font-mono text-slate-500 leading-snug">
+                        A panel you switch off is not running: the avatar stops drawing, and
+                        nothing hidden here is being kept up to date behind your back.
+                    </p>
+                </div>
+
                 <button id="btn-reset-layout" type="button" class="cyber-btn text-xs py-1.5 px-3">Reset panels to their default places</button>
             </div>
 
@@ -1083,8 +1098,10 @@
                             <label for="setting-vault-journal" class="text-xs font-mono text-slate-300">Keep a dated note of each conversation</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Every exchange is added to a note named after today's date, inside
-                            <span class="text-cyan-300">daily</span> in the folder above. No approval is
+                            Every exchange is added <em>word for word</em> to a note named after
+                            today's date, inside <span class="text-cyan-300">daily</span> in the folder
+                            above &mdash; nothing is shortened. A day long enough to outgrow one note
+                            carries on in the next one. No approval is
                             asked, because this only ever writes into its own folder. Switch it off and
                             conversations stay in the app and nowhere else. Everything else &mdash; what
                             it decides to remember <em>about</em> you &mdash; is still only written with
@@ -1249,10 +1266,10 @@
          js/hologram/avatar-loader.js -- the list of files now lives there, once, instead of
          being repeated in this page, sprite.html and avatar-lab.html. -->
     <script src="js/hologram/avatar-loader.js?v=1"></script>
-    <script src="js/hologram/animate.js?v=38"></script>
+    <script src="js/hologram/animate.js?v=39"></script>
     <script src="js/voice.js?v=17"></script>
     <script src="js/app.js?v=49"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
-    <script src="js/layout.js?v=1"></script>
+    <script src="js/layout.js?v=2"></script>
 </body>
 </html>

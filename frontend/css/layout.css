@@ -147,6 +147,15 @@
   padding-top: 14px;
 }
 
+/* A panel switched off in Settings. `display: none` rather than visibility or
+   opacity on purpose: it must take no space in its column, and it must take the
+   avatar's canvas out of the render tree -- animate.js skips a frame for a canvas
+   with no layout box, so switching the avatar off genuinely stops it drawing
+   rather than hiding a scene that carries on burning the GPU behind the panel. */
+.movable-panel.panel-off {
+  display: none !important;
+}
+
 /* ---- Drag states ---------------------------------------------------------- */
 
 .movable-panel {
