@@ -93,6 +93,20 @@ const DENIED_FRAGMENTS: &[&str] = &[
 ];
 
 /// File names that are refused outright, anywhere.
+///
+/// The shell history files are here for a reason worth writing down. A history file is a
+/// verbatim record of every command its owner typed, and people type secrets into commands
+/// -- an API key on a `curl` line, a password after `mysql -p`, a token exported into the
+/// environment. It reads as an ordinary dotfile in the home directory, which is an allowed
+/// root, so without this entry "read ~/.bash_history" is a single well-phrased sentence
+/// away from the last thousand things the operator did on this machine.
+///
+/// It became urgent with the built-in terminal (see src/terminal.rs). Before that, a
+/// history file was something an operator produced in some other application; now Aether1
+/// itself is the thing generating it, and a terminal the companion provably cannot reach
+/// would be a hollow promise if it could read the transcript afterwards. The shell is not
+/// asked to stop keeping history -- that is the operator's own tool working the way they
+/// set it up -- the file is simply not Aether1's to read.
 const DENIED_NAMES: &[&str] = &[
     ".env",
     "id_rsa",
@@ -100,6 +114,18 @@ const DENIED_NAMES: &[&str] = &[
     ".netrc",
     ".pgpass",
     "ntuser.dat",
+    ".bash_history",
+    ".zsh_history",
+    ".sh_history",
+    ".history",
+    ".zhistory",
+    ".python_history",
+    ".node_repl_history",
+    ".psql_history",
+    ".mysql_history",
+    ".sqlite_history",
+    ".lesshst",
+    "consolehost_history.txt",
 ];
 
 fn denied(path: &Path) -> bool {
@@ -478,5 +504,49 @@ mod tests {
     fn a_path_outside_every_root_is_refused() {
         let err = resolve_readable("/bin/sh").unwrap_err();
         assert!(err.contains("outside the paths"), "{err}");
+    }
+
+    #[test]
+    fn the_shell_history_is_never_readable() {
+        with_home(|home| {
+            // The home directory is an allowed root and these are ordinary dotfiles in it,
+            // so without the name rule each of these is one well-phrased sentence away
+            // from every command the operator has ever typed -- including the ones with a
+            // token or a password on the line.
+            for name in [
+                ".bash_history",
+                ".zsh_history",
+                ".python_history",
+                ".psql_history",
+                ".mysql_history",
+                ".lesshst",
+            ] {
+                let path = home.join(name);
+                write(
+                    &path,
+                    "curl -H 'Authorization: Bearer sk-secret' https://example.com\n",
+                );
+                let refused = resolve_readable(path.to_str().unwrap());
+                assert!(
+                    refused.is_err(),
+                    "{name} must never be readable, but it was allowed"
+                );
+            }
+
+            // The rule is about the name, not the place: a history file copied somewhere
+            // else is the same file with the same contents.
+            let elsewhere = home.join("backups").join(".bash_history");
+            write(&elsewhere, "sudo mysql -psecret\n");
+            assert!(resolve_readable(elsewhere.to_str().unwrap()).is_err());
+
+            // And it is not a blanket ban on dotfiles: the ordinary ones still read, or the
+            // companion could not answer a question about the operator's own setup.
+            let fine = home.join(".bashrc");
+            write(&fine, "alias ll='ls -la'\n");
+            assert!(
+                resolve_readable(fine.to_str().unwrap()).is_ok(),
+                "an ordinary dotfile should still be readable"
+            );
+        });
     }
 }

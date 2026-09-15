@@ -165,3 +165,10 @@ jobs:
       # only visible to someone looking at the panel.
       - name: Check the performance panel only reads fields the engine sends
         run: ./scripts/check_panel_fields.sh
+
+      # The terminal runs a real shell. It is safe to ship only because nothing but the
+      # native window can reach it -- no tool, no HTTP route, nothing persisted. Every one
+      # of those is the kind of property a reasonable-looking refactor removes silently, so
+      # it is checked rather than remembered.
+      - name: Check the terminal stays the operator's alone
+        run: ./scripts/check_terminal_isolation.sh

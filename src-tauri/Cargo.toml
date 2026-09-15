@@ -36,6 +36,8 @@ url = "2"
 mdns-sd = "0.21.3"
 bip39 = { version = "2.2.2", features = ["rand"] }
 sha2 = "0.11.0"
+portable-pty = "0.9.0"
+base64 = "0.22"
 
 [profile.release]
 panic = "abort"

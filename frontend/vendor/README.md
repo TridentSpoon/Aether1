@@ -15,6 +15,10 @@ These are local copies. Nothing here is fetched at runtime.
 | `three.min.js` | 3D rendering, for the avatars | three r128 (`three@0.128.0`) | npm, `build/three.min.js`, unmodified |
 | `fonts/*.woff2` | Orbitron 500/700/900, Rajdhani 500/600/700, Share Tech Mono 400 | `@fontsource/*` 5.3.0 | npm, latin subsets, unmodified |
 | `fonts.css` | `@font-face` rules pointing at those files | — | hand-written |
+| `xterm/xterm.js` | The terminal screen — draws a real shell inside the HUD panel | `@xterm/xterm` 5.5.0 | npm, `lib/xterm.js`, unmodified |
+| `xterm/xterm.css` | Its stylesheet | `@xterm/xterm` 5.5.0 | npm, `css/xterm.css`, unmodified |
+| `xterm/addon-fit.js` | Works out how many rows and columns fit the panel | `@xterm/addon-fit` 0.10.0 | npm, `lib/addon-fit.js`, unmodified |
+| `xterm/LICENSE` | The MIT licence those three are published under | — | npm, unmodified |
 
 `three r128` is the version the code was written against; the avatar code uses APIs that
 later releases changed, so this is a deliberate pin rather than a stale one.

@@ -232,6 +232,12 @@
         applyVisibility();
         save();
         settle();
+        /* A panel switched off has no layout box, so anything that measures itself --
+           the terminal, which has to tell the shell how many columns it has -- reads
+           zero while it is off and would keep that size when switched back on. The
+           event is generic rather than a call into the terminal: layout.js moves boxes
+           and should not know what is in them. */
+        document.dispatchEvent(new CustomEvent('aether1:panels-changed', { detail: { id, on } }));
     }
 
     /* One checkbox per panel, built from the markup rather than from a list kept

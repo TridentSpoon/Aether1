@@ -796,6 +796,48 @@ Because a persona now carries access, the companion cannot change its own person
 directive — those settings are out of reach of `set_aether_setting`, alongside API keys and its
 own permissions. "Switch persona to Security" is not something it may approve itself into.
 
+## Your own terminal
+
+There is a terminal in the HUD. It is a real one — the same shell you get from a terminal
+app, running as you, in your home folder, with a proper keyboard attached to it. `sudo` can
+ask you for your password. `yay` can ask you which package you meant. `htop` and `less`
+redraw when you resize the panel. That is the whole point: a box that only runs a command
+and prints what came back is not a terminal, and the moment you need it, it fails you.
+
+Click **▶ Start a shell** in the Terminal panel and type. Type `exit`, or press the button
+again, and it closes. If you don't want it there at all, switch the panel off like any other
+(**Rearranging the HUD**, above).
+
+### It is yours, and only yours
+
+The obvious worry about putting a shell inside an AI companion is the AI. So it was built so
+that your companion cannot reach it — not "is not allowed to", cannot:
+
+- **It is not a tool.** There is no `run_in_terminal` for the model to ask for. Nothing you
+  say in a conversation, and nothing the model reads from a web page or a note, can put a
+  character into it. The refusal list that already keeps the AI out of its own permissions
+  and its own conversations now keeps it out of the terminal too.
+- **It is not on the network.** The terminal exists only in the desktop app. It has no
+  address — there is no route for it in the browser server, so there is nothing to reach
+  over your LAN even with `--lan` on and a pairing token in hand. The code that runs it
+  isn't merely unrouted in `--serve` mode; that mode returns before the desktop app is ever
+  built, so it is never loaded at all. Open the HUD in a browser and the panel isn't there.
+- **Nothing is written down.** What you type and what comes back go from your keyboard to
+  the shell and back to the screen. None of it is stored, logged, put in the vault, or added
+  to the conversation the model sees.
+
+`scripts/check_terminal_isolation.sh` checks all three every time CI runs, so a future
+change that quietly connects the terminal to the AI fails the build rather than shipping.
+
+### One thing that came with it
+
+Shells keep a history file — `~/.bash_history` and friends — which is a verbatim record of
+every command you have typed, and people type passwords and API keys into commands. Your
+home folder is somewhere the AI may read, so until now it could have read that file. It
+can't any more: history files are on the same permanent deny list as your SSH keys, which no
+setting, persona or approval of yours can lift. That was true before there was a terminal
+here; building one made it urgent, because Aether1 would now be writing that file itself.
+
 ## Making your own avatar
 
 The avatar is a module of its own -- everything that draws it lives in
