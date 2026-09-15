@@ -40,6 +40,17 @@
   overflow: auto;
 }
 
+/* Tailwind's .overflow-hidden matches .movable-panel's specificity, so on a
+   panel carrying both classes source order alone decides the winner -- and
+   layout.css loading after tailwind.css let `overflow: auto` leak through.
+   A stray scrollbar there sits on top of .panel-resize in the same corner
+   and steals the drag, so the panel gets stuck too small to grab the handle
+   again. The extra class here outranks both on specificity instead of
+   relying on load order. */
+.movable-panel.overflow-hidden {
+  overflow: hidden;
+}
+
 /* ---- The grip -------------------------------------------------------------
    A strip along the top of every panel. Always visible rather than
    hover-revealed: a control you cannot see is a control nobody finds. */

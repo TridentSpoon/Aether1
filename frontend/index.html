@@ -350,6 +350,15 @@
                 <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="help">
                     ❓ Help Info
                 </button>
+                <!-- Not a quick-chip: this toggles real app state (stop background servers,
+                     hide the HUD) rather than sending a chat command. See set_game_mode_rust
+                     and the game-mode-changed handling in app.js. Native desktop app only --
+                     hidden by initStartupPerformance alongside the rest of that settings
+                     group, since there's no background server or window to manage from a
+                     browser tab. -->
+                <button id="btn-game-mode" type="button" class="hidden cyber-btn text-[11px] py-1.5 justify-center col-span-2">
+                    🎮 Game Mode: OFF
+                </button>
             </div>
         </div>
 
@@ -1317,6 +1326,64 @@
                             environment &mdash; the checkbox cannot switch it off.
                         </p>
                     </div>
+                </div>
+            </details>
+
+            <!-- ======================= STARTUP & PERFORMANCE ======================= -->
+            <!-- Native desktop app only -- login autostart, spawning Ollama and hiding the
+                 HUD window are all things a browser tab has no way to do. Hidden by default
+                 (see initStartupPerformance, mirroring initSpriteMode/initVersionAndUpdates)
+                 and shown once IS_TAURI is confirmed. -->
+            <details id="settings-group-startup" class="settings-group hidden">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">⚡ Startup &amp; Performance</span>
+                    <span class="settings-group-hint">what runs on login, and how to quiet it back down</span>
+                </summary>
+                <div class="settings-group-body">
+                    <div class="space-y-1">
+                        <div class="flex items-center gap-2">
+                            <input id="setting-autostart-app" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-autostart-app" class="text-xs font-mono text-slate-300">Launch AETHER1 at login</label>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                            Starts resident in the tray as soon as you log in, exactly like
+                            opening it by hand. Turning this off removes the login entry
+                            &mdash; it does not touch anything already running.
+                        </p>
+                    </div>
+
+                    <div class="space-y-1 pt-1">
+                        <div class="flex items-center gap-2">
+                            <input id="setting-autostart-ollama" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-autostart-ollama" class="text-xs font-mono text-slate-300">Start the local model server automatically</label>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                            When AETHER1 starts, also start Ollama if it isn't already
+                            running &mdash; the same thing the Quick Commands "Start Server"
+                            button does, just without you having to click it. Does nothing
+                            if Ollama isn't installed, or if something is already listening.
+                        </p>
+                    </div>
+
+                    <div class="space-y-1 pt-1">
+                        <div class="flex items-center gap-2">
+                            <input id="setting-voice-startup-audible" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-voice-startup-audible" class="text-xs font-mono text-slate-300">Speak the voice self-test out loud</label>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                            On launch, AETHER1 checks that speech really plays &mdash; not
+                            just that synthesis ran without error, but that audio was
+                            actually decoded and produced sound. On, you'll hear a short
+                            phrase confirming it. Off, the same check runs silently and
+                            only speaks up if it fails.
+                        </p>
+                    </div>
+
+                    <p class="text-[10px] font-mono text-slate-500 leading-snug pt-2">
+                        Game Mode -- stop the background servers and hide the HUD without
+                        quitting -- is a Quick Command, so it's one click away without
+                        opening Settings first. See 🎮 Game Mode in Tactical Quick Commands.
+                    </p>
                 </div>
             </details>
 
