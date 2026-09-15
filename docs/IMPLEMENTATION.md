@@ -1551,6 +1551,57 @@ have. Sending someone hunting through a folder tree that cannot exist is worse t
 nothing, and it is the same failure mode step 36 was about: a message that is confidently
 unhelpful.
 
+### Step 38: fetching the voice, and never the engine — **shipped**
+
+Step 36 made the voice failures legible. It did not remove them: every route to the good
+voice still ended with a human downloading two files by hand and putting them in the right
+folder, which was the remaining half of *"STILL voice eludes me."*
+
+Four options were on the table, and the one chosen draws a line that is worth writing down.
+
+**Piper is two things, and only one of them runs.** The engine is a program; a voice is a
+`.onnx` file of weights plus a small `.onnx.json` beside it. A voice fetched wrong costs
+garbled speech, because nothing in it is ever executed, marked executable, or put on a
+PATH — it is numbers handed to a program the operator installed themselves. An engine
+fetched wrong costs code execution. Those are not the same risk and `voice_download.rs`
+does not treat them as one: it fetches voices and never programs, and the engine stays a
+package-manager job in the wizard's steps.
+
+**The catalogue being a fixed table is a security property, not an editorial one.** Five
+voices, each a compile-time name paired with a compile-time path under the voice
+collection. A name that is not in the table is refused, so nothing the operator or the page
+can type becomes part of a URL or part of a file path: there is no request to redirect and
+no directory to traverse out of. A test spells this out with `../../../etc/passwd`,
+`en_GB-alba-medium/../../../tmp/x`, an absolute `https://` name and the empty string, and a
+second test asserts every catalogue entry is a plain name and a path under the collection.
+
+**Local-only mode refuses it, and the refusal lives beside the connection.** Not in
+`commands.rs`, which is one door of three, but in `voice_download::start`, which is where
+the socket is opened — so it cannot be walked around by reaching the HTTP route instead of
+the Tauri command. The picker asks the probe rather than guessing and greys its buttons out
+with the reason beside them; a button that silently refuses is how somebody decides the app
+is broken rather than doing as it was told.
+
+**A download in flight is never mistaken for a voice.** Bytes stream into `<name>.onnx.part`
+in 64 KiB chunks, the ceiling is enforced *while* they arrive rather than only from the
+announced `content-length`, a short read is detected and reported as *"the download stopped
+early"*, and the `.part` is removed on any failure. Only after the sidecar parses as JSON
+and the whole body has landed is the file renamed into place and put through
+`tts::voice_problem`. This closes the loop on step 36 from the other end: that step taught
+Aether1 to recognise a half-finished voice, and this one makes sure it never creates one.
+
+Hugging Face is unreachable from the build container, so `fetch` takes its base URL as a
+parameter and the eight tests drive the real code path against a real `TcpListener` — what
+is under test is that function, not a mock of it.
+
+The wizard changed with it. The by-hand voice step is now the button that is sitting
+directly beneath it, with the manual route kept underneath for a voice outside the short
+list; and the steps stopped pointing at `rhasspy/piper` as if it were current. It was
+archived in October 2025 and relicensed, development moved to `OHF-Voice/piper1-gpl`, and
+that project ships no pre-built binaries — so `pip install piper-tts` is now the first
+route on every platform and the old release zips are labelled for what they are: the last
+ready-made builds the original project made, frozen.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1566,9 +1617,10 @@ event log, honest token telemetry, and native tool calling.
 
 **Outstanding, in the order they are worth doing:**
 
-1. **Fetching Piper and a voice automatically.** Step 36 made the failures legible; it did
-   not remove them. Every route to the good voice still ends with a human downloading a
-   tarball and two files by hand, which is the remaining half of *"STILL voice eludes me."*
+1. **Installing the Piper engine automatically.** Step 38 took the voice half: Aether1
+   fetches the two files itself now. The engine is deliberately still a package-manager
+   job, because downloading something that runs is a different risk from downloading
+   something that is read — so this stays outstanding on purpose rather than by omission.
 2. **Push-to-talk from outside the HUD.** Both engines work; holding a key to talk from
    another application needs an OS-level press-and-hold the global-shortcut plugin does not
    express yet.

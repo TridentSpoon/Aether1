@@ -102,6 +102,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/setup/download", post(start_download))
         .route("/api/setup/downloads", get(download_status))
         .route("/api/setup/download/forget", post(forget_download))
+        .route("/api/voice/catalogue", get(voice_catalogue))
+        .route("/api/voice/download", post(start_voice_download))
+        .route("/api/voice/downloads", get(voice_download_status))
+        .route("/api/voice/download/forget", post(forget_voice_download))
         .route("/api/setup/start-server", post(start_local_server))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
@@ -578,6 +582,36 @@ async fn download_status() -> Json<serde_json::Value> {
 
 async fn forget_download(Query(q): Query<DownloadQuery>) -> Json<serde_json::Value> {
     Json(commands::forget_download(q.model_name.unwrap_or_default()))
+}
+
+#[derive(Deserialize)]
+struct VoiceQuery {
+    voice: Option<String>,
+}
+
+async fn voice_catalogue() -> Json<serde_json::Value> {
+    Json(commands::voice_catalogue())
+}
+
+async fn start_voice_download(
+    State(state): State<AppState>,
+    Query(q): Query<VoiceQuery>,
+) -> Json<serde_json::Value> {
+    let engine = state.engine.clone();
+    let voice = q.voice.unwrap_or_default();
+    Json(
+        tokio::task::spawn_blocking(move || commands::start_voice_download(&engine, voice))
+            .await
+            .expect("start_voice_download panicked"),
+    )
+}
+
+async fn voice_download_status() -> Json<serde_json::Value> {
+    Json(commands::voice_download_status())
+}
+
+async fn forget_voice_download(Query(q): Query<VoiceQuery>) -> Json<serde_json::Value> {
+    Json(commands::forget_voice_download(q.voice.unwrap_or_default()))
 }
 
 // Spawns the `ollama` already installed on this machine, with a fixed argument and no

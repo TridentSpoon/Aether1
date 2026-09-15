@@ -234,9 +234,10 @@ or `-devel`, install it, and re-run `./setup.sh`.
 Speaking (TTS) has three tiers, tried in that order by the default **Auto** engine so there
 is always something to speak with, on a machine that has done nothing but run setup:
 
-1. **[Piper](https://github.com/rhasspy/piper)** -- the best-sounding local voice, if you
-   install its binary plus a `.onnx` voice in `~/.local/share/piper/voices` (the offline
-   installer above does this for you). **Two traps here, and between them they account for
+1. **[Piper](https://github.com/OHF-Voice/piper1-gpl)** -- the best-sounding local voice,
+   if you install its binary (the offline installer above does this for you; otherwise
+   `pip install piper-tts`, or your package manager). The voice file itself Aether1 can
+   fetch for you -- see below. **Two traps here, and between them they account for
    most "I installed it and it still doesn't talk" reports** -- see below.
 2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
    says leaves your machine, and it needs a network.
@@ -249,13 +250,15 @@ is always something to speak with, on a machine that has done nothing but run se
 #### The two Piper traps
 
 **`piper` is the name of two unrelated programs.** The one you want is
-[Piper TTS](https://github.com/rhasspy/piper), which turns text into speech. The one you
+[Piper TTS](https://github.com/OHF-Voice/piper1-gpl), which turns text into speech. The one you
 will find first is [Piper](https://github.com/libratbag/piper), a GTK app for configuring
 gaming mice — and on Arch and CachyOS that is exactly what `sudo pacman -S piper` installs,
 because the mouse app is the one in the official repositories. Piper TTS is in the AUR:
 `yay -S piper-tts-bin`. On Debian and Ubuntu, `sudo apt install piper-tts`. On any
-distribution, the `linux_x86_64.tar.gz` from the releases page works without a package
-manager at all — unpack it and drop the `piper` program into `~/.local/bin`.
+distribution, `python3 -m pip install --user piper-tts` works without any package your
+distribution has to carry. (The old `linux_x86_64.tar.gz` release still works too, but it
+is frozen: the original `rhasspy/piper` repository was archived in October 2025 and
+development moved to `OHF-Voice/piper1-gpl`, which ships no pre-built binaries.)
 
 Aether1 no longer takes the name at its word. It asks each candidate binary what its
 options are and only accepts one that knows about `--model`, so a machine with the mouse app
@@ -270,6 +273,21 @@ natural mistake. Aether1 now checks for the sidecar — and for a plausible file
 catches a download that stopped halfway — before it reports a voice as installed.
 
 `en_GB-alba-medium` and `en_US-amy-medium` are good, ordinary-sounding places to start.
+
+**And you no longer have to fetch them yourself.** *Set up the voice* now has a short list
+of voices with a Download button beside each. Aether1 downloads both of the files a voice
+is made of, into the folder it already looks in, and shows a progress bar while it does —
+so the "two files, not one" trap above is one you can only fall into if you go and do it by
+hand anyway.
+
+It fetches voices and never programs. A voice file is sound turned into numbers, handed to
+an engine you installed yourself; nothing downloaded here is executed, marked executable or
+put on your PATH, and Piper itself still comes from your package manager. The list is a
+fixed table built into Aether1, so nothing you or the page can type ever becomes part of a
+web address or a folder name. Bytes land in a `.part` file that is only renamed once the
+whole voice has arrived and been checked, so an interrupted download leaves nothing behind
+that looks usable. And in **local-only mode it does not run at all** — the buttons go dead
+with the reason printed beside them, rather than quietly reaching the internet.
 
 Listening (STT) only has the first two of those -- there is no universal OS-level
 equivalent to fall back to yet:

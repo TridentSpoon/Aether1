@@ -31,6 +31,7 @@ mod server;
 mod setup;
 mod tools;
 mod vault;
+mod voice_download;
 mod voice_setup;
 
 use std::path::PathBuf;
@@ -652,6 +653,26 @@ fn forget_download_rust(model_name: String) -> serde_json::Value {
 }
 
 #[tauri::command(async)]
+fn voice_catalogue_rust() -> serde_json::Value {
+    commands::voice_catalogue()
+}
+
+#[tauri::command(async)]
+fn start_voice_download_rust(engine: tauri::State<LlmEngine>, voice: String) -> serde_json::Value {
+    commands::start_voice_download(&engine, voice)
+}
+
+#[tauri::command(async)]
+fn voice_download_status_rust() -> serde_json::Value {
+    commands::voice_download_status()
+}
+
+#[tauri::command(async)]
+fn forget_voice_download_rust(voice: String) -> serde_json::Value {
+    commands::forget_voice_download(voice)
+}
+
+#[tauri::command(async)]
 fn start_local_server_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::start_local_server(&engine)
 }
@@ -1106,6 +1127,10 @@ fn main() {
             start_download_rust,
             download_status_rust,
             forget_download_rust,
+            voice_catalogue_rust,
+            start_voice_download_rust,
+            voice_download_status_rust,
+            forget_voice_download_rust,
             start_local_server_rust,
             get_static_info_rust,
             get_tools_rust,

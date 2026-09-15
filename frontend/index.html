@@ -559,6 +559,23 @@
                 <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">🔊 SPEAKING OUT LOUD</h3>
                 <div id="voice-speaking" class="voice-half"></div>
                 <ol id="voice-speaking-steps" class="space-y-2"></ol>
+
+                <!-- Piper needs two separate things, and only one of them is a program.
+                     The engine is a package-manager job and stays in the steps above;
+                     a voice is a pair of files Aether1 can fetch for itself, so it
+                     offers to. Hidden until the catalogue loads -- an empty box with a
+                     heading on it is just a question nobody asked. -->
+                <div id="voice-picker" class="hidden bg-slate-900/60 border border-cyan-500/20 rounded p-3 space-y-2">
+                    <div class="font-orbitron text-[11px] font-bold text-cyan-300 tracking-wider">PICK A BETTER VOICE</div>
+                    <p id="voice-picker-note" class="text-[11px] font-mono text-slate-400 leading-snug">
+                        These are voice files for Piper &mdash; recordings turned into numbers,
+                        not programs. Aether1 saves them in its own voices folder; nothing is
+                        installed, nothing is run, and you still need Piper itself from the
+                        steps above for them to be used.
+                    </p>
+                    <div id="voice-picker-list" class="space-y-1.5"></div>
+                    <div id="voice-picker-downloads" class="space-y-2"></div>
+                </div>
             </div>
 
             <!-- Listening. No fallback engine exists for this half, so missing is a fault. -->
@@ -1234,7 +1251,7 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=38"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=48"></script>
+    <script src="js/app.js?v=49"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=1"></script>
 </body>

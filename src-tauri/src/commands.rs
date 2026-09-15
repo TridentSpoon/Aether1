@@ -157,6 +157,35 @@ pub fn forget_download(model_name: String) -> Value {
     serde_json::json!({ "ok": crate::downloads::forget(&model_name) })
 }
 
+/// The voices Aether1 can fetch, and which of them are already here.
+pub fn voice_catalogue() -> Value {
+    serde_json::json!({ "voices": crate::voice_download::catalogue() })
+}
+
+/// Starts fetching one voice by name, returning immediately with its first state.
+///
+/// The name is the whole input, and `voice_download::start` refuses any that is not in its
+/// own table -- so nothing arriving from the HUD becomes part of a URL or a path. The
+/// local-only refusal lives there too rather than here, because this is not the only door:
+/// keeping it beside the thing that opens the connection means it cannot be walked around.
+pub fn start_voice_download(engine: &LlmEngine, voice: String) -> Value {
+    match crate::voice_download::start(engine.db(), &voice) {
+        Ok(fetch) => serde_json::json!({ "ok": true, "download": fetch }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    }
+}
+
+/// Every voice download this session knows about. Polled about once a second while a bar is
+/// on screen, so it stays a cheap read for the same reason `download_status` does.
+pub fn voice_download_status() -> Value {
+    serde_json::json!({ "downloads": crate::voice_download::snapshot() })
+}
+
+/// Clears one finished or failed voice row. Never touches a running one.
+pub fn forget_voice_download(voice: String) -> Value {
+    serde_json::json!({ "ok": crate::voice_download::forget(&voice) })
+}
+
 /// Starts the local model server when it is installed but not running.
 ///
 /// This is the one case where the app can fix a missing dependency itself rather than

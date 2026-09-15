@@ -11,7 +11,7 @@ mod pricing;
 mod providers;
 mod stt;
 mod telemetry;
-mod tts;
+pub mod tts;
 
 use std::sync::Mutex;
 use std::time::Instant;

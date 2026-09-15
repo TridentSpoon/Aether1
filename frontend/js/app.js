@@ -2202,8 +2202,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* One row. Built as nodes, never as markup: the model name and the status word both
-       come from whatever the model server said, and they are going onto the page. */
-    function renderDownloadRow(d) {
+       come from whatever the model server said, and they are going onto the page.
+
+       `onClear` is how the voice downloads borrow this row: same bar, same words, but the
+       ✕ has to reach their own registry. Defaulting it to the model one would have made
+       a voice row quietly clear nothing, which is exactly the kind of button this file
+       refuses to draw elsewhere. */
+    function renderDownloadRow(d, onClear = null) {
         const row = document.createElement('div');
         row.className = 'setup-download';
         row.dataset.phase = d.phase;
@@ -2229,6 +2234,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clear.textContent = '✕';
             clear.title = 'Clear this from the list';
             clear.addEventListener('click', async () => {
+                if (onClear) { await onClear(); return; }
                 await forgetDownload(d.model).catch(() => null);
                 await refreshDownloads();
             });
@@ -2555,6 +2561,9 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const advice = await fetchVoiceAdvice();
             renderVoiceAdvice(advice);
+            // Not awaited: the verdict above is the answer somebody opened this for, and
+            // it should not wait on a list of optional extras to appear underneath it.
+            renderVoiceCatalogue(advice).catch(() => null);
             return advice;
         } catch (e) {
             if (voiceHeadline) voiceHeadline.textContent = 'Could not check this computer.';
@@ -2643,12 +2652,215 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Picking a voice.                                                     */
+    /*                                                                      */
+    /* Only the voice file is fetched here, never the engine: a .onnx is    */
+    /* numbers handed to a program the operator installed themselves, so a  */
+    /* bad one costs garbled speech. Downloading the engine would be        */
+    /* downloading something that runs, which is a different risk and is    */
+    /* deliberately left to the package manager in the steps above.         */
+
+    const voicePicker = document.getElementById('voice-picker');
+    const voicePickerNote = document.getElementById('voice-picker-note');
+    const voicePickerList = document.getElementById('voice-picker-list');
+    const voicePickerDownloads = document.getElementById('voice-picker-downloads');
+
+    // The note the markup ships with, kept so local-only can replace it and the next
+    // refresh can put it back rather than leaving a stale refusal on screen.
+    const VOICE_PICKER_NOTE = voicePickerNote ? voicePickerNote.textContent : '';
+
+    let voicePollTimer = null;
+    // Voices that reached the end while this panel was open, so the wizard is re-probed
+    // exactly once each rather than on every tick after one lands.
+    const settledVoices = new Set();
+
+    async function fetchVoiceCatalogue() {
+        if (IS_TAURI) return tauriInvoke('voice_catalogue_rust');
+        const resp = await apiFetch('/api/voice/catalogue');
+        if (!resp.ok) throw new Error(`voice list failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function forgetVoiceDownload(voice) {
+        if (IS_TAURI) return tauriInvoke('forget_voice_download_rust', { voice });
+        const resp = await apiFetch(`/api/voice/download/forget?voice=${encodeURIComponent(voice)}`,
+            { method: 'POST' });
+        if (!resp.ok) throw new Error(`could not clear: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function fetchVoiceDownloads() {
+        if (IS_TAURI) return tauriInvoke('voice_download_status_rust');
+        const resp = await apiFetch('/api/voice/downloads');
+        if (!resp.ok) throw new Error(`voice downloads failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* One catalogue row. Nodes rather than markup, for the same reason the model rows
+       are: every word of this comes from the backend and is going onto the page. */
+    function renderVoiceOption(voice, downloadable) {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2 flex-wrap';
+
+        const mark = document.createElement('span');
+        mark.className = voice.installed ? 'text-green-400 text-[11px]' : 'text-slate-600 text-[11px]';
+        mark.textContent = voice.installed ? '✔' : '·';
+        row.appendChild(mark);
+
+        const name = document.createElement('span');
+        name.className = 'text-[11px] font-mono text-cyan-100 flex-1 min-w-0';
+        name.textContent = voice.label;
+        row.appendChild(name);
+
+        const size = document.createElement('span');
+        size.className = 'text-[10px] font-mono text-slate-500';
+        size.textContent = voice.installed ? 'already here' : voice.size_hint;
+        row.appendChild(size);
+
+        if (!voice.installed) {
+            const get = document.createElement('button');
+            get.type = 'button';
+            get.className = 'cyber-btn text-[10px] py-1 px-2';
+            get.textContent = '⬇ Download';
+            get.disabled = !downloadable;
+            get.addEventListener('click', () => startVoiceDownload(voice.name, get));
+            row.appendChild(get);
+        }
+
+        return row;
+    }
+
+    /* The catalogue. `local_only` is asked of the advice rather than guessed at, and the
+       buttons go dead with a reason beside them -- a button that silently refuses is how
+       someone ends up thinking the app is broken rather than doing as it was told. */
+    async function renderVoiceCatalogue(advice) {
+        if (!voicePicker || !voicePickerList) return;
+
+        const data = await fetchVoiceCatalogue().catch(() => null);
+        const voices = (data && data.voices) || [];
+        if (!voices.length) { voicePicker.classList.add('hidden'); return; }
+
+        const downloadable = !(advice && advice.local_only);
+        if (voicePickerNote) {
+            voicePickerNote.textContent = downloadable
+                ? VOICE_PICKER_NOTE
+                : 'Local-only mode is on, so Aether1 will not fetch anything. Switch it off in ' +
+                  'Settings, or copy a voice into the folder named above by hand.';
+        }
+
+        voicePickerList.innerHTML = '';
+        for (const voice of voices) voicePickerList.appendChild(renderVoiceOption(voice, downloadable));
+        voicePicker.classList.remove('hidden');
+    }
+
+    function renderVoiceDownloads(list) {
+        if (!voicePickerDownloads) return;
+        voicePickerDownloads.innerHTML = '';
+        // The same row the model downloads use, so a bar means the same thing in both
+        // places. It reads `model`, so the voice name goes in under that name.
+        for (const d of list) voicePickerDownloads.appendChild(renderDownloadRow({
+            model: d.voice,
+            phase: d.phase,
+            detail: d.detail,
+            completed: d.completed,
+            total: d.total,
+            percent: d.percent,
+            error: d.error,
+        }, async () => {
+            await forgetVoiceDownload(d.voice).catch(() => null);
+            await refreshVoiceDownloads();
+        }));
+    }
+
+    async function refreshVoiceDownloads() {
+        if (!voicePickerDownloads) return [];
+        const data = await fetchVoiceDownloads().catch(() => null);
+        const list = (data && data.downloads) || [];
+        renderVoiceDownloads(list);
+
+        let landed = false;
+        for (const d of list) {
+            if (d.phase !== 'done' && d.phase !== 'failed') continue;
+            if (settledVoices.has(d.voice)) continue;
+            settledVoices.add(d.voice);
+            landed = true;
+        }
+
+        if (landed) {
+            const failed = list.find(d => d.phase === 'failed');
+            const done = list.filter(d => d.phase === 'done').map(d => d.voice);
+            // A voice that just landed changes what the probe would say, so ask it again
+            // rather than leaving the verdict above describing the machine as it was.
+            const advice = await refreshVoiceAdvice();
+            if (failed) {
+                setVoiceStatus(`⚠ ${failed.voice}: ${failed.error || 'the download failed'}`, 'bad');
+            } else if (done.length) {
+                voiceEngine.playSFX('incoming');
+                setVoiceStatus(
+                    `✔ ${done.join(', ')} downloaded. ${advice && advice.speaking && advice.speaking.working
+                        ? 'Press "Say something" to hear it.'
+                        : 'Piper itself is still missing -- follow the steps above, then check again.'}`,
+                    'good');
+            }
+        }
+
+        if (!list.some(d => d.phase !== 'done' && d.phase !== 'failed')) stopVoicePoll();
+        return list;
+    }
+
+    function startVoicePoll() {
+        stopVoicePoll();
+        voicePollTimer = setInterval(() => { refreshVoiceDownloads(); }, 1000);
+    }
+
+    function stopVoicePoll() {
+        if (voicePollTimer) { clearInterval(voicePollTimer); voicePollTimer = null; }
+    }
+
+    /* Starting one. Nothing here waits on the download: the bar appears immediately and
+       fills in as bytes arrive, and closing this panel does not stop it. */
+    async function startVoiceDownload(name, button) {
+        voiceEngine.playSFX('click');
+        if (button) button.disabled = true;
+        settledVoices.delete(name);
+        setVoiceStatus(`Starting the download of ${name}...`, 'busy');
+
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('start_voice_download_rust', { voice: name })
+                : await (async () => {
+                    const resp = await apiFetch(`/api/voice/download?voice=${encodeURIComponent(name)}`,
+                        { method: 'POST' });
+                    if (!resp.ok) throw new Error(`could not start: ${resp.status}`);
+                    return resp.json();
+                })();
+
+            if (!data.ok) {
+                setVoiceStatus(data.message || 'That voice could not be started.', 'bad');
+                if (button) button.disabled = false;
+                return;
+            }
+            setVoiceStatus(`Downloading ${name}. You can leave this open — it carries on either way.`, 'busy');
+            await refreshVoiceDownloads();
+            startVoicePoll();
+        } catch (e) {
+            setVoiceStatus(`Could not start that download: ${e.message || e}`, 'bad');
+            if (button) button.disabled = false;
+        }
+    }
+
     function openVoiceWizard() {
         if (!voiceModal) return;
         voiceEngine.playSFX('click');
         voiceModal.classList.remove('hidden');
         renderVoiceAttempts(null);
         refreshVoiceAdvice();
+        // A download started earlier is still going whether or not this panel was open,
+        // so the first thing it does is ask rather than assume there is nothing running.
+        refreshVoiceDownloads().then(list => {
+            if (list.some(d => d.phase !== 'done' && d.phase !== 'failed')) startVoicePoll();
+        }).catch(() => null);
     }
 
     document.getElementById('btn-voice-setup')?.addEventListener('click', openVoiceWizard);
@@ -2657,6 +2869,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnVoiceEnable) btnVoiceEnable.addEventListener('click', handleVoiceEnable);
     document.getElementById('btn-close-voice')?.addEventListener('click', () => {
         voiceModal.classList.add('hidden');
+        // Only the asking stops. The download itself runs on its own thread in the
+        // backend and finishes whether this panel is open or not.
+        stopVoicePoll();
     });
     document.getElementById('btn-open-voice-settings')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
