@@ -884,8 +884,12 @@ fn generate_speech_rust(
 /// Builds (but does not show-if-already-open -- callers check first) the floating "desktop
 /// sprite" window: a small, transparent, undecorated, always-on-top webview showing just the
 /// hologram avatar (frontend/sprite.html reuses the same Three.js avatar code as the main
-/// HUD), PNGTuber-style. Positioned in the bottom-right corner of the primary monitor when
-/// that's available; falls back to Tauri's default placement otherwise.
+/// HUD). It's a live mirror of the main HUD's own hologram -- the frontend pushes avatar,
+/// theme, state and audio changes to it over Tauri events (see setAvatarState and
+/// pushAudioToSprite in js/app.js) rather than this window running any conversation of its
+/// own -- so the main HUD's hologram panel goes quiet while this is open instead of drawing
+/// a second, separate avatar. Positioned in the bottom-right corner of the primary monitor
+/// when that's available; falls back to Tauri's default placement otherwise.
 fn build_sprite_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     const WIDTH: f64 = 300.0;
     const HEIGHT: f64 = 380.0;
