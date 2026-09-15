@@ -236,7 +236,8 @@ is always something to speak with, on a machine that has done nothing but run se
 
 1. **[Piper](https://github.com/rhasspy/piper)** -- the best-sounding local voice, if you
    install its binary plus a `.onnx` voice in `~/.local/share/piper/voices` (the offline
-   installer above does this for you).
+   installer above does this for you). **Two traps here, and between them they account for
+   most "I installed it and it still doesn't talk" reports** -- see below.
 2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
    says leaves your machine, and it needs a network.
 3. **This OS's own voice** -- SAPI on Windows (ships with every edition, nothing to
@@ -244,6 +245,31 @@ is always something to speak with, on a machine that has done nothing but run se
    the other two, but it cannot be "not installed" the way Piper can or offline the way the
    cloud engine is, which is what makes it the guaranteed fallback rather than an optional
    extra.
+
+#### The two Piper traps
+
+**`piper` is the name of two unrelated programs.** The one you want is
+[Piper TTS](https://github.com/rhasspy/piper), which turns text into speech. The one you
+will find first is [Piper](https://github.com/libratbag/piper), a GTK app for configuring
+gaming mice — and on Arch and CachyOS that is exactly what `sudo pacman -S piper` installs,
+because the mouse app is the one in the official repositories. Piper TTS is in the AUR:
+`yay -S piper-tts-bin`. On Debian and Ubuntu, `sudo apt install piper-tts`. On any
+distribution, the `linux_x86_64.tar.gz` from the releases page works without a package
+manager at all — unpack it and drop the `piper` program into `~/.local/bin`.
+
+Aether1 no longer takes the name at its word. It asks each candidate binary what its
+options are and only accepts one that knows about `--model`, so a machine with the mouse app
+and no Piper TTS now correctly reports the good voice as missing instead of ticking the box
+and going silent.
+
+**A voice is two files, not one.** On the
+[voices page](https://huggingface.co/rhasspy/piper-voices/tree/main/en), every voice is a
+large `.onnx` *and* a small `.onnx.json` beside it, with separate download buttons. Piper
+cannot load the model without the `.json`, and downloading only the big obvious one is the
+natural mistake. Aether1 now checks for the sidecar — and for a plausible file size, which
+catches a download that stopped halfway — before it reports a voice as installed.
+
+`en_GB-alba-medium` and `en_US-amy-medium` are good, ordinary-sounding places to start.
 
 Listening (STT) only has the first two of those -- there is no universal OS-level
 equivalent to fall back to yet:

@@ -16,7 +16,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use msedge_tts::tts::client::connect;
 use msedge_tts::tts::SpeechConfig;
@@ -29,7 +29,14 @@ pub const LOCAL_NAME: &str = "Piper (the good offline voice)";
 pub const CLOUD_NAME: &str = "Microsoft's online voice";
 /// Binaries that are Piper, in the order they are tried. The project has renamed its CLI
 /// over time and distributions disagree, so all three are worth looking for.
-const PIPER_BINARIES: &[&str] = &["piper", "piper-tts", "piper_tts"];
+///
+/// Unambiguous names first, and `piper` last, because **there is another program called
+/// `piper`**: the GTK application that configures gaming mice, which is what
+/// `pacman -S piper` installs on Arch and what a search for "piper linux" finds first. It
+/// puts a binary called `piper` on the PATH, so a machine that has it and not Piper TTS
+/// used to report the good offline voice as installed and then produce silence. Ordering
+/// alone does not fix that -- see `is_piper_tts`, which is what actually decides.
+const PIPER_BINARIES: &[&str] = &["piper-tts", "piper_tts", "piper"];
 /// Where a Piper voice is looked for when no path is configured.
 const PIPER_VOICE_DIRS: &[&str] = &[
     "~/.local/share/piper/voices",
@@ -195,19 +202,133 @@ fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The Piper binary, if one is installed.
+/// Whether a binary called some variant of "piper" is the speech synthesiser rather than
+/// the gaming-mouse configurator of the same name.
+///
+/// Asked by running `--help` and looking for the one flag Piper TTS cannot do without: it
+/// is handed a `.onnx` model with `-m`/`--model`, and nothing about configuring a mouse has
+/// any reason to mention that. `--version` would not do -- both programs have one, and both
+/// answer it happily.
+///
+/// A program that cannot be run at all, or that says nothing recognisable, is treated as
+/// not-Piper. That is the safe direction: the cost of a wrong "no" is the OS voice speaking
+/// instead of the better one, and the cost of a wrong "yes" is silence with a tick beside
+/// it, which is the failure this whole module exists to stop.
+fn is_piper_tts(binary: &Path) -> bool {
+    let mut cmd = Command::new(binary);
+    cmd.arg("--help");
+    crate::paths::suppress_console_window(&mut cmd);
+    let Ok(output) = cmd.output() else {
+        return false;
+    };
+    // Some builds print usage to stderr, some to stdout, so both are read.
+    let mut help = String::from_utf8_lossy(&output.stdout).into_owned();
+    help.push_str(&String::from_utf8_lossy(&output.stderr));
+    let help = help.to_lowercase();
+    help.contains("--model") || help.contains("onnx")
+}
+
+/// The Piper binary, if one is installed and is actually Piper.
+///
+/// Cached: this spawns a process to answer, `voice_status` is re-asked every time the
+/// wizard is opened or a setting changes, and the answer cannot change without the machine
+/// being reinstalled under it. `OnceLock` rather than a field because the callers are
+/// scattered and none of them owns a place to keep it.
 pub fn piper_binary() -> Option<PathBuf> {
-    crate::paths::find_installed_binary(PIPER_BINARIES)
+    static FOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            PIPER_BINARIES
+                .iter()
+                .filter_map(|name| crate::paths::find_installed_binary(&[name]))
+                .find(|path| is_piper_tts(path))
+        })
+        .clone()
+}
+
+/// Smallest a real Piper voice can be. The smallest published voices are the `x_low`
+/// models at a little over 5 MB; anything under a megabyte is a download that stopped
+/// early, an HTML error page saved with the wrong name, or a git-lfs pointer file -- all of
+/// which exist on disk, satisfy `exists()`, and make Piper fail at the moment of speaking
+/// rather than at the moment of checking.
+const MIN_VOICE_BYTES: u64 = 1_000_000;
+
+/// Whether a `.onnx` path is a voice Piper can actually load: big enough to be a model, and
+/// accompanied by the `.onnx.json` that describes it.
+///
+/// **The sidecar is the common failure.** A voice on Hugging Face is two separate files
+/// with two separate download buttons, the `.json` is a few kilobytes next to a file of
+/// tens of megabytes, and taking only the obvious one is the natural mistake. Piper will
+/// not start without it. Checking here means "no voice found" is said while the wizard is
+/// open and can explain it, instead of the voice looking installed and the companion going
+/// quiet the first time it tries to speak.
+fn usable_voice(onnx: &Path) -> bool {
+    voice_problem(onnx).is_none()
+}
+
+/// Why a `.onnx` cannot be used, in words that name the fix, or None when it can be.
+///
+/// Separate from `usable_voice` so the wizard can say *which* of the two mistakes was made.
+/// "No voice found" is the wrong sentence to show someone staring at a voice file they
+/// definitely downloaded, and being told the wrong thing is worse than being told nothing:
+/// they go and download it again.
+fn voice_problem(onnx: &Path) -> Option<String> {
+    let name = onnx
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| onnx.display().to_string());
+    let Ok(meta) = std::fs::metadata(onnx) else {
+        return Some(format!("{name} is not there"));
+    };
+    if meta.len() < MIN_VOICE_BYTES {
+        return Some(format!(
+            "{name} is only {} KB, which is too small to be a voice -- the download probably \
+             stopped early. Delete it and fetch it again.",
+            meta.len() / 1024
+        ));
+    }
+    // `en_GB-alba-medium.onnx` -> `en_GB-alba-medium.onnx.json`: an appended extension, not
+    // a replaced one, which is why this is string work rather than `set_extension`.
+    if !PathBuf::from(format!("{}.json", onnx.display())).is_file() {
+        return Some(format!(
+            "{name} is missing the small {name}.json file that has to sit beside it. \
+             Download it from the same page as the voice and put it in the same folder.",
+        ));
+    }
+    None
+}
+
+/// The nearest thing to a voice on this machine, and what is wrong with it. Used only to
+/// explain a failure -- `piper_voice` remains the thing that decides what gets used.
+fn nearest_unusable_voice(configured: Option<&str>) -> Option<String> {
+    if let Some(path) = configured.filter(|p| !p.trim().is_empty()) {
+        return voice_problem(&crate::paths::expand_home(path));
+    }
+    PIPER_VOICE_DIRS
+        .iter()
+        .flat_map(|dir| {
+            std::fs::read_dir(crate::paths::expand_home(dir))
+                .into_iter()
+                .flatten()
+        })
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "onnx"))
+        .find_map(|p| voice_problem(&p))
 }
 
 /// The voice model to speak with: the configured path if there is one, otherwise the first
-/// `.onnx` found in the usual places. Returning None means Piper is installed but has no
-/// voice, which is a different problem from Piper not being installed and is reported as
-/// such.
+/// usable `.onnx` found in the usual places. Returning None means Piper is installed but
+/// has no voice, which is a different problem from Piper not being installed and is
+/// reported as such.
+///
+/// A configured path is checked the same way an auto-detected one is. Pointing the setting
+/// at a half-downloaded file is exactly as easy as leaving one in the voices folder, and
+/// trusting the setting because someone typed it would only move the silent failure.
 pub fn piper_voice(configured: Option<&str>) -> Option<PathBuf> {
     if let Some(path) = configured.filter(|p| !p.trim().is_empty()) {
         let path = crate::paths::expand_home(path);
-        return path.exists().then_some(path);
+        return usable_voice(&path).then_some(path);
     }
     for dir in PIPER_VOICE_DIRS {
         let dir = crate::paths::expand_home(dir);
@@ -218,6 +339,7 @@ pub fn piper_voice(configured: Option<&str>) -> Option<PathBuf> {
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|e| e == "onnx"))
+            .filter(|p| usable_voice(p))
             .collect();
         voices.sort();
         if let Some(first) = voices.into_iter().next() {
@@ -237,11 +359,16 @@ pub fn local_status(configured_voice: Option<&str>) -> Result<(PathBuf, PathBuf)
         )
     })?;
     let voice = piper_voice(configured_voice).ok_or_else(|| {
-        format!(
-            "{} is installed but no .onnx voice was found (looked in {})",
-            binary.display(),
-            PIPER_VOICE_DIRS.join(", ")
-        )
+        match nearest_unusable_voice(configured_voice) {
+            // A voice is there and cannot be used: say what is wrong with that one, not that
+            // there is nothing, which is the sentence that sends people to download it twice.
+            Some(problem) => format!("{} is installed, but {problem}", binary.display()),
+            None => format!(
+                "{} is installed but no .onnx voice was found (looked in {})",
+                binary.display(),
+                PIPER_VOICE_DIRS.join(", ")
+            ),
+        }
     })?;
     Ok((binary, voice))
 }
@@ -601,6 +728,96 @@ mod tests {
     #[test]
     fn a_configured_voice_that_does_not_exist_is_not_used() {
         assert!(piper_voice(Some("/nonexistent/voice.onnx")).is_none());
+    }
+
+    /// Builds a voice directory: `onnx_bytes` of model, and the sidecar only if asked for.
+    fn voice_fixture(name: &str, onnx_bytes: usize, with_sidecar: bool) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("aether1_voice_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let onnx = dir.join("en_GB-alba-medium.onnx");
+        std::fs::write(&onnx, vec![0u8; onnx_bytes]).unwrap();
+        if with_sidecar {
+            std::fs::write(dir.join("en_GB-alba-medium.onnx.json"), b"{}").unwrap();
+        }
+        onnx
+    }
+
+    /// The failure this exists to stop: two download buttons on the voice page, and only
+    /// the obvious one pressed. Piper cannot load the model without the .json beside it, so
+    /// a voice that looks present and is missing its sidecar has to read as "no voice"
+    /// while the wizard is still open to say so.
+    #[test]
+    fn a_voice_without_its_json_sidecar_is_not_a_voice() {
+        let onnx = voice_fixture("nosidecar", 2_000_000, false);
+        assert!(piper_voice(Some(&onnx.display().to_string())).is_none());
+        let _ = std::fs::remove_dir_all(onnx.parent().unwrap());
+    }
+
+    /// A download that stopped early leaves a real file of the wrong size. So does an error
+    /// page saved under the model's name, and so does a git-lfs pointer.
+    #[test]
+    fn a_half_downloaded_voice_is_not_a_voice() {
+        let onnx = voice_fixture("partial", 4_096, true);
+        assert!(piper_voice(Some(&onnx.display().to_string())).is_none());
+        let _ = std::fs::remove_dir_all(onnx.parent().unwrap());
+    }
+
+    #[test]
+    fn a_voice_with_both_files_is_used() {
+        let onnx = voice_fixture("complete", 2_000_000, true);
+        assert_eq!(
+            piper_voice(Some(&onnx.display().to_string())),
+            Some(onnx.clone())
+        );
+        let _ = std::fs::remove_dir_all(onnx.parent().unwrap());
+    }
+
+    /// The gaming-mouse `piper` does not answer `--help` with anything about models, and
+    /// neither does any other program that happens to be on the PATH under that name. A
+    /// stand-in is used here because the real mouse app is not installed on a build
+    /// machine; what is being tested is that the question is asked of the binary at all
+    /// rather than assumed from its name.
+    #[test]
+    fn a_program_that_knows_nothing_about_models_is_not_piper() {
+        let not_piper = which::which("true").or_else(|_| which::which("cmd"));
+        if let Ok(path) = not_piper {
+            assert!(!is_piper_tts(&path), "{} passed as Piper", path.display());
+        }
+    }
+
+    /// The point of the whole check: someone looking at a voice file they definitely
+    /// downloaded must not be told there is no voice. They would download it again.
+    #[test]
+    fn the_sidecar_failure_names_the_sidecar() {
+        let onnx = voice_fixture("message", 2_000_000, false);
+        let problem = voice_problem(&onnx).unwrap();
+        assert!(problem.contains(".onnx.json"), "{problem}");
+        let _ = std::fs::remove_dir_all(onnx.parent().unwrap());
+    }
+
+    #[test]
+    fn the_truncated_failure_says_it_is_too_small() {
+        let onnx = voice_fixture("message_small", 4_096, true);
+        let problem = voice_problem(&onnx).unwrap();
+        assert!(problem.contains("too small"), "{problem}");
+        let _ = std::fs::remove_dir_all(onnx.parent().unwrap());
+    }
+
+    #[test]
+    fn a_binary_that_cannot_be_run_is_not_piper() {
+        assert!(!is_piper_tts(Path::new("/nonexistent/piper")));
+    }
+
+    /// Ordering matters on a machine that has both: the unambiguous names come first so the
+    /// mouse app is never even asked unless nothing else answered.
+    #[test]
+    fn the_unambiguous_names_are_tried_before_the_ambiguous_one() {
+        assert_eq!(
+            PIPER_BINARIES.last(),
+            Some(&"piper"),
+            "bare piper must be the last resort"
+        );
     }
 
     #[test]
