@@ -17,6 +17,7 @@
     windows_subsystem = "windows"
 )]
 
+mod background_services;
 mod cli;
 mod commands;
 mod discovery;
@@ -842,6 +843,22 @@ fn get_settings_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::get_settings(&engine)
 }
 
+/// Enables or disables AETHER1's own login autostart (XDG autostart entry on Linux, a Run
+/// registry key on Windows -- the plugin covers both uniformly), matching whatever the
+/// operator just set `autostart_app` to. Best-effort: no permission is needed for either
+/// mechanism, but a failure here (e.g. a read-only autostart directory) is reported rather
+/// than silently ignored, same as the hotkey re-registration right below this.
+fn sync_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    }
+    .map_err(|e| e.to_string())
+}
+
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
 #[tauri::command(async)]
 fn save_settings_rust(
@@ -850,6 +867,9 @@ fn save_settings_rust(
     settings: serde_json::Value,
 ) -> Result<(), String> {
     let hotkey_changed = settings.get("hotkey_toggle").is_some();
+    let autostart_app = settings
+        .get("autostart_app")
+        .and_then(serde_json::Value::as_bool);
     commands::save_settings(&engine, settings)?;
     // Rebind the global hotkey in place so a chord edited in Settings takes effect without
     // a restart. A chord that won't parse is reported to the operator but doesn't fail the
@@ -860,6 +880,61 @@ fn save_settings_rust(
             return Err(format!("settings saved, but the hotkey was not: {e}"));
         }
     }
+    if let Some(enabled) = autostart_app {
+        if let Err(e) = sync_autostart(&app, enabled) {
+            return Err(format!("settings saved, but launch-at-login was not: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// Toggles Game Mode: stops whatever background server AETHER1 itself started (never one the
+/// operator runs independently -- see background_services) and drops the HUD down to a
+/// minimal footprint. Never quits AETHER1: the tray icon and hotkey are the only way to
+/// switch Game Mode back off, so this only hides the window and tells the frontend to back
+/// off its telemetry polling, the two things actually costing CPU/GPU while the HUD sits
+/// idle behind a game. Reverses symmetrically: Ollama is restarted only if Game Mode is what
+/// stopped it, so turning Game Mode off always returns the machine to the state it was in
+/// right before Game Mode was switched on, not to whatever `autostart_ollama` says in
+/// general.
+#[tauri::command(async)]
+fn set_game_mode_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
+    enabled: bool,
+) -> Result<(), String> {
+    engine
+        .db()
+        .set_setting("game_mode", &serde_json::json!(enabled))
+        .map_err(|e| e.to_string())?;
+
+    if enabled {
+        let was_managed = managed_ollama.is_managed();
+        engine
+            .db()
+            .set_setting(
+                "_game_mode_stopped_ollama",
+                &serde_json::json!(was_managed),
+            )
+            .map_err(|e| e.to_string())?;
+        background_services::stop_managed_ollama(&managed_ollama);
+        if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+            let _ = window.hide();
+        }
+    } else {
+        if engine
+            .db()
+            .get_setting_bool("_game_mode_stopped_ollama", false)
+        {
+            background_services::start_ollama_if_needed(&engine, &managed_ollama);
+        }
+        if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+    let _ = app.emit("game-mode-changed", enabled);
     Ok(())
 }
 
@@ -1181,7 +1256,12 @@ fn main() {
             },
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(llm_engine)
+        .manage(background_services::ManagedOllama::default())
         .invoke_handler(tauri::generate_handler![
             generate_response_rust,
             generate_response_streaming_rust,
@@ -1237,7 +1317,8 @@ fn main() {
             open_panel_window_rust,
             set_window_always_on_top_rust,
             show_main_window_rust,
-            start_window_drag_rust
+            start_window_drag_rust,
+            set_game_mode_rust
         ])
         .on_window_event(|window, event| {
             // Closing the main HUD window would otherwise exit the whole app (Tauri's
@@ -1280,6 +1361,31 @@ fn main() {
                         .get_setting_string("hotkey_toggle", hotkey::DEFAULT_TOGGLE),
                 ),
                 Err(e) => eprintln!("[AETHER1] Global hotkey not registered: {e}"),
+            }
+
+            // Startup & Performance: reconcile the login-autostart entry with the saved
+            // setting (it can drift -- e.g. someone deletes the .desktop file by hand), then
+            // auto-start Ollama if that's turned on and Game Mode isn't currently active
+            // (Game Mode's whole point is to keep it stopped across a restart too).
+            {
+                let engine = app.state::<LlmEngine>();
+                let autostart_app = engine.db().get_setting_bool("autostart_app", false);
+                if let Err(e) = sync_autostart(app.handle(), autostart_app) {
+                    eprintln!("[AETHER1] Could not sync launch-at-login: {e}");
+                }
+
+                let autostart_ollama = engine.db().get_setting_bool("autostart_ollama", false);
+                let game_mode = engine.db().get_setting_bool("game_mode", false);
+                if autostart_ollama && !game_mode {
+                    let managed = app.state::<background_services::ManagedOllama>();
+                    let result = background_services::start_ollama_if_needed(&engine, &managed);
+                    if result["ok"] != serde_json::json!(true) {
+                        eprintln!(
+                            "[AETHER1] Auto-start of the model server: {}",
+                            result["message"].as_str().unwrap_or("unknown error")
+                        );
+                    }
+                }
             }
 
             // Native tray icon so there's a visible indicator (and a quick way to
@@ -1409,7 +1515,16 @@ fn main() {
                         "agent_name": engine.agent_name(),
                     });
                     let _ = app_handle.emit("telemetry-update", payload);
-                    std::thread::sleep(Duration::from_millis(1000));
+                    // Game Mode's "low usage" half: the HUD window is hidden (so its own
+                    // render loop is already throttled by the webview), but this thread
+                    // keeps sampling sysinfo regardless of window visibility -- so it's the
+                    // one piece Game Mode has to slow down itself rather than getting for
+                    // free. Read fresh every tick rather than cached, so switching Game
+                    // Mode off is felt on the very next tick instead of waiting out a long
+                    // sleep that was already in progress.
+                    let game_mode = engine.db().get_setting_bool("game_mode", false);
+                    let interval = if game_mode { 5000 } else { 1000 };
+                    std::thread::sleep(Duration::from_millis(interval));
                 });
             }
 

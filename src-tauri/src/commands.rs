@@ -198,31 +198,49 @@ pub fn forget_voice_download(voice: String) -> Value {
 /// from the HUD and from the setup wizard; it is not a tool, so nothing the companion says
 /// in a conversation can reach it.
 pub fn start_local_server(engine: &LlmEngine) -> Value {
+    start_local_server_tracked(engine).0
+}
+
+/// Same as `start_local_server`, but also hands back the spawned `Child` (when one was
+/// actually spawned) instead of dropping it. `start_local_server` itself just discards that
+/// half for the manual "start" button, which has nothing to do with a process afterwards --
+/// but `background_services` needs the handle so it can stop the very same process later
+/// (for Game Mode), without ever touching an Ollama the operator started independently.
+pub fn start_local_server_tracked(engine: &LlmEngine) -> (Value, Option<std::process::Child>) {
     // Starting a server that then talks to a registry is not itself a network trip, but
     // local-only mode is about what the operator has asked the app not to do on their
     // behalf, and starting daemons uninvited is squarely in that spirit.
     if crate::local_only::enabled(engine.db()) {
-        return serde_json::json!({
-            "ok": false,
-            "message": crate::local_only::refusal("no server was started"),
-        });
+        return (
+            serde_json::json!({
+                "ok": false,
+                "message": crate::local_only::refusal("no server was started"),
+            }),
+            None,
+        );
     }
 
     let Ok(binary) = which::which("ollama") else {
-        return serde_json::json!({
-            "ok": false,
-            "message": "There is no `ollama` command on this machine to start. It needs \
-                        installing first.",
-        });
+        return (
+            serde_json::json!({
+                "ok": false,
+                "message": "There is no `ollama` command on this machine to start. It needs \
+                            installing first.",
+            }),
+            None,
+        );
     };
 
     // If something already answers, starting a second one would fail on the port and look
     // like a broken button. Saying so is the more useful answer.
     if model_scanner::scan_all().has_local_provider {
-        return serde_json::json!({
-            "ok": true,
-            "message": "A model server is already running on this computer.",
-        });
+        return (
+            serde_json::json!({
+                "ok": true,
+                "message": "A model server is already running on this computer.",
+            }),
+            None,
+        );
     }
 
     match std::process::Command::new(&binary)
@@ -235,14 +253,20 @@ pub fn start_local_server(engine: &LlmEngine) -> Value {
         // Started, not proven: it takes a moment to bind the port, and whoever called this
         // confirms by probing rather than by trusting this answer. That is the same rule
         // the rest of the setup path follows -- the machine is asked, never assumed.
-        Ok(_child) => serde_json::json!({
-            "ok": true,
-            "message": "Starting the model server. Give it a few seconds.",
-        }),
-        Err(e) => serde_json::json!({
-            "ok": false,
-            "message": format!("Could not start the model server: {e}"),
-        }),
+        Ok(child) => (
+            serde_json::json!({
+                "ok": true,
+                "message": "Starting the model server. Give it a few seconds.",
+            }),
+            Some(child),
+        ),
+        Err(e) => (
+            serde_json::json!({
+                "ok": false,
+                "message": format!("Could not start the model server: {e}"),
+            }),
+            None,
+        ),
     }
 }
 
@@ -458,6 +482,14 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
         "desktop_sprite_enabled": false,
         "local_only": false,
+        // Startup & Performance: launch AETHER1 at login, auto-start Ollama when AETHER1
+        // starts, whether the voice self-test speaks its confirmation phrase or checks
+        // silently, and whether Game Mode is currently switched on (persisted so it
+        // survives a restart rather than silently reverting).
+        "autostart_app": false,
+        "autostart_ollama": false,
+        "voice_startup_audible": true,
+        "game_mode": false,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())

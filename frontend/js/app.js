@@ -3483,6 +3483,88 @@ document.addEventListener('DOMContentLoaded', () => {
         if (section) section.classList.remove('hidden');
     }
 
+    // Reflects Game Mode's current on/off state on its Quick Commands button -- called both
+    // from loadSettings (what was saved from a previous session) and from the
+    // 'game-mode-changed' event (a live toggle, from this window or another).
+    function setGameModeButtonState(active) {
+        const btn = document.getElementById('btn-game-mode');
+        if (!btn) return;
+        btn.dataset.active = active ? 'true' : 'false';
+        btn.textContent = active ? '🎮 Game Mode: ON' : '🎮 Game Mode: OFF';
+        btn.classList.toggle('cyber-btn-active', active);
+    }
+
+    // Launch autostart, Ollama autostart and Game Mode are all native-process/window
+    // lifecycle -- meaningless from a browser tab, same reasoning as
+    // initSpriteMode/initVersionAndUpdates, so the whole settings group and the Game Mode
+    // button stay hidden there.
+    function initStartupPerformance() {
+        if (!IS_TAURI) return;
+        document.getElementById('settings-group-startup')?.classList.remove('hidden');
+
+        const gameModeBtn = document.getElementById('btn-game-mode');
+        if (gameModeBtn) {
+            gameModeBtn.classList.remove('hidden');
+            gameModeBtn.addEventListener('click', async () => {
+                voiceEngine.playSFX('click');
+                const turningOn = gameModeBtn.dataset.active !== 'true';
+                gameModeBtn.disabled = true;
+                try {
+                    await tauriInvoke('set_game_mode_rust', { enabled: turningOn });
+                    setGameModeButtonState(turningOn);
+                } catch (e) {
+                    console.warn('Could not toggle Game Mode', e);
+                    appendMessage(currentAgentName, `⚠️ Could not switch Game Mode: ${e.message || e}`);
+                } finally {
+                    gameModeBtn.disabled = false;
+                }
+            });
+        }
+
+        // Game Mode can also be switched off from the tray/hotkey path (e.g. re-showing a
+        // hidden window some other way) or from another undocked panel window -- listening
+        // rather than only reacting to this button's own click keeps every window's button
+        // label honest.
+        if (window.__TAURI__ && window.__TAURI__.event) {
+            window.__TAURI__.event.listen('game-mode-changed', (event) => {
+                setGameModeButtonState(event.payload === true);
+            });
+        }
+    }
+
+    /**
+     * Runs once per launch (native app only): synthesizes a short phrase through the exact
+     * pipeline a real reply would use, and checks whether real, non-zero audio actually came
+     * out the other end -- not just whether synthesis returned a path without throwing. That
+     * gap is exactly what let TTS go silently unheard before: everything downstream of Piper
+     * (webview → GStreamer/WebKitGTK → the audio device) could fail without a single error
+     * anywhere in this app. `voice_startup_audible` only decides whether the check is heard;
+     * the check itself always runs, and a failure is surfaced either way (see
+     * showVoiceFailedCard) instead of the console.warn nobody used to see.
+     */
+    async function runVoiceStartupSelfTest() {
+        if (!IS_TAURI) return;
+        let audible = true;
+        try {
+            const data = await tauriInvoke('get_settings_rust');
+            audible = data.settings.voice_startup_audible !== false;
+        } catch (e) {
+            // Fall through with the audible default -- loadSettings surfaces its own
+            // failure to load settings; this self-test isn't the place to repeat it.
+        }
+
+        const url = await synthesizeSpeechUrl('Voice check.', null);
+        if (!url) return; // synthesizeSpeechUrl already showed showVoiceFailedCard on failure
+
+        const result = await voiceEngine.playTTSAudio(url, { audible });
+        if (result && result.signalDetected === false) {
+            showVoiceFailedCard(new Error(
+                'Speech was synthesized, but no audio was actually heard -- the pipeline ' +
+                'downstream of synthesis (the webview’s audio output) produced silence.'
+            ));
+        }
+    }
+
     // Solo-panel mode: this window was opened by open_panel_window_rust with ?panel=<id>,
     // and the bootstrap script in <head> already stamped data-solo-panel on <html> before
     // anything painted. Mark the matching panel as the one CSS should expand to fill the
@@ -3712,6 +3794,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (s.color_theme && s.color_theme !== Aether1Theme.current().colours.preset) {
                 paintTheme(Aether1Theme.setPreset(s.color_theme));
             }
+            document.getElementById('setting-autostart-app').checked = s.autostart_app === true;
+            document.getElementById('setting-autostart-ollama').checked = s.autostart_ollama === true;
+            document.getElementById('setting-voice-startup-audible').checked = s.voice_startup_audible !== false;
+            setGameModeButtonState(s.game_mode === true);
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
             if (spriteModeToggle) spriteModeToggle.checked = s.desktop_sprite_enabled === true;
             // The Rust side reopens the sprite window itself on launch if it was left on
@@ -3830,7 +3916,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 // preset -- there is no preset name to save, and loadSettings ignores an
                 // empty value rather than repainting over the mix.
                 color_theme: Aether1Theme.current().colours.preset || '',
-                desktop_sprite_enabled: spriteModeToggle ? spriteModeToggle.checked : false
+                desktop_sprite_enabled: spriteModeToggle ? spriteModeToggle.checked : false,
+                autostart_app: document.getElementById('setting-autostart-app').checked,
+                autostart_ollama: document.getElementById('setting-autostart-ollama').checked,
+                voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked
             }
         };
         autoSpeak = payload.settings.auto_speak;
@@ -4822,10 +4911,12 @@ document.addEventListener('DOMContentLoaded', () => {
     connectTelemetry();
     initVersionAndUpdates();
     initSpriteMode();
+    initStartupPerformance();
     initSoloPanel();
     initPanelUndock();
     initHologramFloatingNotice();
     initSpriteListenBridge();
+    runVoiceStartupSelfTest();
 
     document.body.addEventListener('click', () => {
         voiceEngine.playSFX('boot');
