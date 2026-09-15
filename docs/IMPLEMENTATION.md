@@ -1645,8 +1645,64 @@ assumed.
 
 Four routes, wired through all three transports as everything here is: `/api/vault/notes`,
 `/api/vault/note`, `/api/vault/graph` and `/api/vault/search`, with `vault_*_rust`
-alongside them. The graph route has no UI yet — it is step 40's — and is shipped now
-because it is the same scan the backlinks already do.
+alongside them. The graph route had no UI when this shipped — it is step 40's, below — and
+was shipped here because it is the same scan the backlinks already do.
+
+### Step 40: the graph — **shipped**
+
+`/api/vault/graph` had a caller and no picture. `frontend/js/notes-graph.js` is the picture:
+a dot per note, a line per `[[link]]`, laid out by a small force simulation and reached from
+**🕸 Graph** at the top of the Notes window. It is the one view that answers two questions a
+list cannot — which notes have become the hubs everything hangs off, and which are floating
+unlinked — and on a vault the companion has been writing into daily, both answers change
+without anybody deciding they should.
+
+**It draws and it does not fetch.** `notes-graph.js` is handed a `{nodes, edges, partial}`
+and a callback for *the operator clicked this note*. It has no idea whether that object came
+over Tauri IPC or HTTP; `app.js` keeps that branch, as every other feature here does. The
+file can be read, and reasoned about, as geometry.
+
+**The loop stops.** A settled graph draws nothing, a hidden one draws nothing, and a closed
+one is torn down. This runs on a machine that is also running a language model, so a picture
+nobody is looking at has no business holding a core — the same discipline `animate.js`
+already applies to the avatar canvas, including the `offsetParent` check for a canvas with no
+layout box. That it genuinely stops is checked by watching the canvas for changes while idle,
+not assumed from reading the code.
+
+**The physics runs on the clock, not on the frame.** A fixed 60th-of-a-second step, as many
+steps per frame as the elapsed time asks for, capped at four so a stall is not replayed in
+one frame. Tied to the frame rate instead, the same vault would settle in two seconds on a
+144 Hz screen and twenty in a throttled tab — and settle into a *different* arrangement in
+each. Positions are seeded deterministically for the same reason: opening the graph twice
+gives you the same picture rather than a new one to relearn.
+
+**A big vault is the design case, not the edge case.** Three things come from testing it at
+nine hundred notes rather than at nine. Repulsion is computed through a uniform grid, so a
+note is only pushed by the ones near enough to matter — pairwise would be four million sums a
+tick at the 2000-note cap. The repulsion force is *capped*, because two notes starting almost
+on top of each other divide by nearly nothing, and an uncapped pair leaves at a speed no
+spring reverses before the simulation cools: on the first big run that showed up as a single
+hub sitting a thousand pixels from everything it linked to. And the opening spiral is seeded
+at roughly the density a settled graph reaches, because packing nine hundred notes into the
+room for nine and letting repulsion sort it out is what blows a graph apart in its first
+second.
+
+**Colour is read from the theme, not hardcoded.** A canvas inherits nothing, so it goes and
+reads `--text-main`, `--text-dim`, `--text-accent` and `--neon-amber` — and decides whether
+it is drawing on a light or a dark ground from the brightness of `--bg-core`, rather than
+from a theme's name, so a theme added later gets it right for free. HUD cyan on Solar's white
+would have been invisible, which is exactly the class of thing that ships unnoticed when the
+developer only ever looks at the dark theme.
+
+**What the picture says.** Size is how many notes point *at* a note, not how many it points
+at — a note is a hub because other things need it. Colour is the folder. A ring is one of the
+three notes read before every single answer, which are worth being able to pick out of a
+cloud. Labels are drawn for every note on a small vault and only for the hovered note on a
+big one until you zoom in, because a thousand overlapping filenames is a grey smudge rather
+than a label.
+
+**Nothing new is exposed.** No route, no command, no tool: this is a second reader for a
+scan that already shipped, and read-only for the same reason the reader is.
 
 ## Where this stands
 
@@ -1656,7 +1712,8 @@ the vault as what to do next, and all three shipped some time ago.*
 **Done.** Phase 1 entire (CLI, hotkey, streaming, local TTS and STT). Phase 2 entire (tool
 registry, the read-only loop, the consent path, mutating tools and undo). Phase 3 entire (the
 vault, priming from it, writing back, search and archiving, and — since step 35 — every
-conversation folded into a dated note without being asked). Plus local-only mode, the theme
+conversation folded into a dated note without being asked, and since steps 39–40 read and
+drawn inside the app). Plus local-only mode, the theme
 engine, the top bar, personas as specialities, per-persona access with per-request elevation
 *and* operator-widened fields, a command allowlist that ships usable, reading the Windows
 event log, honest token telemetry, and native tool calling.

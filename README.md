@@ -595,6 +595,17 @@ plain editor hides — a *Linked from* line at the bottom showing which other no
 the one you are reading. The search box runs the same search the companion itself uses, so
 what you find is what it would have found.
 
+**And you can see the shape of them.** The **🕸 Graph** button at the top of the Notes
+window draws the same notes as a picture: a dot for each note, a line for each `[[link]]`,
+and the note's name underneath. Bigger dots are the notes more things point at, notes in
+the same folder share a colour, and the three ringed dots are the ones it reads before
+every single answer. Drag to move around, scroll to zoom, hover a note to light up what it
+is joined to, and click one to read it.
+
+It is worth a look every so often for the two things a list cannot show you: which notes
+have quietly become the hubs everything hangs off, and which ones are floating on their own
+with nothing pointing at them any more.
+
 It reads and never writes. Notes are changed by asking the companion to change them, which
 goes through the same approval and undo as anything else it does to your files; a reader
 with a Save button would be a second way into the same folder with neither of those things

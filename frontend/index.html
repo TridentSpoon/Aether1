@@ -471,11 +471,12 @@
                     📓 NOTES
                 </h2>
                 <div class="flex items-center gap-2">
+                    <button id="btn-notes-graph" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🕸 Graph</button>
                     <button id="btn-notes-open-folder" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Folder</button>
                     <button id="btn-close-notes" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
                 </div>
             </div>
-            <div class="flex gap-4 flex-1 min-h-0">
+            <div id="notes-reader-view" class="flex gap-4 flex-1 min-h-0">
                 <!-- The list. Search runs the same search the companion itself uses on the
                      vault, so what you find here is what it would have found. -->
                 <div class="w-64 shrink-0 flex flex-col gap-2 min-h-0">
@@ -495,6 +496,22 @@
                     </div>
                     <div id="notes-backlinks" class="hidden text-[11px] font-mono text-slate-400 border-t border-cyan-500/20 pt-2 space-y-1"></div>
                 </div>
+            </div>
+            <!-- The same notes, drawn. Every dot is a note and every line a [[link]];
+                 the ringed dots are the three it reads before every answer. Click a dot
+                 to read that note. The canvas is `hidden` when the reader is showing, and
+                 js/notes-graph.js stops its loop when it is -- a picture nobody is looking
+                 at should not be costing frames on a machine running a model. -->
+            <div id="notes-graph-view" class="hidden flex-1 min-h-0 flex flex-col gap-2">
+                <div class="flex items-center gap-3 flex-wrap text-[10px] font-mono text-slate-500">
+                    <span id="notes-graph-count"></span>
+                    <button id="btn-notes-graph-fit" class="text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-0.5 bg-cyan-950/40 cursor-pointer">Fit</button>
+                    <span>Drag to move · scroll to zoom · click a note to read it</span>
+                </div>
+                <div class="flex-1 min-h-0 rounded border border-cyan-500/20 bg-slate-900/60 overflow-hidden">
+                    <canvas id="notes-graph-canvas" class="w-full h-full block"></canvas>
+                </div>
+                <div id="notes-graph-note" class="hidden text-[10px] font-mono text-amber-300"></div>
             </div>
         </div>
     </div>
@@ -1315,7 +1332,8 @@
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=39"></script>
     <script src="js/voice.js?v=17"></script>
-    <script src="js/app.js?v=50"></script>
+    <script src="js/notes-graph.js?v=1"></script>
+    <script src="js/app.js?v=51"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=3"></script>
 </body>
