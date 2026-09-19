@@ -256,7 +256,8 @@ the failing process already in context.
 **Phase 5 — Reach beyond itself.** Hand a task to whichever coding agent or CLI tool is
 installed and narrate the result. Possibly an MCP client, to borrow the existing tool
 ecosystem instead of growing every integration by hand. Packaging (AUR, `.deb`) so a fresh
-machine is one command away.
+machine is one command away, and — see step 46 — a way for a copy that was *installed*
+rather than cloned to reach a newer version at all, which today it cannot.
 
 **Phase 6 — Continuity.** Memory that moves between your machines under your control, and a
 persona/palette identity the rest of your system can follow.

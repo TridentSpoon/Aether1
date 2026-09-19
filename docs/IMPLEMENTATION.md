@@ -1976,6 +1976,72 @@ What is missing is everything around it, in the order it matters:
 Items 1 and 2 are the ones with a hole behind them right now, and `--lan` should be
 understood as experimental until they land.
 
+### Step 46: updating a copy that was installed rather than cloned
+
+**The updater that exists today only works for the developer.** `main.rs` asks
+`api.github.com` for the latest commit on `main`, and `perform_update_core` runs
+`git pull --ff-only` in `project_root()` and rebuilds. Both halves assume a git checkout,
+and the check assumes `gh auth token` returns something -- the repository is private, so an
+unauthenticated request 404s and `UpdateCheckError::NoGithubAuth` tells the operator to
+install the `gh` CLI and log in.
+
+That is a reasonable developer workflow and it is not a product. Someone who installed from
+`aether1-offline-linux-x86_64.tar.gz` or the Windows installer has no checkout, no `gh`, and
+no path to a newer version at all. **And the two halves of the project disagree about what
+an update even is:** the tray compares commits on `main`, while `release.yml` builds tagged,
+versioned bundles and attaches them to a GitHub Release on `v*`. The updater cannot see
+releases; the release pipeline has no client.
+
+**A credential shipped in the binary is not the fix.** Anything in a distributed app can be
+read out of it, GitHub's secret scanning revokes tokens that appear in public artifacts, and
+there is no obfuscation that changes either fact. The way out is that **the release does not
+have to be private just because the source is.** GitHub Releases inherit their repository's
+visibility, so this means a second, public repository holding only the built artifacts and a
+small version manifest -- no token on the client, nothing to leak, and nothing to host.
+
+**Signing matters more than where the file lives.** Once artifacts are signed and the app
+verifies the signature against a public key compiled into it, the download can come from
+anywhere, over any mirror, and a tampered file simply fails to install. That inverts the
+problem from "keep the location secret" to "make the location irrelevant", which is the only
+version of this that stays true.
+
+The plan:
+
+1. **A public releases repository** (`Aether1-releases` or similar) carrying the bundles
+   `release.yml` already builds, plus a `latest.json` naming the current version and the
+   per-platform URLs. The source repository stays private and unchanged.
+2. **Sign every artifact, and verify on the client.** Windows installers are already signed
+   through Azure Trusted Signing in `release.yml`; the Linux bundles are signed by nothing at
+   all. A minisign keypair covers both uniformly: the private key lives in Actions secrets,
+   the public key is compiled into the binary, and no release is installable without it.
+3. **Point the check at releases, not at `main`.** Compare this build's version against
+   `latest.json`. A commit on `main` is not a release, and telling an operator they are
+   "behind" because someone pushed a README fix is noise.
+4. **Keep the git path, but as the developer path.** When a `.git` directory is present the
+   current pull-and-rebuild behaviour is the right one and should stay. When it is absent,
+   the app fetches the signed bundle instead. Which mode a copy is in should be visible, not
+   inferred silently.
+5. **Do not self-install silently.** The offline bundles are around half a gigabyte. The
+   honest flow is to say a version is available, ask, download with a progress bar the HUD
+   already knows how to draw (step 31), verify the signature, and hand over to the
+   installer.
+
+**On Tauri's own updater.** Tauri v2 ships `tauri-plugin-updater`, which does exactly the
+signature-verified flow described above, and it is not configured here -- there is no
+updater block in `tauri.conf.json` and no pubkey. It is worth adopting only if the bundles
+move to formats it can install (AppImage, `.deb`, NSIS or MSI). This project's bundles are
+bespoke: an Inno Setup installer on Windows, and Linux tarballs carrying Piper, whisper.cpp
+and their models. Verifying minisign signatures directly is the smaller change and keeps the
+packaging that already works; the plugin is the better answer only if the packaging is being
+revisited anyway.
+
+**Two forks the operator has to settle**, because they change the shape rather than the
+detail: whether the source repository stays private, and whether running a small
+update-check endpoint is acceptable. If the source goes public, step 1 collapses to using
+this repository's own Releases and the whole question dissolves. If hosting is acceptable,
+an endpoint holding the token is an alternative to the public mirror -- but it is a service
+to keep running, for a benefit the mirror already provides for free.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -2011,6 +2077,9 @@ event log, honest token telemetry, and native tool calling.
 5. **Step 45, the LAN transport.** TLS and rate limiting are missing from a path that is
    already shipped behind `--lan`, which makes this the only outstanding item with a hole
    behind it rather than an absence.
+6. **Step 46, updates for installed copies.** The updater in `main.rs` needs a git checkout
+   and a logged-in `gh`, so everyone who installed from a Release is on whatever version
+   they downloaded, permanently.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
 which is correct: what they should be depends on those above.
