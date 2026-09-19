@@ -2,7 +2,7 @@
 
 A basic project for self-hosted or API connected AI companions with a sleek holographic presence, built in the spirit of the the future we saw in Sci-Fi growing up.
 
-Designed natively on Linux and with future OS compatibility in mind, featuring real-time system and AI rellevant telemetry, an interactive 3D holographic avatar, with speech capabilities, a local persistent memory, and a system tray companion in or hovering next to your notification bar.
+Built for Linux and Windows as peer platforms -- developed on Linux, installed on both, and a capability is not finished until it works on each -- with macOS to follow if the hardware ever does. It features real-time system and AI relevant telemetry, an interactive 3D holographic avatar, with speech capabilities, a local persistent memory, and a system tray companion in or hovering next to your notification bar.
 
 Intended features
 
