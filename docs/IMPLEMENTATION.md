@@ -673,15 +673,27 @@ The open questions, in the order they will bite:
    further** (see "What 'local' means here" in the ground rules). Both are in scope, which
    makes this two features rather than one -- the host case needs no network exposure at
    all, the LAN case needs authentication before it needs anything else. See below.
-2. **What "better suited" means.** A hand-written rule ("code goes to the code model") is
-   knowable and debuggable. Learned routing needs a signal for what "worked", and the honest
-   answer today is that we do not have one -- a reply the operator did not complain about is
-   not the same as a good reply. This probably starts as declared strengths per model plus
-   the operator's own corrections, and only becomes learned once there is something real to
-   learn from.
-3. **What the operator sees.** If a task silently goes to a different model, the reply's
-   character changes for no visible reason. Which model answered has to be visible, and
-   overridable, or the companion stops feeling like one thing.
+2. ~~**What "better suited" means.**~~ **Settled: the speciality is the key.** Not a
+   classification of each request, and not a learned signal -- the personas already carve
+   the work up by job, so "which model for which job" is a question the design can already
+   ask. It reads as a sentence the operator can check: a code-specialised model like
+   Qwen-Coder suits L'kemi, something chatty and personable suits Halcy. The scoreboard was
+   never going to answer this on its own; it measures tokens per second, which is speed, and
+   fitness is a different axis.
+
+   The suggestion beside each model comes from **a table shipped in the binary**, matching
+   model families to specialities by name, with `model_benchmarks` breaking ties on measured
+   speed. Deliberately not a Hugging Face or Ollama library lookup: those rank by downloads,
+   which is popularity rather than fitness, and principle 2 means a machine with no network
+   still has to see a sensible default. The table ages, and is updated with releases, which
+   is the honest cost of the rule.
+3. ~~**What the operator sees.**~~ **Settled: a dropdown beside the avatar**, listing the
+   models actually available, with one marked *(suggested)*. The choice is explicit rather
+   than inferred -- no thumbs-down teaching it quietly -- and it is stored per speciality in
+   the `settings` table, which is already the key-value store the rest of the HUD's choices
+   live in. A model that disappears from the list leaves the setting in place and falls back
+   to the suggestion, saying so once, so uninstalling a model is not a silent change of who
+   you are talking to.
 
 **On network exposure.** Now that the LAN is confirmed in scope, this is no longer a
 question but an ordering constraint.
@@ -1929,6 +1941,41 @@ if fill is ever switched off.
 through the state label. The viewport now stops 9vmin short of the bottom and the word lives
 in that band, which is a caption rather than an overlay.
 
+### Step 45: the phrase is not the weak part
+
+`serve_auth.rs` protects the pairing phrase carefully at rest -- 12 BIP-39 words, shown
+once, never written down, with only the SHA-256 of a derived token on disk and a
+constant-time comparison to check it. **Settled: 12 words stays.** 128 bits is past the
+point where more words buy anything, so a longer phrase would be ceremony rather than
+security.
+
+What is missing is everything around it, in the order it matters:
+
+1. **TLS, self-signed.** The derived token travels in a plain `Authorization` header --
+   there is no `rustls` or certificate anywhere in `server.rs` -- so anyone on the same
+   wifi can read it once and reuse it indefinitely. The certificate has to be self-signed:
+   no public CA will issue for a `.local` name or a private address, and requiring a public
+   domain would make a LAN feature depend on the internet. Self-signed is not a compromise
+   here, it is the correct shape -- Syncthing takes it further and makes the certificate
+   hash *be* the device identity. The certificate's fingerprint is shown as a safety number
+   on both screens, so the operator confirms the same short string twice and knows which
+   machine answered.
+2. **Rate limiting on the auth route.** The module's own comment describes the phrase as
+   "far more entropy than a rate-limited LAN auth endpoint could ever be brute-forced
+   through", and nothing in `server.rs` or `serve_auth.rs` counts attempts, locks out, or
+   returns 429. The comment describes a property the code does not have, which is worse
+   than not claiming it.
+3. **A token per paired device.** One hash for everything means revoking a lost laptop
+   re-pairs the desktop too, and nothing can say which device is which in the action log.
+4. **A PAKE, later, if the rigour is wanted.** `discovery.rs` announces over DNS-SD, which
+   anyone on the network can impersonate, so a phrase can be typed into a convincing fake.
+   SPAKE2 -- what Matter and Thread commissioning use -- ends that class of attack by never
+   letting the phrase cross the wire at all. It is real work and it is last, because items
+   1 and 2 close the holes that are open today.
+
+Items 1 and 2 are the ones with a hole behind them right now, and `--lan` should be
+understood as experimental until they land.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1958,7 +2005,12 @@ event log, honest token telemetry, and native tool calling.
    a first responder rather than something you go to.
 4. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
-   download path it would need already exist in `setup.rs`.
+   download path it would need already exist in `setup.rs`. Its two design questions are
+   now answered -- routing is keyed on speciality and chosen from a dropdown -- so what
+   remains is the building.
+5. **Step 45, the LAN transport.** TLS and rate limiting are missing from a path that is
+   already shipped behind `--lan`, which makes this the only outstanding item with a hole
+   behind it rather than an absence.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
 which is correct: what they should be depends on those above.

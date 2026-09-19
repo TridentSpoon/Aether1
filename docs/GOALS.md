@@ -324,12 +324,30 @@ them are the kind a later reader would otherwise re-litigate.
   parallel implementation, because Windows is a peer and not a reduced target. Crash
   capture helps here: it is unbuilt on *every* platform today, so it is a fresh design for
   Linux and Windows together rather than a Linux feature to port afterwards.
-- How long is the pairing phrase? `serve_auth.rs` already generates a 12-word BIP-39 phrase
-  with the wire token derived from it, so a copied config leaks nothing. 12 words is 128
-  bits, which is past the point where more words buy anything; a longer phrase would be for
-  how it feels to read, not for what it protects.
-- Where does learned model routing keep its corrections, and how does an override made once
-  survive a model list that changes underneath it?
+- ~~How long is the pairing phrase?~~ **Settled: it stays at 12 words, and the work is
+  elsewhere.** 12 BIP-39 words is 128 bits, past the point where more words buy anything,
+  so a longer phrase would be ceremony. The phrase was never the weak part — the transport
+  around it is. In the order they matter: **self-signed TLS** with the certificate's
+  fingerprint shown as a safety number on both screens, because today the derived token
+  rides a plain `Authorization` header and anyone on the wifi can lift it and replay it
+  forever; **rate limiting** on the auth route, which `serve_auth.rs` already describes
+  itself as having and does not; **a token per paired device**, so removing one machine
+  does not mean re-pairing all of them; and a PAKE such as SPAKE2 later if it is worth the
+  rigour, which would stop the phrase crossing the wire at all. Detail in step 45 of
+  [IMPLEMENTATION.md](IMPLEMENTATION.md).
+- ~~Where does learned model routing keep its corrections?~~ **Settled: keyed on
+  speciality, chosen in the HUD, stored in the settings table.** Each speciality gets the
+  model that suits its job — a code-specialised model for L'kemi, something personable for
+  Halcy — picked from a dropdown beside the avatar that marks one option *(suggested)*. The
+  choice is the operator's, explicitly, rather than something inferred from a thumbs-down,
+  because an inferred preference is hard to inspect and this one has to be readable. See
+  step 19 of [IMPLEMENTATION.md](IMPLEMENTATION.md).
+- Where does the *suggestion* come from? Not from the network, whatever else it costs us:
+  principle 2 means a machine with no internet still has to see a sensible default. So the
+  suggestion is a small table shipped in the binary, matching model families to specialities
+  by name, with the local scoreboard in `model_benchmarks` breaking ties on measured speed.
+  A Hugging Face or Ollama lookup would rank by downloads, which measures popularity rather
+  than fitness, and would make a core affordance depend on being online.
 
 ## Getting there
 
