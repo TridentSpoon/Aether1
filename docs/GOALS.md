@@ -5,7 +5,21 @@
 **A companion that lives on your machine, can actually operate it, and gets to know you
 by running on your hardware long enough to learn.**
 
-Not a chat window with a nice avatar in front of it. The thing that makes a locally-run
+Put plainly, by the person building it: *a chatting friend chilling on your system that
+can help out when running into a problem.* Read the rest of this document against that
+sentence. The three things in the next section — it runs on your hardware, it can operate
+the machine, it remembers — are not the point in themselves; they are what holds the point
+up. A friend who forgets you, cannot do anything, and stops working when the wifi drops is
+not much of a friend. **Delight is the purpose. The three pillars are how it is earned**,
+which is why they are the structure of this document and delight is not a fourth item on
+the list.
+
+Warmth has a reference too, and it is an old one: Cortana at launch, before she was a
+search box. The bar is a companion people talked to because they wanted to, not because
+they needed something.
+
+A chat window with a nice avatar in front of it would be the easy version of this, and it
+is not what is being built. The thing that makes a locally-run
 companion worth building is precisely what a hosted assistant cannot do: it is *on the
 box*. It can see what the machine is doing, it can act on it, and everything it learns
 about you stays on the same disk. Those three facts compound — an assistant that can both
@@ -138,11 +152,17 @@ it knows, wearing whichever of the personas you chose.
    deletable with the tools you already use, not through an interface we have to build
    first. It never leaves the machine unless you move it yourself.
 6. **Persona is presentation, capability is shared.** Halcy, R.E.D. 9000, Nexus, the ARX
-   nodes change voice and manner — never what the system can or will do. Every persona
+   nodes change voice and manner — never what the system can or will do. That is a floor,
+   not a ceiling: manner *is* the product here, so a persona with jokes, opinions and a
+   sense of humour is doing its job rather than overstepping it. Every persona
    pushes back: a companion that agrees with a bad idea is worse than no companion, and
    that is a property of all of them, not a personality option.
 7. **One binary, no install ritual.** The Rust/Tauri core plus a static frontend; the
    setup script and `.tar.gz` bundle do the rest.
+8. **Linux and Windows are peers.** Development happens on Linux and the result is
+   installed on both, so a capability is unfinished until it works on both. macOS follows
+   if the hardware ever does. A phone is a *face* for a desktop instance over your own
+   network, not a fourth port of the whole system.
 
 ## Where we are today
 
@@ -243,15 +263,39 @@ persona/palette identity the rest of your system can follow.
 
 ## Non-goals
 
-- **Not a coding agent.** Aether1 may hand work to one; it is not trying to be one.
+- **Not a coding agent.** Aether1 may hand work to one — with your permission, per
+  handoff, and ideally creating and managing that agent for you — but it is not trying to
+  be one itself.
 - **Not a wrapper around someone else's agent.** Building on a hosted coding agent buys
   enormous capability immediately and costs the thing this project is for: working when
   the network doesn't.
 - **Not a cloud service.** No account, no server-side memory, no telemetry leaving the box.
 - **Not a desktop environment or distribution.** It runs on your setup; it doesn't replace
   it.
-- **Not a general chat client.** If a feature has no relationship to your machine or your
-  history with it, it probably belongs somewhere else.
+- **Not a replacement for a general-purpose assistant.** Conversation for its own sake is
+  in scope: the companion should be good company, tell a joke, and be worth talking to on a
+  day when nothing is broken. What belongs somewhere else is the feature with no
+  relationship to your machine, your history with it, or the conversation itself.
+
+## Decided, 2026-09-19
+
+Nine questions put to the project's owner, and the answers, recorded here because most of
+them are the kind a later reader would otherwise re-litigate.
+
+1. **Delight is the purpose, not a pillar.** Small talk and jokes are in scope.
+2. **Linux and Windows are peers**; macOS if the hardware ever appears; a phone later, as a
+   face for a desktop instance over the LAN.
+3. **Agent handoff is allowed**, per handoff, with permission — and Aether1 may need to
+   create and manage those agents itself. Omarchy's *ease* is the bar to clear.
+4. **Consent stays per step by default**, but a plan whose steps are all disclosed up front
+   may be approved as a whole.
+5. **The vault is searched through Obsidian** or a wiki view over the existing layout.
+6. **Model routing is both rule-based and learned.** Whatever it suggests must be
+   overridable, and the override must be remembered.
+7. **A word phrase pairs devices on a network.** Already built — see `serve_auth.rs`.
+8. **Every dependency is checked**, and a missing one always points at least to its
+   website.
+9. **A small, competent local model is the floor**, not a fallback.
 
 ## Open questions
 
@@ -260,10 +304,10 @@ persona/palette identity the rest of your system can follow.
   cleared. Every run is still proposed. And "approve always" applies to *tools* and to
   *folders within a speciality's field*, never to running a command — `run_command` cannot
   be pre-approved by any path.
-- Retrieval over a folder of notes: does the index plus the existing `read_file` /
-  `list_dir` tools get far enough on its own, or does it need a real search index — and if
-  so, grep-shaped or embeddings? Embeddings mean a second model resident in RAM alongside
-  the chat model.
+- ~~Retrieval over a folder of notes: index and `read_file`, or a real search index?~~
+  **Settled:** Obsidian, or a wiki-style view over the layout that already exists. No
+  bespoke search UI to build, and no embeddings unless retrieval is *measured* to be the
+  bottleneck — a second model resident in RAM is a real cost to pay on a hunch.
 - ~~Where does the vault live, and who owns its layout?~~ **Settled:** a plain folder in
   your home directory, set in Settings, with an index at its root, `daily/` for
   conversations, and wiki-links between notes. Obsidian renders it; nothing requires it.
@@ -276,8 +320,16 @@ persona/palette identity the rest of your system can follow.
   drawn around.
 - MCP client, or a first-party tool set? The first buys an ecosystem; the second keeps the
   consent model entirely ours.
-- Windows: crash capture and command execution are the most Linux-shaped parts of the
-  design. Does Windows get a reduced capability set, or a parallel implementation?
+- ~~Windows: a reduced capability set, or a parallel implementation?~~ **Settled:** a
+  parallel implementation, because Windows is a peer and not a reduced target. Crash
+  capture helps here: it is unbuilt on *every* platform today, so it is a fresh design for
+  Linux and Windows together rather than a Linux feature to port afterwards.
+- How long is the pairing phrase? `serve_auth.rs` already generates a 12-word BIP-39 phrase
+  with the wire token derived from it, so a copied config leaks nothing. 12 words is 128
+  bits, which is past the point where more words buy anything; a longer phrase would be for
+  how it feels to read, not for what it protects.
+- Where does learned model routing keep its corrections, and how does an override made once
+  survive a model list that changes underneath it?
 
 ## Getting there
 
