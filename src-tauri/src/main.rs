@@ -56,6 +56,7 @@ const TRAY_ID: &str = "main-tray";
 const MAIN_LABEL: &str = "main";
 const SPRITE_LABEL: &str = "sprite";
 const AVATAR_LAB_LABEL: &str = "avatar-lab";
+const FACE_LABEL: &str = "face";
 
 /// Set by build.rs from `git rev-parse HEAD` at compile time; "unknown" if this wasn't
 /// built from a git checkout (e.g. a source tarball without a .git directory).
@@ -1135,6 +1136,80 @@ fn toggle_sprite_window_rust(app: tauri::AppHandle, enabled: bool) -> Result<(),
     }
 }
 
+/// Builds the fullscreen face window: the avatar filling a whole screen with nothing around
+/// it but the word for what it is doing (frontend/face.html). Meant for a spare screen or a
+/// second monitor, so it goes to a monitor that is *not* the one the HUD is on when there is
+/// one -- putting it over the window it mirrors would be a strange default -- and falls back
+/// to the primary monitor otherwise.
+///
+/// Like the desktop sprite this is a mirror, not a second companion: it has no chat, no
+/// microphone and no settings of its own, and everything it draws arrives from the main HUD
+/// over the same Tauri events the sprite already listens to (see frontend/js/face.js). Unlike
+/// the sprite it takes no input at all beyond Esc to close, which is why it does not need --
+/// and deliberately does not get -- the sprite's click-to-listen bridge.
+///
+/// Undecorated as well as fullscreen: a title bar on a screen showing one face is the one
+/// piece of furniture there is no excuse for. That makes Esc the only way out, so face.js
+/// says so on screen rather than leaving the operator to guess.
+fn build_face_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        app,
+        FACE_LABEL,
+        tauri::WebviewUrl::App("face.html".into()),
+    )
+    .title("AETHER1")
+    .fullscreen(true)
+    .decorations(false)
+    .resizable(false)
+    .skip_taskbar(true);
+
+    if let Some(monitor) = spare_monitor(app) {
+        // Fullscreen is applied to whichever monitor the window is on, so the position has
+        // to be set before it is shown -- one logical pixel inside the spare monitor's own
+        // origin is enough to land it there.
+        let origin = monitor.position().to_logical::<f64>(monitor.scale_factor());
+        builder = builder.position(origin.x + 1.0, origin.y + 1.0);
+    }
+
+    builder.build()
+}
+
+/// A monitor other than the one the HUD is currently on, if this machine has one. `None`
+/// on a single-monitor machine (and on any platform where the monitor list is unavailable),
+/// which leaves the face on the only screen there is -- the right answer there, even though
+/// it covers the HUD, because the alternative is refusing to open at all.
+fn spare_monitor(app: &tauri::AppHandle) -> Option<tauri::window::Monitor> {
+    let main = app.get_webview_window(MAIN_LABEL)?;
+    let current = main.current_monitor().ok().flatten()?;
+    let monitors = app.available_monitors().ok()?;
+    monitors
+        .into_iter()
+        .find(|m| m.position() != current.position())
+}
+
+/// Opens or closes the fullscreen face. Backs both the tray's "Fullscreen Face" item and
+/// `aether1 face`, and the Esc key inside the face window itself -- one command for all
+/// three so there is a single answer to "is it open", rather than three places that each
+/// think they know.
+#[tauri::command]
+fn toggle_face_window_rust(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        match app.get_webview_window(FACE_LABEL) {
+            Some(window) => {
+                window.show().map_err(|e| e.to_string())?;
+                window.set_focus().map_err(|e| e.to_string())
+            }
+            None => build_face_window(&app)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        }
+    } else if let Some(window) = app.get_webview_window(FACE_LABEL) {
+        window.close().map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Opens the avatar workbench (frontend/avatar-lab.html) in its own window: the avatar
 /// engine with nothing else running, plus the builder that writes the custom avatar's
 /// recipe. A separate window rather than a route inside the HUD, because the workbench
@@ -1311,11 +1386,15 @@ fn main() {
     // runs in a headless process. See cli.rs for the argument parsing and server.rs for
     // the axum app.
     let invocation = cli::parse(&std::env::args().collect::<Vec<_>>());
+    // `aether1 face` with nothing already running: this launch becomes the instance, and
+    // the face has to be opened from setup() below rather than by the single-instance
+    // handler, which only ever runs for the *second* launch.
+    let open_face_at_launch = matches!(invocation, cli::Invocation::Face);
     match invocation {
-        // `show`/`toggle` continue into the app path: the single-instance plugin below
-        // hands their argv to the already-running instance, and if there isn't one, this
-        // launch becomes it.
-        cli::Invocation::App | cli::Invocation::Window { .. } => {}
+        // `show`/`toggle`/`face` continue into the app path: the single-instance plugin
+        // below hands their argv to the already-running instance, and if there isn't one,
+        // this launch becomes it.
+        cli::Invocation::App | cli::Invocation::Window { .. } | cli::Invocation::Face => {}
         // Headless HTTP mode.
         cli::Invocation::Serve { lan } => {
             let engine = build_llm_engine();
@@ -1341,6 +1420,14 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(
             |app, argv, _cwd| match cli::parse(&argv) {
                 cli::Invocation::Window { toggle: true } => hotkey::toggle_window(app),
+                // `aether1 face` from a second launch opens the face and leaves the HUD
+                // exactly as it was -- summoning the main window too would undo the point
+                // of a command whose whole job is to put something on a *different* screen.
+                cli::Invocation::Face => {
+                    if let Err(e) = toggle_face_window_rust(app.clone(), true) {
+                        eprintln!("[AETHER1] Could not open the fullscreen face: {e}");
+                    }
+                }
                 _ => hotkey::show_window(app),
             },
         ))
@@ -1411,6 +1498,7 @@ fn main() {
             apply_update_rust,
             install_gh_via_winget_rust,
             toggle_sprite_window_rust,
+            toggle_face_window_rust,
             open_avatar_lab_rust,
             open_panel_window_rust,
             set_window_always_on_top_rust,
@@ -1421,24 +1509,26 @@ fn main() {
         .on_window_event(|window, event| {
             // Closing the main HUD window would otherwise exit the whole app (Tauri's
             // default with no other running windows/tray keeping it alive) -- but if the
-            // desktop sprite is up, the app should keep running headless-with-sprite instead,
-            // matching the tray's existing "Show AETHER1" affordance. Only intercepts the
-            // close when the sprite is actually open, so anyone not using that feature sees
-            // the same close-quits-the-app behavior as before.
+            // desktop sprite or the fullscreen face is up, the app should keep running
+            // headless-with-avatar instead, matching the tray's existing "Show AETHER1"
+            // affordance. Both count, and for the same reason: each is a window showing the
+            // avatar somewhere other than the HUD, and quitting out from under one of them
+            // reads as the close button having killed a window on a different screen. Only
+            // intercepts the close when one of them is actually open, so anyone not using
+            // either feature sees the same close-quits-the-app behavior as before.
             if window.label() == MAIN_LABEL {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if window
-                        .app_handle()
-                        .get_webview_window(SPRITE_LABEL)
-                        .is_some()
-                    {
+                    let app = window.app_handle();
+                    let avatar_is_elsewhere = app.get_webview_window(SPRITE_LABEL).is_some()
+                        || app.get_webview_window(FACE_LABEL).is_some();
+                    if avatar_is_elsewhere {
                         api.prevent_close();
                         let _ = window.hide();
                     }
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             // Let the webview load synthesized speech files directly off disk via
             // convertFileSrc (see synthesizeSpeechUrl in frontend/js/app.js) -- the asset
             // protocol is opt-in per-directory, and this path is only known at runtime (it's
@@ -1496,8 +1586,14 @@ fn main() {
                 true,
                 None::<&str>,
             )?;
+            // In the tray rather than only in the HUD: the face is for a screen you are not
+            // sitting in front of, and reaching it should not require first summoning the
+            // window it is meant to replace.
+            let face_item =
+                MenuItem::with_id(app, "face", "🙂 Fullscreen Face", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit AETHER1", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_item, &update_item, &quit_item])?;
+            let tray_menu =
+                Menu::with_items(app, &[&show_item, &face_item, &update_item, &quit_item])?;
 
             // Whether the last check found a newer commit on `main` -- read by the
             // "check_update" click handler to decide whether the next click should check
@@ -1562,6 +1658,16 @@ fn main() {
                                 }
                             }
                         }
+                        // A toggle, like the menu item's own wording implies: clicking it
+                        // again is how you get a fullscreen, undecorated window back off a
+                        // screen if Esc did not reach it (a face on a monitor without focus
+                        // never sees a keystroke).
+                        "face" => {
+                            let open = app.get_webview_window(FACE_LABEL).is_some();
+                            if let Err(e) = toggle_face_window_rust(app.clone(), !open) {
+                                eprintln!("[AETHER1] Could not toggle the fullscreen face: {e}");
+                            }
+                        }
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -1595,6 +1701,16 @@ fn main() {
             if sprite_was_enabled {
                 if let Err(e) = build_sprite_window(app.handle()) {
                     eprintln!("[AETHER1] Could not reopen the desktop sprite window: {e}");
+                }
+            }
+
+            // `aether1 face` started this process. Not persisted the way the sprite is:
+            // asking for the face once is asking for it now, not forever -- a fullscreen
+            // window that reappears on every launch until you find the setting that stops
+            // it is a trap, and the tray item is right there when you want it again.
+            if open_face_at_launch {
+                if let Err(e) = build_face_window(app.handle()) {
+                    eprintln!("[AETHER1] Could not open the fullscreen face: {e}");
                 }
             }
 
@@ -1659,6 +1775,7 @@ mod ipc_thread_tests {
     /// None of them blocks on anything, so none of them can freeze the HUD.
     const MAIN_THREAD_ONLY: &[&str] = &[
         "toggle_sprite_window_rust",
+        "toggle_face_window_rust",
         "open_avatar_lab_rust",
         "open_panel_window_rust",
         "set_window_always_on_top_rust",

@@ -629,12 +629,15 @@ Sketched rather than specified, because the earlier steps will change what these
 
 ---
 
-### Step 18a: A fullscreen face
+### Step 18a: A fullscreen face — **shipped**
 
 Cheap, and it changes how the thing feels: a fullscreen route that shows only the avatar
 and its state (idle / listening / thinking / speaking), for a second monitor or a spare
 screen. The hologram renderer and the state machine already exist; this is a layout and a
 CLI flag (`aether1 face`) away.
+
+*Built in step 44 below — where the "cheap" estimate turned out to be right about the
+window and wrong about the avatar in it.*
 
 ### Step 18b: Separable parts
 
@@ -1861,6 +1864,71 @@ before the script runs and falls back to if it never does — a layout that work
 one that collapses. Resize events are coalesced to one pass per frame, and that pass ends by
 dispatching `aether1:panels-changed`, which is how the terminal hears that its box moved.
 
+### Step 44: a fullscreen face, and the avatar that would not fill it — **shipped**
+
+Step 18a called this "a layout and a CLI flag away". The layout and the CLI flag took an
+afternoon and the estimate was right about both. It was wrong about the third thing, which
+is that an avatar drawn on a whole monitor was still the size of the panel it came from.
+
+**The window.** `frontend/face.html` is an undecorated, fullscreen window holding the
+hologram and one word — IDLE, LISTENING, THINKING or SPEAKING. `build_face_window` puts it
+on a monitor the HUD is *not* on when the machine has one, because a fullscreen window that
+lands on the screen you are working on is not a second screen feature. Three ways in, all
+of them the same Rust command (`toggle_face_window_rust`): `aether1 face`, the tray's
+**🙂 Fullscreen Face** item, and a **⛶** button beside the avatar panel's undock control.
+Not persisted: asking for the face is asking for it now, not forever.
+
+**A mirror in one direction only.** Like the desktop sprite it shows the HUD's own avatar,
+driven by the four events the HUD pushes (`avatar-changed`, `color-theme-changed`,
+`hologram-state-changed`, `hologram-audio-changed`). Unlike the sprite it cannot be clicked
+to start the microphone. The sprite can, because it replaces the HUD on the desktop in front
+of you; this window is on a screen across the room, and a fullscreen surface that starts
+recording when something brushes the mouse is not a feature. Esc closes it, and that is the
+whole of its input.
+
+**The gate became a set.** State and audio are per-frame-ish traffic across the IPC
+boundary, so `app.js` only emitted them while the sprite was open. That boolean is now an
+`avatarMirrors` set: a window says `avatar-mirror-attached` when it opens and
+`avatar-mirror-detached` when it closes. A set rather than a counter, so a face that reloads
+cannot double-count itself into a gate that never closes. Attaching also triggers a snapshot
+push — avatar, theme and current state — which closes a gap the sprite had all along: a
+mirror opened mid-sentence used to sit on IDLE until the next thing happened.
+
+**The postage stamp.** The first fullscreen screenshot had the avatar at 30% of the screen
+height, and the reason was in `applyContentFit`: it only ever *widens* the camera's field of
+view above `baseFov`, never narrows it. That is right for the HUD, where every avatar reads
+at the resting size it was designed at and a panel with room to spare simply has room to
+spare. On a monitor it means the avatar keeps its panel size and the monitor supplies the
+empty space. So `setFillFraction`/`applyFillZoom` are the opt-in other half: the face asks
+to fill the frame, nothing else does, and the HUD's zoom slider is untouched because the
+default is null.
+
+**The first fix did not work, and measuring said why.** With the fill zoom in, the avatar was
+the same size. Reading the engine's own numbers out of the running page rather than guessing
+gave it away in one line: `contentHalfHeight` was 80 for an avatar whose lettering is 40
+units tall. a1 wears a soft glow — a 160-unit sprite at 0.18 opacity — and the bounding box
+auto-fit measures is the glow's, not the avatar's. The fill was working perfectly and filling
+the screen with haze.
+
+So `expandBySolidParts` measures the same objects again, skipping anything you can see
+through, and the fill path uses that box while auto-fit keeps using the full one. A glow
+clipped against a panel edge would show; a glow running off the edge of a monitor is what
+glow is supposed to do. The bounce allowance is dropped from the fill target for a related
+reason — it is a flat 35 world units sized against a panel, while an avatar's actual idle
+motion scales with the zoom applied here, so adding it again would reserve a third of a
+monitor for a wobble of a few pixels. `fitMargin`'s 30% covers the motion at any size
+because it is a proportion. Measured across every avatar, height went from 30% of the screen
+to 47–86%, and the HUD's numbers came back identical.
+
+**The zoom ceiling had to move, and only here.** `setZoom` clamped at 2.5, which is as far
+as the HUD's slider goes; the a1 fill wants 2.65. `maxZoom` is now a field, raised to 6 only
+for a window that has opted into filling, and put back — with the current zoom re-clamped —
+if fill is ever switched off.
+
+**The word needed its own room.** With the avatar actually filling the frame it grew straight
+through the state label. The viewport now stops 9vmin short of the bottom and the word lives
+in that band, which is a caption rather than an overlay.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -1871,7 +1939,8 @@ registry, the read-only loop, the consent path, mutating tools and undo). Phase 
 vault, priming from it, writing back, search and archiving, and — since step 35 — every
 conversation folded into a dated note without being asked, and since steps 39–40 read and
 drawn inside the app, and since step 41 kept in conversations you can reopen). Plus, since
-step 42, a real terminal in the HUD that the companion provably cannot reach. Plus local-only
+step 42, a real terminal in the HUD that the companion provably cannot reach, and since
+step 44 the avatar on a spare screen of its own. Plus local-only
 mode, the theme engine, the top bar, personas as specialities, per-persona access with per-request elevation
 *and* operator-widened fields, a command allowlist that ships usable, reading the Windows
 event log, honest token telemetry, and native tool calling.
@@ -1887,9 +1956,7 @@ event log, honest token telemetry, and native tool calling.
    express yet.
 3. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
    a first responder rather than something you go to.
-4. **Step 18a, a fullscreen face.** Cheap — the renderer and the state machine both exist — and
-   it changes what the thing feels like more than its cost suggests.
-5. **Step 19, several local models.** A stated core requirement, and still deliberately not
+4. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
    download path it would need already exist in `setup.rs`.
 

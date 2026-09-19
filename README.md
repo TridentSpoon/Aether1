@@ -506,6 +506,38 @@ machine pointed at the same companion can be arranged completely differently. Se
 **Reset panels to their default places** button when you want the original layout back,
 which also switches every panel back on.
 
+## The avatar on a spare screen
+
+If you have a second monitor, a telly on the wall, or the little screen on a laptop dock
+doing nothing, you can put the avatar on it and nothing else:
+
+```sh
+aether1 face
+```
+
+There is also a **⛶** button in the top corner of the avatar panel, and a **🙂 Fullscreen
+Face** item in the tray menu. All three do the same thing.
+
+What you get is one screen with the avatar on it, filling the height, and a single word
+underneath saying what it is doing — IDLE, LISTENING, THINKING or SPEAKING. No panels, no
+chat, no buttons, no mouse pointer. It picks a monitor you are *not* working on when there
+is one, so it does not land on top of whatever you were reading.
+
+**It is a mirror, not a second companion.** It shows whatever the main window's avatar is
+doing, in the same shape and the same colours, and changes the moment you change them. It
+has no conversation of its own and nothing to type into.
+
+**It never listens.** The small desktop avatar can be clicked to start the microphone,
+because it sits on the desktop in front of you. This one deliberately cannot: it is on a
+screen across the room, and a screen that starts recording because the cat walked past the
+mouse is not something worth having.
+
+**Press Esc to close it** — the reminder in the corner says so, and fades out once you have
+read it. Moving the mouse brings it (and the pointer) back. The tray item and the **⛶**
+button close it again too.
+
+It is not remembered between restarts. Asking for it is asking for it now, not forever.
+
 ## Themes
 
 A theme is two choices, and they are independent.
@@ -885,6 +917,7 @@ echo "status" | aether1 prompt           # or pipe the question in
 aether1 status                           # system diagnostic report (--json for raw)
 aether1 say "systems nominal"            # speak, in the configured persona voice
 aether1 toggle                           # summon/dismiss the HUD of a running instance
+aether1 face                             # avatar fullscreen on a spare screen (Esc closes it)
 aether1 --help
 ```
 

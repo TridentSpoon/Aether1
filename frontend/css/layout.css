@@ -132,6 +132,19 @@
   outline: none;
 }
 
+/* A second control in the same strip, on the avatar panel only: fullscreen on a spare
+   screen (see #btn-avatar-fullscreen in index.html). It carries .panel-undock as well, so
+   it inherits that button's whole appearance and the solo-panel hide rule below along with
+   it -- only the position differs. The grip's right edge moves out of its way for that one
+   panel rather than for all of them, since nothing else has two. */
+.panel-fullscreen {
+  right: 38px;
+}
+
+[data-panel="hologram"] .panel-grip {
+  right: 62px;
+}
+
 /* Panels whose content starts at the very top (the avatar, the dialogue stream)
    need to make room for the grip; the padded ones already have room. */
 .grip-inset {

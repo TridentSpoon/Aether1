@@ -212,6 +212,13 @@ class HologramAvatar {
         // that layer is excluded on purpose, see avatar-custom.js.
         this.zoomScale = 1;
         this.avatarZoomGroup = null;
+        // The ceiling on setZoom. 2.5 is as far as the HUD's zoom slider goes; the fullscreen
+        // face raises it (see setFillFraction), because a monitor is not a panel.
+        this.maxZoom = 2.5;
+
+        // Null unless a caller opts in (see setFillFraction): how much of the frame the
+        // avatar should be scaled up to occupy. Only the fullscreen face asks for this.
+        this.fillFraction = null;
 
         // Pointer tracking -- only The Nexus consumes these (mouse-manipulated head that
         // autonomously "hunts" when the pointer isn't actively directing it); other avatars
@@ -234,6 +241,10 @@ class HologramAvatar {
         this.fitBounceAllowance = 35; // world units -- covers bounce/pulse/click motion a resting bounding box doesn't capture
         this.contentHalfWidth = null;
         this.contentHalfHeight = null;
+        // The same measurement with the avatar's glow left out -- only the fill path below
+        // uses these (see expandBySolidParts and applyFillZoom).
+        this.solidHalfWidth = null;
+        this.solidHalfHeight = null;
 
         this.init();
     }
@@ -426,6 +437,8 @@ class HologramAvatar {
         }
         const box = new THREE.Box3();
         objects.forEach(obj => box.expandByObject(obj));
+        const solid = new THREE.Box3();
+        objects.forEach(obj => this.expandBySolidParts(solid, obj));
         if (zoomed) {
             this.avatarZoomGroup.scale.setScalar(this.zoomScale);
             this.avatarZoomGroup.updateMatrixWorld(true);
@@ -436,7 +449,32 @@ class HologramAvatar {
         // solid 'A' and point-cloud '1' sit either side of it, for instance.
         this.contentHalfWidth = Math.max(Math.abs(box.min.x), Math.abs(box.max.x));
         this.contentHalfHeight = Math.max(Math.abs(box.min.y), Math.abs(box.max.y));
+        this.solidHalfWidth = solid.isEmpty() ? this.contentHalfWidth
+            : Math.max(Math.abs(solid.min.x), Math.abs(solid.max.x));
+        this.solidHalfHeight = solid.isEmpty() ? this.contentHalfHeight
+            : Math.max(Math.abs(solid.min.y), Math.abs(solid.max.y));
         this.applyContentFit();
+    }
+
+    /* The same box, minus the haze. Several avatars wear a soft glow -- a big, near-
+       transparent sprite or halo several times the size of the thing it is glowing around
+       (a1's is a 160-unit sprite at 0.18 opacity around lettering only 80 units tall). For
+       auto-fit that is exactly right: the glow is part of the picture and clipping it against
+       a panel edge would show. For "fill the screen" it is exactly wrong -- sizing the avatar
+       so its glow reaches the edges of a monitor leaves the avatar itself a third of the
+       height it should be, which is the postage stamp this whole path exists to avoid.
+
+       So the fill path measures only what is solid enough to read as an edge, and lets the
+       haze run off the screen, which is what haze is supposed to do. The threshold is on
+       opacity alone: an object you can see through is not where the avatar ends. */
+    expandBySolidParts(box, object) {
+        object.traverseVisible((node) => {
+            if (!node.geometry) return;
+            const material = node.material;
+            const materials = Array.isArray(material) ? material : [material];
+            const solid = materials.some(m => m && (!m.transparent || (m.opacity == null ? 1 : m.opacity) >= 0.5));
+            if (solid) box.expandByObject(node);
+        });
     }
 
     // Manual zoom -- how big the avatar reads on screen, picked by hand rather than derived
@@ -446,7 +484,7 @@ class HologramAvatar {
     // zoomParentFor and avatar-custom.js) so this only ever resizes the avatar itself, tiers
     // 1-3, never its background.
     setZoom(scale) {
-        this.zoomScale = Math.min(2.5, Math.max(0.5, Number(scale) || 1));
+        this.zoomScale = Math.min(this.maxZoom, Math.max(0.5, Number(scale) || 1));
         if (this.avatarZoomGroup) this.avatarZoomGroup.scale.setScalar(this.zoomScale);
     }
 
@@ -477,6 +515,62 @@ class HologramAvatar {
 
         this.camera.fov = Math.min(this.maxFov, Math.max(this.baseFov, neededFovDeg));
         this.camera.updateProjectionMatrix();
+
+        // Auto-fit has just decided how much of the frame the avatar is allowed; if a caller
+        // asked to fill it, that is the moment to work out by how much.
+        if (this.fillFraction != null) this.applyFillZoom();
+    }
+
+    /* "Use the space you have been given."
+
+       Auto-fit above only ever *widens* the field of view, never narrows it: a panel too
+       narrow for an avatar gets a wider lens, and a panel with room to spare simply has room
+       to spare. That is right for the HUD, where every avatar is meant to read at the resting
+       size it was designed at, and wrong for a window whose entire job is to be a face --
+       frontend/face.html fills a monitor, and an avatar drawn at panel size in the middle of
+       it is a postage stamp on a wall.
+
+       So this is the other half of the pair, and it is opt-in: the face asks for it, nothing
+       else does. `fraction` is how much of the frame the avatar's solid parts should take up,
+       1 meaning right up to the 30% margin fitMargin reserves for idle motion. Null (the
+       default) leaves manual zoom alone entirely, which is what every existing caller wants
+       -- the HUD's own zoom slider would fight anything else. */
+    setFillFraction(fraction) {
+        this.fillFraction = fraction == null ? null : Math.min(1, Math.max(0.1, Number(fraction) || 1));
+        // 2.5 is the slider's ceiling, and it is the wrong one here: an avatar whose solid
+        // parts are small relative to its glow needs more than that before it reads as a
+        // face across a room. 6 is the point past which even the smallest avatar's lettering
+        // is filling a 4K screen, so nothing useful lies beyond it.
+        this.maxZoom = this.fillFraction == null ? 2.5 : 6;
+        // Either recompute the fill, or -- when fill is being switched back off -- put the
+        // current zoom back through setZoom so the lowered ceiling actually applies to it.
+        if (this.fillFraction != null) this.applyFillZoom();
+        else this.setZoom(this.zoomScale);
+    }
+
+    applyFillZoom() {
+        if (!this.camera || !this.container || this.fillFraction == null) return;
+        if (this.contentHalfWidth == null || this.contentHalfHeight == null) return;
+        const width = this.container.clientWidth;
+        const height = this.container.clientHeight;
+        if (!width || !height) return;
+
+        // The avatar's solid parts rather than the box auto-fit uses, and padded by the
+        // ordinary margin only. The bounce allowance is deliberately left out: it is a flat
+        // 35 world units, sized against an avatar seen in a panel, and an avatar's actual
+        // idle motion scales with the zoom applied here, so adding it again on top would
+        // reserve a third of a monitor for a wobble of a few pixels. fitMargin's 30% covers
+        // the motion at any size, because it is a proportion.
+        const halfW = (this.solidHalfWidth == null ? this.contentHalfWidth : this.solidHalfWidth) * this.fitMargin;
+        const halfH = (this.solidHalfHeight == null ? this.contentHalfHeight : this.solidHalfHeight) * this.fitMargin;
+        if (!halfW || !halfH) return;
+        const visibleHalfH = this.camera.position.z * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+        const visibleHalfW = visibleHalfH * (width / height);
+
+        // Whichever axis runs out first decides, and never below 1: shrinking an avatar
+        // below its designed size is auto-fit's job (by widening the lens), not this one's.
+        const fill = Math.min(visibleHalfH / halfH, visibleHalfW / halfW) * this.fillFraction;
+        this.setZoom(Math.max(1, fill));
     }
 
     /* Which color palette tints the currently active (and future) avatar shapes.

@@ -36,6 +36,8 @@ USAGE:
     aether1 status                 Print a system diagnostic report
     aether1 say [TEXT]             Speak text in the companion's voice
     aether1 show | toggle          Summon (or dismiss) the HUD of a running instance
+    aether1 face                   Put the avatar fullscreen on a spare screen -- just the
+                                   face and what it is doing (Esc closes it)
     aether1 --serve                Run headless as an HTTP/WebSocket server, reachable
                                    from this machine only
     aether1 --serve --lan          Also announce on the LAN (mDNS) and accept connections
@@ -81,6 +83,12 @@ pub enum Invocation {
     Window {
         toggle: bool,
     },
+    /// `face`: the fullscreen avatar on a spare screen. Like `show`/`toggle` this reaches an
+    /// already-running instance through the single-instance plugin rather than being handled
+    /// in cli::run -- the face is a mirror of the HUD's own avatar (see frontend/js/face.js),
+    /// so there has to be a HUD for it to mirror. With no instance running, this launch
+    /// becomes one and opens the face alongside it.
+    Face,
     /// `lan` is the opt-in from `--serve --lan`: bind every interface instead of
     /// the loopback address, so other machines can reach the HUD.
     Serve {
@@ -233,6 +241,10 @@ pub fn parse(argv: &[String]) -> Invocation {
         "pair" => free_text(rest).and_then(|extra| match extra {
             Some(extra) => Err(format!("pair takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Pair),
+        }),
+        "face" => free_text(rest).and_then(|extra| match extra {
+            Some(extra) => Err(format!("face takes no arguments (got {extra:?})")),
+            None => Ok(Invocation::Face),
         }),
         "show" | "toggle" => free_text(rest.clone()).and_then(|extra| match extra {
             Some(extra) => Err(format!("{command} takes no arguments (got {extra:?})")),
@@ -387,11 +399,14 @@ fn run_pair() -> Result<String, String> {
     ))
 }
 
-/// Runs a headless invocation and returns the process exit code. `App` and `Serve` are
-/// handled by main() and are a no-op here.
+/// Runs a headless invocation and returns the process exit code. `App`, `Serve`, `Window`
+/// and `Face` are handled by main() and are a no-op here.
 pub fn run(invocation: Invocation) -> i32 {
     let result = match invocation {
-        Invocation::App | Invocation::Serve { .. } | Invocation::Window { .. } => Ok(String::new()),
+        Invocation::App
+        | Invocation::Serve { .. }
+        | Invocation::Window { .. }
+        | Invocation::Face => Ok(String::new()),
         Invocation::Help => Ok(USAGE.trim_end().to_string()),
         Invocation::Version => Ok(format!(
             "{} ({})",
@@ -545,6 +560,28 @@ mod tests {
             parse_args(&["toggle", "now"]),
             Invocation::Invalid(_)
         ));
+    }
+
+    #[test]
+    fn face_is_recognized_and_takes_nothing() {
+        assert_eq!(parse_args(&["face"]), Invocation::Face);
+        // Not folded into free text like `prompt`/`say`: there is nothing for the face to
+        // do with a word, so a stray one is a typo worth reporting.
+        assert!(matches!(
+            parse_args(&["face", "please"]),
+            Invocation::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn face_is_a_window_request_not_a_headless_one() {
+        // run() is the headless path, and `face` is not headless -- main() sends it to the
+        // desktop path alongside App and Window. This pins the half of that arrangement
+        // that is testable: run() treats it as a no-op rather than erroring, so if the
+        // routing in main() is ever changed the failure is a window that does not open,
+        // not a spurious "aether1: ..." on stderr from a command that was never meant to
+        // arrive here.
+        assert_eq!(run(Invocation::Face), 0);
     }
 
     #[test]

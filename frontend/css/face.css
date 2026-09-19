@@ -1,0 +1,158 @@
+/* The fullscreen face -- the avatar filling a whole screen with nothing around it but the
+   word for what it is doing (see frontend/face.html / js/face.js).
+
+   Its own stylesheet rather than A1theme.css for the opposite reason to sprite.css: that
+   file paints a HUD, with panel chrome, grid washes and scan lines meant to sit behind
+   twelve other things. Here there is nothing else on the screen, so all of that would be
+   decoration around a face with no reason to be decorated. What is left is the theme's own
+   background and one line of text. */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  /* Opaque, unlike the sprite: that one floats over your desktop, this one *is* the screen.
+     --bg-core is whatever the current theme's ground is (see js/theme.js), so a light theme
+     gets a light face rather than a black rectangle with a light HUD next to it. */
+  background: var(--bg-core, #04070f);
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Rajdhani', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: var(--text-accent, #00f0ff);
+  user-select: none;
+  /* Nothing here is clickable and there is no text to select, so the pointer is only ever
+     in the way. It comes back on movement (see js/face.js) so the window can still be
+     closed by hand on a monitor that never takes keyboard focus. */
+  cursor: none;
+}
+
+body.pointer-visible {
+  cursor: default;
+}
+
+#face-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#hologram-viewport {
+  position: absolute;
+  /* Everything except a band at the foot, which belongs to the state word. The avatar is
+     scaled to fill whatever it is given (see setFillFraction in js/hologram/core.js), so
+     without this reservation it grows straight through the word and the two overlap. */
+  inset: 0 0 9vmin 0;
+  background: transparent;
+}
+
+/* The Nexus Crew's CRT overlay and A1ter_nul's chromatic glitch -- toggled by
+   HologramAvatar.setAvatar in core.js, and duplicated here for the same reason sprite.css
+   duplicates them: this window loads neither A1theme.css nor sprite.css, and an avatar
+   whose whole character is the interference it sits behind loses it otherwise. */
+#hologram-viewport.crt-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 1px,
+    rgba(0, 0, 0, 0.35) 2px,
+    rgba(0, 0, 0, 0.35) 3px
+  );
+  mix-blend-mode: overlay;
+  animation: crtFlicker 3.2s infinite steps(24);
+}
+
+@keyframes crtFlicker {
+  0%, 100% { opacity: 0.85; }
+  8% { opacity: 0.6; }
+  9% { opacity: 0.9; }
+  33% { opacity: 0.8; }
+  47% { opacity: 0.55; }
+  48% { opacity: 0.9; }
+  70% { opacity: 0.75; }
+  91% { opacity: 0.85; }
+}
+
+#hologram-viewport.glitch-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background:
+    repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.28) 3px, rgba(0,0,0,0.28) 4px),
+    linear-gradient(90deg, rgba(255,0,60,0.05) 0%, transparent 2%, transparent 98%, rgba(0,229,255,0.05) 100%);
+  mix-blend-mode: screen;
+  animation: glitchFlicker 2.6s infinite steps(20);
+}
+
+@keyframes glitchFlicker {
+  0%, 100% { opacity: 0.8; }
+  11% { opacity: 0.55; }
+  12% { opacity: 0.9; }
+  40% { opacity: 0.75; }
+  41% { opacity: 0.4; }
+  73% { opacity: 0.85; }
+  74% { opacity: 0.6; }
+}
+
+/* The one word. Sized in vmin rather than px because this window is whatever size the
+   monitor is -- a 24px label readable on a laptop panel is a smudge on a television across
+   the room, which is one of the screens this is for. */
+#face-state {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2.6vmin;
+  z-index: 10;
+  text-align: center;
+  font-size: clamp(14px, 3.2vmin, 64px);
+  font-weight: 600;
+  letter-spacing: 0.42em;
+  /* The tracking above adds a trailing gap after the last letter, which reads as the word
+     sitting slightly left of centre on a wide screen. Paid back here. */
+  text-indent: 0.42em;
+  opacity: 0.55;
+  transition: opacity 0.4s ease, color 0.4s ease;
+  pointer-events: none;
+}
+
+/* Idle is the state it is in almost all the time, and a word burnt into a screen for eight
+   hours is worse than a word you have to look for. The three states where something is
+   actually happening brighten instead. */
+#face-state[data-state="IDLE"] {
+  opacity: 0.28;
+  color: var(--text-dim, #7c8ea0);
+}
+
+#face-state[data-state="LISTENING"],
+#face-state[data-state="THINKING"],
+#face-state[data-state="SPEAKING"] {
+  opacity: 0.85;
+  color: var(--text-accent, #00f0ff);
+}
+
+#face-hint {
+  position: absolute;
+  top: 3vmin;
+  right: 3vmin;
+  z-index: 10;
+  font-size: clamp(11px, 1.4vmin, 22px);
+  letter-spacing: 0.18em;
+  color: var(--text-dim, #7c8ea0);
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  pointer-events: none;
+}
+
+#face-hint.showing {
+  opacity: 0.7;
+}
