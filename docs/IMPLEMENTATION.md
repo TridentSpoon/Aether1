@@ -2007,9 +2007,17 @@ version of this that stays true.
 
 The plan:
 
-1. **A public releases repository** (`Aether1-releases` or similar) carrying the bundles
-   `release.yml` already builds, plus a `latest.json` naming the current version and the
-   per-platform URLs. The source repository stays private and unchanged.
+1. **An unlisted bucket** carrying the bundles `release.yml` already builds, plus a
+   `latest.json` naming the current version and the per-platform URLs. Object storage with a
+   public-read bucket on an unguessable path -- Cloudflare R2, Backblaze B2, any S3-shaped
+   thing -- reachable by URL, listed nowhere, indexed by nothing, and free at this scale.
+   There is no server to keep alive: a bucket is a place to put files, not a service.
+   The source repository stays private and unchanged, which is what makes the project
+   unforkable: a bucket holds built artifacts, and nobody can fork a tarball into a project.
+
+   *Not a public artifacts repository*, which was the obvious answer and is the wrong one
+   here: a public repository appears on the owner's profile and in search, so it fails the
+   one requirement that the thing be reachable only by people who were given the link.
 2. **Sign every artifact, and verify on the client.** Windows installers are already signed
    through Azure Trusted Signing in `release.yml`; the Linux bundles are signed by nothing at
    all. A minisign keypair covers both uniformly: the private key lives in Actions secrets,
@@ -2035,12 +2043,25 @@ and their models. Verifying minisign signatures directly is the smaller change a
 packaging that already works; the plugin is the better answer only if the packaging is being
 revisited anyway.
 
-**Two forks the operator has to settle**, because they change the shape rather than the
-detail: whether the source repository stays private, and whether running a small
-update-check endpoint is acceptable. If the source goes public, step 1 collapses to using
-this repository's own Releases and the whole question dissolves. If hosting is acceptable,
-an endpoint holding the token is an alternative to the public mirror -- but it is a service
-to keep running, for a benefit the mirror already provides for free.
+**Settled: the source stays private, the distribution is by link, and nothing is hosted.**
+The project is not to be forkable while it is still being built, which the private source
+already achieves; the bundles need to reach people who were given a link and nobody else;
+and no endpoint is to be run.
+
+**One consequence to be clear about, because it is a property of the design rather than a
+detail of it.** For the app to check by itself, the manifest's URL has to be inside the app.
+Anything inside a distributed binary can be read out of it, so the URL is exactly as private
+as the binary is: give the installer to five people and five people have the address, and
+anyone they pass it on to has it too. That is **unlisted, not access-controlled** -- nothing
+is discoverable, nothing is indexed, and nobody stumbles across it, but obscurity is not a
+lock and should never be described as one. It is the right trade while the project is small
+and the thing being protected is the source, which is not in the bucket. It stops being the
+right trade the moment something in a release is meant to be secret, and nothing in a
+release should ever be.
+
+This is also why item 2 is not optional. An unguessable URL is not authentication, so the
+signature is what makes a download trustworthy: without it, anyone who learns the address
+can serve a different file at it and be believed.
 
 ## Where this stands
 
