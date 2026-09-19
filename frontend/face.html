@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AETHER1 Face</title>
+    <!-- Local copies, same as the HUD and the sprite: this window is meant to sit on a spare
+         screen for hours at a time, so it least of all should need a working network to draw
+         itself. -->
+    <link rel="stylesheet" href="vendor/fonts.css?v=1">
+    <!-- The theme, before anything is painted -- see sprite.html for the full note. On a
+         window that fills an entire monitor, a frame of the fallback palette is not a flicker,
+         it is the whole screen flashing. -->
+    <script src="js/hologram/palettes.js?v=19"></script>
+    <script src="js/theme.js?v=5"></script>
+    <script>Aether1Theme.apply(document);</script>
+    <script src="vendor/three.min.js?v=1"></script>
+    <link rel="stylesheet" href="css/face.css?v=2">
+</head>
+<body>
+    <div id="face-root">
+        <div id="hologram-viewport"></div>
+
+        <!-- What it is doing, in one word: IDLE, LISTENING, THINKING or SPEAKING. Pushed
+             from the main HUD, never decided here (see js/face.js). -->
+        <div id="face-state" aria-live="polite">IDLE</div>
+
+        <!-- This window has no title bar and fills the screen, so the way out has to be said
+             rather than discovered. Fades once the operator has had time to read it, and
+             comes back on any mouse movement. -->
+        <div id="face-hint">Esc to close</div>
+    </div>
+
+    <!-- Same hologram engine as the main HUD and the sprite (see index.html's own script
+         block for the load-order note: core.js first, then the loader, animate.js last). -->
+    <script src="js/hologram/core.js?v=44"></script>
+    <script src="js/hologram/geometry-helpers.js?v=20"></script>
+    <script src="js/hologram/avatar-loader.js?v=1"></script>
+    <script src="js/hologram/animate.js?v=39"></script>
+    <script src="js/face.js?v=2"></script>
+</body>
+</html>

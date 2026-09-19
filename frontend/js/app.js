@@ -581,33 +581,77 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Whether the desktop sprite window is currently open -- kept in sync with the
-    // "Float the avatar on your desktop" setting (see setHologramFloating below) so the two
-    // push functions that follow know whether anyone is listening before bothering to emit.
+    // "Float the avatar on your desktop" setting (see setHologramFloating below).
     let desktopSpriteEnabled = false;
 
-    /* Sets the hologram's state and, if the desktop sprite is open, mirrors it there over a
-       Tauri event -- the same "push, don't poll" pattern setHologramAvatar already uses for
-       avatar changes. Every hologram.setState call in this file goes through here instead of
-       calling the hologram directly, so the sprite always shows what the main window's avatar
-       is actually doing (IDLE/LISTENING/THINKING/SPEAKING) rather than running its own idea
-       of "busy" from a separate conversation. */
+    /* Every window other than this one that is currently drawing this avatar: the desktop
+       sprite, the fullscreen face (js/face.js), or both at once. The two push functions
+       below check it before bothering to emit, because state and audio are the only two
+       mirror messages frequent enough for that to matter -- avatar and theme changes happen
+       when a human clicks something and are sent unconditionally.
+
+       A set rather than a counter so that a window announcing itself twice (a reload of the
+       face, say) doesn't leave the HUD emitting to a listener that is no longer there. The
+       sprite is added by setHologramFloating, which already knows; other windows say so
+       themselves, over the two events below. */
+    const avatarMirrors = new Set();
+
+    function anyoneMirroringTheAvatar() {
+        return desktopSpriteEnabled || avatarMirrors.size > 0;
+    }
+
+    /* Sets the hologram's state and, if anything is mirroring this avatar, pushes it there
+       over a Tauri event -- the same "push, don't poll" pattern setHologramAvatar already
+       uses for avatar changes. Every hologram.setState call in this file goes through here
+       instead of calling the hologram directly, so a mirror always shows what the main
+       window's avatar is actually doing (IDLE/LISTENING/THINKING/SPEAKING) rather than
+       running its own idea of "busy" from a separate conversation. */
+    let currentAvatarState = 'IDLE';
     function setAvatarState(newState) {
+        currentAvatarState = newState;
         hologram.setState(newState);
-        if (desktopSpriteEnabled && window.__TAURI__ && window.__TAURI__.event) {
+        if (anyoneMirroringTheAvatar() && window.__TAURI__ && window.__TAURI__.event) {
             window.__TAURI__.event.emit('hologram-state-changed', { state: newState }).catch(() => {});
         }
     }
 
     // Audio data arrives every animation frame; emitting all of it across the Tauri IPC
-    // boundary for a window that mostly isn't open would be wasted work, so this both gates
-    // on the sprite actually being open and thins the frames it does send -- the sprite's
+    // boundary for windows that mostly aren't open would be wasted work, so this both gates
+    // on something actually mirroring the avatar and thins the frames it does send -- a
     // reactive glow doesn't need 60fps to read as alive.
     let audioFrameCount = 0;
     function pushAudioToSprite(freqData) {
-        if (!desktopSpriteEnabled || !window.__TAURI__ || !window.__TAURI__.event) return;
+        if (!anyoneMirroringTheAvatar() || !window.__TAURI__ || !window.__TAURI__.event) return;
         audioFrameCount = (audioFrameCount + 1) % 3;
         if (audioFrameCount !== 0) return;
         window.__TAURI__.event.emit('hologram-audio-changed', { data: Array.from(freqData) }).catch(() => {});
+    }
+
+    /* A mirror window saying hello. It gets a snapshot of where the avatar is right now in
+       reply, because everything else about this arrangement is a *change* notification: a
+       face opened while the companion is mid-sentence would otherwise sit on IDLE in the
+       wrong colours until the next thing happened to change.
+
+       Deliberately not gated on IS_TAURI having a window open: a mirror that never announces
+       itself simply never gets these, which is the failure mode we want. The matching
+       'detached' comes from the mirror's own beforeunload. If a mirror window is killed
+       hard enough that beforeunload never runs, the worst case is the HUD emitting state and
+       audio events that nobody receives -- a few small messages a second into nothing, until
+       the HUD itself is restarted. */
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('avatar-mirror-attached', (event) => {
+            const name = (event.payload && event.payload.window) || 'unknown';
+            avatarMirrors.add(name);
+            const emit = (channel, payload) =>
+                window.__TAURI__.event.emit(channel, payload).catch(() => {});
+            emit('avatar-changed', { avatar: currentAvatar });
+            if (currentTheme) emit('color-theme-changed', currentTheme);
+            emit('hologram-state-changed', { state: currentAvatarState });
+        }).catch((e) => console.warn('Could not listen for avatar mirrors attaching', e));
+
+        window.__TAURI__.event.listen('avatar-mirror-detached', (event) => {
+            avatarMirrors.delete((event.payload && event.payload.window) || 'unknown');
+        }).catch((e) => console.warn('Could not listen for avatar mirrors detaching', e));
     }
 
     // Voice Callbacks
@@ -3656,6 +3700,26 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* The avatar's other exit: fullscreen on a spare screen (see frontend/face.html and
+       build_face_window in main.rs). Unlike the sprite this does not take the avatar out of
+       this panel -- the face is a mirror, and the HUD keeps its own hologram -- so there is
+       no "bring it back" notice to show here, and nothing about this panel changes.
+
+       Removed outright in a browser rather than disabled: a button that cannot do anything
+       is worse than no button, and there is no second native window to open from a tab. */
+    function initAvatarFullscreen() {
+        const btn = document.getElementById('btn-avatar-fullscreen');
+        if (!btn) return;
+        if (!IS_TAURI) {
+            btn.remove();
+            return;
+        }
+        btn.addEventListener('click', () => {
+            tauriInvoke('toggle_face_window_rust', { enabled: true })
+                .catch((e) => console.warn('Could not open the fullscreen face', e));
+        });
+    }
+
     async function loadChatHistory() {
         try {
             const msgs = IS_TAURI
@@ -4979,6 +5043,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initStartupPerformance();
     initSoloPanel();
     initPanelUndock();
+    initAvatarFullscreen();
     initHologramFloatingNotice();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();
