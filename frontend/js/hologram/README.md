@@ -78,10 +78,12 @@ updates the moment you save, with no reload.
 pieces of the hand-built avatars. The rule is opt-out, not opt-in: every avatar's
 components are available to the kit -- and so to Genesis and the custom-avatar builder
 -- by default, including avatars still behind a Trace Protocol unlock. They stay out
-only when a reason is written down for it. The only current exceptions are the Nexus /
-Nexus Sent and A1, whose designs stay theirs alone. (`avatar-senti.js` is the Nexus Sent
-avatar under a different filename -- id `senti`, label "Nexus Sent" -- so it falls under
-this same exception, not a separate avatar left out by mistake.) See
+only when a reason is written down for it. The current exceptions are the Nexus /
+Nexus Sent, A1, and White Rabbit, whose designs stay theirs alone. (`avatar-senti.js` is
+the Nexus Sent avatar under a different filename -- id `senti`, label "Nexus Sent" -- so
+it falls under this same exception, not a separate avatar left out by mistake. White
+Rabbit's pieces were in the kit until they were withdrawn at the owner's request on
+2026-09-20; the avatar itself still ships.) See
 `js/hologram/parts.js` for the full catalogue.
 
 What is saved is a *recipe* — a few lines of settings, not code. A recipe can be pasted

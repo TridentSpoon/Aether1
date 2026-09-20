@@ -30,11 +30,12 @@
  * components belong in this kit by default -- including ones still behind a Trace
  * Protocol unlock -- and a new avatar gets its pieces adapted in here as part of adding
  * it, unless a reason to keep it exclusive is written down next to its exception. The
- * only current exceptions are the Nexus / Nexus Sent and A1, whose designs stay theirs
- * alone. (Note that avatar-senti.js registers under the id "senti" but its label is
- * "Nexus Sent" -- it *is* the Nexus Sent avatar under a different filename, not a
- * separate "Senti" avatar, so it falls under this same exception rather than being a
- * gap in the catalogue.) An adapted part is a fresh, simplified build of the same visual
+ * current exceptions are the Nexus / Nexus Sent, A1, and White Rabbit, whose designs
+ * stay theirs alone. (Note that avatar-senti.js registers under the id "senti" but its
+ * label is "Nexus Sent" -- it *is* the Nexus Sent avatar under a different filename, not
+ * a separate "Senti" avatar, so it falls under this same exception rather than being a
+ * gap in the catalogue. White Rabbit was in the kit until its silhouette and ears were
+ * withdrawn at the owner's request on 2026-09-20; the avatar itself is untouched.) An adapted part is a fresh, simplified build of the same visual
  * idea using only api.helpers, not the original file's code -- it has to stand on its
  * own next to parts it never met.
  *
@@ -95,34 +96,6 @@
         const group = new THREE.Group();
         group.add(fillMesh, outline);
         return group;
-    }
-
-    // Rejection-samples `count` points inside the union of ellipses {cx,cy,rx,ry} --
-    // the same plain 2D containment math White Rabbit uses for its silhouette.
-    function sampleEllipseCluster(ellipses, count, zJitter) {
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        ellipses.forEach(({ cx, cy, rx, ry }) => {
-            minX = Math.min(minX, cx - rx); maxX = Math.max(maxX, cx + rx);
-            minY = Math.min(minY, cy - ry); maxY = Math.max(maxY, cy + ry);
-        });
-        const positions = new Float32Array(count * 3);
-        let filled = 0, attempts = 0;
-        const maxAttempts = count * 200;
-        while (filled < count && attempts < maxAttempts) {
-            attempts++;
-            const x = THREE.MathUtils.lerp(minX, maxX, Math.random());
-            const y = THREE.MathUtils.lerp(minY, maxY, Math.random());
-            const inside = ellipses.some(({ cx, cy, rx, ry }) => {
-                const dx = (x - cx) / rx, dy = (y - cy) / ry;
-                return dx * dx + dy * dy <= 1;
-            });
-            if (!inside) continue;
-            positions[filled * 3] = x;
-            positions[filled * 3 + 1] = y;
-            positions[filled * 3 + 2] = (Math.random() - 0.5) * zJitter;
-            filled++;
-        }
-        return positions;
     }
 
     // ---- Cores: the thing at the middle -------------------------------------
@@ -298,36 +271,6 @@
                             outlineMat.opacity = 0.35 + level * 0.55 + ctx.click * 0.2;
                         });
                         group.rotation.y = Math.sin(ctx.time * 0.2) * 0.1;
-                    },
-                };
-            },
-        },
-
-        // Adapted from White Rabbit: the same rejection-sampled point cloud, drawn as a
-        // blank front-facing silhouette rather than a solid body -- here just the
-        // rounded head/body shape, sized by options.size.
-        rabbitSilhouette: {
-            label: 'Rabbit silhouette',
-            build(api, options) {
-                const s = options.size / 20;
-                const positions = sampleEllipseCluster(
-                    [{ cx: 0, cy: -0.4 * s * 20, rx: 0.95 * s * 20, ry: 1.05 * s * 20 },
-                     { cx: 0, cy: 0.75 * s * 20, rx: 0.7 * s * 20, ry: 0.75 * s * 20 }],
-                    1600, 8 * s
-                );
-                const geom = new THREE.BufferGeometry();
-                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                const mat = new THREE.PointsMaterial({
-                    color: api.palette.hex, map: api.helpers.glowTexture(24), size: 2.2,
-                    transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
-                });
-                const points = new THREE.Points(geom, mat);
-                return {
-                    object: points,
-                    applyPalette(p) { mat.color.setHex(p.hex); },
-                    animate(ctx) {
-                        const scale = 1 + Math.sin(ctx.time * 0.8) * 0.015 + ctx.audio * 0.06 + ctx.click * 0.04;
-                        points.scale.setScalar(scale);
                     },
                 };
             },
@@ -1051,58 +994,6 @@
                             cube.scale.setScalar(s);
                         });
                         beamMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
-                    },
-                };
-            },
-        },
-
-        // Adapted from White Rabbit: the pair of long ears hinged at their base, which
-        // mostly sit still and flick every few seconds rather than animating
-        // continuously -- each ear keeps its own next-twitch time so the two never move
-        // in lockstep, and an alert state pulls them upright and flicks them more often.
-        rabbitEars: {
-            label: 'Rabbit ears',
-            build(api, options) {
-                const group = new THREE.Group();
-                const s = options.radius / 30;
-                const mat = new THREE.PointsMaterial({
-                    color: api.palette.hex3, map: api.helpers.glowTexture(20), size: 2.7,
-                    transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false,
-                });
-                const ears = [-1, 1].map((side) => {
-                    const positions = sampleEllipseCluster(
-                        [{ cx: 0, cy: 19 * s, rx: 4.3 * s, ry: 19 * s }], 520, 6 * s
-                    );
-                    const geom = new THREE.BufferGeometry();
-                    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                    const pivot = new THREE.Group();
-                    pivot.position.set(side * 6.5 * s, options.radius * 0.55, 0);
-                    pivot.rotation.z = -side * 0.22;
-                    pivot.add(new THREE.Points(geom, mat));
-                    group.add(pivot);
-                    return {
-                        pivot, side, restAngle: -side * 0.22,
-                        nextTwitch: 1.5 + Math.random() * 3, twitchStart: -10,
-                    };
-                });
-                return {
-                    object: group,
-                    applyPalette(p) { mat.color.setHex(p.hex3); },
-                    animate(ctx) {
-                        const thinking = ctx.state === 'THINKING';
-                        const lift = ctx.state === 'IDLE' ? 0 : 0.12;
-                        const minGap = thinking ? 1.2 : 2.8;
-                        const maxGap = thinking ? 3 : 7;
-                        ears.forEach((ear) => {
-                            if (ctx.time > ear.nextTwitch) {
-                                ear.twitchStart = ctx.time;
-                                ear.nextTwitch = ctx.time + THREE.MathUtils.lerp(minGap, maxGap, Math.random());
-                            }
-                            const dt = ctx.time - ear.twitchStart;
-                            const twitch = dt >= 0 && dt < 0.5 ? Math.sin(dt * 24) * 0.4 * (1 - dt / 0.5) : 0;
-                            const sway = Math.sin(ctx.time * 1.05 + ear.side * 1.7) * 0.02;
-                            ear.pivot.rotation.z = ear.restAngle + ear.side * lift + twitch + sway;
-                        });
                     },
                 };
             },
