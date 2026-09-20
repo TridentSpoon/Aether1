@@ -78,6 +78,17 @@
         return mesh;
     }
 
+    // A real hex prism rather than a flat pane: a six-sided cylinder laid into the XY
+    // plane with its front cap at z=0, so it reads as a solid gem with depth and does not
+    // vanish edge-on when the scene is dragged round. Anything positioned in front of a
+    // flat hex fill sits in exactly the same place in front of this.
+    function hexPrismMesh(api, radius, rotationOffset, material, thickness) {
+        const geom = new THREE.CylinderGeometry(radius, radius, thickness, 6, 1, false, rotationOffset);
+        geom.rotateX(-Math.PI / 2);
+        geom.translate(0, 0, -thickness / 2);
+        return new THREE.Mesh(geom, material);
+    }
+
     function hexOutlineLoop(api, radius, rotationOffset, material, cx = 0, cy = 0) {
         const geom = new THREE.BufferGeometry().setFromPoints(api.helpers.hexVertices(radius, rotationOffset, cx, cy));
         return new THREE.LineLoop(geom, material);
@@ -106,6 +117,12 @@
     }
 
     // ---- Cores: the thing at the middle -------------------------------------
+    //
+    // Two things sat here and no longer do, so nobody re-adds them under the opt-out
+    // rule: A1ter_nul's broken shard stack, which is a row of equaliser bars rather than
+    // a core, and A.R.X.LIMES's faceted hub, which is the faceted crystal at a smaller
+    // size. Both were withdrawn at the owner's request on 2026-09-20; neither avatar was
+    // touched, and both still contribute to other tiers.
 
     const CORES = {
         none: {
@@ -133,6 +150,8 @@
             },
         },
 
+        // A.R.X.LIMES's faceted hub is this same geodesic at a smaller size, so it is not
+        // carried as a second core -- turn the size down instead.
         crystal: {
             label: 'Faceted crystal',
             build(api, options) {
@@ -233,55 +252,12 @@
             },
         },
 
-        // Adapted from A1ter_nul: a row of dark-glass shard bars, tallest in the
-        // middle, each answering its own audio bin like a broken-glass equaliser.
-        altShards: {
-            label: 'Broken shard stack',
-            build(api, options) {
-                const group = new THREE.Group();
-                const count = 7;
-                const totalSpan = options.size * 3.2;
-                const maxLength = options.size * 2.1;
-                const minLength = options.size * 0.9;
-                const shards = [];
-                for (let i = 0; i < count; i++) {
-                    const t = count > 1 ? i / (count - 1) : 0.5;
-                    const taper = 1 - Math.pow(Math.abs(t - 0.5) * 2, 1.6);
-                    const length = minLength + (maxLength - minLength) * taper;
-                    const x = -totalSpan / 2 + (i / (count - 1)) * totalSpan;
-                    const fillMat = new THREE.MeshBasicMaterial({
-                        color: 0x0a0a0c, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
-                    });
-                    const outlineMat = new THREE.LineBasicMaterial({
-                        color: 0x00f0ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
-                    });
-                    const geom = new THREE.PlaneGeometry(options.size * 0.34, length);
-                    const mesh = new THREE.Mesh(geom, fillMat);
-                    const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geom), outlineMat);
-                    const shard = new THREE.Group();
-                    shard.add(mesh, outline);
-                    shard.position.x = x;
-                    group.add(shard);
-                    shards.push({ outlineMat, index: i });
-                }
-                return {
-                    object: group,
-                    applyPalette(p) {
-                        const bottom = new THREE.Color(p.hex2), top = new THREE.Color(p.hex3);
-                        shards.forEach(({ outlineMat, index }) => outlineMat.color.copy(bottom).lerp(top, index / (count - 1)));
-                    },
-                    animate(ctx) {
-                        shards.forEach(({ outlineMat, index }) => {
-                            const level = band(ctx, index, count);
-                            outlineMat.opacity = 0.35 + level * 0.55 + ctx.click * 0.2;
-                        });
-                    },
-                };
-            },
-        },
-
-        // Adapted from A.R.X.LOGOS: a central hexagon with a fixed dark pupil and a
-        // catchlight, reading as an eye rather than a plain panel.
+        // Adapted from A.R.X.LOGOS: its centrepiece, built the same way that avatar builds
+        // it -- an extruded hex prism with the whole prism's edges traced (not a flat pane
+        // and a flat outline loop), with the same fixed dark pupil and catchlight nested a
+        // hair in front of it, at the same proportions and the same breathing scale. What
+        // is left out is only what belongs to the rest of that avatar: the six spiral arms
+        // that sweep shut over the eye, and the catchlight glint that answers them.
         hexEye: {
             label: 'Hex eye',
             build(api, options) {
@@ -291,13 +267,13 @@
                     color: 0xe024c3, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
                 });
                 const outlineMat = new THREE.LineBasicMaterial({ color: 0xe024c3, transparent: true, opacity: 0.95 });
-                const fill = hexFillMesh(api, radius, 0, fillMat);
-                const outline = hexOutlineLoop(api, radius, 0, outlineMat);
+                const fill = hexPrismMesh(api, radius, 0, fillMat, radius * (12 / 26));
+                const outline = new THREE.LineSegments(new THREE.EdgesGeometry(fill.geometry, 12), outlineMat);
                 const pupilMat = new THREE.MeshBasicMaterial({ color: 0x050208, transparent: true, opacity: 0.92 });
-                const pupil = hexFillMesh(api, radius * 0.35, 0, pupilMat);
+                const pupil = hexFillMesh(api, radius * (9 / 26), 0, pupilMat);
                 pupil.position.z = 0.5;
                 const catchMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
-                const catchlight = hexFillMesh(api, radius * 0.09, 0, catchMat, -radius * 0.16, radius * 0.16);
+                const catchlight = hexFillMesh(api, radius * (2.4 / 26), 0, catchMat, -radius * (4 / 26), radius * (4 / 26));
                 catchlight.position.z = 1;
                 group.add(fill, outline, pupil, catchlight);
                 return {
@@ -305,33 +281,9 @@
                     applyPalette(p) { fillMat.color.setHex(p.hex); outlineMat.color.setHex(p.hex); },
                     animate(ctx) {
                         const scale = ctx.state === 'SPEAKING' ? 1 + ctx.audio * 0.5
-                            : ctx.state === 'THINKING' ? 1 + Math.sin(ctx.time * 16) * 0.15 : 1 + ctx.click * 0.15;
+                            : ctx.state === 'THINKING' ? 1 + Math.sin(ctx.time * 16) * 0.18 : 1 + ctx.click * 0.15;
                         fill.scale.setScalar(scale);
                         outline.scale.setScalar(scale);
-                    },
-                };
-            },
-        },
-
-        // Adapted from A.R.X.LIMES: the small faceted anchor its plates orbit, on its
-        // own here as a compact geodesic core.
-        facetedHub: {
-            label: 'Faceted hub',
-            build(api, options) {
-                const geom = new THREE.IcosahedronGeometry(options.size * 0.4, 1);
-                const fillMat = new THREE.MeshBasicMaterial({
-                    color: 0xffaa00, side: THREE.DoubleSide, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending,
-                });
-                const outlineMat = new THREE.LineBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.95 });
-                const mesh = new THREE.Mesh(geom, fillMat);
-                const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geom, 12), outlineMat);
-                const group = new THREE.Group();
-                group.add(mesh, outline);
-                return {
-                    object: group,
-                    applyPalette(p) { fillMat.color.setHex(p.hex2); outlineMat.color.setHex(p.hex3); },
-                    animate(ctx) {
-                        group.scale.setScalar(1 + ctx.audio * 0.15 + ctx.click * 0.12);
                     },
                 };
             },
@@ -604,10 +556,9 @@
             },
         },
 
-        // Adapted from Operator: the prompt line at the centre of its tunnel -- a row of
-        // ticks already printed rather than typing itself out, each breathing on its own
-        // phase so the row shimmers like a CRT instead of pulsing in lockstep, with a
-        // "|>" caret waiting at the end of the line.
+        // Adapted from Operator: the caret at the centre of its tunnel. Just the "|>" --
+        // no printed line behind it -- breathing with a CRT flicker rather than a hard
+        // on/off blink, and holding a steady voice-reactive glow while speaking.
         terminalPrompt: {
             label: 'Terminal prompt',
             build(api, options) {
@@ -625,41 +576,9 @@
                     texture.needsUpdate = true;
                     return texture;
                 }
-                function tickTexture(size) {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = size;
-                    canvas.height = size;
-                    const ctx2d = canvas.getContext('2d');
-                    ctx2d.fillStyle = '#ffffff';
-                    ctx2d.fillRect(size * 0.42, size * 0.2, size * 0.16, size * 0.6);
-                    const texture = new THREE.CanvasTexture(canvas);
-                    texture.needsUpdate = true;
-                    return texture;
-                }
 
                 const group = new THREE.Group();
-                const count = 20;
-                const spacing = options.size * 0.115;
-                const startX = -((count - 1) * spacing) / 2;
-                const positions = new Float32Array(count * 3);
-                const colors = new Float32Array(count * 3);
-                for (let i = 0; i < count; i++) {
-                    positions[i * 3] = startX + i * spacing;
-                    positions[i * 3 + 1] = -options.size * 0.1;
-                    positions[i * 3 + 2] = 0;
-                }
-                const geom = new THREE.BufferGeometry();
-                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-                const lineMat = new THREE.PointsMaterial({
-                    color: api.palette.hex3, map: tickTexture(32), size: options.size * 0.27,
-                    vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false,
-                    blending: THREE.AdditiveBlending, sizeAttenuation: true,
-                });
-                const line = new THREE.Points(geom, lineMat);
-                group.add(line);
 
-                const caretX = startX + (count - 1) * spacing + spacing;
                 const caretMat = new THREE.SpriteMaterial({
                     map: caretTexture(72), color: api.palette.hex,
                     transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -667,9 +586,11 @@
                 const caret = new THREE.Sprite(caretMat);
                 const caretSize = options.size * 0.6;
                 caret.scale.set(caretSize, caretSize, 1);
-                caret.position.set(caretX, -options.size * 0.1, 1);
+                caret.position.set(0, 0, 1);
                 group.add(caret);
 
+                // A soft halo right behind the caret, purely so it reads clearly against
+                // whatever sits around it instead of getting lost in it.
                 const haloMat = new THREE.SpriteMaterial({
                     map: api.helpers.glowTexture(48), color: api.palette.hex,
                     transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
@@ -677,23 +598,17 @@
                 const halo = new THREE.Sprite(haloMat);
                 const haloSize = options.size * 0.8;
                 halo.scale.set(haloSize, haloSize, 1);
-                halo.position.set(caretX, -options.size * 0.1, 0);
+                halo.position.set(0, 0, 0);
                 group.add(halo);
 
                 return {
                     object: group,
                     applyPalette(p) {
-                        lineMat.color.setHex(p.hex3);
                         caretMat.color.setHex(p.hex);
                         haloMat.color.setHex(p.hex);
                     },
                     animate(ctx) {
                         const speed = ctx.state === 'THINKING' ? 3.2 : 1.4;
-                        for (let i = 0; i < count; i++) {
-                            const brightness = 0.32 + (Math.sin(ctx.time * speed + i * 0.6) * 0.5 + 0.5) * 0.22;
-                            colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = brightness;
-                        }
-                        geom.attributes.color.needsUpdate = true;
                         const caretOpacity = ctx.state === 'SPEAKING'
                             ? 0.75 + ctx.audio * 0.4
                             : 0.72 + (Math.sin(ctx.time * speed) * 0.5 + 0.5) * 0.28;
