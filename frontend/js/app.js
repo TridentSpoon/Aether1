@@ -693,6 +693,107 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.agent_name && data.agent_name !== currentAgentName) {
             updateAgentNameDisplay(data.agent_name);
         }
+        // Step 19: almost always absent. It carries one line when a model the operator
+        // chose has been uninstalled. The backend hands it over once per model per session
+        // and clears it as it does, so this cannot repeat it -- uninstalling a model must
+        // not silently change who you are talking to, and must not nag either.
+        if (data.routing_notice) {
+            appendSystemNotice(data.routing_notice);
+            refreshSpecialityModel();
+        }
+    }
+
+    /* Step 19: the model dropdown beside the avatar ---------------------------------
+       Shows the model for the speciality that is active right now, not a table of all
+       sixteen -- the avatar already says which speciality you are in, so the row reads as
+       "this one, on that model". Changing persona re-reads it.
+
+       The whole row hides when the model server has not answered. A dropdown offering
+       nothing is worse than no dropdown: it looks broken, and it invites a click that
+       cannot do anything. */
+    const elAvatarModelRow = document.getElementById('avatar-model-row');
+    const elAvatarModel = document.getElementById('avatar-model');
+
+    async function refreshSpecialityModel() {
+        if (!IS_TAURI || !elAvatarModel || !elAvatarModelRow) return;
+        let data;
+        try {
+            data = await tauriInvoke('speciality_models_rust');
+        } catch (e) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+        // null means nothing answered; [] means a server with nothing loaded. Neither can
+        // offer a choice, and both are hidden rather than shown as an empty control.
+        if (!Array.isArray(data.available) || data.available.length === 0) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+
+        const active = document.getElementById('setting-persona')?.value || 'default';
+        const row = (data.specialities || []).find(s => s.key === active);
+        if (!row) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+
+        elAvatarModel.innerHTML = '';
+        // "Suggested" is the first option and the one selected when nothing was chosen, so
+        // the default state of the control is the design's own recommendation rather than
+        // a blank the operator has to interpret.
+        const auto = document.createElement('option');
+        auto.value = '';
+        auto.textContent = row.suggested
+            ? `${row.suggested}  (suggested)`
+            : 'the general model';
+        elAvatarModel.appendChild(auto);
+
+        for (const entry of data.available) {
+            const option = document.createElement('option');
+            option.value = entry.model;
+            option.textContent = entry.good_at
+                ? `${entry.model} -- ${entry.good_at}`
+                : entry.model;
+            elAvatarModel.appendChild(option);
+        }
+
+        elAvatarModel.value = row.chosen || '';
+        // A chosen model that is no longer installed is not in the list, so the select
+        // would fall back to the first option and quietly look like a choice was never
+        // made. Say it instead.
+        if (row.chosen && elAvatarModel.value !== row.chosen) {
+            const gone = document.createElement('option');
+            gone.value = row.chosen;
+            gone.textContent = `${row.chosen}  (not installed)`;
+            elAvatarModel.appendChild(gone);
+            elAvatarModel.value = row.chosen;
+        }
+        elAvatarModel.title = `${row.speciality}\nRunning on: ${row.running || 'the general model'}`;
+        elAvatarModelRow.classList.remove('hidden');
+    }
+
+    function initSpecialityModel() {
+        if (!elAvatarModel) return;
+        elAvatarModel.addEventListener('change', async () => {
+            const model = elAvatarModel.value;
+            const persona = document.getElementById('setting-persona')?.value || 'default';
+            try {
+                // An empty value is "no pick", which is a real setting and not the same as
+                // picking nothing -- it is what lets the suggestion apply again.
+                await tauriInvoke('set_speciality_model_rust', {
+                    persona,
+                    model: model || null,
+                });
+            } catch (e) {
+                console.error('Could not set the model for this speciality', e);
+            }
+            refreshSpecialityModel();
+        });
+        const personaSelect = document.getElementById('setting-persona');
+        if (personaSelect) {
+            personaSelect.addEventListener('change', refreshSpecialityModel);
+        }
+        refreshSpecialityModel();
     }
 
     function connectTelemetry() {
@@ -1105,6 +1206,24 @@ document.addEventListener('DOMContentLoaded', () => {
         escaped = escaped.replace(/^## (.*$)/gim, '<h2 class="text-lg font-bold text-cyan-300 mt-2 mb-1">$1</h2>');
         escaped = escaped.replace(/\n/g, '<br/>');
         return escaped;
+    }
+
+    /* A line from AETHER1 the program, not from the persona.
+       Deliberately not appendMessage: that one puts the agent's own name and avatar on
+       what it renders, and attributing "your model was uninstalled" to the character is
+       how an operator learns to distrust what the character says. This is plainly the
+       machinery talking. */
+    function appendSystemNotice(text) {
+        if (!chatContainer) return;
+        const row = document.createElement('div');
+        row.className = 'my-2 px-3 py-2 text-xs font-mono leading-relaxed msg-system self-stretch';
+        const label = document.createElement('span');
+        label.className = 'opacity-70';
+        label.textContent = 'AETHER1 — ';
+        row.appendChild(label);
+        row.appendChild(document.createTextNode(text));
+        chatContainer.appendChild(row);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
     function appendMessage(sender, text, audioUrl = null) {
@@ -5045,6 +5164,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initPanelUndock();
     initAvatarFullscreen();
     initHologramFloatingNotice();
+    initSpecialityModel();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();
 

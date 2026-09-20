@@ -48,6 +48,8 @@ USAGE:
     aether1 revoke <ID>            Take one device's access away, leaving the rest alone
     aether1 revoke all             Take every device's access away, keeping the phrase
     aether1 crashes                List the crashes AETHER1 has seen on this machine
+    aether1 models                 Show which local model each speciality runs on
+    aether1 models <NAME> <MODEL>  Point one speciality at a model (`clear` to unset)
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -97,6 +99,12 @@ pub enum Invocation {
     },
     /// `crashes`: what has died on this machine recently, asked for rather than announced.
     Crashes,
+    /// `models`: which local model each speciality runs on, and with two arguments, the
+    /// setting of one. See llm/routing.rs for why the key is the speciality.
+    Models {
+        persona: Option<String>,
+        model: Option<String>,
+    },
     /// `face`: the fullscreen avatar on a spare screen. Like `show`/`toggle` this reaches an
     /// already-running instance through the single-instance plugin rather than being handled
     /// in cli::run -- the face is a mirror of the HUD's own avatar (see frontend/js/face.js),
@@ -250,6 +258,21 @@ pub fn parse(argv: &[String]) -> Invocation {
             Some(extra) => Err(format!("crashes takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Crashes),
         }),
+        "models" => match rest.len() {
+            0 => Ok(Invocation::Models {
+                persona: None,
+                model: None,
+            }),
+            2 => Ok(Invocation::Models {
+                persona: Some(rest[0].to_string()),
+                model: Some(rest[1].to_string()),
+            }),
+            _ => Err(
+                "models takes either nothing, or a speciality and a model -- for example \
+                 `aether1 models nexus qwen2.5-coder:7b`, or `aether1 models nexus clear`"
+                    .to_string(),
+            ),
+        },
         "say" => take_option(&rest, "--voice").and_then(|(voice, rest)| {
             let (no_play, rest) = take_flag(&rest, "--no-play");
             free_text(rest).map(|text| Invocation::Say {
@@ -370,6 +393,91 @@ fn run_status(json: bool, events: bool) -> String {
 
 /// `aether1 crashes`. Deliberately shows muted programs too, marked -- the mute list stops
 /// AETHER1 interrupting you, and this is you doing the asking.
+/// `aether1 models`, both the showing and the setting.
+///
+/// The showing is the important half: step 19's whole claim is that "which model for which
+/// job" reads back as a sentence the operator can check, and a list they can see is what
+/// makes that true rather than a thing the design asserts about itself.
+fn run_models(persona: Option<String>, model: Option<String>) -> Result<String, String> {
+    use crate::llm::routing;
+    use crate::llm::Persona;
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let (Some(name), Some(model)) = (persona.as_deref(), model.as_deref()) {
+        let persona = Persona::from_key(name);
+        // from_key falls back rather than failing, so a typo would silently set the
+        // default persona's model. Checked here, where there is someone to tell.
+        if persona.key() != name.to_ascii_lowercase() {
+            return Err(format!(
+                "no speciality called {name:?} -- run `aether1 models` to see the names"
+            ));
+        }
+        let clearing = matches!(model.to_ascii_lowercase().as_str(), "clear" | "none" | "-");
+        routing::set_choice(db, &persona, (!clearing).then_some(model))?;
+        return Ok(if clearing {
+            format!(
+                "\"{}\" no longer has a model of its own; it will use the suggestion, or the \
+                 general model where nothing suits it.",
+                persona.speciality()
+            )
+        } else {
+            format!("\"{}\" will run on {model}.", persona.speciality())
+        });
+    }
+
+    let endpoint = db.get_setting_string("llm_endpoint", "http://localhost:11434");
+    let available = crate::model_scanner::models_at(&endpoint);
+    let speeds = routing::measured_speeds(db);
+
+    let mut out = match &available {
+        Some(models) if models.is_empty() => format!(
+            "{endpoint} answered but has no models loaded, so every speciality falls back to \
+             the general model.\n"
+        ),
+        Some(models) => format!(
+            "{} model{} available at {endpoint}:\n",
+            models.len(),
+            if models.len() == 1 { "" } else { "s" }
+        ),
+        None => format!(
+            "Nothing answered at {endpoint}, so this is what is stored rather than what is \
+             running.\n"
+        ),
+    };
+
+    let available = available.unwrap_or_default();
+    for persona in Persona::all() {
+        let choice = routing::resolve(db, &persona, &available, &speeds);
+        let line = match (&choice.model, &choice.reason) {
+            (Some(model), routing::Reason::Chosen) => format!("{model}  (your choice)"),
+            (Some(model), routing::Reason::Suggested) => format!("{model}  (suggested)"),
+            (Some(model), routing::Reason::Missing(gone)) => {
+                format!("{model}  (suggested -- your {gone} is not installed)")
+            }
+            (None, routing::Reason::Missing(gone)) => {
+                format!("the general model  (your {gone} is not installed)")
+            }
+            // Reason::General carries no model by construction, and a Some here would mean
+            // resolve() had changed underneath this; say what is true rather than assume.
+            (Some(model), routing::Reason::General) => model.clone(),
+            (None, _) => "the general model".to_string(),
+        };
+        out.push_str(&format!(
+            "\n    {:<16} {}\n    {:<16} {line}\n",
+            persona.key(),
+            persona.speciality(),
+            ""
+        ));
+    }
+    out.push_str(
+        "\nRun `aether1 models <speciality> <model>` to point one at a model, or \
+         `aether1 models <speciality> clear` to go back to the suggestion.",
+    );
+    Ok(out)
+}
+
 fn run_crashes() -> Result<String, String> {
     use crate::watchers::crash::{self, Availability};
 
@@ -586,6 +694,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Prompt { text, session } => run_prompt(text, session),
         Invocation::Status { json, events } => Ok(run_status(json, events)),
         Invocation::Crashes => run_crashes(),
+        Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Say { text, voice, play } => run_say(text, voice, play),
         Invocation::Discover { timeout_secs } => run_discover(timeout_secs),
         Invocation::Announce { name, port } => run_announce(name, port),
