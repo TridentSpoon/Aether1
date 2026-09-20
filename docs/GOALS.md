@@ -248,10 +248,12 @@ as you work. Retrieval over the notes, session consolidation into notes rather t
 transcript, observed-habit capture, decay. No memory browser to build: the browser is your
 editor.
 
-**Phase 4 — Situation.** *(half shipped)* AI telemetry — provider, model, tokens, spend —
-beside the hardware HUD it already resembles, measured rather than invented. Still to do:
-crash and journal capture wired to the tray, so the companion is the first responder with
-the failing process already in context.
+**Phase 4 — Situation.** *(shipped)* AI telemetry — provider, model, tokens, spend — beside
+the hardware HUD it already resembles, measured rather than invented. And crash capture wired
+to the tray: when a program dies, the tray goes amber, a notification offers to look into it,
+and the conversation opens with the failing process, what killed it and its last lines of log
+already in hand. Crashes only — the wider sweep of the system log is behind
+`aether1 status --events`, because a companion that reads the noise aloud is one you turn off.
 
 **Phase 5 — Reach beyond itself.** Hand a task to whichever coding agent or CLI tool is
 installed and narrate the result. Possibly an MCP client, to borrow the existing tool

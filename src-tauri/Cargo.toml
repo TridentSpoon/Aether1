@@ -30,6 +30,9 @@ tower-http = { version = "0.7.0", features = ["fs"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
+# Step 13: the crash watcher needs a way to say something while the HUD is closed, which
+# is the only reason this is here -- nothing else in AETHER1 notifies.
+tauri-plugin-notification = "2"
 # Already in the tree via tauri; taken as a direct dependency so local_only.rs can decide
 # whether a configured endpoint is on this machine or the local network by parsing its
 # host properly, rather than by string-matching a URL.

@@ -560,7 +560,7 @@ browser a file-manager window, only the machine this process is actually running
 
 ## Phase 4 — Situation
 
-### Step 13: Crash and log capture
+### Step 13: Crash and log capture — **shipped**
 
 Crashes only. The wider sweep of the event log is something you ask for, not something it
 volunteers: an event log is mostly noise, and a companion that reads the noise aloud is a
@@ -576,18 +576,44 @@ recent failures, and that is not a thing to spend a cloud call on; `local_only.r
 per-persona routing already give a way to pin it. With no local model present it shows the raw
 event and says nothing further, rather than waiting for one to exist.
 
-- **New `src-tauri/src/watchers/crash.rs`** — watch `systemd-coredump` (or poll
-  `coredumpctl list`) on Linux and the equivalent on Windows, behind one trait with two
-  implementations.
-- **`src-tauri/src/main.rs`** — on a crash, set the tray to amber and post a notification
-  offering the companion as first responder, with the failing process, its exit signal, and
-  the tail of its journal already assembled as context.
-- **The diagnostics command** — `aether1 status` already prints a system report; the wider
-  event sweep belongs there, on request, rather than on a watcher.
-- **Settings** — an off switch and a per-program mute list.
-- **Verify:** a deliberately segfaulted test binary produces a notification whose
-  conversation starts with the crash already in context; the same on Windows; and with no local
-  model installed, the notification still arrives carrying the raw event.
+- ~~**New `src-tauri/src/watchers/crash.rs`**~~ **Shipped.** `CrashReader` is the one design;
+  `LinuxCrashReader` polls `coredumpctl list --json=short` and pulls the failing program's
+  last lines out of the journal, `WindowsCrashReader` reads event 1000 from the Application
+  log. Polling rather than a watch, because there is no supported event for "a core was just
+  collected" and a process that answers in milliseconds costs nothing at a crash-shaped
+  interval. Both readers are compiled and tested on every platform, so the peer platform is
+  not a thing that only exists on the machine it runs on.
+- ~~**`src-tauri/src/main.rs`**~~ **Shipped.** On a crash the tray goes amber — tinted from
+  the existing icon rather than a second asset, so it keeps working if the icon is ever
+  redrawn — the tooltip says what died, a notification offers to look into it, and the HUD is
+  handed the whole assembled context. The amber clears itself after two minutes: it is a
+  notice, not a state to live in.
+- ~~**The diagnostics command**~~ **Shipped** as `aether1 status --events`, plus
+  `aether1 crashes` for the crash list on its own. Muted programs still appear there, marked:
+  the mute list stops AETHER1 interrupting you, and asking is not being interrupted.
+- ~~**Settings**~~ **Shipped** as `crash_capture_enabled` (on by default — a watcher nobody
+  turned on watches nothing) and `crash_capture_muted`, which reads a JSON array or a
+  comma-separated line, matches case-insensitively, and ignores a `.exe` on either side, so
+  one list works on both platforms.
+
+**The parsing is a free function over each tool's output, and that is the design decision
+worth keeping.** The machine this was built on has neither `coredumpctl` nor a journal nor
+Windows, so a reader that could only be tested by crashing something would have been a reader
+written by guesswork. It also caught a real bug: the first Windows implementation read the
+rendered message and took the first eight-digit hex value as the exception code, which is the
+faulting module's PE timestamp. Event 1000 declares its fields in a fixed template, so reading
+the properties array is both simpler and the only version that works on an install that is not
+in English.
+
+- **Verified:** with no `coredumpctl` present, `aether1 crashes` says what is missing and which
+  package provides it, rather than reporting a machine that never crashes. With a stand-in
+  `coredumpctl` and `journalctl` on `PATH` the real reader ran end to end — two crashes listed
+  oldest first, paths reduced to program names, signals named rather than numbered, the journal
+  tail attached, and `crash_capture_muted` marking firefox while still showing it.
+  `aether1 status --events` returns the journal's error-level lines with the hostname dropped
+  and pids stripped from unit names, and says "nothing at error level" rather than printing a
+  blank where a report should be. **Not verified here:** the tray, the notification and the
+  Windows reader, none of which a headless Linux container can run.
 
 **Its seam with step 15.** These are not one step. Crash capture has to stand on its own — no
 agent installed, no local model, still shows you the crash — and most hand-offs have nothing to
@@ -2375,8 +2401,9 @@ event log, honest token telemetry, and native tool calling.
 2. **Push-to-talk from outside the HUD.** Both engines work; holding a key to talk from
    another application needs an OS-level press-and-hold the global-shortcut plugin does not
    express yet.
-3. **Step 13, crash capture.** Linux only as designed, and the one feature that would make it
-   a first responder rather than something you go to.
+3. ~~**Step 13, crash capture.**~~ **Shipped**, on both platforms. What is left is what a
+   headless container cannot check: the tray colour, the notification, and the Windows reader
+   against a real event log.
 4. **Step 19, several local models.** A stated core requirement, and still deliberately not
    started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
    download path it would need already exist in `setup.rs`. Its two design questions are
@@ -2390,5 +2417,5 @@ event log, honest token telemetry, and native tool calling.
    and a logged-in `gh`, so everyone who installed from a Release is on whatever version
    they downloaded, permanently.
 
-Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
-which is correct: what they should be depends on those above.
+Steps 15–18 (agent handoff, MCP, packaging, memory sync) are now specs rather than sketches,
+settled in that order and written up in full above.
