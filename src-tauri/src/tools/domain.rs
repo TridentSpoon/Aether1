@@ -3,7 +3,7 @@
 // The tool layer already answers one question -- does this change the machine? -- and
 // proposes anything that does. This module answers the second: is this read the sort of
 // thing this persona is *for*? A System Diagnosis persona reading the system log is doing
-// its job. The same call from Creative Work is worth a glance, so it becomes a proposal.
+// its job. The same call from Signal & Logic is worth a glance, so it becomes a proposal.
 //
 // Three properties are worth stating plainly, because each of them is easy to lose:
 //

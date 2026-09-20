@@ -63,12 +63,17 @@ const FAMILIES: &[Family] = &[
     Family {
         needles: &["qwen", "coder"],
         good_at: "writing and fixing code",
-        suits: &[Persona::Nexus, Persona::ArxLkemi, Persona::ArxLexico],
+        suits: &[
+            Persona::Nexus,
+            Persona::ArxLkemi,
+            Persona::ArxLegionare,
+            Persona::Alt,
+        ],
     },
     Family {
         needles: &["deepseek", "coder"],
         good_at: "writing and fixing code",
-        suits: &[Persona::Nexus, Persona::ArxLkemi],
+        suits: &[Persona::Nexus, Persona::ArxLkemi, Persona::Alt],
     },
     Family {
         needles: &["codellama"],
@@ -78,14 +83,14 @@ const FAMILIES: &[Family] = &[
     Family {
         needles: &["starcoder"],
         good_at: "writing and fixing code",
-        suits: &[Persona::Nexus],
+        suits: &[Persona::Nexus, Persona::ArxLkemi],
     },
     Family {
         needles: &["deepseek", "r1"],
         good_at: "working a problem through step by step",
         suits: &[
+            Persona::ArxLogos,
             Persona::ArxLegionare,
-            Persona::Halcy,
             Persona::ArxLucre,
             Persona::Default,
         ],
@@ -93,27 +98,27 @@ const FAMILIES: &[Family] = &[
     Family {
         needles: &["hermes"],
         good_at: "conversation, and following an instruction closely",
-        suits: &[Persona::Halcy, Persona::ArxLocas, Persona::ArxLoregenda],
+        suits: &[Persona::Halcy, Persona::ArxLocas, Persona::ArxLyksaum],
     },
     Family {
         needles: &["llama"],
         good_at: "general conversation",
-        suits: &[Persona::Halcy, Persona::ArxLocas, Persona::ArxLogos],
+        suits: &[Persona::Halcy, Persona::ArxLoregenda, Persona::ArxLyksaum],
     },
     Family {
         needles: &["mistral"],
         good_at: "general work, quickly",
-        suits: &[Persona::ArxLocas, Persona::Red9000, Persona::ArxLyksaum],
+        suits: &[Persona::ArxLocas, Persona::Red9000, Persona::ArxLexico],
     },
     Family {
         needles: &["gemma"],
         good_at: "short answers without padding",
-        suits: &[Persona::Red9000, Persona::ArxLyksaum],
+        suits: &[Persona::Red9000, Persona::ArxLexico, Persona::ArxLimes],
     },
     Family {
         needles: &["phi"],
         good_at: "short answers on a small machine",
-        suits: &[Persona::Red9000, Persona::ArxLyksaum, Persona::ArxLimes],
+        suits: &[Persona::Red9000, Persona::ArxLimes, Persona::ArxLocas],
     },
 ];
 

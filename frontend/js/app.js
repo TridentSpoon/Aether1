@@ -3996,7 +3996,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Shows the custom persona directive textarea only when "Custom Directive" is
     // selected as the base persona -- the preset personas don't need it.
     /* The persona list, built from what the backend says exists rather than from a list in
-       the markup. Each entry leads with what it is *for* -- "Coding", "Cites Sources" -- with
+       the markup. Each entry leads with what it is *for* -- "Coding", "Signal & Logic" -- with
        the avatar it belongs to bookended after it, because the persona and the avatar are one
        choice you can make from either end. */
     async function loadPersonaCatalogue() {

@@ -1222,7 +1222,7 @@ answer looked like, so picking one changed the tone of the reply and almost noth
 Each directive now has a "What that means in practice" half — a test enforces that phrase is
 present in all seven speciality personas, which is a crude check for a real property. To the
 Point must put the answer in the first line and not restate the question. Coding must produce
-runnable code and name the failure mode. Cites Sources must say *which kind* of source a claim
+runnable code and name the failure mode. Scanning & Extraction must say *which kind* of source a claim
 has — read this session, recalled from training and unverifiable, or inferred — and never
 invent one to fill the shape. Security must ask whether a target is the operator's to test.
 
@@ -1250,7 +1250,7 @@ fallback directive without saying so.
 [PERSONA_ACCESS.md](PERSONA_ACCESS.md); this is the summary and why it is a document before it
 is code.
 
-Read-only tools currently run automatically for every persona, so Creative Work can read your
+Read-only tools currently run automatically for every persona, so Signal & Logic can read your
 firewall rules and Conversational can read your source tree. Nothing connects what the
 companion is *for* to what it reaches for without asking. The design gives each persona a
 domain — a set of read-only tools and path roots — that runs without a prompt, and makes
