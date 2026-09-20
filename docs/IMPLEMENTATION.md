@@ -640,11 +640,8 @@ a timer is a getter that will one day be the reason the HUD stutters.
 
 ## Phase 5+ — Reach and continuity
 
-Steps 15, 16 and 18 are specified below. Step 17 stays sketched, because what is left of it
-depends on step 46:
-
-- **Step 17: packaging** — AUR and `.deb` beside the existing `.tar.gz`, so a fresh machine
-  is one command.
+Every step in this phase is specified below. They were sketches for a long time because the
+earlier steps kept changing what they should be; they no longer do.
 
 ---
 
@@ -741,6 +738,51 @@ a trusted one, and an external caller must not get a way in that a local one doe
 - **Verify:** a paired machine on the LAN lists this machine's tools over MCP, a call to one
   stops for consent before it runs, an unpaired caller gets nothing, and turning the switch off
   removes the endpoint from discovery as well as from the router.
+
+---
+
+### Step 17: Packaging
+
+What is left of this is Linux only. Step 46 settled the Windows side — an Inno Setup installer
+signed through Azure Trusted Signing, and an in-app updater that signs the operator in to GitHub
+for a repository that stays private.
+
+**AppImage is the Linux artifact.** It matches the shape that already exists: the Linux bundle
+carries Piper, whisper.cpp and their models rather than trusting the host to have them, which is
+exactly what an AppImage is for, so this is a repackage rather than a rethink. It needs no store,
+which matters while releases are gated. And it carries update information — a string embedded at
+build time that lets `AppImageUpdate`, and the desktop managers built on it, fetch a delta instead
+of the whole file.
+
+**That string points at the GitHub repository from the first build**, even though the repository
+is private today. It costs nothing to embed, and it is the difference between the day the
+repository goes public being a switch and being a rebuild. Until then it simply does not resolve
+for an outside manager, and updating happens inside the app through the signed-in path from step
+46. Both are true at once: the app updates itself now, and every AppImage already in someone's
+hands starts working with an external manager the moment the repository is public. The manager
+must fail politely against a private repository rather than crash, which is a thing to test
+rather than assume.
+
+**Flatpak and Snap are the wrong universal here**, and the reason belongs in writing so it is not
+revisited. This app reads the journal and the Windows event log, watches for crashes, runs
+commands, and hands work to agent CLIs on the host. Under either sandbox every one of those needs
+a hole punched through it, and a package carrying `--filesystem=host` plus host command execution
+is a sandbox in name only: all of the packaging overhead, none of the safety.
+
+**AUR and `.deb` stay.** On Arch and CachyOS the AUR is a PKGBUILD and the operator's own helper
+keeps it current, which is the native answer on the machine this is developed on; `.deb` covers
+the Debian and Ubuntu side.
+
+- **`.github/workflows/release.yml`** — build the AppImage beside the existing bundles, with the
+  update information string embedded and pointing at the repository.
+- **minisign** — the Linux bundles are signed by nothing today. The keypair planned in step 46
+  covers the AppImage too: private key in Actions secrets, public key compiled in.
+- **AUR and `.deb`** — a PKGBUILD and a `.deb` beside the tarball, so a fresh machine is one
+  command.
+- **Verify:** the AppImage runs on a distribution that is not the build host; an external manager
+  reading its embedded update information reports something sensible against the private
+  repository instead of failing hard; and the in-app updater still works for an AppImage that no
+  manager has ever registered.
 
 ---
 
