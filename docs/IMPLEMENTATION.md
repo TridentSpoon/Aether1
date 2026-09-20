@@ -2158,7 +2158,7 @@ if fill is ever switched off.
 through the state label. The viewport now stops 9vmin short of the bottom and the word lives
 in that band, which is a caption rather than an overlay.
 
-### Step 45: the phrase is not the weak part
+### Step 45: the phrase is not the weak part -- **items 1, 2 and 3 shipped**
 
 `serve_auth.rs` protects the pairing phrase carefully at rest -- 12 BIP-39 words, shown
 once, never written down, with only the SHA-256 of a derived token on disk and a
@@ -2168,30 +2168,56 @@ security.
 
 What is missing is everything around it, in the order it matters:
 
-1. **TLS, self-signed.** The derived token travels in a plain `Authorization` header --
-   there is no `rustls` or certificate anywhere in `server.rs` -- so anyone on the same
-   wifi can read it once and reuse it indefinitely. The certificate has to be self-signed:
-   no public CA will issue for a `.local` name or a private address, and requiring a public
-   domain would make a LAN feature depend on the internet. Self-signed is not a compromise
-   here, it is the correct shape -- Syncthing takes it further and makes the certificate
-   hash *be* the device identity. The certificate's fingerprint is shown as a safety number
-   on both screens, so the operator confirms the same short string twice and knows which
-   machine answered.
-2. **Rate limiting on the auth route.** The module's own comment describes the phrase as
-   "far more entropy than a rate-limited LAN auth endpoint could ever be brute-forced
-   through", and nothing in `server.rs` or `serve_auth.rs` counts attempts, locks out, or
-   returns 429. The comment describes a property the code does not have, which is worse
-   than not claiming it.
-3. **A token per paired device.** One hash for everything means revoking a lost laptop
-   re-pairs the desktop too, and nothing can say which device is which in the action log.
+1. ~~**TLS, self-signed.**~~ **Shipped.** `serve_tls.rs` generates a certificate on first
+   `--lan` run, keeps it beside the pairing token so the fingerprint stays the same across
+   restarts, and `server.rs` serves over TLS through `axum-server`. The whole SHA-256
+   fingerprint is printed at startup, grouped in eights for reading aloud; truncating it
+   would only have made the line shorter. Self-signed was never a compromise -- no public CA
+   will issue for a `.local` name or a private address, so the alternative was owning a
+   domain. Loopback deliberately stays plain HTTP: nothing off the machine can reach
+   127.0.0.1, so there is no wire to listen to.
+2. ~~**Rate limiting on the auth route.**~~ **Shipped.** An address gets five wrong guesses
+   a minute, then waits a minute, counted across both doors -- a wrong token and a wrong
+   phrase are the same attack seen twice, so they share one budget, and a request carrying
+   no credential counts too. Getting it right clears the record. The table of addresses is
+   capped and never evicts a live lockout, since filling it from other addresses would
+   otherwise erase the evidence of one's own failures. `WORD_COUNT`'s comment about "a
+   rate-limited LAN auth endpoint" is now true rather than aspirational.
+3. ~~**A token per paired device.**~~ **Shipped.** The phrase and a device's credential are
+   now two different things. The phrase opens the door once, at `/api/pair`, and is not
+   accepted as a bearer token afterwards; each device that pairs gets its own 256-bit token
+   from the operating system's generator, derived from nothing, so learning one says nothing
+   about the phrase or about any other device's. Only the hash is kept, in
+   `backend/serve_devices.json` at 0600, with a short id taken from that hash, a label the
+   device sent, and when it paired. `accepts` folds over the whole list without stopping at
+   a match, so the time a rejection takes says nothing about how many devices there are.
+   `aether1 devices` lists them, `aether1 revoke <id>` cuts one off and leaves the rest
+   alone, and `aether1 revoke all` cuts off every one while keeping the phrase you wrote
+   down -- rotating with `aether1 pair` is still the harsher door, and it clears the device
+   list too, because "any phrase paired before this no longer works" would otherwise have
+   quietly stopped being true. An install from before this step keeps working: its one
+   phrase-derived credential is recorded as a device, so nothing has to pair again on the
+   upgrade, and that entry can be revoked like any other once it has.
+
+   **Revoking had to take hold without a restart, and at first it did not.** `aether1
+   revoke` is a separate process from `aether1 --serve`, so the running server went on
+   honouring a token whose entry had just been deleted -- exactly the moment revoking is
+   for. That was caught by running the two side by side rather than by a test; the server
+   now stamps the device file's modified time and length and re-reads it when either
+   changes, one `stat` per request, and there is a test standing on it. Verified live: a
+   revoked device gets a 401 on its next request while the others keep their 200.
 4. **A PAKE, later, if the rigour is wanted.** `discovery.rs` announces over DNS-SD, which
    anyone on the network can impersonate, so a phrase can be typed into a convincing fake.
    SPAKE2 -- what Matter and Thread commissioning use -- ends that class of attack by never
    letting the phrase cross the wire at all. It is real work and it is last, because items
    1 and 2 close the holes that are open today.
 
-Items 1 and 2 are the ones with a hole behind them right now, and `--lan` should be
-understood as experimental until they land.
+Items 1 and 2 were the ones with a hole behind them, and both are closed: the token no
+longer crosses the network in the clear, and guessing costs something. Item 3 turned out to
+be worth doing immediately after rather than later, because it is what makes the other two
+recoverable -- TLS and rate limiting stop a stranger getting in, and per-device tokens are
+how you get a device *out* once it is lost. Item 4 is the one that can still wait: it is
+rigour on a path that is no longer broken.
 
 ### Step 46: updating a copy that was installed rather than cloned
 
@@ -2341,9 +2367,10 @@ event log, honest token telemetry, and native tool calling.
    download path it would need already exist in `setup.rs`. Its two design questions are
    now answered -- routing is keyed on speciality and chosen from a dropdown -- so what
    remains is the building.
-5. **Step 45, the LAN transport.** TLS and rate limiting are missing from a path that is
-   already shipped behind `--lan`, which makes this the only outstanding item with a hole
-   behind it rather than an absence.
+5. **Step 45, the LAN transport.** TLS, attempt limiting and per-device tokens shipped, so
+   a lost machine can now be cut off on its own with `aether1 revoke <id>`. What remains is
+   a PAKE, if the rigour is ever wanted -- it closes a convincing-fake attack rather than a
+   hole that is open today.
 6. **Step 46, updates for installed copies.** The updater in `main.rs` needs a git checkout
    and a logged-in `gh`, so everyone who installed from a Release is on whatever version
    they downloaded, permanently.

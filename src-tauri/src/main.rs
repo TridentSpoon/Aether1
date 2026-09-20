@@ -28,6 +28,7 @@ mod local_only;
 mod model_scanner;
 mod paths;
 mod serve_auth;
+mod serve_tls;
 mod server;
 mod setup;
 mod terminal;

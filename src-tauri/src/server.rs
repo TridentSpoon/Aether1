@@ -7,13 +7,13 @@
 // The native app is untouched by any of this -- see the `--serve` flag check in main() that
 // routes here before tauri::Builder is ever constructed.
 
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, Request, State,
+        ConnectInfo, Path, Query, Request, State,
     },
     http::{header, StatusCode},
     middleware,
@@ -22,6 +22,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum_server::tls_rustls::RustlsConfig;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
@@ -32,13 +33,24 @@ use crate::discovery;
 use crate::llm::{self, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
-use crate::serve_auth::{self, ServeAuth, Setup};
+use crate::serve_auth::{self, AttemptLimiter, ServeAuth, Setup};
+use crate::serve_tls;
 use crate::vault;
 
 #[derive(Clone)]
 struct AppState {
     engine: Arc<LlmEngine>,
     telemetry_tx: broadcast::Sender<Value>,
+}
+
+/// What the two `--lan` gates share: the token to check against, and the record of who has
+/// been getting it wrong. Bundled because `/api/pair` and the middleware both need both --
+/// a failed phrase and a failed token are the same attack seen at two doors, and counting
+/// them separately would double whatever budget an attacker actually gets.
+#[derive(Clone)]
+struct LanState {
+    auth: Arc<ServeAuth>,
+    limiter: Arc<AttemptLimiter>,
 }
 
 /// The address the HTTP server listens on.
@@ -149,6 +161,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
     // mDNS daemon answering queries) for as long as `run()`'s stack frame does, which is
     // the life of the server.
     let mut _announcement = None;
+    let mut tls = None;
     if lan {
         let (auth, setup) =
             serve_auth::load_or_create().expect("could not set up the --lan pairing token");
@@ -159,13 +172,31 @@ pub async fn run(engine: LlmEngine, lan: bool) {
                  one. Run `aether1 pair` later to generate a new phrase and revoke this one.\n"
             );
         }
-        let auth = Arc::new(auth);
+        let lan_state = LanState {
+            auth: Arc::new(auth),
+            limiter: Arc::new(AttemptLimiter::new()),
+        };
         let pair_router = Router::new()
             .route("/api/pair", post(pair))
-            .with_state(auth.clone());
+            .with_state(lan_state.clone());
         app = app
-            .route_layer(middleware::from_fn_with_state(auth, require_lan_token))
+            .route_layer(middleware::from_fn_with_state(lan_state, require_lan_token))
             .merge(pair_router);
+
+        let certificate =
+            serve_tls::load_or_create().expect("could not set up the --lan certificate");
+        if matches!(certificate.origin, serve_tls::Origin::New) {
+            println!("[AETHER1] --lan: made this machine a certificate to identify itself by.");
+        }
+        println!(
+            "\n[AETHER1] --lan certificate fingerprint (SHA-256):\n\n    {}\n\n\
+             Your browser will warn that nobody vouches for this certificate, which is true: \
+             this machine signed it itself, because no public authority will vouch for \
+             an address on your own network. Check the fingerprint it shows you against the one \
+             above, once, and you have done by hand what the padlock does for a public site.\n",
+            certificate.fingerprint
+        );
+        tls = Some(certificate);
 
         let instance_name = sysinfo::System::host_name().unwrap_or_else(|| "aether1".to_string());
         match discovery::announce(&instance_name, 8378, &[("version", crate::APP_VERSION)]) {
@@ -176,22 +207,61 @@ pub async fn run(engine: LlmEngine, lan: bool) {
 
     let app = app.fallback_service(static_service);
 
-    let listener = tokio::net::TcpListener::bind(bind_address(lan))
-        .await
+    // Bound before serving either way, so "that port is taken" is still reported the moment
+    // it happens rather than somewhere inside the TLS handshake machinery.
+    let listener = std::net::TcpListener::bind(bind_address(lan))
         .expect("failed to bind :8378 -- is another AETHER1 instance already running?");
-    println!("[AETHER1] serving http://localhost:8378 (Ctrl+C to stop)");
+    listener
+        .set_nonblocking(true)
+        .expect("could not put the listening socket into non-blocking mode");
+
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    println!("[AETHER1] serving {scheme}://localhost:8378 (Ctrl+C to stop)");
     if lan {
         // Said plainly and every time. Someone who typed --lan once in a script should
         // still be told what it means on the day they run it somewhere unfamiliar.
         println!(
-            "[AETHER1] --lan: reachable from your network, but every request needs the \
-             pairing token above (or POST /api/pair with the phrase) -- without it, AETHER1 \
-             refuses to show your conversation or run anything."
+            "[AETHER1] --lan: reachable from your network over TLS, but every request needs \
+             a token of its own -- a device gets one by POSTing the pairing phrase to \
+             /api/pair, and until then AETHER1 refuses to show your conversation or run \
+             anything. `aether1 devices` lists what is paired; `aether1 revoke <id>` cuts \
+             one off straight away."
         );
     } else {
         println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
     }
-    axum::serve(listener, app).await.expect("axum server error");
+
+    // `into_make_service_with_connect_info` is what puts the peer address within reach of
+    // the handlers, which is what the attempt limiter counts against. Loopback pays for it
+    // too, where it is unused but harmless, rather than having two ways to start the server.
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
+
+    match tls {
+        Some(certificate) => {
+            // rustls is built here without a default provider chosen for it, so one is named
+            // explicitly. `ring` is the same provider the outbound HTTP client already uses,
+            // which keeps one implementation in the binary rather than two.
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let config = RustlsConfig::from_pem(
+                certificate.cert_pem.into_bytes(),
+                certificate.key_pem.into_bytes(),
+            )
+            .await
+            .expect("could not load the --lan certificate");
+            axum_server::from_tcp_rustls(listener, config)
+                .expect("could not start the TLS listener")
+                .serve(service)
+                .await
+                .expect("axum server error");
+        }
+        None => {
+            let listener = tokio::net::TcpListener::from_std(listener)
+                .expect("could not hand the listening socket to tokio");
+            axum::serve(listener, service)
+                .await
+                .expect("axum server error");
+        }
+    }
 }
 
 fn bearer_token(request: &Request) -> Option<String> {
@@ -225,20 +295,79 @@ fn unauthorized() -> Response {
         .into_response()
 }
 
+/// The answer an address gets once it has spent its attempts. `Retry-After` is the header
+/// HTTP already has for this, so a well-behaved client waits the right amount without being
+/// told how in prose, and says the same thing in the body for a person reading it.
+fn too_many_attempts(wait: Duration) -> Response {
+    let seconds = wait.as_secs().max(1);
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, seconds.to_string())],
+        Json(serde_json::json!({
+            "error": "too many failed pairing attempts",
+            "hint": format!("wait {seconds} seconds and try again"),
+        })),
+    )
+        .into_response()
+}
+
 async fn require_lan_token(
-    State(auth): State<Arc<ServeAuth>>,
+    State(lan): State<LanState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
+    let ip = peer.ip();
+    if let Some(wait) = lan.limiter.retry_after(ip) {
+        return too_many_attempts(wait);
+    }
     match bearer_token(&request).or_else(|| token_from_query(&request)) {
-        Some(token) if auth.accepts(&token) => next.run(request).await,
-        _ => unauthorized(),
+        Some(token) if lan.auth.accepts(&token) => {
+            lan.limiter.record_success(ip);
+            next.run(request).await
+        }
+        // A request with no credential at all is counted the same as a wrong one. It is
+        // indistinguishable from the first step of someone probing, and treating it as
+        // innocent would leave a way to keep guessing for free by alternating.
+        _ => {
+            lan.limiter.record_failure(ip);
+            unauthorized()
+        }
     }
 }
 
 #[derive(Deserialize)]
 struct PairRequest {
     phrase: String,
+    /// What to call this device in the list. Optional: a browser will not send one, so the
+    /// User-Agent stands in, and an operator can always tell one entry from another by when
+    /// it paired even if both are called the same thing.
+    #[serde(default)]
+    device: Option<String>,
+}
+
+/// The name a device gets when it did not choose one. A User-Agent is long and full of
+/// things nobody wants to read, so this keeps the part that identifies the browser and the
+/// system and throws the version soup away.
+fn label_from_user_agent(request_headers: &header::HeaderMap, peer: SocketAddr) -> String {
+    let agent = request_headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let browser = ["Firefox", "Edg", "Chrome", "Safari", "curl", "AETHER1"]
+        .into_iter()
+        .find(|name| agent.contains(name));
+    let system = ["Windows", "Macintosh", "Linux", "Android", "iPhone"]
+        .into_iter()
+        .find(|name| agent.contains(name));
+    match (browser, system) {
+        (Some(browser), Some(system)) => format!("{browser} on {system}"),
+        (Some(browser), None) => browser.to_string(),
+        (None, Some(system)) => system.to_string(),
+        // Nothing recognisable: the address it paired from is at least something the
+        // operator can match against a machine they own.
+        (None, None) => format!("a device at {}", peer.ip()),
+    }
 }
 
 /// The one route under `--lan` that needs no token -- it's what produces one. `phrase` is
@@ -246,15 +375,40 @@ struct PairRequest {
 /// wire, matching serve_auth's rule that the phrase itself never leaves the two ends that
 /// already know it (the person who read it off this machine, and whoever they typed it into).
 async fn pair(
-    State(auth): State<Arc<ServeAuth>>,
+    State(lan): State<LanState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: header::HeaderMap,
     Json(req): Json<PairRequest>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let token = serve_auth::derive_token_from_phrase(&req.phrase)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    if auth.accepts(&token) {
-        Ok(Json(serde_json::json!({ "token": token })))
-    } else {
-        Err((StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()))
+) -> Response {
+    let ip = peer.ip();
+    if let Some(wait) = lan.limiter.retry_after(ip) {
+        return too_many_attempts(wait);
+    }
+    // A phrase that isn't valid BIP-39 counts as a failure too: it is still a guess, and
+    // letting malformed ones through free would make the budget trivial to avoid.
+    let Ok(token) = serve_auth::derive_token_from_phrase(&req.phrase) else {
+        lan.limiter.record_failure(ip);
+        return (
+            StatusCode::BAD_REQUEST,
+            "that doesn't look like a valid pairing phrase".to_string(),
+        )
+            .into_response();
+    };
+    if !lan.auth.phrase_matches(&token) {
+        lan.limiter.record_failure(ip);
+        return (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response();
+    }
+
+    lan.limiter.record_success(ip);
+    // The phrase is spent the moment it is checked: what goes back is a token minted for
+    // this device alone, so revoking it later takes access from this machine and no other.
+    let label = req
+        .device
+        .filter(|chosen| !chosen.trim().is_empty())
+        .unwrap_or_else(|| label_from_user_agent(&headers, peer));
+    match lan.auth.add_device(&label) {
+        Ok(device_token) => Json(serde_json::json!({ "token": device_token })).into_response(),
+        Err(e) => internal_error(e).into_response(),
     }
 }
 

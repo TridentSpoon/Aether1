@@ -2,6 +2,8 @@
 backend/aether1_memory.db
 backend/audio_cache/
 backend/serve_token.hash
+backend/serve_cert.pem
+backend/serve_key.pem
 logs/
 *.pid
 *.log
@@ -18,3 +20,4 @@ src-tauri/gen/
 .vscode/
 .idea/
 .claude/
+backend/serve_devices.json
