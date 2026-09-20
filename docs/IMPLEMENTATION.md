@@ -2463,6 +2463,14 @@ and this is about the app, and conflating them is what got us here. The HUD gets
 list in the settings panel, since the person most likely to need it is the one who cannot
 get a sentence out of the companion.
 
+**Three moments, and no fourth.** The whole list runs once at startup, so the app knows what
+it is standing on before the operator asks it for anything. After that nothing sweeps on a
+timer: a subsystem that fails during ordinary use runs its own check there and then, which
+is both cheaper and more precise than polling, and everything else waits for the operator to
+press Diagnose or type `aether1 doctor`. A companion quietly probing ports and spawning
+processes every minute costs more than it is worth, and these checks are individually cheap
+only for as long as they are not all running all the time.
+
 #### The ladder: how a failed check gets fixed
 
 Four rungs, cheapest first, and nothing skips a rung.
@@ -2500,6 +2508,14 @@ The consent model does not loosen because the task is a repair:
   survives it. An agent may tell you what to install and why, and may run the package
   manager if you approve that specific command; it does not decide to.
 
+**What the agent may repair is the ground AETHER1 stands on, not AETHER1.** The foundation
+is fair game: a service that is not running, a missing package, a permission, a
+half-downloaded file, a path pointing at nothing. AETHER1's own source is not -- on any
+machine, including a developer machine with the checkout sitting right there. And when the
+fault turns out to be in *another program*, the agent stops at words: it says what it found
+and what it would do, and the operator decides. Diagnosing is allowed everywhere; acting is
+allowed on AETHER1's foundation and nowhere else.
+
 **Rung 3 -- stop.** One known repair and one agent hand-off per check per session, then it
 stops and says plainly that it could not fix this. A loop that keeps trying is worse than a
 broken check, because it burns tokens and the operator stops reading it.
@@ -2534,9 +2550,15 @@ editable before it goes anywhere, and it goes nowhere by default. Consent is per
 a standing switch -- the same reasoning as step 16's per-call MCP consent: agreeing to send
 one report is not agreeing to be a telemetry source.
 
-**3. What "reported back to the repo" is.** An **issue**, opened from a template, carrying
-the record and a proposed test. Deliberately not a pull request: a machine-generated patch
-to the build is precisely the thing that must not arrive ready to merge. Step 46 already
+**3. What "reported back to the repo" is, and when it is offered.** When the record looks
+like a missing dependency there is nobody to tell: the fix is a line in `setup.rs` so the
+next person is told about it, and that is a change a person makes. When it looks like an
+actual bug in AETHER1, the app offers to notify the developers, and taking that offer opens
+an **issue** carrying the record and the proposed test.
+
+An issue, and deliberately not a pull request: a machine-generated patch to the build is
+precisely the thing that must not arrive ready to merge, and the issue is where the triage
+below happens anyway. Step 46 already
 brings a GitHub identity into the app via device flow, so there is somebody to open it as --
 but that App is scoped `contents: read`, and opening issues needs `issues: write` added to
 it. That is a real widening of what the app can do to the repository and is called out here
@@ -2551,10 +2573,10 @@ build requirement: it stops being a story about a machine and becomes a row in `
 that will fail for everyone, for ever, if the check regresses.
 
 **5. Three verdicts, and a human picks.**
-   - **A build requirement.** The check was wrong or missing, or the app genuinely needs
+   - **A bug, which is to say a build requirement.** The check was wrong or missing, or the app genuinely needs
      something it does not ship or look for. The fix belongs in the code or the packaging --
      a wider search path, a bundled dependency, a corrected probe.
-   - **An environment fact.** The machine really was missing something the operator has to
+   - **A dependency, which is to say an environment fact.** The machine really was missing something the operator has to
      install. Then the fix belongs in `setup.rs` as a per-OS step with a link, so the *next*
      person is told rather than silently patched. This is the case that gets mistaken for
      the first one most often.
@@ -2584,6 +2606,15 @@ repairs the *machine*; a change to AETHER1's code leaves as a report for a perso
 even on a developer machine that happens to have a checkout sitting right there. The
 difference between a program that fixes its environment and a program that edits itself is
 worth keeping sharp, and nothing here needs the second one.
+
+**Settled 2026-09-20.** The agent repairs the machine and never AETHER1's code; the point of
+repairing the machine is that the app should be running on a solid foundation, so the
+foundation is what it is allowed to touch. A fault in another program earns a notification
+and a suggestion, and the operator decides from there. A record that looks like a bug rather
+than a missing dependency gets an offer to notify the developers, which is a bug report on
+this repository, reviewed like any other. And it runs at startup, again the moment something
+actually fails, and whenever the operator asks -- never on a timer, because the cost of
+watching has to stay smaller than the cost of the thing being watched.
 
 ## Where this stands
 
