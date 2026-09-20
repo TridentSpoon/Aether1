@@ -820,6 +820,73 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LUCRE: the column of cubes stacked along the vertical axis,
+        // each turned 45 degrees so it meets the viewer corner-on, with the dashed data
+        // beam running the full height of the stack through them.
+        stackedCubes: {
+            label: 'Stacked cubes',
+            build(api, options) {
+                const group = new THREE.Group();
+                const unit = options.radius * 0.36;
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.22, depthWrite: false,
+                });
+                const wireMatA = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.85 });
+                const wireMatB = new THREE.LineBasicMaterial({ color: api.palette.hex3, transparent: true, opacity: 0.85 });
+                const geom = new THREE.BoxGeometry(unit, unit, unit);
+                const edges = new THREE.EdgesGeometry(geom);
+                const layout = [
+                    { y: options.radius * 1.36, scale: 0.65 },
+                    { y: options.radius * 0.75, scale: 0.85 },
+                    { y: -options.radius * 0.75, scale: 0.85 },
+                    { y: -options.radius * 1.36, scale: 0.65 },
+                ];
+                const cubes = layout.map((cfg, i) => {
+                    const cube = new THREE.Mesh(geom, fillMat);
+                    cube.scale.setScalar(cfg.scale);
+                    cube.position.set(0, cfg.y, 0);
+                    cube.rotation.y = Math.PI / 4;
+                    const wire = new THREE.LineSegments(edges, i % 2 === 0 ? wireMatA : wireMatB);
+                    wire.scale.copy(cube.scale);
+                    wire.position.copy(cube.position);
+                    wire.rotation.copy(cube.rotation);
+                    group.add(cube, wire);
+                    return { cube, wire, baseY: cfg.y, phase: (i + 1) * 0.5 };
+                });
+                const beamMat = new THREE.LineDashedMaterial({
+                    color: api.palette.hex3, transparent: true, opacity: 0.75, dashSize: 3, gapSize: 1.8,
+                });
+                const reach = options.radius * 1.55;
+                const beam = new THREE.Line(
+                    new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(0, -reach, 0), new THREE.Vector3(0, reach, 0),
+                    ]),
+                    beamMat
+                );
+                beam.computeLineDistances();
+                group.add(beam);
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        fillMat.color.setHex(p.hex);
+                        wireMatA.color.setHex(p.hex2);
+                        wireMatB.color.setHex(p.hex3);
+                        beamMat.color.setHex(p.hex3);
+                    },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.2;
+                        cubes.forEach(({ cube, wire, baseY, phase }) => {
+                            const drift = Math.sin(ctx.time * 1.4 + phase) * options.radius * 0.03;
+                            cube.position.y = baseY + drift;
+                            wire.position.y = cube.position.y;
+                        });
+                        beamMat.opacity = 0.55 + ctx.audio * 0.35 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Outer rings: a boundary further out ---------------------------------
@@ -1193,6 +1260,44 @@
                         group.rotation.y = ctx.time * 0.15;
                         group.rotation.x = Math.sin(ctx.time * 0.5) * 0.08;
                         mat.opacity = 0.42 + ctx.audio * 0.25 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LUCRE: the two halo bands, real ring geometry rather than
+        // camera-facing sprites, tilted partway so a fixed front-on camera still sees
+        // them as rings, and each tumbling at its own rate so they never lock together.
+        tumblingHalos: {
+            label: 'Tumbling halos',
+            build(api, options) {
+                const group = new THREE.Group();
+                const configs = [
+                    { inner: 1.0, tiltX: 1.15, tiltY: 0.1, opacity: 0.4, speed: 0.18, hot: false },
+                    { inner: 1.14, tiltX: 1.3, tiltY: -0.15, opacity: 0.28, speed: -0.24, hot: true },
+                ];
+                const rings = configs.map((cfg) => {
+                    const mat = new THREE.MeshBasicMaterial({
+                        color: cfg.hot ? api.palette.hex3 : api.palette.hex2, side: THREE.DoubleSide,
+                        transparent: true, opacity: cfg.opacity, depthWrite: false,
+                    });
+                    const inner = options.radius * cfg.inner;
+                    const ring = new THREE.Mesh(new THREE.RingGeometry(inner, inner * 1.032, 64), mat);
+                    ring.rotation.x = cfg.tiltX;
+                    ring.rotation.y = cfg.tiltY;
+                    group.add(ring);
+                    return { ring, mat, cfg };
+                });
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        rings.forEach(({ mat, cfg }) => mat.color.setHex(cfg.hot ? p.hex3 : p.hex2));
+                    },
+                    animate(ctx) {
+                        rings.forEach(({ ring, mat, cfg }) => {
+                            ring.rotation.y += cfg.speed * 0.016;
+                            mat.opacity = cfg.opacity + ctx.audio * 0.2 + ctx.click * 0.15;
+                        });
                     },
                 };
             },
