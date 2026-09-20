@@ -1976,6 +1976,122 @@ What is missing is everything around it, in the order it matters:
 Items 1 and 2 are the ones with a hole behind them right now, and `--lan` should be
 understood as experimental until they land.
 
+### Step 46: updating a copy that was installed rather than cloned
+
+**The updater that exists today only works for the developer.** `main.rs` asks
+`api.github.com` for the latest commit on `main`, and `perform_update_core` runs
+`git pull --ff-only` in `project_root()` and rebuilds. Both halves assume a git checkout,
+and the check assumes `gh auth token` returns something -- the repository is private, so an
+unauthenticated request 404s and `UpdateCheckError::NoGithubAuth` tells the operator to
+install the `gh` CLI and log in.
+
+That is a reasonable developer workflow and it is not a product. Someone who installed from
+`aether1-offline-linux-x86_64.tar.gz` or the Windows installer has no checkout, no `gh`, and
+no path to a newer version at all. **And the two halves of the project disagree about what
+an update even is:** the tray compares commits on `main`, while `release.yml` builds tagged,
+versioned bundles and attaches them to a GitHub Release on `v*`. The updater cannot see
+releases; the release pipeline has no client.
+
+**A credential shipped in the binary is not the fix.** Anything in a distributed app can be
+read out of it, GitHub's secret scanning revokes tokens that appear in public artifacts, and
+there is no obfuscation that changes either fact.
+
+**The operator does not have to be the one holding the credential, though.** If each person
+signs in to GitHub as themselves, the app carries no secret at all and access becomes a real
+check rather than a guess: reading the private repository's releases requires being a
+collaborator on it, so adding someone grants access and removing them revokes it. That is
+what "subscribed to the project" means in practice, and it is the mechanism GitHub already
+has.
+
+The flow is the **device flow**: the app shows a short code, the person opens
+`github.com/login/device` in a browser and approves, and the app receives a token for that
+person. It exists precisely for applications that cannot keep a secret -- the only thing
+compiled into the binary is a client ID, which is public by design and grants nothing on its
+own.
+
+**Use a GitHub App rather than a classic OAuth App.** A classic OAuth App would have to ask
+for the `repo` scope, which is read *and write* to every repository that person can reach --
+an alarming thing to request for the sake of a version check, and rightly so. A GitHub App
+scopes down to `contents: read` on the repositories it is installed on, so the token the app
+holds can do one thing. Device flow has to be enabled in the App's settings; it is off by
+default.
+
+**Signing matters more than where the file lives.** Once artifacts are signed and the app
+verifies the signature against a public key compiled into it, the download can come from
+anywhere, over any mirror, and a tampered file simply fails to install. That inverts the
+problem from "keep the location secret" to "make the location irrelevant", which is the only
+version of this that stays true.
+
+The plan:
+
+1. **Sign in to GitHub in the app, and keep the releases where they already are.** The
+   private repository's own Releases are the distribution; `release.yml` already puts the
+   bundles there. Nothing new is hosted, nothing is published, and the source stays private
+   and unforkable. Access is whoever the owner has added to the repository, which is a list
+   that can be added to and taken away from.
+
+   *Not a public artifacts repository*, which was this step's first answer and is wrong
+   here: a public repository appears on the owner's profile and in search, so it fails the
+   requirement that releases reach only people who were let in. *Not an unlisted bucket*
+   either, which was its second: it works, and it asks nobody to sign in, but an unguessable
+   URL is obscurity rather than access control -- it cannot be taken back from someone, and
+   the URL would have to live in the binary, which makes it exactly as private as the binary
+   is. Worth keeping in mind only if signing in ever becomes the wrong price to ask.
+2. **Sign every artifact, and verify on the client.** Windows installers are already signed
+   through Azure Trusted Signing in `release.yml`; the Linux bundles are signed by nothing at
+   all. A minisign keypair covers both uniformly: the private key lives in Actions secrets,
+   the public key is compiled into the binary, and no release is installable without it.
+3. **Point the check at releases, not at `main`.** Compare this build's version against the
+   latest published release -- `/repos/{owner}/{repo}/releases/latest`, with the signed-in
+   token, and the asset fetched from the release's asset endpoint. A commit on `main` is not
+   a release, and telling someone they are "behind" because a README was fixed is noise.
+4. **Keep the git path, but as the developer path.** When a `.git` directory is present the
+   current pull-and-rebuild behaviour is the right one and should stay. When it is absent,
+   the app fetches the signed bundle instead. Which mode a copy is in should be visible, not
+   inferred silently.
+5. **Do not self-install silently.** The offline bundles are around half a gigabyte. The
+   honest flow is to say a version is available, ask, download with a progress bar the HUD
+   already knows how to draw (step 31), verify the signature, and hand over to the
+   installer.
+6. **Keep the token somewhere better than the settings table.** `llm_api_key` already lives
+   there as plain JSON, so there is precedent, but a GitHub token is a different kind of
+   secret: it is an identity on someone else's account rather than a key to a service they
+   chose to pay for. The OS keychain -- Credential Manager on Windows, libsecret or
+   kwallet on Linux -- is where it belongs, and `contents: read` on one repository keeps the
+   damage bounded if it ends up somewhere else anyway.
+7. **Not signing in is not an error.** Someone who declines still has a working companion;
+   they just do not get told about new versions. The check should say so plainly once and
+   stop asking, rather than nagging or degrading anything else.
+
+**On Tauri's own updater.** Tauri v2 ships `tauri-plugin-updater`, which does exactly the
+signature-verified flow described above, and it is not configured here -- there is no
+updater block in `tauri.conf.json` and no pubkey. It is worth adopting only if the bundles
+move to formats it can install (AppImage, `.deb`, NSIS or MSI). This project's bundles are
+bespoke: an Inno Setup installer on Windows, and Linux tarballs carrying Piper, whisper.cpp
+and their models. Verifying minisign signatures directly is the smaller change and keeps the
+packaging that already works; the plugin is the better answer only if the packaging is being
+revisited anyway.
+
+**Settled: the source stays private, access is by GitHub identity, and nothing is hosted.**
+The project is not to be forkable while it is still being built, which the private source
+already achieves; releases reach the people the owner has let in and nobody else; and no
+endpoint is to be run.
+
+**What this costs, stated plainly:** a GitHub account and a one-time browser approval become
+the price of automatic updates. For a project whose access model is "subscribed to the
+project" that is the point rather than a drawback, and it buys something obscurity cannot --
+access that can be taken back. A link, once given, is given forever.
+
+**It also replaces, rather than removes, the current `gh` requirement.** Today the check
+shells out to `gh auth token`, so it needs the GitHub CLI installed and logged in; the device
+flow needs a browser, which every machine running this already has. It is strictly less to
+ask for than what is there now.
+
+Signing still matters and is still item 2. Authentication proves who may download; a
+signature proves what was downloaded. A token that is stolen, a release asset replaced, or a
+copy passed hand to hand on a USB stick are all cases where the second question is the one
+that counts.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -2011,6 +2127,9 @@ event log, honest token telemetry, and native tool calling.
 5. **Step 45, the LAN transport.** TLS and rate limiting are missing from a path that is
    already shipped behind `--lan`, which makes this the only outstanding item with a hole
    behind it rather than an absence.
+6. **Step 46, updates for installed copies.** The updater in `main.rs` needs a git checkout
+   and a logged-in `gh`, so everyone who installed from a Release is on whatever version
+   they downloaded, permanently.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) remain sketches rather than specs,
 which is correct: what they should be depends on those above.
