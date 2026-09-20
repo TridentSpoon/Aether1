@@ -562,14 +562,39 @@ browser a file-manager window, only the machine this process is actually running
 
 ### Step 13: Crash and log capture
 
+Crashes only. The wider sweep of the event log is something you ask for, not something it
+volunteers: an event log is mostly noise, and a companion that reads the noise aloud is a
+companion you turn off.
+
+Windows is a peer here rather than a feature gate. Both platforms offer the same three things
+under different names — an event stream, a crash record, and a log tail. On Linux that is the
+systemd journal, `coredumpctl`, and `/var/log` where there is no journal; on Windows it is the
+event log and Windows Error Reporting. One design, two readers.
+
+Reading them is local-model work. Summarising a crash means handing something your machine's
+recent failures, and that is not a thing to spend a cloud call on; `local_only.rs` and the
+per-persona routing already give a way to pin it. With no local model present it shows the raw
+event and says nothing further, rather than waiting for one to exist.
+
 - **New `src-tauri/src/watchers/crash.rs`** — watch `systemd-coredump` (or poll
-  `coredumpctl list`) on Linux; feature-gate Windows out for now.
+  `coredumpctl list`) on Linux and the equivalent on Windows, behind one trait with two
+  implementations.
 - **`src-tauri/src/main.rs`** — on a crash, set the tray to amber and post a notification
   offering the companion as first responder, with the failing process, its exit signal, and
   the tail of its journal already assembled as context.
+- **The diagnostics command** — `aether1 status` already prints a system report; the wider
+  event sweep belongs there, on request, rather than on a watcher.
 - **Settings** — an off switch and a per-program mute list.
 - **Verify:** a deliberately segfaulted test binary produces a notification whose
-  conversation starts with the crash already in context.
+  conversation starts with the crash already in context; the same on Windows; and with no local
+  model installed, the notification still arrives carrying the raw event.
+
+**Its seam with step 15.** These are not one step. Crash capture has to stand on its own — no
+agent installed, no local model, still shows you the crash — and most hand-offs have nothing to
+do with a crash. What they share is exactly one thing: the assembled context. Step 15 installs a
+standing context file into the agents' own skill directories; step 13 produces a crash bundle. A
+crash handed to an agent is the second plus the first, which is how Omarchy does it too, with
+`diagnose-crash` as a skill of its own. Build the context bundle once and let both call it.
 
 ### Step 14: Honest AI telemetry — **shipped**
 
@@ -615,10 +640,9 @@ a timer is a getter that will one day be the reason the HUD stutters.
 
 ## Phase 5+ — Reach and continuity
 
-Sketched rather than specified, because the earlier steps will change what these should be:
+Step 15 is specified below. The rest stay sketched rather than specified, because the
+earlier steps will change what they should be:
 
-- **Step 15: agent handoff** — detect installed CLIs (`which` is already a dependency),
-  hand a task to one, narrate the result in persona.
 - **Step 16: MCP client** — if step 15 shows the tool ecosystem is worth borrowing, an MCP
   client behind the same consent path, so external tools inherit the approval flow rather
   than bypassing it.
@@ -626,6 +650,58 @@ Sketched rather than specified, because the earlier steps will change what these
   is one command.
 - **Step 18: memory sync** — an export/import format first, sync second, both under your
   control and neither touching a server we run.
+
+---
+
+### Step 15: Agent handoff
+
+A coding agent is already installed on both machines, and the non-goal that says "not a
+coding agent" has always ended "Aether1 may hand work to one". This is that hand-off: per
+hand-off, with permission, and narrated back in persona rather than left in a terminal you
+have to go and read.
+
+**What it hands to.** A list of agent commands in settings, seeded on first run from what is
+actually on PATH, with a row for adding your own. A fixed list would mean every new agent
+needs a new release; a seeded list you can edit means the next one works the day you install
+it. Omarchy arrived at the same shape — agents pre-wired, a default you set, and nothing
+stopping you pointing it elsewhere.
+
+**Where it runs.** The operator terminal's current directory when the terminal is open,
+because a hand-off that came out of a real problem is almost always about the thing you were
+just doing. A work directory you nominate once when it is not. Never `$HOME`: Omarchy refuses
+it outright and starts such launches in `~/Work` instead, which is the right instinct — an
+agent that goes wrong should go wrong inside a blast radius you chose. Reaching a project
+outside either directory is a separate request, authorised before anything runs, and the
+directory appears in the approval line every time, so a wrong one takes one glance to catch.
+
+**Foreground and background.** With the terminal open the agent lands in it and you watch it
+work. With the window closed it runs unattended and you get an account of what happened
+afterwards. Unattended is only honest if the agent cannot stall on a permission prompt nobody
+is there to answer, so the background path is the case the consent rule already allows: the
+plan is disclosed and approved whole up front, and then it runs. Consent per step stays the
+default for the foreground path.
+
+**What the agent is told.** The machine description step 37 already generates, and the
+conversation that led to the task, every time. The relevant vault notes and the crash and log
+data only when the task plainly came from them. The standing part of that does not belong in
+every prompt: it is written once into the skill directories agents read at startup
+(`~/.claude/skills`, `~/.codex/skills`, and the generic `~/.agents/skills`), the way Omarchy
+installs its own, so a hand-off prompt only has to carry the task. This is also where step 13
+meets this step — a crash hand-off is the crash-capture context plus the same installed skill.
+
+- **New `src-tauri/src/handoff.rs`** — the agent list and its seeding from PATH via `which`
+  (already a dependency), directory resolution by the rules above, and running the chosen
+  command through the existing consent path in `tools/mutating.rs`.
+- **A skill writer** — generates and refreshes the Aether1 context file in each known agent's
+  skill directory, and removes it cleanly when an agent is dropped from the list.
+- **`src-tauri/src/cli.rs`** — a subcommand that hands a task over from outside the HUD, so a
+  compositor binding or another program can reach it.
+- **Settings** — the agent list, the default agent, the nominated work directory, and an off
+  switch.
+- **Verify:** a hand-off with the terminal open lands in that terminal in the expected
+  directory; the same hand-off with the window closed produces an account of what the agent
+  did; a hand-off aimed outside the allowed directories stops and asks first; and an agent
+  installed after Aether1 started appears in the list without a code change.
 
 ---
 
