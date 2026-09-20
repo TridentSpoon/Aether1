@@ -22,6 +22,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum_server::tls_rustls::RustlsConfig;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
@@ -33,6 +34,7 @@ use crate::llm::{self, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
 use crate::serve_auth::{self, AttemptLimiter, ServeAuth, Setup};
+use crate::serve_tls;
 use crate::vault;
 
 #[derive(Clone)]
@@ -159,6 +161,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
     // mDNS daemon answering queries) for as long as `run()`'s stack frame does, which is
     // the life of the server.
     let mut _announcement = None;
+    let mut tls = None;
     if lan {
         let (auth, setup) =
             serve_auth::load_or_create().expect("could not set up the --lan pairing token");
@@ -180,6 +183,21 @@ pub async fn run(engine: LlmEngine, lan: bool) {
             .route_layer(middleware::from_fn_with_state(lan_state, require_lan_token))
             .merge(pair_router);
 
+        let certificate =
+            serve_tls::load_or_create().expect("could not set up the --lan certificate");
+        if matches!(certificate.origin, serve_tls::Origin::New) {
+            println!("[AETHER1] --lan: made this machine a certificate to identify itself by.");
+        }
+        println!(
+            "\n[AETHER1] --lan certificate fingerprint (SHA-256):\n\n    {}\n\n\
+             Your browser will warn that nobody vouches for this certificate, which is true: \
+             this machine signed it itself, because no public authority will vouch for \
+             an address on your own network. Check the fingerprint it shows you against the one \
+             above, once, and you have done by hand what the padlock does for a public site.\n",
+            certificate.fingerprint
+        );
+        tls = Some(certificate);
+
         let instance_name = sysinfo::System::host_name().unwrap_or_else(|| "aether1".to_string());
         match discovery::announce(&instance_name, 8378, &[("version", crate::APP_VERSION)]) {
             Ok(guard) => _announcement = Some(guard),
@@ -189,30 +207,59 @@ pub async fn run(engine: LlmEngine, lan: bool) {
 
     let app = app.fallback_service(static_service);
 
-    let listener = tokio::net::TcpListener::bind(bind_address(lan))
-        .await
+    // Bound before serving either way, so "that port is taken" is still reported the moment
+    // it happens rather than somewhere inside the TLS handshake machinery.
+    let listener = std::net::TcpListener::bind(bind_address(lan))
         .expect("failed to bind :8378 -- is another AETHER1 instance already running?");
-    println!("[AETHER1] serving http://localhost:8378 (Ctrl+C to stop)");
+    listener
+        .set_nonblocking(true)
+        .expect("could not put the listening socket into non-blocking mode");
+
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    println!("[AETHER1] serving {scheme}://localhost:8378 (Ctrl+C to stop)");
     if lan {
         // Said plainly and every time. Someone who typed --lan once in a script should
         // still be told what it means on the day they run it somewhere unfamiliar.
         println!(
-            "[AETHER1] --lan: reachable from your network, but every request needs the \
-             pairing token above (or POST /api/pair with the phrase) -- without it, AETHER1 \
-             refuses to show your conversation or run anything."
+            "[AETHER1] --lan: reachable from your network over TLS, but every request needs \
+             the pairing token above (or POST /api/pair with the phrase) -- without it, \
+             AETHER1 refuses to show your conversation or run anything."
         );
     } else {
         println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
     }
+
     // `into_make_service_with_connect_info` is what puts the peer address within reach of
     // the handlers, which is what the attempt limiter counts against. Loopback pays for it
     // too, where it is unused but harmless, rather than having two ways to start the server.
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .expect("axum server error");
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
+
+    match tls {
+        Some(certificate) => {
+            // rustls is built here without a default provider chosen for it, so one is named
+            // explicitly. `ring` is the same provider the outbound HTTP client already uses,
+            // which keeps one implementation in the binary rather than two.
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let config = RustlsConfig::from_pem(
+                certificate.cert_pem.into_bytes(),
+                certificate.key_pem.into_bytes(),
+            )
+            .await
+            .expect("could not load the --lan certificate");
+            axum_server::from_tcp_rustls(listener, config)
+                .expect("could not start the TLS listener")
+                .serve(service)
+                .await
+                .expect("axum server error");
+        }
+        None => {
+            let listener = tokio::net::TcpListener::from_std(listener)
+                .expect("could not hand the listening socket to tokio");
+            axum::serve(listener, service)
+                .await
+                .expect("axum server error");
+        }
+    }
 }
 
 fn bearer_token(request: &Request) -> Option<String> {
