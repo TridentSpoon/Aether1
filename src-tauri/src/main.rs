@@ -36,6 +36,7 @@ mod tools;
 mod vault;
 mod voice_download;
 mod voice_setup;
+mod watchers;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -1331,6 +1332,96 @@ fn open_panel_window_rust(app: tauri::AppHandle, panel: String) -> Result<(), St
 
 /// Shared by both the native Tauri path and `--serve`: opens the real sqlite file at
 /// backend/aether1_memory.db, falling back to a temp-dir sqlite file if that fails.
+/// Copies a borrowed icon into one that can outlive the setup closure, which is what a
+/// background thread needs. Tauri hands out the window icon as a borrow of the app.
+fn owned_icon(base: Option<&tauri::image::Image<'_>>) -> Option<tauri::image::Image<'static>> {
+    let base = base?;
+    Some(tauri::image::Image::new_owned(
+        base.rgba().to_vec(),
+        base.width(),
+        base.height(),
+    ))
+}
+
+/// Tints the tray icon amber, so a crash is visible at a glance without shipping a second
+/// icon file. Pushing the existing pixels towards amber rather than drawing a new image
+/// means this keeps working if the icon is ever redrawn, and it keeps the silhouette --
+/// what changes is the colour, which is the whole signal.
+fn amber_icon(base: Option<&tauri::image::Image<'_>>) -> Option<tauri::image::Image<'static>> {
+    let base = base?;
+    let (width, height) = (base.width(), base.height());
+    let mut rgba = base.rgba().to_vec();
+    for pixel in rgba.chunks_exact_mut(4) {
+        // Alpha is left alone: tinting the transparent parts would turn the icon into a
+        // square. Everything visible is mixed halfway towards amber, which keeps the shape
+        // readable where a flat fill would lose it.
+        if pixel[3] == 0 {
+            continue;
+        }
+        pixel[0] = ((pixel[0] as u16 + 0xFF) / 2) as u8;
+        pixel[1] = ((pixel[1] as u16 + 0xA5) / 2) as u8;
+        pixel[2] = ((pixel[2] as u16) / 2) as u8;
+    }
+    Some(tauri::image::Image::new_owned(rgba, width, height))
+}
+
+/// Offers the companion as first responder for one crash: the tray goes amber and says what
+/// died, a notification carries the same sentence, and the HUD is handed the whole assembled
+/// context so the conversation it opens already knows about the crash rather than asking.
+///
+/// Every step here is allowed to fail quietly except the last. A tray that will not repaint
+/// or a desktop that has no notifications is a worse experience, not a reason to lose the
+/// crash -- so the event to the frontend goes out regardless, and the HUD is the one surface
+/// that is always told.
+fn announce_crash<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    crash: &watchers::crash::Crash,
+    amber: Option<tauri::image::Image<'static>>,
+    plain: Option<tauri::image::Image<'static>>,
+) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        if let Some(amber) = amber {
+            let _ = tray.set_icon(Some(amber));
+        }
+        let _ = tray.set_tooltip(Some(format!(
+            "AETHER1 -- {}. Open AETHER1 to look into it.",
+            crash.headline()
+        )));
+        // The amber is a notice, not a state to live in: it clears itself so the tray does
+        // not stay orange for the rest of the session over a crash you already read.
+        let app_for_reset = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(120));
+            if let Some(tray) = app_for_reset.tray_by_id(TRAY_ID) {
+                if let Some(plain) = plain {
+                    let _ = tray.set_icon(Some(plain));
+                }
+                let _ = tray.set_tooltip(Some(format!(
+                    "AETHER1 -- running (build {})",
+                    short_hash(BUILT_COMMIT)
+                )));
+            }
+        });
+    }
+
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app
+        .notification()
+        .builder()
+        .title(crash.headline())
+        .body("AETHER1 has the details. Open it to look into this together.")
+        .show();
+
+    let _ = app.emit(
+        "crash-detected",
+        serde_json::json!({
+            "headline": crash.headline(),
+            "context": crash.as_context(),
+            "crash": crash,
+        }),
+    );
+}
+
 fn build_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
     // The native path creates backend/ as a side effect of setting up the audio cache in
@@ -1433,6 +1524,7 @@ fn main() {
             },
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -1740,6 +1832,49 @@ fn main() {
                     let game_mode = engine.db().get_setting_bool("game_mode", false);
                     let interval = if game_mode { 5000 } else { 1000 };
                     std::thread::sleep(Duration::from_millis(interval));
+                });
+            }
+
+            // Step 13: crash capture. A companion that only knows what you type at it is
+            // something you go to; one that notices your editor just died is a first
+            // responder. The watcher is the only thing in AETHER1 that speaks without
+            // being asked, which is why it is crashes only -- see watchers/crash.rs.
+            {
+                let app_handle = app.handle().clone();
+                let amber = amber_icon(app.default_window_icon());
+                let plain = owned_icon(app.default_window_icon());
+                std::thread::spawn(move || {
+                    let mut watch = watchers::crash::CrashWatch::new();
+                    // Said once, at startup, rather than swallowed: a machine that cannot
+                    // be watched should not look like a machine that never crashes.
+                    if let watchers::crash::Availability::Unavailable(reason) = watch.availability()
+                    {
+                        println!("[AETHER1] crash capture is not available here. {reason}");
+                        return;
+                    }
+                    loop {
+                        std::thread::sleep(watchers::crash::POLL_INTERVAL);
+                        let engine = app_handle.state::<LlmEngine>();
+                        if !engine
+                            .db()
+                            .get_setting_bool(watchers::crash::ENABLED_SETTING, true)
+                        {
+                            continue;
+                        }
+                        let muted = watchers::crash::muted_programs(
+                            engine
+                                .db()
+                                .get_setting(watchers::crash::MUTED_SETTING)
+                                .ok()
+                                .flatten(),
+                        );
+                        let Ok(news) = watch.poll(&muted) else {
+                            continue;
+                        };
+                        for crash in news {
+                            announce_crash(&app_handle, &crash, amber.clone(), plain.clone());
+                        }
+                    }
                 });
             }
 

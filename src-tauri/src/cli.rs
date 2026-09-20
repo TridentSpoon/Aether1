@@ -47,6 +47,7 @@ USAGE:
     aether1 devices                List the devices paired with this machine
     aether1 revoke <ID>            Take one device's access away, leaving the rest alone
     aether1 revoke all             Take every device's access away, keeping the phrase
+    aether1 crashes                List the crashes AETHER1 has seen on this machine
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -94,6 +95,8 @@ pub enum Invocation {
     Revoke {
         id: String,
     },
+    /// `crashes`: what has died on this machine recently, asked for rather than announced.
+    Crashes,
     /// `face`: the fullscreen avatar on a spare screen. Like `show`/`toggle` this reaches an
     /// already-running instance through the single-instance plugin rather than being handled
     /// in cli::run -- the face is a mirror of the HUD's own avatar (see frontend/js/face.js),
@@ -111,6 +114,9 @@ pub enum Invocation {
     },
     Status {
         json: bool,
+        /// `--events`: also sweep the system log for recent errors. Off by default, and
+        /// deliberately so -- see watchers/events.rs for why noise is opt-in.
+        events: bool,
     },
     Say {
         text: Option<String>,
@@ -234,11 +240,16 @@ pub fn parse(argv: &[String]) -> Invocation {
         }),
         "status" => {
             let (json, rest) = take_flag(&rest, "--json");
+            let (events, rest) = take_flag(&rest, "--events");
             free_text(rest).and_then(|extra| match extra {
                 Some(extra) => Err(format!("status takes no arguments (got {extra:?})")),
-                None => Ok(Invocation::Status { json }),
+                None => Ok(Invocation::Status { json, events }),
             })
         }
+        "crashes" => free_text(rest).and_then(|extra| match extra {
+            Some(extra) => Err(format!("crashes takes no arguments (got {extra:?})")),
+            None => Ok(Invocation::Crashes),
+        }),
         "say" => take_option(&rest, "--voice").and_then(|(voice, rest)| {
             let (no_play, rest) = take_flag(&rest, "--no-play");
             free_text(rest).map(|text| Invocation::Say {
@@ -342,13 +353,74 @@ fn run_prompt(text: Option<String>, session: Option<String>) -> Result<String, S
         .to_string())
 }
 
-fn run_status(json: bool) -> String {
+fn run_status(json: bool, events: bool) -> String {
     let telemetry = Telemetry::snapshot();
     if json {
-        telemetry.to_wire_json().to_string()
-    } else {
-        telemetry.diagnostic_report()
+        return telemetry.to_wire_json().to_string();
     }
+    let report = telemetry.diagnostic_report();
+    if !events {
+        return report;
+    }
+    // Step 13's rule, kept honest at the command line: the wider sweep of the event log is
+    // something you ask for. It is appended to the report rather than replacing it, since
+    // "what is this machine doing" and "what has gone wrong on it" are read together.
+    format!("{report}\n\n{}", crate::watchers::events::report())
+}
+
+/// `aether1 crashes`. Deliberately shows muted programs too, marked -- the mute list stops
+/// AETHER1 interrupting you, and this is you doing the asking.
+fn run_crashes() -> Result<String, String> {
+    use crate::watchers::crash::{self, Availability};
+
+    let reader = crash::reader_for_this_machine();
+    if let Availability::Unavailable(reason) = reader.availability() {
+        return Err(reason);
+    }
+
+    // A week: long enough that a crash from Friday is still findable on Monday, short
+    // enough that the list is a list rather than a history.
+    let week = 7 * 24 * 60 * 60;
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default()
+        .saturating_sub(week);
+
+    let crashes = reader.crashes_since(since)?;
+    if crashes.is_empty() {
+        return Ok("Nothing has crashed on this machine in the past week.".to_string());
+    }
+
+    let engine = crate::build_llm_engine();
+    let muted = crash::muted_programs(engine.db().get_setting(crash::MUTED_SETTING).ok().flatten());
+
+    let mut out = format!(
+        "{} crash{} in the past week, oldest first:\n",
+        crashes.len(),
+        if crashes.len() == 1 { "" } else { "es" }
+    );
+    for crash in &crashes {
+        let ago = how_long_ago(since_then(crash.at));
+        let muted_note = if crash::is_muted(&crash.program, &muted) {
+            "  (muted)"
+        } else {
+            ""
+        };
+        out.push_str(&format!("\n    {} -- {ago}{muted_note}", crash.headline()));
+    }
+    out.push_str("\n\nRun `aether1 status --events` for the wider sweep of the system log.");
+    Ok(out)
+}
+
+/// Seconds between a unix timestamp and now, floored at zero so a clock that has moved
+/// backwards reports "just now" rather than a wild number.
+fn since_then(at: u64) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default()
+        .saturating_sub(at)
 }
 
 fn run_say(text: Option<String>, voice: Option<String>, play: bool) -> Result<String, String> {
@@ -512,7 +584,8 @@ pub fn run(invocation: Invocation) -> i32 {
             crate::short_hash(crate::BUILT_COMMIT)
         )),
         Invocation::Prompt { text, session } => run_prompt(text, session),
-        Invocation::Status { json } => Ok(run_status(json)),
+        Invocation::Status { json, events } => Ok(run_status(json, events)),
+        Invocation::Crashes => run_crashes(),
         Invocation::Say { text, voice, play } => run_say(text, voice, play),
         Invocation::Discover { timeout_secs } => run_discover(timeout_secs),
         Invocation::Announce { name, port } => run_announce(name, port),
@@ -644,8 +717,24 @@ mod tests {
     fn status_rejects_stray_arguments() {
         assert_eq!(
             parse_args(&["status", "--json"]),
-            Invocation::Status { json: true }
+            Invocation::Status {
+                json: true,
+                events: false
+            }
         );
+        assert_eq!(
+            parse_args(&["status", "--events"]),
+            Invocation::Status {
+                json: false,
+                events: true
+            },
+            "the wider sweep of the event log is asked for, never volunteered"
+        );
+        assert_eq!(parse_args(&["crashes"]), Invocation::Crashes);
+        assert!(matches!(
+            parse_args(&["crashes", "please"]),
+            Invocation::Invalid(_)
+        ));
         assert!(matches!(
             parse_args(&["status", "please"]),
             Invocation::Invalid(_)
