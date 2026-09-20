@@ -669,6 +669,106 @@
                 };
             },
         },
+
+        // Adapted from Operator: the prompt line at the centre of its tunnel -- a row of
+        // ticks already printed rather than typing itself out, each breathing on its own
+        // phase so the row shimmers like a CRT instead of pulsing in lockstep, with a
+        // "|>" caret waiting at the end of the line.
+        terminalPrompt: {
+            label: 'Terminal prompt',
+            build(api, options) {
+                function caretTexture(size) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx2d = canvas.getContext('2d');
+                    ctx2d.fillStyle = '#ffffff';
+                    ctx2d.font = `bold ${Math.round(size * 0.62)}px monospace`;
+                    ctx2d.textAlign = 'center';
+                    ctx2d.textBaseline = 'middle';
+                    ctx2d.fillText('|>', size / 2, size / 2);
+                    const texture = new THREE.CanvasTexture(canvas);
+                    texture.needsUpdate = true;
+                    return texture;
+                }
+                function tickTexture(size) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx2d = canvas.getContext('2d');
+                    ctx2d.fillStyle = '#ffffff';
+                    ctx2d.fillRect(size * 0.42, size * 0.2, size * 0.16, size * 0.6);
+                    const texture = new THREE.CanvasTexture(canvas);
+                    texture.needsUpdate = true;
+                    return texture;
+                }
+
+                const group = new THREE.Group();
+                const count = 20;
+                const spacing = options.size * 0.115;
+                const startX = -((count - 1) * spacing) / 2;
+                const positions = new Float32Array(count * 3);
+                const colors = new Float32Array(count * 3);
+                for (let i = 0; i < count; i++) {
+                    positions[i * 3] = startX + i * spacing;
+                    positions[i * 3 + 1] = -options.size * 0.1;
+                    positions[i * 3 + 2] = 0;
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                const lineMat = new THREE.PointsMaterial({
+                    color: api.palette.hex3, map: tickTexture(32), size: options.size * 0.27,
+                    vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false,
+                    blending: THREE.AdditiveBlending, sizeAttenuation: true,
+                });
+                const line = new THREE.Points(geom, lineMat);
+                group.add(line);
+
+                const caretX = startX + (count - 1) * spacing + spacing;
+                const caretMat = new THREE.SpriteMaterial({
+                    map: caretTexture(72), color: api.palette.hex,
+                    transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending,
+                });
+                const caret = new THREE.Sprite(caretMat);
+                const caretSize = options.size * 0.6;
+                caret.scale.set(caretSize, caretSize, 1);
+                caret.position.set(caretX, -options.size * 0.1, 1);
+                group.add(caret);
+
+                const haloMat = new THREE.SpriteMaterial({
+                    map: api.helpers.glowTexture(48), color: api.palette.hex,
+                    transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const halo = new THREE.Sprite(haloMat);
+                const haloSize = options.size * 0.8;
+                halo.scale.set(haloSize, haloSize, 1);
+                halo.position.set(caretX, -options.size * 0.1, 0);
+                group.add(halo);
+
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        lineMat.color.setHex(p.hex3);
+                        caretMat.color.setHex(p.hex);
+                        haloMat.color.setHex(p.hex);
+                    },
+                    animate(ctx) {
+                        const speed = ctx.state === 'THINKING' ? 3.2 : 1.4;
+                        for (let i = 0; i < count; i++) {
+                            const brightness = 0.32 + (Math.sin(ctx.time * speed + i * 0.6) * 0.5 + 0.5) * 0.22;
+                            colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = brightness;
+                        }
+                        geom.attributes.color.needsUpdate = true;
+                        const caretOpacity = ctx.state === 'SPEAKING'
+                            ? 0.75 + ctx.audio * 0.4
+                            : 0.72 + (Math.sin(ctx.time * speed) * 0.5 + 0.5) * 0.28;
+                        caretMat.opacity = caretOpacity;
+                        haloMat.opacity = 0.35 + caretOpacity * 0.35;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
