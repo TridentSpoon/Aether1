@@ -1941,6 +1941,46 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.L'KEMI: the column of data particles rising past it and
+        // wrapping back to the bottom -- a hollow cylinder of points rather than a
+        // sphere, so it reads as a stream running through whatever it surrounds rather
+        // than an atmosphere around it.
+        risingDataColumn: {
+            label: 'Rising data column',
+            build(api, options) {
+                const half = options.radius * 1.55;
+                const count = 80;
+                const positions = new Float32Array(count * 3);
+                for (let i = 0; i < count; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = options.radius * (1.12 + Math.random() * 0.7);
+                    positions[i * 3] = Math.cos(angle) * r;
+                    positions[i * 3 + 1] = (Math.random() * 2 - 1) * half;
+                    positions[i * 3 + 2] = Math.sin(angle) * r;
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const mat = new THREE.PointsMaterial({
+                    color: api.palette.hex, size: 1.3, transparent: true, opacity: 0.55,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const array = points.geometry.attributes.position.array;
+                        const rise = 0.35 + ctx.audio * 0.9;
+                        for (let i = 1; i < array.length; i += 3) {
+                            array[i] += rise;
+                            if (array[i] > half) array[i] -= half * 2;
+                        }
+                        points.geometry.attributes.position.needsUpdate = true;
+                        mat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
+                    },
+                };
+            },
+        },
     };
 
     /* One place for a picker to read, so adding a part here makes it appear in the
