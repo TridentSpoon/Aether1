@@ -633,6 +633,42 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LEGIONARE: the crystal hanging inside its pyramid -- a bare
+        // icosahedron with no wireframe over it, lit by a fixed ember glow rather than
+        // the theme, spinning faster than whatever shell surrounds it so the two never
+        // look welded together.
+        emberCrystal: {
+            label: 'Ember crystal',
+            build(api, options) {
+                const HOT = 0xff3300;
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const crystal = new THREE.Mesh(new THREE.IcosahedronGeometry(options.size * 0.8, 0), mat);
+                group.add(crystal);
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.radialGlowTexture(64, '#ffcf9e', '#ff3300'),
+                    transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glowScale = options.size * 2.4;
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(glowScale, glowScale, 1);
+                group.add(glow);
+                return {
+                    object: group,
+                    applyPalette() { /* fixed by design: the ember is LEGIONARE's one constant colour */ },
+                    animate(ctx) {
+                        crystal.rotation.x = ctx.time * 0.4;
+                        crystal.rotation.y = ctx.time * 0.6;
+                        const pulse = ctx.audio * 0.6 + ctx.click * 0.35 + (Math.sin(ctx.time * 3) + 1) * 0.12;
+                        mat.opacity = 0.75 + Math.min(0.25, pulse * 0.25);
+                        glowMat.opacity = Math.min(1, 0.35 + pulse * 0.55);
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
