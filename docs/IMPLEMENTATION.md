@@ -1941,7 +1941,7 @@ if fill is ever switched off.
 through the state label. The viewport now stops 9vmin short of the bottom and the word lives
 in that band, which is a caption rather than an overlay.
 
-### Step 45: the phrase is not the weak part
+### Step 45: the phrase is not the weak part -- **items 1 and 2 shipped**
 
 `serve_auth.rs` protects the pairing phrase carefully at rest -- 12 BIP-39 words, shown
 once, never written down, with only the SHA-256 of a derived token on disk and a
@@ -1951,20 +1951,21 @@ security.
 
 What is missing is everything around it, in the order it matters:
 
-1. **TLS, self-signed.** The derived token travels in a plain `Authorization` header --
-   there is no `rustls` or certificate anywhere in `server.rs` -- so anyone on the same
-   wifi can read it once and reuse it indefinitely. The certificate has to be self-signed:
-   no public CA will issue for a `.local` name or a private address, and requiring a public
-   domain would make a LAN feature depend on the internet. Self-signed is not a compromise
-   here, it is the correct shape -- Syncthing takes it further and makes the certificate
-   hash *be* the device identity. The certificate's fingerprint is shown as a safety number
-   on both screens, so the operator confirms the same short string twice and knows which
-   machine answered.
-2. **Rate limiting on the auth route.** The module's own comment describes the phrase as
-   "far more entropy than a rate-limited LAN auth endpoint could ever be brute-forced
-   through", and nothing in `server.rs` or `serve_auth.rs` counts attempts, locks out, or
-   returns 429. The comment describes a property the code does not have, which is worse
-   than not claiming it.
+1. ~~**TLS, self-signed.**~~ **Shipped.** `serve_tls.rs` generates a certificate on first
+   `--lan` run, keeps it beside the pairing token so the fingerprint stays the same across
+   restarts, and `server.rs` serves over TLS through `axum-server`. The whole SHA-256
+   fingerprint is printed at startup, grouped in eights for reading aloud; truncating it
+   would only have made the line shorter. Self-signed was never a compromise -- no public CA
+   will issue for a `.local` name or a private address, so the alternative was owning a
+   domain. Loopback deliberately stays plain HTTP: nothing off the machine can reach
+   127.0.0.1, so there is no wire to listen to.
+2. ~~**Rate limiting on the auth route.**~~ **Shipped.** An address gets five wrong guesses
+   a minute, then waits a minute, counted across both doors -- a wrong token and a wrong
+   phrase are the same attack seen twice, so they share one budget, and a request carrying
+   no credential counts too. Getting it right clears the record. The table of addresses is
+   capped and never evicts a live lockout, since filling it from other addresses would
+   otherwise erase the evidence of one's own failures. `WORD_COUNT`'s comment about "a
+   rate-limited LAN auth endpoint" is now true rather than aspirational.
 3. **A token per paired device.** One hash for everything means revoking a lost laptop
    re-pairs the desktop too, and nothing can say which device is which in the action log.
 4. **A PAKE, later, if the rigour is wanted.** `discovery.rs` announces over DNS-SD, which
@@ -1973,8 +1974,10 @@ What is missing is everything around it, in the order it matters:
    letting the phrase cross the wire at all. It is real work and it is last, because items
    1 and 2 close the holes that are open today.
 
-Items 1 and 2 are the ones with a hole behind them right now, and `--lan` should be
-understood as experimental until they land.
+Items 1 and 2 were the ones with a hole behind them, and both are now closed: the token no
+longer crosses the network in the clear, and guessing costs something. Items 3 and 4 are
+improvements on a path that is no longer broken, which is a different kind of work and can
+wait its turn.
 
 ### Step 46: updating a copy that was installed rather than cloned
 
@@ -2124,9 +2127,9 @@ event log, honest token telemetry, and native tool calling.
    download path it would need already exist in `setup.rs`. Its two design questions are
    now answered -- routing is keyed on speciality and chosen from a dropdown -- so what
    remains is the building.
-5. **Step 45, the LAN transport.** TLS and rate limiting are missing from a path that is
-   already shipped behind `--lan`, which makes this the only outstanding item with a hole
-   behind it rather than an absence.
+5. **Step 45, the LAN transport.** TLS and attempt limiting shipped; what remains is a
+   token per paired device, so revoking one machine does not re-pair them all, and a PAKE if
+   the rigour is ever wanted. Neither is a hole, unlike what they follow.
 6. **Step 46, updates for installed copies.** The updater in `main.rs` needs a git checkout
    and a logged-in `gh`, so everyone who installed from a Release is on whatever version
    they downloaded, permanently.
