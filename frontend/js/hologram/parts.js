@@ -482,6 +482,51 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LEXICO: the core cube at the centre of its cross -- a real
+        // box rather than a flat isometric illusion, with a white aperture bead and a
+        // radial glow sitting at the rotation origin so it only ever brightens in place.
+        // Keeps LEXICO's fixed hot cyan, which does not retint with the theme.
+        apertureCube: {
+            label: 'Aperture cube',
+            build(api, options) {
+                const HOT = 0x00ffff;
+                const group = new THREE.Group();
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+                const side = options.size * 0.85;
+                const geom = new THREE.BoxGeometry(side, side, side);
+                const cube = new THREE.Mesh(geom, fillMat);
+                const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geom), wireMat);
+                const bead = new THREE.Mesh(
+                    new THREE.SphereGeometry(options.size * 0.13, 12, 12),
+                    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 })
+                );
+                group.add(cube, wire, bead);
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.radialGlowTexture(64, '#e0ffff', '#00ffff'),
+                    transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glowScale = options.size * 2.1;
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(glowScale, glowScale, 1);
+                group.add(glow);
+                return {
+                    object: group,
+                    applyPalette() { /* fixed by design: LEXICO's aperture is its one unchanging colour */ },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.5;
+                        group.rotation.x = Math.sin(ctx.time * 0.4) * 0.25;
+                        const pulse = 0.35 + ctx.audio * 0.5 + ctx.click * 0.3;
+                        glowMat.opacity = Math.min(1, 0.3 + pulse * 0.5);
+                        const s = glowScale * (1 + pulse * 0.2);
+                        glow.scale.set(s, s, 1);
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1298,6 +1343,43 @@
                             ring.rotation.y += cfg.speed * 0.016;
                             mat.opacity = cfg.opacity + ctx.audio * 0.2 + ctx.click * 0.15;
                         });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LEXICO: the pair of gyro rings lying flat in the picture
+        // plane, one broad and faint, one tighter and brighter. Sprites rather than
+        // geometry on purpose -- a billboard always faces the camera, so these stay
+        // true circles whatever the part they wrap is doing. Their counter-spin goes
+        // through material.rotation, the only rotation the sprite shader reads.
+        gyroRings: {
+            label: 'Gyro rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                const outerMat = new THREE.SpriteMaterial({
+                    map: api.helpers.ringTexture(64, 0.035), color: api.palette.hex2,
+                    transparent: true, opacity: 0.45, depthWrite: false,
+                });
+                const outer = new THREE.Sprite(outerMat);
+                const outerSize = options.radius * 2.6;
+                outer.scale.set(outerSize, outerSize, 1);
+                const innerMat = new THREE.SpriteMaterial({
+                    map: api.helpers.ringTexture(64, 0.06), color: api.palette.hex3,
+                    transparent: true, opacity: 0.6, depthWrite: false,
+                });
+                const inner = new THREE.Sprite(innerMat);
+                const innerSize = options.radius * 2.1;
+                inner.scale.set(innerSize, innerSize, 1);
+                group.add(outer, inner);
+                return {
+                    object: group,
+                    applyPalette(p) { outerMat.color.setHex(p.hex2); innerMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        outer.material.rotation = ctx.time * 0.25;
+                        inner.material.rotation = -ctx.time * 0.4;
+                        outerMat.opacity = 0.4 + ctx.audio * 0.25;
+                        innerMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.2;
                     },
                 };
             },
