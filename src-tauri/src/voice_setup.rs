@@ -25,6 +25,11 @@ use crate::setup::{Os, Step};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Speaking {
+    /// Speech is produced and never heard. Linux only, and the one stage where every
+    /// status field in this module can read "installed" while the machine stays silent --
+    /// see `media_playback_step`. Ranked below Silent because it is worse to diagnose:
+    /// Silent at least says something is missing.
+    Unheard,
     /// Nothing on this machine can produce speech. Only reachable on Linux without
     /// espeak-ng, or in local-only mode with no Piper: Windows and macOS both ship a
     /// voice that cannot be uninstalled.
@@ -39,6 +44,10 @@ pub enum Speaking {
 impl Speaking {
     pub fn headline(self) -> &'static str {
         match self {
+            Speaking::Unheard => {
+                "It can speak, but nothing comes out of the speakers -- a piece of the \
+                 audio plumbing is missing."
+            }
             Speaking::Silent => "Nothing on this computer can speak yet.",
             Speaking::BasicVoice => "It can speak, using the basic voice built into this computer.",
             Speaking::GoodVoice => "It can speak, using the good offline voice.",
@@ -115,6 +124,88 @@ pub struct VoiceAdvice {
     pub needs_attention: bool,
 }
 
+/// The GStreamer elements the webview needs before any synthesized audio can be heard, and
+/// the plugin each one lives in.
+///
+/// `wavparse` is the one that matters: Piper and espeak-ng both produce WAV, so without it
+/// every local engine is inaudible. `avdec_mp3` covers the online voice, which returns MP3.
+#[cfg(target_os = "linux")]
+const REQUIRED_GST_ELEMENTS: &[(&str, &str)] = &[
+    (
+        "wavparse",
+        "the offline voices (Piper and espeak-ng both produce WAV)",
+    ),
+    ("avdec_mp3", "the online voice (it returns MP3)"),
+];
+
+/// Whether the webview can actually play what the speech engines produce, and what to
+/// install when it cannot.
+///
+/// **This is the failure that looks like nothing at all.** Tauri's Linux webview is
+/// WebKitGTK, and WebKitGTK decodes `<audio>` through GStreamer. Distributions package the
+/// plugins that do the decoding as *optional* for WebKitGTK -- on Arch, `gst-plugins-good`
+/// and `gst-libav` are optdepends of `webkit2gtk-4.1`, so installing the webview does not
+/// install them. When they are absent the `<audio>` element reports no error and plays
+/// silence, so Piper synthesizes correctly, this module's every status field says
+/// "installed", the voice test reports "spoke", and the operator hears nothing. Nothing
+/// downstream of synthesis is visible to the rest of this app, which is exactly why it has
+/// to be asked about here rather than inferred from a failure that never arrives.
+///
+/// Asked of `gst-inspect-1.0`, which ships in `gstreamer` itself -- a hard dependency of
+/// WebKitGTK, so it is present wherever the webview is. A missing `gst-inspect-1.0` means
+/// this machine cannot be asked, which returns None: an unproven warning about audio
+/// plumbing sends people to reinstall things that were never the problem, and being told
+/// the wrong thing is worse than being told nothing.
+#[cfg(target_os = "linux")]
+pub fn media_playback_step() -> Option<Step> {
+    let probe = |element: &str| -> Option<bool> {
+        let mut cmd = std::process::Command::new("gst-inspect-1.0");
+        cmd.arg(element);
+        crate::paths::suppress_console_window(&mut cmd);
+        cmd.output().ok().map(|out| out.status.success())
+    };
+
+    // If the first probe cannot run at all, gst-inspect-1.0 is missing and nothing here
+    // can be established either way.
+    probe(REQUIRED_GST_ELEMENTS[0].0)?;
+
+    let missing: Vec<&(&str, &str)> = REQUIRED_GST_ELEMENTS
+        .iter()
+        .filter(|(element, _)| probe(element) == Some(false))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+
+    let what = missing
+        .iter()
+        .map(|(element, needed_for)| format!("{element}, which {needed_for}"))
+        .collect::<Vec<_>>()
+        .join("; and ");
+
+    Some(Step::run(
+        "Install the audio decoders",
+        &format!(
+            "Speech is being produced correctly and this computer cannot play it. The \
+             window Aether1 draws itself in plays sound through GStreamer, and the \
+             decoders are missing: {what}. Most distributions treat these as optional \
+             for the webview, so installing Aether1 did not bring them in. The line below \
+             is the Arch one; on Debian, Ubuntu and Mint use: sudo apt install \
+             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav. On \
+             Fedora: sudo dnf install gstreamer1-plugins-good gstreamer1-plugins-bad-free. \
+             Restart Aether1 afterwards.",
+        ),
+        "sudo pacman -S gst-plugins-good gst-plugins-bad gst-libav",
+    ))
+}
+
+/// Non-Linux platforms play audio through the OS's own media stack, which is not something
+/// that can be missing: nothing to check, so nothing to report.
+#[cfg(not(target_os = "linux"))]
+pub fn media_playback_step() -> Option<Step> {
+    None
+}
+
 /// Where to get Piper, per operating system. Piper is two separate things: a program,
 /// which has to come from a package manager because it runs, and a voice, which is a pair
 /// of data files Aether1 now fetches itself. Only the first half is still a chore, which
@@ -150,8 +241,10 @@ fn piper_steps(os: Os) -> Vec<Step> {
                 "Piper is maintained as a Python package now, and this is the shortest route \
                  on Windows. Open Command Prompt and paste the line below. If Windows says \
                  there is no python, install it from the Microsoft Store first, then try \
-                 again.",
-                "python -m pip install piper-tts",
+                 again. It goes into a small Python environment belonging to Aether1, which \
+                 Aether1 looks in by itself -- that keeps piper.exe out of a Scripts folder \
+                 that may or may not be on your PATH, and leaves your own Python alone.",
+                &llm::managed_env_command("piper-tts"),
             ),
             Step::open(
                 "...or take the old ready-made zip",
@@ -197,11 +290,14 @@ fn piper_steps(os: Os) -> Vec<Step> {
                 "yay -S piper-tts-bin",
             ),
             Step::run(
-                "...or install it with pip, which works on any distribution",
-                "Piper is maintained as a Python package now, so this route needs no \
-                 package that your distribution has to carry. It installs into your own \
-                 account, not system-wide.",
-                "python3 -m pip install --user piper-tts",
+                "...or install it into Aether1's own Python, which works on any distribution",
+                "Piper is also a Python package, which is the route that does not depend on \
+                 your distribution packaging it. Not `pip install --user`, though: Arch, \
+                 Debian, Ubuntu and Fedora all refuse to let pip write to the system \
+                 Python at all now (the `externally-managed-environment` error), so this \
+                 puts it in a small environment belonging to Aether1 instead. Aether1 \
+                 looks in there for the piper program by itself.",
+                &llm::managed_env_command("piper-tts"),
             ),
             Step::open(
                 "...or take the old ready-made tarball",
@@ -235,14 +331,25 @@ fn whisper_steps(os: Os) -> Vec<Step> {
         "https://huggingface.co/ggerganov/whisper.cpp/tree/main",
     );
 
+    // The one command that works on every current distribution, and the reason it is not
+    // the obvious `pip install faster-whisper`: see `paths::managed_python_env`. It is
+    // written out here rather than described so it can be pasted and be done with.
+    let faster_whisper = Step::run(
+        "Install the listener into Aether1's own Python",
+        "faster-whisper brings its own language files, so this is the only step. It goes \
+         into a small Python environment belonging to Aether1 rather than the system one, \
+         because Arch, Debian, Ubuntu and Fedora all refuse a plain `pip install` into \
+         the system Python now -- that is the `externally-managed-environment` error, and \
+         a virtual environment is the answer the error itself recommends. Nothing here \
+         needs administrator rights, nothing is added to your PATH, and nothing touches \
+         the Python your distribution manages. Aether1 looks in this environment by \
+         itself; there is nothing to point it at afterwards.",
+        &llm::managed_env_command("faster-whisper"),
+    );
+
     match os {
         Os::Windows => vec![
-            Step::run(
-                "Install the listener",
-                "The simplest route on Windows is the Python one. Paste this into Command \
-                 Prompt. It brings its own language files, so there is no second step.",
-                "pip install faster-whisper",
-            ),
+            faster_whisper,
             Step::say(
                 "Or use whisper.cpp instead",
                 "If you would rather not install Python, whisper.cpp is a single .exe from \
@@ -254,17 +361,29 @@ fn whisper_steps(os: Os) -> Vec<Step> {
         Os::Mac => vec![
             Step::run(
                 "Install whisper.cpp",
-                "Paste this into Terminal. Homebrew builds it for your Mac's own chip.",
+                "Paste this into Terminal. Homebrew builds it for your Mac's own chip, and \
+                 it needs no Python at all.",
                 "brew install whisper-cpp",
             ),
+            faster_whisper,
             model,
         ],
         Os::Linux => vec![
-            Step::run(
-                "Install the listener",
-                "Either of these works -- whisper.cpp is faster, faster-whisper is one \
-                 command and brings its own language files.",
-                "pip install faster-whisper",
+            Step::say(
+                "The quick version",
+                "There are two listeners and either one is enough. whisper.cpp is a native \
+                 program with no Python anywhere in it, and it is the one Aether1 prefers \
+                 when both are present -- but it wants a language file downloaded \
+                 separately. faster-whisper is a single command and fetches its own. If \
+                 you have no preference, take the faster-whisper step and ignore the rest.",
+            ),
+            faster_whisper,
+            Step::say(
+                "Or install whisper.cpp instead",
+                "Look for whisper.cpp in your package manager -- on Arch it is in the AUR \
+                 (yay -S whisper.cpp), on Homebrew it is whisper-cpp. Aether1 looks for a \
+                 command called whisper-cli, whisper-cpp, whisper or main. Then take the \
+                 language-file step below, which faster-whisper does not need.",
             ),
             model,
         ],
@@ -291,8 +410,33 @@ pub fn advise(
     let piper = llm::tts_local_status(Some(local_voice));
     let os_voice = llm::tts_os_status();
 
-    let speaking = match (&piper, &os_voice) {
-        (Ok((_, voice)), _) => Half {
+    // Asked before any of the three stages below, because it outranks all of them: a
+    // machine that cannot play audio at all is not improved by installing a better voice,
+    // and the three stages below would each report success while the operator hears
+    // nothing. This is the only check here that looks past synthesis at whether the sound
+    // actually arrives.
+    let playback = media_playback_step();
+
+    let speaking = match (&playback, &piper, &os_voice) {
+        (Some(fix), piper_status, _) => Half {
+            stage: Speaking::Unheard,
+            headline: Speaking::Unheard.headline().to_string(),
+            detail: format!(
+                "{} Everything up to the speakers is working{}.",
+                fix.detail,
+                match piper_status {
+                    Ok((_, voice)) => format!(
+                        " -- Piper is installed, with the voice at {}",
+                        voice.display()
+                    ),
+                    Err(_) => String::new(),
+                }
+            ),
+            engine: String::new(),
+            steps: vec![fix.clone()],
+            working: false,
+        },
+        (None, Ok((_, voice)), _) => Half {
             stage: Speaking::GoodVoice,
             headline: Speaking::GoodVoice.headline().to_string(),
             detail: format!(
@@ -304,7 +448,7 @@ pub fn advise(
             steps: Vec::new(),
             working: true,
         },
-        (Err(why), Ok(())) => Half {
+        (None, Err(why), Ok(())) => Half {
             stage: Speaking::BasicVoice,
             headline: Speaking::BasicVoice.headline().to_string(),
             detail: format!(
@@ -317,7 +461,7 @@ pub fn advise(
             steps: piper_steps(os),
             working: true,
         },
-        (Err(piper_why), Err(os_why)) => Half {
+        (None, Err(piper_why), Err(os_why)) => Half {
             stage: Speaking::Silent,
             headline: Speaking::Silent.headline().to_string(),
             detail: format!("{os_why} ({piper_why})"),
@@ -477,6 +621,96 @@ mod tests {
                     step.title
                 );
             }
+        }
+    }
+
+    /// **No step may tell somebody to pip-install into the system Python.** This is the
+    /// regression this test exists for, not a style rule: on Arch, Debian 12+, Ubuntu
+    /// 23.04+, Fedora and Homebrew, `pip install <anything>` into the system interpreter
+    /// stops dead with `error: externally-managed-environment` (PEP 668). A wizard step
+    /// that cannot succeed is worse than no step -- it reads as the app being broken, and
+    /// the only "fix" it leaves within reach is `--break-system-packages`, which is how
+    /// somebody's distribution gets quietly damaged by a speech setting.
+    ///
+    /// A command is allowed to contain `pip install` as long as the pip it names is one
+    /// inside Aether1's own environment, which is what `managed_env_command` produces.
+    #[test]
+    fn no_step_tells_anybody_to_pip_install_into_the_system_python() {
+        let managed = crate::paths::managed_python_env()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "pyenv".to_string());
+        for os in [Os::Windows, Os::Mac, Os::Linux] {
+            for step in piper_steps(os).iter().chain(whisper_steps(os).iter()) {
+                let Some(command) = &step.command else {
+                    continue;
+                };
+                assert!(
+                    !command.contains("--break-system-packages"),
+                    "{:?} step {:?} offers --break-system-packages",
+                    os,
+                    step.title
+                );
+                if command.contains("pip install") || command.contains("pip3 install") {
+                    assert!(
+                        command.contains(&managed) || command.contains("venv"),
+                        "{:?} step {:?} pip-installs into the system Python: {command}",
+                        os,
+                        step.title
+                    );
+                }
+            }
+        }
+    }
+
+    /// The command handed to the operator has to create the same environment the code
+    /// later looks in, or they follow the instructions successfully and Aether1 still
+    /// reports the engine missing. Tying both ends to `managed_python_env` here is what
+    /// stops the two drifting apart.
+    #[test]
+    fn the_install_command_points_at_the_environment_aether1_reads() {
+        let env = crate::paths::managed_python_env().expect("a home directory in the test env");
+        let command = llm::managed_env_command("faster-whisper");
+        assert!(
+            command.contains(&env.display().to_string()),
+            "the install command does not name {}: {command}",
+            env.display()
+        );
+        assert!(
+            command.contains("venv"),
+            "the install command does not create an environment: {command}"
+        );
+        assert!(
+            command.contains("faster-whisper"),
+            "the install command does not install what was asked for: {command}"
+        );
+    }
+
+    /// Off Linux there is no GStreamer to be missing, and a wizard that invents an audio
+    /// fault on Windows or macOS sends people to install packages that do not exist for
+    /// their platform.
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn only_linux_is_asked_about_audio_decoders() {
+        assert!(media_playback_step().is_none());
+    }
+
+    /// On Linux the answer is a fact about this machine and may legitimately be either,
+    /// but a reported fault must always arrive with the command that fixes it -- "your
+    /// audio plumbing is broken" with nothing to do about it is the sentence this whole
+    /// module exists to avoid.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_reported_audio_fault_always_names_its_fix() {
+        if let Some(step) = media_playback_step() {
+            let command = step.command.expect("an audio fault with no command to run");
+            assert!(
+                command.contains("gst"),
+                "the fix does not name the GStreamer plugins: {command}"
+            );
+            assert!(
+                !step.detail.is_empty(),
+                "the fault is reported with no explanation"
+            );
         }
     }
 
