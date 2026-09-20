@@ -317,6 +317,20 @@ mod tests {
     /// permits reading and therefore the only place `set_extra_roots` will accept. Building
     /// these in /tmp is what the first version of these tests did, and the guard refused
     /// every one of them -- correctly.
+    /// Holds the environment still for the duration of a test.
+    ///
+    /// `HOME` is process-global and `fs_guard`'s tests move it about to describe their own
+    /// rules; these tests resolve real paths under the real home, so one running while the
+    /// other had `HOME` swapped out made `within_roots` disagree with itself. It was
+    /// intermittent, and only on a compiler new enough to schedule the two together --
+    /// which is to say it was a coin toss that had been landing the right way. The lock is
+    /// `fs_guard`'s own, because a second lock would protect nothing from the first.
+    fn hold_the_environment() -> std::sync::MutexGuard<'static, ()> {
+        crate::tools::fs_guard::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn dir_under_home(name: &str) -> PathBuf {
         let dir = crate::paths::home_dir()
             .unwrap()
@@ -375,6 +389,7 @@ mod tests {
     #[test]
     fn a_folder_the_operator_adds_becomes_part_of_the_field() {
         let db = temp_db("extra_roots_gate");
+        let _environment = hold_the_environment();
         let dir = dir_under_home("extra");
         let inside = dir.join("notes.txt");
         std::fs::write(&inside, "hello").unwrap();
@@ -402,6 +417,7 @@ mod tests {
     #[test]
     fn widening_one_persona_does_not_widen_another() {
         let db = temp_db("extra_roots_scope");
+        let _environment = hold_the_environment();
         let dir = dir_under_home("scope");
         let inside = dir.join("f.txt");
         std::fs::write(&inside, "x").unwrap();
@@ -462,6 +478,7 @@ mod tests {
     #[test]
     fn the_described_field_includes_what_was_added() {
         let db = temp_db("extra_roots_field");
+        let _environment = hold_the_environment();
         let dir = dir_under_home("field");
 
         let persona = Persona::Nexus;

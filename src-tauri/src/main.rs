@@ -1351,7 +1351,10 @@ fn amber_icon(base: Option<&tauri::image::Image<'_>>) -> Option<tauri::image::Im
     let base = base?;
     let (width, height) = (base.width(), base.height());
     let mut rgba = base.rgba().to_vec();
-    for pixel in rgba.chunks_exact_mut(4) {
+    // `as_chunks_mut::<4>` rather than `chunks_exact_mut(4)`: the pixel width is a constant,
+    // and saying so lets the compiler drop the remainder branch. Newer clippy asks for this
+    // by name.
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         // Alpha is left alone: tinting the transparent parts would turn the icon into a
         // square. Everything visible is mixed halfway towards amber, which keeps the shape
         // readable where a flat fill would lose it.
