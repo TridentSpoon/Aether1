@@ -592,6 +592,47 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LOCAS: its core sphere on its own -- a dark shell with a
+        // faint theme-tinted wire lattice floating just above it and a fixed hot bead
+        // burning at the centre, so the sphere reads as a housing with something live
+        // inside rather than a solid ball.
+        latticeOrb: {
+            label: 'Lattice orb',
+            build(api, options) {
+                const HOT = 0x00e8ff;
+                const group = new THREE.Group();
+                const shellMat = new THREE.MeshBasicMaterial({ color: 0x061018, transparent: true, opacity: 0.92 });
+                group.add(new THREE.Mesh(new THREE.SphereGeometry(options.size, 24, 18), shellMat));
+                const wireMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex3, wireframe: true, transparent: true, opacity: 0.3,
+                });
+                group.add(new THREE.Mesh(new THREE.SphereGeometry(options.size * 1.02, 14, 10), wireMat));
+                const hotMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(new THREE.SphereGeometry(options.size * 0.32, 16, 12), hotMat));
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.radialGlowTexture(64, '#c8feff', '#00a8cc'),
+                    transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glowScale = options.size * 2.4;
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(glowScale, glowScale, 1);
+                group.add(glow);
+                return {
+                    object: group,
+                    applyPalette(p) { wireMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        group.rotation.y = -ctx.time * 0.25;
+                        group.rotation.x = Math.sin(ctx.time * 0.35) * 0.15;
+                        const pulse = ctx.audio * 0.5 + ctx.click * 0.3;
+                        hotMat.opacity = 0.8 + pulse * 0.2;
+                        glowMat.opacity = Math.min(1, 0.45 + pulse * 0.5);
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1445,6 +1486,47 @@
                         inner.material.rotation = -ctx.time * 0.4;
                         outerMat.opacity = 0.4 + ctx.audio * 0.25;
                         innerMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOCAS: the two broken-circle rings that sit around it like
+        // gauge markings -- dashed lines rather than solid bands, tilted well off the
+        // picture plane and counter-rotating, so the gaps in them are what shows the
+        // motion.
+        dashedGaugeRings: {
+            label: 'Dashed gauge rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                group.rotation.x = Math.PI / 2.4;
+                function dashedRing(radius, dashSize, gapSize, mat, segments = 72) {
+                    const pts = [];
+                    for (let i = 0; i <= segments; i++) {
+                        const a = (i / segments) * Math.PI * 2;
+                        pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0));
+                    }
+                    const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), mat);
+                    line.computeLineDistances();
+                    return line;
+                }
+                const outerMat = new THREE.LineDashedMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.5, dashSize: 9, gapSize: 5,
+                });
+                const innerMat = new THREE.LineDashedMaterial({
+                    color: api.palette.hex3, transparent: true, opacity: 0.4, dashSize: 5, gapSize: 4,
+                });
+                const outer = dashedRing(options.radius * 1.3, 9, 5, outerMat);
+                const inner = dashedRing(options.radius * 1.13, 5, 4, innerMat);
+                group.add(outer, inner);
+                return {
+                    object: group,
+                    applyPalette(p) { outerMat.color.setHex(p.hex); innerMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        outer.rotation.z = ctx.time * 0.12;
+                        inner.rotation.z = -ctx.time * 0.19;
+                        outerMat.opacity = 0.45 + ctx.audio * 0.25;
+                        innerMat.opacity = 0.35 + ctx.audio * 0.3 + ctx.click * 0.2;
                     },
                 };
             },
