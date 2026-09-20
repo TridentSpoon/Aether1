@@ -640,13 +640,11 @@ a timer is a getter that will one day be the reason the HUD stutters.
 
 ## Phase 5+ — Reach and continuity
 
-Steps 15 and 16 are specified below. The rest stay sketched rather than specified, because
-the earlier steps will change what they should be:
+Steps 15, 16 and 18 are specified below. Step 17 stays sketched, because what is left of it
+depends on step 46:
 
 - **Step 17: packaging** — AUR and `.deb` beside the existing `.tar.gz`, so a fresh machine
   is one command.
-- **Step 18: memory sync** — an export/import format first, sync second, both under your
-  control and neither touching a server we run.
 
 ---
 
@@ -743,6 +741,66 @@ a trusted one, and an external caller must not get a way in that a local one doe
 - **Verify:** a paired machine on the LAN lists this machine's tools over MCP, a call to one
   stops for consent before it runs, an unpaired caller gets nothing, and turning the switch off
   removes the endpoint from discovery as well as from the router.
+
+---
+
+### Step 18: Memory sync, which is three different problems
+
+"Memory" here is all three of the things it could mean — the vault, the conversations, and the
+settings and personas — and the reason this step was a sketch for so long is that they do not
+sync the same way. Treating them as one thing is what makes this look hard.
+
+**The vault is a folder, and that is the answer.** Markdown files merge per file, and Syncthing,
+a git remote or a synced directory already do it better than anything written here would. So this
+step does not sync the vault. What it owes the vault is not corrupting it: notice when files
+change underneath the app, and never hold them open in a way that fights whatever is already
+syncing them.
+
+**Conversations cannot conflict, because nobody edits the past.** `sessions` and `messages` are
+append-only in practice — a finished conversation is never rewritten — so merging is just
+insertion. `sessions.id` is already `TEXT` and unique per machine, so the two sides never collide.
+`messages.id` is a local `AUTOINCREMENT` and must not cross the wire; an import renumbers on
+insert and recognises a message it already has by session, sender and timestamp, which makes
+importing the same export twice a no-op rather than a duplicate transcript.
+
+**Settings are the hard third, because they do not all belong to you.** Some describe the machine
+— which model, which endpoint, which voice engine, a hotkey chord that works on this desktop and
+not the other one — and copying those across is not sync, it is damage: a laptop's model choice
+landing on a desktop with a better GPU makes the desktop worse. Others describe you: personas,
+the tone sliders, consent preferences, the agent list from step 15. Those are the whole point.
+So every key gets a scope, machine or identity, and only identity-scoped keys travel. Existing
+keys default to machine, because a key that fails to sync is a nuisance and a key that syncs
+when it should not is a regression you have to find.
+
+`long_term_memory` already carries `updated_at`, so newest wins there and no schema change is
+needed. `settings` carries no timestamp at all, so it cannot be merged as it stands — adding one,
+with the scope column, is this step's own schema change.
+
+**What is left of conflict is small enough to ask about.** The vault belongs to whatever syncs it,
+conversations cannot collide, and machine-scoped keys never leave. That leaves two machines
+editing the same identity-scoped key while apart, which is rare and always meaningful, so both
+versions are kept and you are asked, rather than one being picked silently.
+
+**Transport: a file first, the LAN second.** Export and import of a single file works between two
+machines that never see each other and needs nothing running, which is why it comes first. Direct
+transfer over the LAN comes after, on the pairing phrase in `serve_auth.rs` and the discovery in
+`discovery.rs` that already exist. Neither touches a server anyone else runs. The phone is not a
+third party to this: it is a face for a desktop instance and keeps no memory of its own.
+
+- **New `src-tauri/src/sync.rs`** — export to and import from one file; conversation import keyed
+  on session, sender and timestamp so a repeat import is a no-op; identity-scoped key merge by
+  `updated_at`.
+- **`src-tauri/src/llm/db.rs`** — `settings` gains `updated_at` and a `scope` column of
+  `machine` or `identity`, with existing keys defaulting to `machine`.
+- **LAN transfer** — over the existing pairing and discovery, under the same per-call consent as
+  everything else.
+- **Settings** — an off switch, which machine is paired, and a record of what travelled last time.
+- **The vault is deliberately out of scope**, and the doc should say why rather than leaving it
+  looking forgotten.
+- **Verify:** an export taken on one machine and imported on the other brings the conversations
+  and the personas across and leaves the second machine's model choice untouched; importing the
+  same file twice changes nothing; and two machines that edited the same identity-scoped key while
+  apart produce a question rather than a silent overwrite.
 
 ---
 
