@@ -640,12 +640,9 @@ a timer is a getter that will one day be the reason the HUD stutters.
 
 ## Phase 5+ — Reach and continuity
 
-Step 15 is specified below. The rest stay sketched rather than specified, because the
-earlier steps will change what they should be:
+Steps 15 and 16 are specified below. The rest stay sketched rather than specified, because
+the earlier steps will change what they should be:
 
-- **Step 16: MCP client** — if step 15 shows the tool ecosystem is worth borrowing, an MCP
-  client behind the same consent path, so external tools inherit the approval flow rather
-  than bypassing it.
 - **Step 17: packaging** — AUR and `.deb` beside the existing `.tar.gz`, so a fresh machine
   is one command.
 - **Step 18: memory sync** — an export/import format first, sync second, both under your
@@ -702,6 +699,50 @@ meets this step — a crash hand-off is the crash-capture context plus the same 
   directory; the same hand-off with the window closed produces an account of what the agent
   did; a hand-off aimed outside the allowed directories stops and asks first; and an agent
   installed after Aether1 started appears in the list without a code change.
+
+---
+
+### Step 16: MCP, the server half first
+
+MCP is the Model Context Protocol: a small JSON-RPC protocol where a server advertises tools,
+resources and prompts, and any client that speaks it can use them. The sketch had this the way
+everyone writes it — a client, so Aether1 can borrow other people's tools. It is worth doing the
+other way round, for two reasons.
+
+The first is a limit, not a preference. A client is only as good as the model driving it: using
+someone else's tools means tool calling, and that is exactly what a small local model is worst
+at. An MCP client would be close to useless on the floor this project commits to, and genuinely
+useful only on a capable model, usually a paid one. That is not an argument against building it.
+It does mean it is a feature for the far end of the range rather than the near one, and it should
+be described that way instead of as a general capability.
+
+The second is that the server half is the one nothing else here covers. A netbook serving models
+in another room, a desktop that knows your vault, a laptop that does not — the discovery and the
+pairing phrase for that already exist in `discovery.rs` and `serve_auth.rs`. Speaking MCP over
+that link means another assistant, on another machine you own, can reach this machine's tools and
+this machine's vault without a second integration being written for each one. That is the peers
+idea with a protocol attached.
+
+It costs less than it sounds, because the pieces are already here. `tools::Registry` already has
+`schemas()` and `run()`, the headless `--serve` router already exposes `/api/tools`,
+`/api/actions` and `/api/actions/pending`, and the pending-actions surface is already how a tool
+call waits for a person to say yes. MCP's `tools/list` is `schemas()`; MCP's `tools/call` is
+`run()` through that same pending-action path. Consent stays per call — an approved server is not
+a trusted one, and an external caller must not get a way in that a local one does not have.
+
+- **New `src-tauri/src/mcp.rs`** — the protocol itself, mounted on the existing axum router
+  behind the pairing auth in `serve_auth.rs`, mapping `tools/list` to `tools::Registry::schemas`
+  and `tools/call` to `tools::run` through the pending-action consent path.
+- **Resources** — the vault, read-only, under the same per-call consent as everything else.
+- **Discovery** — advertise the MCP endpoint in the existing mDNS record so a paired machine
+  finds it the way it already finds everything else.
+- **Settings** — an off switch, a per-tool allow list of what a remote caller may reach at all,
+  and a visible record of which paired machine called what.
+- **The client half is optional and comes after** — if it is built, it goes behind the same
+  consent path, and its own doc comment should say plainly that it needs a capable model.
+- **Verify:** a paired machine on the LAN lists this machine's tools over MCP, a call to one
+  stops for consent before it runs, an unpaired caller gets nothing, and turning the switch off
+  removes the endpoint from discovery as well as from the router.
 
 ---
 
