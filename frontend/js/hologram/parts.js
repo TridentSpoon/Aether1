@@ -1169,6 +1169,34 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LOREGENDA: the tilted halo standing in for a UI ring --
+        // a single sprite ring rather than geometry, so it stays a clean circle at any
+        // angle, and it leans rather than lying flat.
+        tiltedHalo: {
+            label: 'Tilted halo',
+            build(api, options) {
+                const mat = new THREE.SpriteMaterial({
+                    map: api.helpers.ringTexture(64, 0.05), color: api.palette.hex3,
+                    transparent: true, opacity: 0.5, depthWrite: false,
+                });
+                const sprite = new THREE.Sprite(mat);
+                const size = options.radius * 2.1;
+                sprite.scale.set(size, size, 1);
+                sprite.rotation.z = Math.PI / 5;
+                const group = new THREE.Group();
+                group.add(sprite);
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.15;
+                        group.rotation.x = Math.sin(ctx.time * 0.5) * 0.08;
+                        mat.opacity = 0.42 + ctx.audio * 0.25 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Effects: an ambient layer or background ------------------------------
@@ -1478,6 +1506,39 @@
                             const a = d.angle + ctx.time * d.speed;
                             n.position.set(Math.cos(a) * d.radius, d.heightOffset + Math.sin(ctx.time + d.bob) * 4, Math.sin(a) * d.radius);
                         });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOREGENDA: the ambient dust -- a thin flattened shell of
+        // points well outside the body, turning slowly enough to read as drift rather
+        // than rotation.
+        driftingDust: {
+            label: 'Drifting dust',
+            build(api, options) {
+                const count = 70;
+                const positions = new Float32Array(count * 3);
+                for (let i = 0; i < count * 3; i += 3) {
+                    const r = options.radius * (1.4 + Math.random() * 0.8);
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos(Math.random() * 2 - 1);
+                    positions[i] = r * Math.sin(phi) * Math.cos(theta);
+                    positions[i + 1] = r * Math.cos(phi) * 0.6;
+                    positions[i + 2] = r * Math.sin(phi) * Math.sin(theta);
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const mat = new THREE.PointsMaterial({
+                    color: api.palette.hex, size: 1.4, transparent: true, opacity: 0.55,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        points.rotation.y = ctx.time * 0.05;
+                        mat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.2;
                     },
                 };
             },
