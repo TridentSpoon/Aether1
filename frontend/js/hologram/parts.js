@@ -768,6 +768,58 @@
                 };
             },
         },
+
+        // Adapted from White Rabbit: the pair of long ears hinged at their base, which
+        // mostly sit still and flick every few seconds rather than animating
+        // continuously -- each ear keeps its own next-twitch time so the two never move
+        // in lockstep, and an alert state pulls them upright and flicks them more often.
+        rabbitEars: {
+            label: 'Rabbit ears',
+            build(api, options) {
+                const group = new THREE.Group();
+                const s = options.radius / 30;
+                const mat = new THREE.PointsMaterial({
+                    color: api.palette.hex3, map: api.helpers.glowTexture(20), size: 2.7,
+                    transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const ears = [-1, 1].map((side) => {
+                    const positions = sampleEllipseCluster(
+                        [{ cx: 0, cy: 19 * s, rx: 4.3 * s, ry: 19 * s }], 520, 6 * s
+                    );
+                    const geom = new THREE.BufferGeometry();
+                    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                    const pivot = new THREE.Group();
+                    pivot.position.set(side * 6.5 * s, options.radius * 0.55, 0);
+                    pivot.rotation.z = -side * 0.22;
+                    pivot.add(new THREE.Points(geom, mat));
+                    group.add(pivot);
+                    return {
+                        pivot, side, restAngle: -side * 0.22,
+                        nextTwitch: 1.5 + Math.random() * 3, twitchStart: -10,
+                    };
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        const thinking = ctx.state === 'THINKING';
+                        const lift = ctx.state === 'IDLE' ? 0 : 0.12;
+                        const minGap = thinking ? 1.2 : 2.8;
+                        const maxGap = thinking ? 3 : 7;
+                        ears.forEach((ear) => {
+                            if (ctx.time > ear.nextTwitch) {
+                                ear.twitchStart = ctx.time;
+                                ear.nextTwitch = ctx.time + THREE.MathUtils.lerp(minGap, maxGap, Math.random());
+                            }
+                            const dt = ctx.time - ear.twitchStart;
+                            const twitch = dt >= 0 && dt < 0.5 ? Math.sin(dt * 24) * 0.4 * (1 - dt / 0.5) : 0;
+                            const sway = Math.sin(ctx.time * 1.05 + ear.side * 1.7) * 0.02;
+                            ear.pivot.rotation.z = ear.restAngle + ear.side * lift + twitch + sway;
+                        });
+                    },
+                };
+            },
+        },
     };
 
     // ---- Outer rings: a boundary further out ---------------------------------
