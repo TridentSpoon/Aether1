@@ -562,14 +562,39 @@ browser a file-manager window, only the machine this process is actually running
 
 ### Step 13: Crash and log capture
 
+Crashes only. The wider sweep of the event log is something you ask for, not something it
+volunteers: an event log is mostly noise, and a companion that reads the noise aloud is a
+companion you turn off.
+
+Windows is a peer here rather than a feature gate. Both platforms offer the same three things
+under different names — an event stream, a crash record, and a log tail. On Linux that is the
+systemd journal, `coredumpctl`, and `/var/log` where there is no journal; on Windows it is the
+event log and Windows Error Reporting. One design, two readers.
+
+Reading them is local-model work. Summarising a crash means handing something your machine's
+recent failures, and that is not a thing to spend a cloud call on; `local_only.rs` and the
+per-persona routing already give a way to pin it. With no local model present it shows the raw
+event and says nothing further, rather than waiting for one to exist.
+
 - **New `src-tauri/src/watchers/crash.rs`** — watch `systemd-coredump` (or poll
-  `coredumpctl list`) on Linux; feature-gate Windows out for now.
+  `coredumpctl list`) on Linux and the equivalent on Windows, behind one trait with two
+  implementations.
 - **`src-tauri/src/main.rs`** — on a crash, set the tray to amber and post a notification
   offering the companion as first responder, with the failing process, its exit signal, and
   the tail of its journal already assembled as context.
+- **The diagnostics command** — `aether1 status` already prints a system report; the wider
+  event sweep belongs there, on request, rather than on a watcher.
 - **Settings** — an off switch and a per-program mute list.
 - **Verify:** a deliberately segfaulted test binary produces a notification whose
-  conversation starts with the crash already in context.
+  conversation starts with the crash already in context; the same on Windows; and with no local
+  model installed, the notification still arrives carrying the raw event.
+
+**Its seam with step 15.** These are not one step. Crash capture has to stand on its own — no
+agent installed, no local model, still shows you the crash — and most hand-offs have nothing to
+do with a crash. What they share is exactly one thing: the assembled context. Step 15 installs a
+standing context file into the agents' own skill directories; step 13 produces a crash bundle. A
+crash handed to an agent is the second plus the first, which is how Omarchy does it too, with
+`diagnose-crash` as a skill of its own. Build the context bundle once and let both call it.
 
 ### Step 14: Honest AI telemetry — **shipped**
 
