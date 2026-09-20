@@ -179,30 +179,9 @@ HologramAvatar.registerAvatar({
         ones.points.scale.set(1.9, 1, 1);
         group.add(zeros.points, ones.points);
 
-        // The prompt: a row of ticks that perpetually "types" itself out left to right,
-        // sitting in the ring's clear centre, with a "|>" caret that blinks at wherever
-        // the line currently ends.
-        const promptCount = 20;
-        const promptSpacing = 2.3;
-        const promptStartX = -((promptCount - 1) * promptSpacing) / 2;
+        // The prompt: just the "|>" caret, waiting in the ring's clear centre. No line of
+        // ticks printed behind it -- the caret alone is the prompt.
         const promptZ = 30;
-        const promptPositions = new Float32Array(promptCount * 3);
-        const promptColors = new Float32Array(promptCount * 3);
-        for (let i = 0; i < promptCount; i++) {
-            promptPositions[i * 3] = promptStartX + i * promptSpacing;
-            promptPositions[i * 3 + 1] = -2;
-            promptPositions[i * 3 + 2] = promptZ;
-        }
-        const promptGeometry = new THREE.BufferGeometry();
-        promptGeometry.setAttribute('position', new THREE.BufferAttribute(promptPositions, 3));
-        promptGeometry.setAttribute('color', new THREE.BufferAttribute(promptColors, 3));
-        const promptMaterial = new THREE.PointsMaterial({
-            color: api.palette.hex3, map: accentTick, size: 5.5, vertexColors: true,
-            transparent: true, opacity: 0.95, depthWrite: false,
-            blending: THREE.AdditiveBlending, sizeAttenuation: true,
-        });
-        const promptPoints = new THREE.Points(promptGeometry, promptMaterial);
-        group.add(promptPoints);
 
         // A soft halo right behind the caret, purely so it reads clearly against the
         // ring instead of getting lost in it.
@@ -238,9 +217,7 @@ HologramAvatar.registerAvatar({
         group.add(glow);
 
         return {
-            group, zeros, ones,
-            promptPoints, promptMaterial, promptPositions, promptColors,
-            promptCount, promptStartX, promptSpacing, promptZ,
+            group, zeros, ones, promptZ,
             cursor, cursorMaterial, cursorGlow, cursorGlowMaterial,
             glow, glowMaterial,
         };
@@ -280,21 +257,11 @@ HologramAvatar.registerAvatar({
         updateOperatorStream(model.zeros, ctx, speedMult, zoomPulse, blink);
         updateOperatorStream(model.ones, ctx, speedMult, zoomPulse, blink);
 
-        // The prompt line sits still -- already printed, not typing itself out -- with
-        // a CRT-style flicker instead of a sweep: each tick breathes a little brighter
-        // then a little dimmer, each on its own slightly offset phase so the row shimmers
-        // rather than pulsing in lockstep. Thinking breathes faster, same as before.
+        // The caret's own fixed resting spot, dead centre of the tunnel. Thinking makes
+        // its flicker (below) breathe faster, same as before.
         const flickerSpeed = isThinking ? 3.2 : 1.4;
-        for (let i = 0; i < model.promptCount; i++) {
-            const phase = i * 0.6;
-            const brightness = 0.32 + (Math.sin(ctx.time * flickerSpeed + phase) * 0.5 + 0.5) * 0.22;
-            model.promptColors[i * 3] = model.promptColors[i * 3 + 1] = model.promptColors[i * 3 + 2] = brightness;
-        }
-        model.promptPoints.geometry.attributes.color.needsUpdate = true;
-        // The caret's own fixed resting spot, at the end of the (static) line.
-        const cursorX = model.promptStartX + (model.promptCount - 1) * model.promptSpacing;
-        model.cursor.position.set(cursorX, -2, model.promptZ + 4);
-        model.cursorGlow.position.set(cursorX, -2, model.promptZ + 2);
+        model.cursor.position.set(0, -2, model.promptZ + 4);
+        model.cursorGlow.position.set(0, -2, model.promptZ + 2);
 
         // The caret breathes with the same CRT flicker while waiting -- slightly
         // brighter, then dimmer, not a hard on/off blink -- and holds a steady
@@ -318,7 +285,6 @@ HologramAvatar.registerAvatar({
     applyPalette(model, palette) {
         model.zeros.material.color.setHex(palette.hex);
         model.ones.material.color.setHex(palette.hex2);
-        model.promptMaterial.color.setHex(palette.hex3);
         model.cursorMaterial.color.setHex(palette.hex);
         model.cursorGlowMaterial.color.setHex(palette.hex);
         model.glowMaterial.color.setHex(palette.hex);
