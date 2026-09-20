@@ -18,6 +18,13 @@
  * Parts never read the palette at build time and keep it -- they are always told, so
  * that a theme switched later reaches every part including the ones not on screen.
  *
+ * A core does not turn itself. The recipe has a spin setting, which turns the whole
+ * assembly, and a core with a rotation of its own would ignore a spin of zero -- the one
+ * setting someone reaches for when they want the thing to sit still. A fixed angle set
+ * at build time is not motion and is fine (see the medallion's tilt). Reacting to the
+ * voice, to a click or to the state is not motion either: scale, opacity and glow are
+ * still every core's to use.
+ *
  * Four tiers, matching the workbench's four pickers:
  *
  *   cores       -- the thing at the middle
@@ -143,8 +150,6 @@
                     object: group,
                     applyPalette(p) { fill.color.setHex(p.hex); edge.color.setHex(p.hex3); },
                     animate(ctx) {
-                        group.rotation.y = ctx.time * 0.4;
-                        group.rotation.x = Math.sin(ctx.time * 0.3) * 0.3;
                         group.scale.setScalar(1 + ctx.audio * 0.2 + ctx.click * 0.15);
                     },
                 };
@@ -270,7 +275,6 @@
                             const level = band(ctx, index, count);
                             outlineMat.opacity = 0.35 + level * 0.55 + ctx.click * 0.2;
                         });
-                        group.rotation.y = Math.sin(ctx.time * 0.2) * 0.1;
                     },
                 };
             },
@@ -327,7 +331,6 @@
                     object: group,
                     applyPalette(p) { fillMat.color.setHex(p.hex2); outlineMat.color.setHex(p.hex3); },
                     animate(ctx) {
-                        group.rotation.y = ctx.time * 0.25;
                         group.scale.setScalar(1 + ctx.audio * 0.15 + ctx.click * 0.12);
                     },
                 };
@@ -385,7 +388,6 @@
                     object: group,
                     applyPalette(p) { shellMat.color.setHex(p.hex); outerWireMat.color.setHex(p.hex2); },
                     animate(ctx) {
-                        group.rotation.y = ctx.time * 0.2;
                         const blinkCycle = 4.2, blinkWindow = 0.18;
                         const t = ctx.time % blinkCycle;
                         const blink = t < blinkWindow ? 1 - Math.pow(Math.sin((t / blinkWindow) * Math.PI), 2) : 1;
@@ -400,8 +402,8 @@
         },
 
         // Adapted from A.R.X.LUCRE: the flattened-diamond shell (a squashed octahedron
-        // laid across a plane) on its own as a tumbling core, without the vertical
-        // cube stack or halo rings that surround it in the original.
+        // laid across a plane) on its own, without the vertical cube stack or halo rings
+        // that surround it in the original.
         flatDiamondCore: {
             label: 'Flat diamond',
             build(api, options) {
@@ -418,7 +420,6 @@
                     object: group,
                     applyPalette(p) { fillMat.color.setHex(p.hex); wireMat.color.setHex(p.hex2); },
                     animate(ctx) {
-                        group.rotation.y = ctx.time * 0.3;
                         const breathe = 1 + Math.sin(ctx.time * 2) * 0.05 + ctx.audio * 0.15 + ctx.click * 0.15;
                         group.scale.setScalar(breathe);
                     },
@@ -428,8 +429,8 @@
 
         // Adapted from A.R.X.LEXICO: the core cube at the centre of its cross -- a real
         // box rather than a flat isometric illusion, with a white aperture bead and a
-        // radial glow sitting at the rotation origin so it only ever brightens in place.
-        // Keeps LEXICO's fixed hot cyan, which does not retint with the theme.
+        // radial glow sitting at the group's own origin, so it only ever brightens in
+        // place. Keeps LEXICO's fixed hot cyan, which does not retint with the theme.
         apertureCube: {
             label: 'Aperture cube',
             build(api, options) {
@@ -460,8 +461,6 @@
                     object: group,
                     applyPalette() { /* fixed by design: LEXICO's aperture is its one unchanging colour */ },
                     animate(ctx) {
-                        group.rotation.y = ctx.time * 0.5;
-                        group.rotation.x = Math.sin(ctx.time * 0.4) * 0.25;
                         const pulse = 0.35 + ctx.audio * 0.5 + ctx.click * 0.3;
                         glowMat.opacity = Math.min(1, 0.3 + pulse * 0.5);
                         const s = glowScale * (1 + pulse * 0.2);
@@ -474,8 +473,8 @@
         // Adapted from A.R.X.LYKSAUM: the HUD medallion as a core -- a real cylinder
         // tilted about 29 degrees off-axis so its rim and edge read as depth rather
         // than a flat sprite, carrying a glowing rim torus, a thin inset structural
-        // ring and three accent dots mounted on the housing so they turn with it.
-        // Keeps LYKSAUM's fixed hot cyan for the rim and dots.
+        // ring and three accent dots mounted on the housing, which carries them at
+        // whatever angle it sits at. Keeps LYKSAUM's fixed hot cyan for the rim and dots.
         discMedallion: {
             label: 'HUD medallion',
             build(api, options) {
@@ -528,8 +527,6 @@
                         structMat.color.setHex(p.hex3);
                     },
                     animate(ctx) {
-                        group.rotation.y = ctx.time * (Math.PI * 2 / 14);
-                        group.rotation.x = BASE_TILT + Math.sin(ctx.time * 0.3) * 0.06;
                         rimMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
                     },
                 };
@@ -567,8 +564,6 @@
                     object: group,
                     applyPalette(p) { wireMat.color.setHex(p.hex3); },
                     animate(ctx) {
-                        group.rotation.y = -ctx.time * 0.25;
-                        group.rotation.x = Math.sin(ctx.time * 0.35) * 0.15;
                         const pulse = ctx.audio * 0.5 + ctx.click * 0.3;
                         hotMat.opacity = 0.8 + pulse * 0.2;
                         glowMat.opacity = Math.min(1, 0.45 + pulse * 0.5);
@@ -579,8 +574,7 @@
 
         // Adapted from A.R.X.LEGIONARE: the crystal hanging inside its pyramid -- a bare
         // icosahedron with no wireframe over it, lit by a fixed ember glow rather than
-        // the theme, spinning faster than whatever shell surrounds it so the two never
-        // look welded together.
+        // the theme.
         emberCrystal: {
             label: 'Ember crystal',
             build(api, options) {
@@ -589,8 +583,7 @@
                 const mat = new THREE.MeshBasicMaterial({
                     color: HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
                 });
-                const crystal = new THREE.Mesh(new THREE.IcosahedronGeometry(options.size * 0.8, 0), mat);
-                group.add(crystal);
+                group.add(new THREE.Mesh(new THREE.IcosahedronGeometry(options.size * 0.8, 0), mat));
                 const glowMat = new THREE.SpriteMaterial({
                     map: api.helpers.radialGlowTexture(64, '#ffcf9e', '#ff3300'),
                     transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
@@ -603,8 +596,6 @@
                     object: group,
                     applyPalette() { /* fixed by design: the ember is LEGIONARE's one constant colour */ },
                     animate(ctx) {
-                        crystal.rotation.x = ctx.time * 0.4;
-                        crystal.rotation.y = ctx.time * 0.6;
                         const pulse = ctx.audio * 0.6 + ctx.click * 0.35 + (Math.sin(ctx.time * 3) + 1) * 0.12;
                         mat.opacity = 0.75 + Math.min(0.25, pulse * 0.25);
                         glowMat.opacity = Math.min(1, 0.35 + pulse * 0.55);
