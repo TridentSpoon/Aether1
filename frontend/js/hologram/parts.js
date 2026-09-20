@@ -527,6 +527,71 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LYKSAUM: the HUD medallion as a core -- a real cylinder
+        // tilted about 29 degrees off-axis so its rim and edge read as depth rather
+        // than a flat sprite, carrying a glowing rim torus, a thin inset structural
+        // ring and three accent dots mounted on the housing so they turn with it.
+        // Keeps LYKSAUM's fixed hot cyan for the rim and dots.
+        discMedallion: {
+            label: 'HUD medallion',
+            build(api, options) {
+                const HOT = 0x00e8ff;
+                const BASE_TILT = -0.5;
+                const group = new THREE.Group();
+                group.rotation.x = BASE_TILT;
+                const radius = options.size * 1.15;
+                const thickness = radius * 0.24;
+                const discMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex3, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.22, depthWrite: false,
+                });
+                const discGeo = new THREE.CylinderGeometry(radius, radius, thickness, 48);
+                discGeo.rotateX(Math.PI / 2);
+                const wireMat = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.6 });
+                group.add(new THREE.Mesh(discGeo, discMat));
+                group.add(new THREE.LineSegments(new THREE.EdgesGeometry(discGeo), wireMat));
+
+                const rimMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.85,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                group.add(new THREE.Mesh(new THREE.TorusGeometry(radius, radius * 0.038, 12, 48), rimMat));
+
+                const structMat = new THREE.LineBasicMaterial({ color: api.palette.hex3, transparent: true, opacity: 0.55 });
+                const structPts = [];
+                for (let i = 0; i <= 64; i++) {
+                    const a = (i / 64) * Math.PI * 2;
+                    structPts.push(new THREE.Vector3(Math.cos(a) * radius * 0.81, Math.sin(a) * radius * 0.81, 0.5));
+                }
+                group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(structPts), structMat));
+
+                // Top, left and right only: the bottom of a medallion is where a collar
+                // arc usually sits, and a dot there fights it.
+                const dotMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.8,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                [Math.PI / 2, Math.PI, 0].forEach((a) => {
+                    const dot = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.038, 10, 10), dotMat);
+                    dot.position.set(Math.cos(a) * radius * 0.64, Math.sin(a) * radius * 0.64, thickness / 2 + 1.2);
+                    group.add(dot);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        discMat.color.setHex(p.hex3);
+                        wireMat.color.setHex(p.hex2);
+                        structMat.color.setHex(p.hex3);
+                    },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * (Math.PI * 2 / 14);
+                        group.rotation.x = BASE_TILT + Math.sin(ctx.time * 0.3) * 0.06;
+                        rimMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1726,6 +1791,34 @@
                     animate(ctx) {
                         points.rotation.y = ctx.time * 0.05;
                         mat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LYKSAUM: the soft horizontal bar that sweeps up and down
+        // the face of its medallion on a six-second cycle. A billboard, so it stays a
+        // flat bar across whatever it passes in front of.
+        scanSweep: {
+            label: 'Scan sweep',
+            build(api, options) {
+                const mat = new THREE.SpriteMaterial({
+                    map: api.helpers.glowTexture(64), color: api.palette.hex3,
+                    transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const bar = new THREE.Sprite(mat);
+                const reach = options.radius * 1.2;
+                bar.scale.set(reach * 2.1, reach * 0.16, 1);
+                bar.position.z = options.radius * 0.5;
+                const group = new THREE.Group();
+                group.add(bar);
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        const t = (ctx.time % 6) / 6;
+                        bar.position.y = -reach + t * reach * 2;
+                        mat.opacity = 0.28 + ctx.audio * 0.25 + ctx.click * 0.15;
                     },
                 };
             },
