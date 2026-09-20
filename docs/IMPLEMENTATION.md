@@ -810,9 +810,21 @@ importing the same export twice a no-op rather than a duplicate transcript.
 not the other one — and copying those across is not sync, it is damage: a laptop's model choice
 landing on a desktop with a better GPU makes the desktop worse. Others describe you: personas,
 the tone sliders, consent preferences, the agent list from step 15. Those are the whole point.
-So every key gets a scope, machine or identity, and only identity-scoped keys travel. Existing
-keys default to machine, because a key that fails to sync is a nuisance and a key that syncs
-when it should not is a regression you have to find.
+So every key gets a scope, machine or identity, and only identity-scoped keys travel.
+
+**The existing keys are not defaulted, they are classified.** A blanket default is wrong in both
+directions: default them all to machine and the feature arrives empty, which reads as broken and
+leaves you flipping flags key by key; default them all to identity and the first sync quietly
+makes the other machine worse, with an endpoint pointing at something that is not on the network
+and no error to connect it to. Neither is necessary. There are a few dozen keys and every one of
+them is in this repository, so they get read once and marked when the column is added. That is an
+afternoon, and it is the difference between a rule and a guess.
+
+The default only governs keys added later, and there `machine` is right, because a key that fails
+to sync is a nuisance while a key that syncs when it should not is a regression you have to go and
+find. What keeps that from rotting is a test: adding a settings key with no explicit scope fails
+the build. Without it, a year from now someone adds something persona-shaped, it inherits the
+fallback, and the feature is quietly wrong in whichever direction the fallback points.
 
 `long_term_memory` already carries `updated_at`, so newest wins there and no schema change is
 needed. `settings` carries no timestamp at all, so it cannot be merged as it stands — adding one,
@@ -833,7 +845,9 @@ third party to this: it is a face for a desktop instance and keeps no memory of 
   on session, sender and timestamp so a repeat import is a no-op; identity-scoped key merge by
   `updated_at`.
 - **`src-tauri/src/llm/db.rs`** — `settings` gains `updated_at` and a `scope` column of
-  `machine` or `identity`, with existing keys defaulting to `machine`.
+  `machine` or `identity`; the keys that exist when the column lands are classified by hand, one
+  by one, and `machine` is only the fallback for keys added afterwards.
+- **A test that fails on an unclassified key**, so the fallback stays nearly unreachable.
 - **LAN transfer** — over the existing pairing and discovery, under the same per-call consent as
   everything else.
 - **Settings** — an off switch, which machine is paired, and a record of what travelled last time.
@@ -842,7 +856,8 @@ third party to this: it is a face for a desktop instance and keeps no memory of 
 - **Verify:** an export taken on one machine and imported on the other brings the conversations
   and the personas across and leaves the second machine's model choice untouched; importing the
   same file twice changes nothing; and two machines that edited the same identity-scoped key while
-  apart produce a question rather than a silent overwrite.
+  apart produce a question rather than a silent overwrite; and a settings key added without a
+  scope fails the build.
 
 ---
 
