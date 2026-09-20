@@ -482,6 +482,293 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LEXICO: the core cube at the centre of its cross -- a real
+        // box rather than a flat isometric illusion, with a white aperture bead and a
+        // radial glow sitting at the rotation origin so it only ever brightens in place.
+        // Keeps LEXICO's fixed hot cyan, which does not retint with the theme.
+        apertureCube: {
+            label: 'Aperture cube',
+            build(api, options) {
+                const HOT = 0x00ffff;
+                const group = new THREE.Group();
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const wireMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+                const side = options.size * 0.85;
+                const geom = new THREE.BoxGeometry(side, side, side);
+                const cube = new THREE.Mesh(geom, fillMat);
+                const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geom), wireMat);
+                const bead = new THREE.Mesh(
+                    new THREE.SphereGeometry(options.size * 0.13, 12, 12),
+                    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 })
+                );
+                group.add(cube, wire, bead);
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.radialGlowTexture(64, '#e0ffff', '#00ffff'),
+                    transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glowScale = options.size * 2.1;
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(glowScale, glowScale, 1);
+                group.add(glow);
+                return {
+                    object: group,
+                    applyPalette() { /* fixed by design: LEXICO's aperture is its one unchanging colour */ },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.5;
+                        group.rotation.x = Math.sin(ctx.time * 0.4) * 0.25;
+                        const pulse = 0.35 + ctx.audio * 0.5 + ctx.click * 0.3;
+                        glowMat.opacity = Math.min(1, 0.3 + pulse * 0.5);
+                        const s = glowScale * (1 + pulse * 0.2);
+                        glow.scale.set(s, s, 1);
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LYKSAUM: the HUD medallion as a core -- a real cylinder
+        // tilted about 29 degrees off-axis so its rim and edge read as depth rather
+        // than a flat sprite, carrying a glowing rim torus, a thin inset structural
+        // ring and three accent dots mounted on the housing so they turn with it.
+        // Keeps LYKSAUM's fixed hot cyan for the rim and dots.
+        discMedallion: {
+            label: 'HUD medallion',
+            build(api, options) {
+                const HOT = 0x00e8ff;
+                const BASE_TILT = -0.5;
+                const group = new THREE.Group();
+                group.rotation.x = BASE_TILT;
+                const radius = options.size * 1.15;
+                const thickness = radius * 0.24;
+                const discMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex3, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.22, depthWrite: false,
+                });
+                const discGeo = new THREE.CylinderGeometry(radius, radius, thickness, 48);
+                discGeo.rotateX(Math.PI / 2);
+                const wireMat = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.6 });
+                group.add(new THREE.Mesh(discGeo, discMat));
+                group.add(new THREE.LineSegments(new THREE.EdgesGeometry(discGeo), wireMat));
+
+                const rimMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.85,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                group.add(new THREE.Mesh(new THREE.TorusGeometry(radius, radius * 0.038, 12, 48), rimMat));
+
+                const structMat = new THREE.LineBasicMaterial({ color: api.palette.hex3, transparent: true, opacity: 0.55 });
+                const structPts = [];
+                for (let i = 0; i <= 64; i++) {
+                    const a = (i / 64) * Math.PI * 2;
+                    structPts.push(new THREE.Vector3(Math.cos(a) * radius * 0.81, Math.sin(a) * radius * 0.81, 0.5));
+                }
+                group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(structPts), structMat));
+
+                // Top, left and right only: the bottom of a medallion is where a collar
+                // arc usually sits, and a dot there fights it.
+                const dotMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.8,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                [Math.PI / 2, Math.PI, 0].forEach((a) => {
+                    const dot = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.038, 10, 10), dotMat);
+                    dot.position.set(Math.cos(a) * radius * 0.64, Math.sin(a) * radius * 0.64, thickness / 2 + 1.2);
+                    group.add(dot);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        discMat.color.setHex(p.hex3);
+                        wireMat.color.setHex(p.hex2);
+                        structMat.color.setHex(p.hex3);
+                    },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * (Math.PI * 2 / 14);
+                        group.rotation.x = BASE_TILT + Math.sin(ctx.time * 0.3) * 0.06;
+                        rimMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOCAS: its core sphere on its own -- a dark shell with a
+        // faint theme-tinted wire lattice floating just above it and a fixed hot bead
+        // burning at the centre, so the sphere reads as a housing with something live
+        // inside rather than a solid ball.
+        latticeOrb: {
+            label: 'Lattice orb',
+            build(api, options) {
+                const HOT = 0x00e8ff;
+                const group = new THREE.Group();
+                const shellMat = new THREE.MeshBasicMaterial({ color: 0x061018, transparent: true, opacity: 0.92 });
+                group.add(new THREE.Mesh(new THREE.SphereGeometry(options.size, 24, 18), shellMat));
+                const wireMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex3, wireframe: true, transparent: true, opacity: 0.3,
+                });
+                group.add(new THREE.Mesh(new THREE.SphereGeometry(options.size * 1.02, 14, 10), wireMat));
+                const hotMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(new THREE.SphereGeometry(options.size * 0.32, 16, 12), hotMat));
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.radialGlowTexture(64, '#c8feff', '#00a8cc'),
+                    transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glowScale = options.size * 2.4;
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(glowScale, glowScale, 1);
+                group.add(glow);
+                return {
+                    object: group,
+                    applyPalette(p) { wireMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        group.rotation.y = -ctx.time * 0.25;
+                        group.rotation.x = Math.sin(ctx.time * 0.35) * 0.15;
+                        const pulse = ctx.audio * 0.5 + ctx.click * 0.3;
+                        hotMat.opacity = 0.8 + pulse * 0.2;
+                        glowMat.opacity = Math.min(1, 0.45 + pulse * 0.5);
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LEGIONARE: the crystal hanging inside its pyramid -- a bare
+        // icosahedron with no wireframe over it, lit by a fixed ember glow rather than
+        // the theme, spinning faster than whatever shell surrounds it so the two never
+        // look welded together.
+        emberCrystal: {
+            label: 'Ember crystal',
+            build(api, options) {
+                const HOT = 0xff3300;
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const crystal = new THREE.Mesh(new THREE.IcosahedronGeometry(options.size * 0.8, 0), mat);
+                group.add(crystal);
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.radialGlowTexture(64, '#ffcf9e', '#ff3300'),
+                    transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glowScale = options.size * 2.4;
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(glowScale, glowScale, 1);
+                group.add(glow);
+                return {
+                    object: group,
+                    applyPalette() { /* fixed by design: the ember is LEGIONARE's one constant colour */ },
+                    animate(ctx) {
+                        crystal.rotation.x = ctx.time * 0.4;
+                        crystal.rotation.y = ctx.time * 0.6;
+                        const pulse = ctx.audio * 0.6 + ctx.click * 0.35 + (Math.sin(ctx.time * 3) + 1) * 0.12;
+                        mat.opacity = 0.75 + Math.min(0.25, pulse * 0.25);
+                        glowMat.opacity = Math.min(1, 0.35 + pulse * 0.55);
+                    },
+                };
+            },
+        },
+
+        // Adapted from Operator: the prompt line at the centre of its tunnel -- a row of
+        // ticks already printed rather than typing itself out, each breathing on its own
+        // phase so the row shimmers like a CRT instead of pulsing in lockstep, with a
+        // "|>" caret waiting at the end of the line.
+        terminalPrompt: {
+            label: 'Terminal prompt',
+            build(api, options) {
+                function caretTexture(size) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx2d = canvas.getContext('2d');
+                    ctx2d.fillStyle = '#ffffff';
+                    ctx2d.font = `bold ${Math.round(size * 0.62)}px monospace`;
+                    ctx2d.textAlign = 'center';
+                    ctx2d.textBaseline = 'middle';
+                    ctx2d.fillText('|>', size / 2, size / 2);
+                    const texture = new THREE.CanvasTexture(canvas);
+                    texture.needsUpdate = true;
+                    return texture;
+                }
+                function tickTexture(size) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx2d = canvas.getContext('2d');
+                    ctx2d.fillStyle = '#ffffff';
+                    ctx2d.fillRect(size * 0.42, size * 0.2, size * 0.16, size * 0.6);
+                    const texture = new THREE.CanvasTexture(canvas);
+                    texture.needsUpdate = true;
+                    return texture;
+                }
+
+                const group = new THREE.Group();
+                const count = 20;
+                const spacing = options.size * 0.115;
+                const startX = -((count - 1) * spacing) / 2;
+                const positions = new Float32Array(count * 3);
+                const colors = new Float32Array(count * 3);
+                for (let i = 0; i < count; i++) {
+                    positions[i * 3] = startX + i * spacing;
+                    positions[i * 3 + 1] = -options.size * 0.1;
+                    positions[i * 3 + 2] = 0;
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                const lineMat = new THREE.PointsMaterial({
+                    color: api.palette.hex3, map: tickTexture(32), size: options.size * 0.27,
+                    vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false,
+                    blending: THREE.AdditiveBlending, sizeAttenuation: true,
+                });
+                const line = new THREE.Points(geom, lineMat);
+                group.add(line);
+
+                const caretX = startX + (count - 1) * spacing + spacing;
+                const caretMat = new THREE.SpriteMaterial({
+                    map: caretTexture(72), color: api.palette.hex,
+                    transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending,
+                });
+                const caret = new THREE.Sprite(caretMat);
+                const caretSize = options.size * 0.6;
+                caret.scale.set(caretSize, caretSize, 1);
+                caret.position.set(caretX, -options.size * 0.1, 1);
+                group.add(caret);
+
+                const haloMat = new THREE.SpriteMaterial({
+                    map: api.helpers.glowTexture(48), color: api.palette.hex,
+                    transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const halo = new THREE.Sprite(haloMat);
+                const haloSize = options.size * 0.8;
+                halo.scale.set(haloSize, haloSize, 1);
+                halo.position.set(caretX, -options.size * 0.1, 0);
+                group.add(halo);
+
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        lineMat.color.setHex(p.hex3);
+                        caretMat.color.setHex(p.hex);
+                        haloMat.color.setHex(p.hex);
+                    },
+                    animate(ctx) {
+                        const speed = ctx.state === 'THINKING' ? 3.2 : 1.4;
+                        for (let i = 0; i < count; i++) {
+                            const brightness = 0.32 + (Math.sin(ctx.time * speed + i * 0.6) * 0.5 + 0.5) * 0.22;
+                            colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = brightness;
+                        }
+                        geom.attributes.color.needsUpdate = true;
+                        const caretOpacity = ctx.state === 'SPEAKING'
+                            ? 0.75 + ctx.audio * 0.4
+                            : 0.72 + (Math.sin(ctx.time * speed) * 0.5 + 0.5) * 0.28;
+                        caretMat.opacity = caretOpacity;
+                        haloMat.opacity = 0.35 + caretOpacity * 0.35;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -764,6 +1051,125 @@
                             cube.scale.setScalar(s);
                         });
                         beamMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
+                    },
+                };
+            },
+        },
+
+        // Adapted from White Rabbit: the pair of long ears hinged at their base, which
+        // mostly sit still and flick every few seconds rather than animating
+        // continuously -- each ear keeps its own next-twitch time so the two never move
+        // in lockstep, and an alert state pulls them upright and flicks them more often.
+        rabbitEars: {
+            label: 'Rabbit ears',
+            build(api, options) {
+                const group = new THREE.Group();
+                const s = options.radius / 30;
+                const mat = new THREE.PointsMaterial({
+                    color: api.palette.hex3, map: api.helpers.glowTexture(20), size: 2.7,
+                    transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const ears = [-1, 1].map((side) => {
+                    const positions = sampleEllipseCluster(
+                        [{ cx: 0, cy: 19 * s, rx: 4.3 * s, ry: 19 * s }], 520, 6 * s
+                    );
+                    const geom = new THREE.BufferGeometry();
+                    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                    const pivot = new THREE.Group();
+                    pivot.position.set(side * 6.5 * s, options.radius * 0.55, 0);
+                    pivot.rotation.z = -side * 0.22;
+                    pivot.add(new THREE.Points(geom, mat));
+                    group.add(pivot);
+                    return {
+                        pivot, side, restAngle: -side * 0.22,
+                        nextTwitch: 1.5 + Math.random() * 3, twitchStart: -10,
+                    };
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        const thinking = ctx.state === 'THINKING';
+                        const lift = ctx.state === 'IDLE' ? 0 : 0.12;
+                        const minGap = thinking ? 1.2 : 2.8;
+                        const maxGap = thinking ? 3 : 7;
+                        ears.forEach((ear) => {
+                            if (ctx.time > ear.nextTwitch) {
+                                ear.twitchStart = ctx.time;
+                                ear.nextTwitch = ctx.time + THREE.MathUtils.lerp(minGap, maxGap, Math.random());
+                            }
+                            const dt = ctx.time - ear.twitchStart;
+                            const twitch = dt >= 0 && dt < 0.5 ? Math.sin(dt * 24) * 0.4 * (1 - dt / 0.5) : 0;
+                            const sway = Math.sin(ctx.time * 1.05 + ear.side * 1.7) * 0.02;
+                            ear.pivot.rotation.z = ear.restAngle + ear.side * lift + twitch + sway;
+                        });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LUCRE: the column of cubes stacked along the vertical axis,
+        // each turned 45 degrees so it meets the viewer corner-on, with the dashed data
+        // beam running the full height of the stack through them.
+        stackedCubes: {
+            label: 'Stacked cubes',
+            build(api, options) {
+                const group = new THREE.Group();
+                const unit = options.radius * 0.36;
+                const fillMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.22, depthWrite: false,
+                });
+                const wireMatA = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.85 });
+                const wireMatB = new THREE.LineBasicMaterial({ color: api.palette.hex3, transparent: true, opacity: 0.85 });
+                const geom = new THREE.BoxGeometry(unit, unit, unit);
+                const edges = new THREE.EdgesGeometry(geom);
+                const layout = [
+                    { y: options.radius * 1.36, scale: 0.65 },
+                    { y: options.radius * 0.75, scale: 0.85 },
+                    { y: -options.radius * 0.75, scale: 0.85 },
+                    { y: -options.radius * 1.36, scale: 0.65 },
+                ];
+                const cubes = layout.map((cfg, i) => {
+                    const cube = new THREE.Mesh(geom, fillMat);
+                    cube.scale.setScalar(cfg.scale);
+                    cube.position.set(0, cfg.y, 0);
+                    cube.rotation.y = Math.PI / 4;
+                    const wire = new THREE.LineSegments(edges, i % 2 === 0 ? wireMatA : wireMatB);
+                    wire.scale.copy(cube.scale);
+                    wire.position.copy(cube.position);
+                    wire.rotation.copy(cube.rotation);
+                    group.add(cube, wire);
+                    return { cube, wire, baseY: cfg.y, phase: (i + 1) * 0.5 };
+                });
+                const beamMat = new THREE.LineDashedMaterial({
+                    color: api.palette.hex3, transparent: true, opacity: 0.75, dashSize: 3, gapSize: 1.8,
+                });
+                const reach = options.radius * 1.55;
+                const beam = new THREE.Line(
+                    new THREE.BufferGeometry().setFromPoints([
+                        new THREE.Vector3(0, -reach, 0), new THREE.Vector3(0, reach, 0),
+                    ]),
+                    beamMat
+                );
+                beam.computeLineDistances();
+                group.add(beam);
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        fillMat.color.setHex(p.hex);
+                        wireMatA.color.setHex(p.hex2);
+                        wireMatB.color.setHex(p.hex3);
+                        beamMat.color.setHex(p.hex3);
+                    },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.2;
+                        cubes.forEach(({ cube, wire, baseY, phase }) => {
+                            const drift = Math.sin(ctx.time * 1.4 + phase) * options.radius * 0.03;
+                            cube.position.y = baseY + drift;
+                            wire.position.y = cube.position.y;
+                        });
+                        beamMat.opacity = 0.55 + ctx.audio * 0.35 + ctx.click * 0.2;
                     },
                 };
             },
@@ -1117,6 +1523,150 @@
                 };
             },
         },
+
+        // Adapted from A.R.X.LOREGENDA: the tilted halo standing in for a UI ring --
+        // a single sprite ring rather than geometry, so it stays a clean circle at any
+        // angle, and it leans rather than lying flat.
+        tiltedHalo: {
+            label: 'Tilted halo',
+            build(api, options) {
+                const mat = new THREE.SpriteMaterial({
+                    map: api.helpers.ringTexture(64, 0.05), color: api.palette.hex3,
+                    transparent: true, opacity: 0.5, depthWrite: false,
+                });
+                const sprite = new THREE.Sprite(mat);
+                const size = options.radius * 2.1;
+                sprite.scale.set(size, size, 1);
+                sprite.rotation.z = Math.PI / 5;
+                const group = new THREE.Group();
+                group.add(sprite);
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        group.rotation.y = ctx.time * 0.15;
+                        group.rotation.x = Math.sin(ctx.time * 0.5) * 0.08;
+                        mat.opacity = 0.42 + ctx.audio * 0.25 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LUCRE: the two halo bands, real ring geometry rather than
+        // camera-facing sprites, tilted partway so a fixed front-on camera still sees
+        // them as rings, and each tumbling at its own rate so they never lock together.
+        tumblingHalos: {
+            label: 'Tumbling halos',
+            build(api, options) {
+                const group = new THREE.Group();
+                const configs = [
+                    { inner: 1.0, tiltX: 1.15, tiltY: 0.1, opacity: 0.4, speed: 0.18, hot: false },
+                    { inner: 1.14, tiltX: 1.3, tiltY: -0.15, opacity: 0.28, speed: -0.24, hot: true },
+                ];
+                const rings = configs.map((cfg) => {
+                    const mat = new THREE.MeshBasicMaterial({
+                        color: cfg.hot ? api.palette.hex3 : api.palette.hex2, side: THREE.DoubleSide,
+                        transparent: true, opacity: cfg.opacity, depthWrite: false,
+                    });
+                    const inner = options.radius * cfg.inner;
+                    const ring = new THREE.Mesh(new THREE.RingGeometry(inner, inner * 1.032, 64), mat);
+                    ring.rotation.x = cfg.tiltX;
+                    ring.rotation.y = cfg.tiltY;
+                    group.add(ring);
+                    return { ring, mat, cfg };
+                });
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        rings.forEach(({ mat, cfg }) => mat.color.setHex(cfg.hot ? p.hex3 : p.hex2));
+                    },
+                    animate(ctx) {
+                        rings.forEach(({ ring, mat, cfg }) => {
+                            ring.rotation.y += cfg.speed * 0.016;
+                            mat.opacity = cfg.opacity + ctx.audio * 0.2 + ctx.click * 0.15;
+                        });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LEXICO: the pair of gyro rings lying flat in the picture
+        // plane, one broad and faint, one tighter and brighter. Sprites rather than
+        // geometry on purpose -- a billboard always faces the camera, so these stay
+        // true circles whatever the part they wrap is doing. Their counter-spin goes
+        // through material.rotation, the only rotation the sprite shader reads.
+        gyroRings: {
+            label: 'Gyro rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                const outerMat = new THREE.SpriteMaterial({
+                    map: api.helpers.ringTexture(64, 0.035), color: api.palette.hex2,
+                    transparent: true, opacity: 0.45, depthWrite: false,
+                });
+                const outer = new THREE.Sprite(outerMat);
+                const outerSize = options.radius * 2.6;
+                outer.scale.set(outerSize, outerSize, 1);
+                const innerMat = new THREE.SpriteMaterial({
+                    map: api.helpers.ringTexture(64, 0.06), color: api.palette.hex3,
+                    transparent: true, opacity: 0.6, depthWrite: false,
+                });
+                const inner = new THREE.Sprite(innerMat);
+                const innerSize = options.radius * 2.1;
+                inner.scale.set(innerSize, innerSize, 1);
+                group.add(outer, inner);
+                return {
+                    object: group,
+                    applyPalette(p) { outerMat.color.setHex(p.hex2); innerMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        outer.material.rotation = ctx.time * 0.25;
+                        inner.material.rotation = -ctx.time * 0.4;
+                        outerMat.opacity = 0.4 + ctx.audio * 0.25;
+                        innerMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOCAS: the two broken-circle rings that sit around it like
+        // gauge markings -- dashed lines rather than solid bands, tilted well off the
+        // picture plane and counter-rotating, so the gaps in them are what shows the
+        // motion.
+        dashedGaugeRings: {
+            label: 'Dashed gauge rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                group.rotation.x = Math.PI / 2.4;
+                function dashedRing(radius, dashSize, gapSize, mat, segments = 72) {
+                    const pts = [];
+                    for (let i = 0; i <= segments; i++) {
+                        const a = (i / segments) * Math.PI * 2;
+                        pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0));
+                    }
+                    const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), mat);
+                    line.computeLineDistances();
+                    return line;
+                }
+                const outerMat = new THREE.LineDashedMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.5, dashSize: 9, gapSize: 5,
+                });
+                const innerMat = new THREE.LineDashedMaterial({
+                    color: api.palette.hex3, transparent: true, opacity: 0.4, dashSize: 5, gapSize: 4,
+                });
+                const outer = dashedRing(options.radius * 1.3, 9, 5, outerMat);
+                const inner = dashedRing(options.radius * 1.13, 5, 4, innerMat);
+                group.add(outer, inner);
+                return {
+                    object: group,
+                    applyPalette(p) { outerMat.color.setHex(p.hex); innerMat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        outer.rotation.z = ctx.time * 0.12;
+                        inner.rotation.z = -ctx.time * 0.19;
+                        outerMat.opacity = 0.45 + ctx.audio * 0.25;
+                        innerMat.opacity = 0.35 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Effects: an ambient layer or background ------------------------------
@@ -1426,6 +1976,107 @@
                             const a = d.angle + ctx.time * d.speed;
                             n.position.set(Math.cos(a) * d.radius, d.heightOffset + Math.sin(ctx.time + d.bob) * 4, Math.sin(a) * d.radius);
                         });
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LOREGENDA: the ambient dust -- a thin flattened shell of
+        // points well outside the body, turning slowly enough to read as drift rather
+        // than rotation.
+        driftingDust: {
+            label: 'Drifting dust',
+            build(api, options) {
+                const count = 70;
+                const positions = new Float32Array(count * 3);
+                for (let i = 0; i < count * 3; i += 3) {
+                    const r = options.radius * (1.4 + Math.random() * 0.8);
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos(Math.random() * 2 - 1);
+                    positions[i] = r * Math.sin(phi) * Math.cos(theta);
+                    positions[i + 1] = r * Math.cos(phi) * 0.6;
+                    positions[i + 2] = r * Math.sin(phi) * Math.sin(theta);
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const mat = new THREE.PointsMaterial({
+                    color: api.palette.hex, size: 1.4, transparent: true, opacity: 0.55,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        points.rotation.y = ctx.time * 0.05;
+                        mat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LYKSAUM: the soft horizontal bar that sweeps up and down
+        // the face of its medallion on a six-second cycle. A billboard, so it stays a
+        // flat bar across whatever it passes in front of.
+        scanSweep: {
+            label: 'Scan sweep',
+            build(api, options) {
+                const mat = new THREE.SpriteMaterial({
+                    map: api.helpers.glowTexture(64), color: api.palette.hex3,
+                    transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const bar = new THREE.Sprite(mat);
+                const reach = options.radius * 1.2;
+                bar.scale.set(reach * 2.1, reach * 0.16, 1);
+                bar.position.z = options.radius * 0.5;
+                const group = new THREE.Group();
+                group.add(bar);
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex3); },
+                    animate(ctx) {
+                        const t = (ctx.time % 6) / 6;
+                        bar.position.y = -reach + t * reach * 2;
+                        mat.opacity = 0.28 + ctx.audio * 0.25 + ctx.click * 0.15;
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.L'KEMI: the column of data particles rising past it and
+        // wrapping back to the bottom -- a hollow cylinder of points rather than a
+        // sphere, so it reads as a stream running through whatever it surrounds rather
+        // than an atmosphere around it.
+        risingDataColumn: {
+            label: 'Rising data column',
+            build(api, options) {
+                const half = options.radius * 1.55;
+                const count = 80;
+                const positions = new Float32Array(count * 3);
+                for (let i = 0; i < count; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = options.radius * (1.12 + Math.random() * 0.7);
+                    positions[i * 3] = Math.cos(angle) * r;
+                    positions[i * 3 + 1] = (Math.random() * 2 - 1) * half;
+                    positions[i * 3 + 2] = Math.sin(angle) * r;
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                const mat = new THREE.PointsMaterial({
+                    color: api.palette.hex, size: 1.3, transparent: true, opacity: 0.55,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const array = points.geometry.attributes.position.array;
+                        const rise = 0.35 + ctx.audio * 0.9;
+                        for (let i = 1; i < array.length; i += 3) {
+                            array[i] += rise;
+                            if (array[i] > half) array[i] -= half * 2;
+                        }
+                        points.geometry.attributes.position.needsUpdate = true;
+                        mat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
                     },
                 };
             },
