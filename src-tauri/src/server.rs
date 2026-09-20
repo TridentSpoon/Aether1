@@ -7,13 +7,13 @@
 // The native app is untouched by any of this -- see the `--serve` flag check in main() that
 // routes here before tauri::Builder is ever constructed.
 
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, Request, State,
+        ConnectInfo, Path, Query, Request, State,
     },
     http::{header, StatusCode},
     middleware,
@@ -32,13 +32,23 @@ use crate::discovery;
 use crate::llm::{self, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
-use crate::serve_auth::{self, ServeAuth, Setup};
+use crate::serve_auth::{self, AttemptLimiter, ServeAuth, Setup};
 use crate::vault;
 
 #[derive(Clone)]
 struct AppState {
     engine: Arc<LlmEngine>,
     telemetry_tx: broadcast::Sender<Value>,
+}
+
+/// What the two `--lan` gates share: the token to check against, and the record of who has
+/// been getting it wrong. Bundled because `/api/pair` and the middleware both need both --
+/// a failed phrase and a failed token are the same attack seen at two doors, and counting
+/// them separately would double whatever budget an attacker actually gets.
+#[derive(Clone)]
+struct LanState {
+    auth: Arc<ServeAuth>,
+    limiter: Arc<AttemptLimiter>,
 }
 
 /// The address the HTTP server listens on.
@@ -159,12 +169,15 @@ pub async fn run(engine: LlmEngine, lan: bool) {
                  one. Run `aether1 pair` later to generate a new phrase and revoke this one.\n"
             );
         }
-        let auth = Arc::new(auth);
+        let lan_state = LanState {
+            auth: Arc::new(auth),
+            limiter: Arc::new(AttemptLimiter::new()),
+        };
         let pair_router = Router::new()
             .route("/api/pair", post(pair))
-            .with_state(auth.clone());
+            .with_state(lan_state.clone());
         app = app
-            .route_layer(middleware::from_fn_with_state(auth, require_lan_token))
+            .route_layer(middleware::from_fn_with_state(lan_state, require_lan_token))
             .merge(pair_router);
 
         let instance_name = sysinfo::System::host_name().unwrap_or_else(|| "aether1".to_string());
@@ -191,7 +204,15 @@ pub async fn run(engine: LlmEngine, lan: bool) {
     } else {
         println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
     }
-    axum::serve(listener, app).await.expect("axum server error");
+    // `into_make_service_with_connect_info` is what puts the peer address within reach of
+    // the handlers, which is what the attempt limiter counts against. Loopback pays for it
+    // too, where it is unused but harmless, rather than having two ways to start the server.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("axum server error");
 }
 
 fn bearer_token(request: &Request) -> Option<String> {
@@ -225,14 +246,44 @@ fn unauthorized() -> Response {
         .into_response()
 }
 
+/// The answer an address gets once it has spent its attempts. `Retry-After` is the header
+/// HTTP already has for this, so a well-behaved client waits the right amount without being
+/// told how in prose, and says the same thing in the body for a person reading it.
+fn too_many_attempts(wait: Duration) -> Response {
+    let seconds = wait.as_secs().max(1);
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, seconds.to_string())],
+        Json(serde_json::json!({
+            "error": "too many failed pairing attempts",
+            "hint": format!("wait {seconds} seconds and try again"),
+        })),
+    )
+        .into_response()
+}
+
 async fn require_lan_token(
-    State(auth): State<Arc<ServeAuth>>,
+    State(lan): State<LanState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
+    let ip = peer.ip();
+    if let Some(wait) = lan.limiter.retry_after(ip) {
+        return too_many_attempts(wait);
+    }
     match bearer_token(&request).or_else(|| token_from_query(&request)) {
-        Some(token) if auth.accepts(&token) => next.run(request).await,
-        _ => unauthorized(),
+        Some(token) if lan.auth.accepts(&token) => {
+            lan.limiter.record_success(ip);
+            next.run(request).await
+        }
+        // A request with no credential at all is counted the same as a wrong one. It is
+        // indistinguishable from the first step of someone probing, and treating it as
+        // innocent would leave a way to keep guessing for free by alternating.
+        _ => {
+            lan.limiter.record_failure(ip);
+            unauthorized()
+        }
     }
 }
 
@@ -246,15 +297,30 @@ struct PairRequest {
 /// wire, matching serve_auth's rule that the phrase itself never leaves the two ends that
 /// already know it (the person who read it off this machine, and whoever they typed it into).
 async fn pair(
-    State(auth): State<Arc<ServeAuth>>,
+    State(lan): State<LanState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<PairRequest>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let token = serve_auth::derive_token_from_phrase(&req.phrase)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    if auth.accepts(&token) {
-        Ok(Json(serde_json::json!({ "token": token })))
+) -> Response {
+    let ip = peer.ip();
+    if let Some(wait) = lan.limiter.retry_after(ip) {
+        return too_many_attempts(wait);
+    }
+    // A phrase that isn't valid BIP-39 counts as a failure too: it is still a guess, and
+    // letting malformed ones through free would make the budget trivial to avoid.
+    let Ok(token) = serve_auth::derive_token_from_phrase(&req.phrase) else {
+        lan.limiter.record_failure(ip);
+        return (
+            StatusCode::BAD_REQUEST,
+            "that doesn't look like a valid pairing phrase".to_string(),
+        )
+            .into_response();
+    };
+    if lan.auth.accepts(&token) {
+        lan.limiter.record_success(ip);
+        Json(serde_json::json!({ "token": token })).into_response()
     } else {
-        Err((StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()))
+        lan.limiter.record_failure(ip);
+        (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response()
     }
 }
 

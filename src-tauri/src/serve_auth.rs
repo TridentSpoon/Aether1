@@ -13,7 +13,11 @@
 // module only matters once `--lan` is opted into, which is also why it stays a separate,
 // skippable module rather than something wired into every `--serve` run regardless.
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use bip39::Mnemonic;
 use sha2::{Digest, Sha256};
@@ -152,6 +156,177 @@ pub fn derive_token_from_phrase(phrase: &str) -> Result<String, String> {
         .map_err(|_| "that doesn't look like a valid pairing phrase".to_string())
 }
 
+/// How many wrong guesses an address gets before it is made to wait. Five is generous for
+/// someone mistyping twelve words and hopeless for anyone working through a dictionary.
+const MAX_FAILURES: u32 = 5;
+
+/// Failures older than this stop counting, so a wrong phrase typed on Monday and another on
+/// Friday never add up to a lockout.
+const FAILURE_WINDOW: Duration = Duration::from_secs(60);
+
+/// How long an address that exhausted its attempts is refused, correct phrase or not.
+const LOCKOUT: Duration = Duration::from_secs(60);
+
+/// A ceiling on how many addresses are tracked at once, because the key is chosen by whoever
+/// is connecting: without it, a long enough run of attempts from changing addresses would
+/// grow this map until the process ran out of memory, which is its own denial of service.
+const MAX_TRACKED: usize = 1024;
+
+struct Attempts {
+    failures: u32,
+    window_started: Instant,
+    locked_until: Option<Instant>,
+}
+
+impl Attempts {
+    /// True once nothing about this record can affect a decision any more, which is what
+    /// makes it safe to drop when the table needs room.
+    fn is_spent(&self, now: Instant) -> bool {
+        self.locked_until.is_none_or(|until| now >= until)
+            && now.duration_since(self.window_started) >= FAILURE_WINDOW
+    }
+}
+
+/// Counts failed pairing attempts per address and refuses an address that has had too many.
+///
+/// The phrase is 128 bits, so this is not what stands between an attacker and the token --
+/// nothing could work through that space regardless. What it stops is the cheaper attack the
+/// entropy does not address: a client hammering the endpoint indefinitely, which costs this
+/// machine real work per request and leaves no trace anyone would notice. It also makes the
+/// claim in `WORD_COUNT`'s comment above true, which it was not before.
+///
+/// Keyed on the peer address rather than on anything the client sends, since a header can be
+/// set to whatever an attacker likes. Behind a proxy every client would share one address and
+/// so one budget, which is a reason not to put this behind a proxy rather than a reason to
+/// trust `X-Forwarded-For`.
+pub struct AttemptLimiter {
+    attempts: Mutex<HashMap<IpAddr, Attempts>>,
+}
+
+impl Default for AttemptLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AttemptLimiter {
+    pub fn new() -> Self {
+        Self {
+            attempts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// How long this address must wait, or None if it may try now.
+    pub fn retry_after(&self, ip: IpAddr) -> Option<Duration> {
+        self.retry_after_at(ip, Instant::now())
+    }
+
+    pub fn record_failure(&self, ip: IpAddr) {
+        self.record_failure_at(ip, Instant::now());
+    }
+
+    /// Clears an address's history. Someone who gets it right on the fourth go should not be
+    /// one typo away from a lockout for the rest of the minute.
+    pub fn record_success(&self, ip: IpAddr) {
+        self.lock().remove(&ip);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<IpAddr, Attempts>> {
+        // A poisoned lock here means another thread panicked mid-update. The data is a few
+        // counters, none of it is sensitive, and refusing to serve because of it would turn
+        // one panic into a dead auth endpoint -- so the guard is taken either way.
+        self.attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn retry_after_at(&self, ip: IpAddr, now: Instant) -> Option<Duration> {
+        let attempts = self.lock();
+        if let Some(record) = attempts.get(&ip) {
+            let until = record.locked_until?;
+            return (until > now).then(|| until.duration_since(now));
+        }
+        // An address nobody has seen before is normally free to try. The exception is a
+        // full table where every entry is a live lockout, which takes thousands of failures
+        // in one minute to reach and means an attack is underway: rather than let the next
+        // new address in unmetered, everyone waits until the first of those lockouts ends.
+        // Refusing an unknown client is a real cost, but it is bounded, and the alternative
+        // is a bypass that costs an attacker nothing more than another address.
+        saturating_wait(&attempts, now)
+    }
+
+    fn record_failure_at(&self, ip: IpAddr, now: Instant) {
+        let mut attempts = self.lock();
+        prune(&mut attempts, now, ip);
+        if !attempts.contains_key(&ip) && attempts.len() >= MAX_TRACKED {
+            // No room was freed, so there is nothing to count against. `retry_after_at`
+            // refuses this address anyway for as long as that stays true.
+            return;
+        }
+
+        let record = attempts.entry(ip).or_insert(Attempts {
+            failures: 0,
+            window_started: now,
+            locked_until: None,
+        });
+
+        // A lockout that has run out, or a window that has closed, starts the count again --
+        // otherwise one lockout would make every later mistake an instant second one.
+        let lock_expired = record.locked_until.is_some_and(|until| now >= until);
+        if lock_expired || now.duration_since(record.window_started) >= FAILURE_WINDOW {
+            record.failures = 0;
+            record.window_started = now;
+            record.locked_until = None;
+        }
+
+        record.failures += 1;
+        if record.failures >= MAX_FAILURES {
+            record.locked_until = Some(now + LOCKOUT);
+        }
+    }
+}
+
+/// Makes room in the table before a new address is added: spent records first, and only if
+/// that is not enough, whichever *unlocked* address has been quiet longest.
+///
+/// A live lockout is never what gets dropped. Evicting one would hand an attacker the whole
+/// mechanism for free -- fail five times, then fill the table from other addresses until the
+/// record of those five failures is pushed out, and start again.
+fn prune(attempts: &mut HashMap<IpAddr, Attempts>, now: Instant, incoming: IpAddr) {
+    if attempts.len() < MAX_TRACKED || attempts.contains_key(&incoming) {
+        return;
+    }
+    attempts.retain(|_, record| !record.is_spent(now));
+    if attempts.len() < MAX_TRACKED {
+        return;
+    }
+    let evictable = attempts
+        .iter()
+        .filter(|(_, record)| !is_locked(record, now))
+        .min_by_key(|(_, record)| record.window_started)
+        .map(|(ip, _)| *ip);
+    if let Some(ip) = evictable {
+        attempts.remove(&ip);
+    }
+}
+
+fn is_locked(record: &Attempts, now: Instant) -> bool {
+    record.locked_until.is_some_and(|until| until > now)
+}
+
+/// How long an unknown address must wait when the table is full and every entry in it is a
+/// live lockout -- None whenever there is still room to track someone new.
+fn saturating_wait(attempts: &HashMap<IpAddr, Attempts>, now: Instant) -> Option<Duration> {
+    if attempts.len() < MAX_TRACKED {
+        return None;
+    }
+    let earliest = attempts
+        .values()
+        .map(|record| record.locked_until.filter(|until| *until > now))
+        .min()??;
+    Some(earliest.duration_since(now))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +427,173 @@ mod tests {
     #[test]
     fn an_invalid_phrase_is_reported_rather_than_panicking() {
         assert!(derive_token_from_phrase("not a real bip39 phrase at all").is_err());
+    }
+
+    fn ip(last: u8) -> IpAddr {
+        IpAddr::from([192, 168, 1, last])
+    }
+
+    #[test]
+    fn an_address_is_locked_out_once_it_runs_out_of_attempts() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+        let client = ip(10);
+
+        for _ in 1..MAX_FAILURES {
+            limiter.record_failure_at(client, now);
+            assert!(
+                limiter.retry_after_at(client, now).is_none(),
+                "a typo before the last one must not lock anyone out"
+            );
+        }
+
+        limiter.record_failure_at(client, now);
+        let wait = limiter
+            .retry_after_at(client, now)
+            .expect("the last attempt should have locked this address out");
+        assert!(wait <= LOCKOUT && wait > Duration::ZERO);
+    }
+
+    #[test]
+    fn the_lockout_ends_by_itself() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+        let client = ip(11);
+
+        for _ in 0..MAX_FAILURES {
+            limiter.record_failure_at(client, now);
+        }
+        assert!(limiter.retry_after_at(client, now).is_some());
+        assert!(limiter.retry_after_at(client, now + LOCKOUT).is_none());
+    }
+
+    #[test]
+    fn a_lockout_that_expired_starts_the_count_over() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+        let client = ip(12);
+
+        for _ in 0..MAX_FAILURES {
+            limiter.record_failure_at(client, now);
+        }
+        // One wrong guess after the wait is over must not walk straight back into a lockout.
+        let later = now + LOCKOUT;
+        limiter.record_failure_at(client, later);
+        assert!(limiter.retry_after_at(client, later).is_none());
+    }
+
+    #[test]
+    fn failures_spread_past_the_window_never_add_up() {
+        let limiter = AttemptLimiter::new();
+        let mut now = Instant::now();
+        let client = ip(13);
+
+        for _ in 0..MAX_FAILURES * 3 {
+            limiter.record_failure_at(client, now);
+            assert!(
+                limiter.retry_after_at(client, now).is_none(),
+                "attempts a full window apart are not an attack"
+            );
+            now += FAILURE_WINDOW;
+        }
+    }
+
+    #[test]
+    fn getting_it_right_clears_what_came_before() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+        let client = ip(14);
+
+        for _ in 1..MAX_FAILURES {
+            limiter.record_failure_at(client, now);
+        }
+        limiter.record_success(client);
+
+        // Having been forgiven, this address gets its whole budget back rather than being
+        // one typo from a lockout for the rest of the minute.
+        for _ in 1..MAX_FAILURES {
+            limiter.record_failure_at(client, now);
+            assert!(limiter.retry_after_at(client, now).is_none());
+        }
+    }
+
+    #[test]
+    fn one_address_locking_itself_out_does_not_lock_out_another() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+
+        for _ in 0..MAX_FAILURES {
+            limiter.record_failure_at(ip(15), now);
+        }
+        assert!(limiter.retry_after_at(ip(15), now).is_some());
+        assert!(
+            limiter.retry_after_at(ip(16), now).is_none(),
+            "a neighbour mistyping the phrase must not shut this machine out"
+        );
+    }
+
+    #[test]
+    fn the_table_stays_bounded_however_many_addresses_turn_up() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+
+        for n in 0..(MAX_TRACKED as u32 * 2) {
+            limiter.record_failure_at(IpAddr::from(n.to_be_bytes()), now);
+        }
+        assert!(limiter.lock().len() <= MAX_TRACKED);
+    }
+
+    #[test]
+    fn a_locked_out_address_survives_the_table_filling_up() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+        let client = ip(17);
+
+        for _ in 0..MAX_FAILURES {
+            limiter.record_failure_at(client, now);
+        }
+        // Pruning evicts the quietest record, and this one's window started first, so the
+        // guard is that a live lockout is never what gets dropped to make room.
+        for n in 0..(MAX_TRACKED as u32) {
+            limiter.record_failure_at(IpAddr::from(n.to_be_bytes()), now + Duration::from_secs(1));
+        }
+        assert!(
+            limiter.retry_after_at(client, now).is_some(),
+            "a lockout must not be evictable by flooding the table"
+        );
+    }
+
+    #[test]
+    fn an_unknown_address_is_free_to_try_while_the_table_has_room() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+
+        // One address locked out is nothing like a saturated table, and must not make the
+        // rest of the house wait.
+        for _ in 0..MAX_FAILURES {
+            limiter.record_failure_at(ip(18), now);
+        }
+        assert!(limiter.retry_after_at(ip(19), now).is_none());
+    }
+
+    #[test]
+    fn a_table_full_of_live_lockouts_makes_everyone_wait() {
+        let limiter = AttemptLimiter::new();
+        let now = Instant::now();
+
+        for n in 0..(MAX_TRACKED as u32) {
+            let attacker = IpAddr::from(n.to_be_bytes());
+            for _ in 0..MAX_FAILURES {
+                limiter.record_failure_at(attacker, now);
+            }
+        }
+
+        let wait = limiter
+            .retry_after_at(ip(20), now)
+            .expect("a table of nothing but live lockouts should refuse a new address");
+        assert!(wait <= LOCKOUT);
+        // And it lets go on its own once those lockouts run out.
+        assert!(limiter.retry_after_at(ip(20), now + LOCKOUT).is_none());
     }
 
     #[test]
