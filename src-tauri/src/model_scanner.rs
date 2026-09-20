@@ -347,19 +347,30 @@ pub fn models_at(endpoint: &str) -> Option<Vec<String>> {
         .ok()
         .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
         .map(|data| data.data.into_iter().map(|m| m.id).collect());
-    if let Some(models) = openai {
-        return Some(models);
+    // Only an answer with something in it short-circuits the native probe. A server that
+    // replies 200 to /v1/models with a body carrying no `data` -- a catch-all handler, a
+    // proxy, anything not really speaking the OpenAI shape -- parses as an empty list, and
+    // taking that at face value would report "answered, nothing loaded" on a machine whose
+    // /api/tags is sitting right there with the models on it.
+    if let Some(models) = &openai {
+        if !models.is_empty() {
+            return openai;
+        }
     }
 
     let native_base = base.strip_suffix("/v1").unwrap_or(base);
-    ureq::get(format!("{native_base}/api/tags"))
+    let native: Option<Vec<String>> = ureq::get(format!("{native_base}/api/tags"))
         .config()
         .timeout_global(Some(PROBE_TIMEOUT))
         .build()
         .call()
         .ok()
         .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
-        .map(|data| data.models.into_iter().map(|m| m.name).collect())
+        .map(|data| data.models.into_iter().map(|m| m.name).collect());
+
+    // Either probe answering still counts as an answer, so "did not answer at all" (None)
+    // stays distinct from "answered with nothing loaded" (Some(vec![])).
+    native.or(openai)
 }
 
 /// Every local model server that answers, in port order.
@@ -531,6 +542,49 @@ mod local_server_tests {
             }
         });
         port
+    }
+
+    /// A stub that answers 200 to *everything*, with the real body on one path and a
+    /// well-formed but wrong-shaped JSON body on every other. The 404-ing stub above cannot
+    /// reach the case this covers: a server that replies to the OpenAI probe without really
+    /// speaking it.
+    fn stub_server_answering_everything(path: &'static str, body: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for stream in listener.incoming().take(2) {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = [0u8; 1024];
+                let read = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..read]).to_string();
+                let payload = if request.contains(path) {
+                    body
+                } else {
+                    r#"{"nothing":"of the expected shape"}"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        port
+    }
+
+    /// Found by running it against a stand-in server: a 200 carrying no `data` key parses
+    /// as an empty OpenAI list, and taking that as the answer reported "answered, nothing
+    /// loaded" on a machine whose /api/tags was sitting there with the models on it.
+    #[test]
+    fn an_openai_answer_in_the_wrong_shape_does_not_hide_the_native_listing() {
+        let port =
+            stub_server_answering_everything("/api/tags", r#"{"models":[{"name":"llama3.2:3b"}]}"#);
+        assert_eq!(
+            models_at(&format!("http://127.0.0.1:{port}")),
+            Some(vec!["llama3.2:3b".to_string()])
+        );
     }
 
     /// The happy path: a server that answers is found, and the endpoint reported is the one
