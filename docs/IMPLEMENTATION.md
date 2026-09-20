@@ -2376,6 +2376,215 @@ signature proves what was downloaded. A token that is stolen, a release asset re
 copy passed hand to hand on a USB stick are all cases where the second question is the one
 that counts.
 
+### Step 47: diagnostics that fixes things, and a fix that has to prove itself
+
+**What this app calls diagnostics today is a report about the machine, not about itself.**
+`aether1 status` prints `Telemetry::diagnostic_report()` -- CPU, RAM, disk, network, top
+processes -- and `aether1 status --events` sweeps the system log for anything that went
+wrong recently. Both describe the computer AETHER1 is sitting on. Neither answers the
+question an operator actually asks when something feels off, which is *is AETHER1 working?*
+The closest thing to that answer is `setup::advise()`, and it looks at exactly one
+subsystem, the model, in the five stages a fresh install moves through and no further. Every
+other subsystem reports its own health in its own way, to whoever happened to call it: the
+voice fails inside `tts.rs`, the hotkey never fires on Wayland and says nothing, a missing
+`coredumpctl` is mentioned only if you run `aether1 crashes`.
+
+So the first half of this step is not self-healing at all. It is deciding what "everything
+is running" means, as a list, in one place.
+
+#### A check is a pure function of an observation
+
+This is the shape the whole step turns on, so it comes first. Every check is split in two:
+a **probe** that touches the world and returns a plain data structure, and a **verdict** that
+reads that structure and returns `Ok`, `Degraded` or `Failed` with a `setup::Step` attached
+for the human. `advise()` is already written this way -- it takes a `ScanResult` and two
+facts and decides, which is why its whole table of cases is unit-tested without an Ollama
+anywhere near it -- and that is the pattern the rest should follow.
+
+Three things follow, and they matter more than the tidiness:
+
+- An observation can be **recorded**. The bytes that made a check fail on one machine can be
+  written down, carried to another machine, and replayed.
+- A check can therefore be **tested against a machine it never saw**, in CI, for ever after.
+- A repair can be **verified** by re-running the same verdict against a fresh probe, which is
+  the difference between fixing something and hoping.
+
+The second half of this step -- the part about whether a fix is a real build requirement --
+is impossible without this and trivial with it.
+
+#### What "everything is running" means
+
+Two classes, and the difference between them decides everything downstream.
+
+**Things AETHER1 owns.** A fault here is AETHER1's own bug, and no amount of installing
+things on the machine is the answer.
+
+1. **The memory database.** `MemoryDb` opens, the schema is at the expected version, a write
+   round-trips, and the filesystem under it has room. A read-only or full disk is the most
+   common way this one fails.
+2. **The HUD is answering.** Step 32 already deals with a window that stopped responding;
+   this makes that a named check rather than a symptom.
+3. **The tray is present.** On Linux a tray icon needs a StatusNotifierItem host, and on a
+   bare window manager there is not one -- the icon simply never appears, which today looks
+   identical to the app not starting.
+4. **Background services match what was asked for.** Autostart is on and `ManagedOllama`
+   holds a live child, or autostart is off and it does not. A child that died is a fault;
+   an Ollama the operator started themselves is not AETHER1's to account for.
+5. **The watchers are watching.** The crash watcher has its reader (`coredumpctl` on Linux,
+   the event log on Windows), the poll is ticking, and the last sweep was recent.
+6. **The server, when it is meant to be up.** With `--serve`, the port is bound; with
+   `--lan`, the TLS certificate loads, its fingerprint matches the one that was shown, and
+   mDNS is announcing.
+7. **Consent is not silently stuck.** Proposals expire after fifteen minutes by design, so a
+   queue of expired ones nobody ever answered is a sign the card is not reaching the
+   operator at all.
+
+**Things AETHER1 depends on.** A fault here is about the machine, and this is the class where
+"fix it" can mean anything.
+
+8. **A model answers.** `model_scanner::models_at(endpoint)` returns something, and the
+   distinction step 19 insists on holds: no answer is a different fault from an empty list.
+9. **The configured model is installed.** Routing already knows this (`reported_missing`) and
+   already falls back with a notice; the check makes it visible before someone types at it.
+10. **Voice out.** An engine is found -- Piper, espeak-ng, or SAPI through PowerShell -- and
+    the voice files a Piper voice needs are both present, not just one.
+11. **Voice in.** The whisper binary runs and the model file is there and complete.
+12. **The hotkey is registered.** And, on Wayland, the check must say that a registered
+    global shortcut never fires there and the compositor binding is the supported route.
+    A known-impossible thing reported as healthy is worse than reporting it broken.
+13. **Room to work.** Enough disk for the model, voice and STT downloads that are configured
+    but not yet fetched.
+14. **The update path.** Signed in, or declined once and deliberately quiet (step 46). Never
+    nagging.
+
+`aether1 doctor` runs the list and prints it; `aether1 doctor --fix` runs the ladder below.
+It is a new verb rather than another flag on `status` because `status` is about the machine
+and this is about the app, and conflating them is what got us here. The HUD gets the same
+list in the settings panel, since the person most likely to need it is the one who cannot
+get a sentence out of the companion.
+
+#### The ladder: how a failed check gets fixed
+
+Four rungs, cheapest first, and nothing skips a rung.
+
+**Rung 0 -- say it.** Every verdict carries a `setup::Step` already: an imperative, a
+sentence of why, and a command or a link. For most failures this is the whole fix and the
+operator does it in five seconds. `install_steps()` and `start_steps()` are already written
+per-OS with links; the rest of the checks owe the same.
+
+**Rung 1 -- the known repairs.** A table in the binary, `CheckId -> a repair already
+expressible as an existing tool`: start the managed Ollama, re-register the hotkey, retry
+the voice download that was interrupted, re-open the database. These are deterministic, they
+are written by hand, and **they need no model at all** -- which is the point, because a
+machine whose model endpoint is down is exactly the machine that cannot ask a model for
+help. Each one goes through `tools::consent`: proposed, shown, approved, logged with who
+approved it. A repair that is on the always-allow list runs without asking, and the log says
+it was a rule rather than a person, as it already does.
+
+**Rung 2 -- an agent.** Only when no known repair matches the check, or the known repair ran
+and the re-check still fails. This is step 15's hand-off with the failed check's bundle as
+context: the observation, the verdict, what rung 1 tried, and the step 37 machine
+description. The bundle is prose rather than JSON, for the reason step 13 already settled --
+small local models do better with sentences.
+
+The consent model does not loosen because the task is a repair:
+- The agent runs where step 15 says it runs -- the operator terminal's directory, or the
+  nominated work directory, never `$HOME`.
+- Foreground by default, with the operator watching. Background only under step 15's rule:
+  the plan is disclosed and approved whole up front, because an unattended agent must not
+  stall on a permission prompt.
+- Per-persona access and per-request elevation apply unchanged. "It is fixing something" is
+  not a reason to widen a grant, and a repair that needs elevation asks for it like anything
+  else.
+- **It still never installs an engine on its own.** That principle predates this step and
+  survives it. An agent may tell you what to install and why, and may run the package
+  manager if you approve that specific command; it does not decide to.
+
+**Rung 3 -- stop.** One known repair and one agent hand-off per check per session, then it
+stops and says plainly that it could not fix this. A loop that keeps trying is worse than a
+broken check, because it burns tokens and the operator stops reading it.
+
+**The re-check is mandatory.** After every repair, the probe runs again and the same verdict
+decides. A repair whose re-check still fails is recorded as a failed repair, which is
+evidence too -- knowing that a plausible fix does not work is worth as much as knowing one
+does.
+
+**And self-healing must not become a place bugs go to hide.** If the same check is repaired
+on every launch, that is not healing, it is a defect being suppressed once a day. The third
+identical repair of the same check should be reported as its own finding, separately from
+whatever it is nominally fixing.
+
+#### Feeding a fix back, and finding out whether it is a real requirement
+
+**A fix that worked on one machine is evidence, not a requirement.** That is the whole
+difficulty. The repair succeeded, so something was wrong; but "this machine was missing a
+package" and "every build is missing that package" look exactly the same from inside the
+machine that was missing it. Nothing about a successful fix distinguishes them. Only a test
+does, and the test has to run somewhere that machine is not.
+
+**1. The repair record.** Every attempt -- rung 1 or rung 2, succeeded or failed -- writes
+one record: the check, the recorded observation that produced the verdict, the OS, desktop
+and versions that matter to that check, exactly what was run or changed, and the re-check
+result. Successes and failures are recorded identically. This lands in the existing action
+log, which already keeps what was proposed, who approved it, and what happened.
+
+**2. Nothing leaves the machine unseen.** A repair record contains paths, a hostname, a
+package list and possibly a command line the operator typed. It is shown in full, it is
+editable before it goes anywhere, and it goes nowhere by default. Consent is per report, not
+a standing switch -- the same reasoning as step 16's per-call MCP consent: agreeing to send
+one report is not agreeing to be a telemetry source.
+
+**3. What "reported back to the repo" is.** An **issue**, opened from a template, carrying
+the record and a proposed test. Deliberately not a pull request: a machine-generated patch
+to the build is precisely the thing that must not arrive ready to merge. Step 46 already
+brings a GitHub identity into the app via device flow, so there is somebody to open it as --
+but that App is scoped `contents: read`, and opening issues needs `issues: write` added to
+it. That is a real widening of what the app can do to the repository and is called out here
+rather than assumed.
+
+**4. The proposed test is the point.** Because a check is a pure function of an observation,
+the observation that failed can be committed as a fixture, and the test reads: *given this
+observation, the check fails; given the observation after the repair, it passes.* It needs
+no Ollama, no Windows, no particular desktop -- it is a table entry beside the ones
+`setup.rs` already has. That is the mechanism by which a one-machine patch is promoted to a
+build requirement: it stops being a story about a machine and becomes a row in `cargo test`
+that will fail for everyone, for ever, if the check regresses.
+
+**5. Three verdicts, and a human picks.**
+   - **A build requirement.** The check was wrong or missing, or the app genuinely needs
+     something it does not ship or look for. The fix belongs in the code or the packaging --
+     a wider search path, a bundled dependency, a corrected probe.
+   - **An environment fact.** The machine really was missing something the operator has to
+     install. Then the fix belongs in `setup.rs` as a per-OS step with a link, so the *next*
+     person is told rather than silently patched. This is the case that gets mistaken for
+     the first one most often.
+   - **One machine.** Nothing to change; the record stays as history and the repair table
+     keeps its entry.
+
+   The evidence that separates the first from the third is **repetition and replay**: the
+   same observation arriving from a second machine, or the fixture failing on a clean CI
+   runner. One report is an anecdote.
+
+**6. CI is the arbiter, and it has a hole worth naming.** `ci.yml` builds, tests, clippies
+and formats on `ubuntu-latest` only. A repair observed on Windows cannot be proven by CI as
+it stands. This is the strongest argument for the fixture approach being the primary
+mechanism rather than a nicety -- a recorded observation replays on any runner, so a
+Windows-shaped fault can be tested on the Linux runner that already exists. Adding a
+`windows-latest` job is a separate and larger question; step 13 shipped two platform readers
+with only one of them ever executed in CI, and that is the debt this would start paying.
+
+**7. The loop has to close, or the repair table rots.** When a repair becomes a build change,
+its entry in the rung-1 table is removed in the same commit -- the check now passes on its
+own. Otherwise the table grows into a pile of workarounds quietly papering over bugs that
+were fixed years earlier, and every one of them costs a consent prompt on somebody's
+machine.
+
+**What this step is not.** It is not an app that rewrites its own source. An agent at rung 2
+repairs the *machine*; a change to AETHER1's code leaves as a report for a person to act on,
+even on a developer machine that happens to have a checkout sitting right there. The
+difference between a program that fixes its environment and a program that edits itself is
+worth keeping sharp, and nothing here needs the second one.
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -2416,6 +2625,9 @@ event log, honest token telemetry, and native tool calling.
 6. **Step 46, updates for installed copies.** The updater in `main.rs` needs a git checkout
    and a logged-in `gh`, so everyone who installed from a Release is on whatever version
    they downloaded, permanently.
+7. **Step 47, diagnostics that fixes things.** `aether1 status` describes the machine and
+   nothing describes the app, so "is AETHER1 working?" has no answer and every subsystem
+   reports its health to whoever happens to call it. Specified, not started.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) are now specs rather than sketches,
 settled in that order and written up in full above.
