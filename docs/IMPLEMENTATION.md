@@ -1994,10 +1994,27 @@ releases; the release pipeline has no client.
 
 **A credential shipped in the binary is not the fix.** Anything in a distributed app can be
 read out of it, GitHub's secret scanning revokes tokens that appear in public artifacts, and
-there is no obfuscation that changes either fact. The way out is that **the release does not
-have to be private just because the source is.** GitHub Releases inherit their repository's
-visibility, so this means a second, public repository holding only the built artifacts and a
-small version manifest -- no token on the client, nothing to leak, and nothing to host.
+there is no obfuscation that changes either fact.
+
+**The operator does not have to be the one holding the credential, though.** If each person
+signs in to GitHub as themselves, the app carries no secret at all and access becomes a real
+check rather than a guess: reading the private repository's releases requires being a
+collaborator on it, so adding someone grants access and removing them revokes it. That is
+what "subscribed to the project" means in practice, and it is the mechanism GitHub already
+has.
+
+The flow is the **device flow**: the app shows a short code, the person opens
+`github.com/login/device` in a browser and approves, and the app receives a token for that
+person. It exists precisely for applications that cannot keep a secret -- the only thing
+compiled into the binary is a client ID, which is public by design and grants nothing on its
+own.
+
+**Use a GitHub App rather than a classic OAuth App.** A classic OAuth App would have to ask
+for the `repo` scope, which is read *and write* to every repository that person can reach --
+an alarming thing to request for the sake of a version check, and rightly so. A GitHub App
+scopes down to `contents: read` on the repositories it is installed on, so the token the app
+holds can do one thing. Device flow has to be enabled in the App's settings; it is off by
+default.
 
 **Signing matters more than where the file lives.** Once artifacts are signed and the app
 verifies the signature against a public key compiled into it, the download can come from
@@ -2007,24 +2024,27 @@ version of this that stays true.
 
 The plan:
 
-1. **An unlisted bucket** carrying the bundles `release.yml` already builds, plus a
-   `latest.json` naming the current version and the per-platform URLs. Object storage with a
-   public-read bucket on an unguessable path -- Cloudflare R2, Backblaze B2, any S3-shaped
-   thing -- reachable by URL, listed nowhere, indexed by nothing, and free at this scale.
-   There is no server to keep alive: a bucket is a place to put files, not a service.
-   The source repository stays private and unchanged, which is what makes the project
-   unforkable: a bucket holds built artifacts, and nobody can fork a tarball into a project.
+1. **Sign in to GitHub in the app, and keep the releases where they already are.** The
+   private repository's own Releases are the distribution; `release.yml` already puts the
+   bundles there. Nothing new is hosted, nothing is published, and the source stays private
+   and unforkable. Access is whoever the owner has added to the repository, which is a list
+   that can be added to and taken away from.
 
-   *Not a public artifacts repository*, which was the obvious answer and is the wrong one
+   *Not a public artifacts repository*, which was this step's first answer and is wrong
    here: a public repository appears on the owner's profile and in search, so it fails the
-   one requirement that the thing be reachable only by people who were given the link.
+   requirement that releases reach only people who were let in. *Not an unlisted bucket*
+   either, which was its second: it works, and it asks nobody to sign in, but an unguessable
+   URL is obscurity rather than access control -- it cannot be taken back from someone, and
+   the URL would have to live in the binary, which makes it exactly as private as the binary
+   is. Worth keeping in mind only if signing in ever becomes the wrong price to ask.
 2. **Sign every artifact, and verify on the client.** Windows installers are already signed
    through Azure Trusted Signing in `release.yml`; the Linux bundles are signed by nothing at
    all. A minisign keypair covers both uniformly: the private key lives in Actions secrets,
    the public key is compiled into the binary, and no release is installable without it.
-3. **Point the check at releases, not at `main`.** Compare this build's version against
-   `latest.json`. A commit on `main` is not a release, and telling an operator they are
-   "behind" because someone pushed a README fix is noise.
+3. **Point the check at releases, not at `main`.** Compare this build's version against the
+   latest published release -- `/repos/{owner}/{repo}/releases/latest`, with the signed-in
+   token, and the asset fetched from the release's asset endpoint. A commit on `main` is not
+   a release, and telling someone they are "behind" because a README was fixed is noise.
 4. **Keep the git path, but as the developer path.** When a `.git` directory is present the
    current pull-and-rebuild behaviour is the right one and should stay. When it is absent,
    the app fetches the signed bundle instead. Which mode a copy is in should be visible, not
@@ -2033,6 +2053,15 @@ The plan:
    honest flow is to say a version is available, ask, download with a progress bar the HUD
    already knows how to draw (step 31), verify the signature, and hand over to the
    installer.
+6. **Keep the token somewhere better than the settings table.** `llm_api_key` already lives
+   there as plain JSON, so there is precedent, but a GitHub token is a different kind of
+   secret: it is an identity on someone else's account rather than a key to a service they
+   chose to pay for. The OS keychain -- Credential Manager on Windows, libsecret or
+   kwallet on Linux -- is where it belongs, and `contents: read` on one repository keeps the
+   damage bounded if it ends up somewhere else anyway.
+7. **Not signing in is not an error.** Someone who declines still has a working companion;
+   they just do not get told about new versions. The check should say so plainly once and
+   stop asking, rather than nagging or degrading anything else.
 
 **On Tauri's own updater.** Tauri v2 ships `tauri-plugin-updater`, which does exactly the
 signature-verified flow described above, and it is not configured here -- there is no
@@ -2043,25 +2072,25 @@ and their models. Verifying minisign signatures directly is the smaller change a
 packaging that already works; the plugin is the better answer only if the packaging is being
 revisited anyway.
 
-**Settled: the source stays private, the distribution is by link, and nothing is hosted.**
+**Settled: the source stays private, access is by GitHub identity, and nothing is hosted.**
 The project is not to be forkable while it is still being built, which the private source
-already achieves; the bundles need to reach people who were given a link and nobody else;
-and no endpoint is to be run.
+already achieves; releases reach the people the owner has let in and nobody else; and no
+endpoint is to be run.
 
-**One consequence to be clear about, because it is a property of the design rather than a
-detail of it.** For the app to check by itself, the manifest's URL has to be inside the app.
-Anything inside a distributed binary can be read out of it, so the URL is exactly as private
-as the binary is: give the installer to five people and five people have the address, and
-anyone they pass it on to has it too. That is **unlisted, not access-controlled** -- nothing
-is discoverable, nothing is indexed, and nobody stumbles across it, but obscurity is not a
-lock and should never be described as one. It is the right trade while the project is small
-and the thing being protected is the source, which is not in the bucket. It stops being the
-right trade the moment something in a release is meant to be secret, and nothing in a
-release should ever be.
+**What this costs, stated plainly:** a GitHub account and a one-time browser approval become
+the price of automatic updates. For a project whose access model is "subscribed to the
+project" that is the point rather than a drawback, and it buys something obscurity cannot --
+access that can be taken back. A link, once given, is given forever.
 
-This is also why item 2 is not optional. An unguessable URL is not authentication, so the
-signature is what makes a download trustworthy: without it, anyone who learns the address
-can serve a different file at it and be believed.
+**It also replaces, rather than removes, the current `gh` requirement.** Today the check
+shells out to `gh auth token`, so it needs the GitHub CLI installed and logged in; the device
+flow needs a browser, which every machine running this already has. It is strictly less to
+ask for than what is there now.
+
+Signing still matters and is still item 2. Authentication proves who may download; a
+signature proves what was downloaded. A token that is stolen, a release asset replaced, or a
+copy passed hand to hand on a USB stick are all cases where the second question is the one
+that counts.
 
 ## Where this stands
 
