@@ -328,12 +328,14 @@ them are the kind a later reader would otherwise re-litigate.
 - ~~How long is the pairing phrase?~~ **Settled: it stays at 12 words, and the work is
   elsewhere.** 12 BIP-39 words is 128 bits, past the point where more words buy anything,
   so a longer phrase would be ceremony. The phrase was never the weak part — the transport
-  around it was. **Self-signed TLS** and **attempt limiting** have since shipped, so the
-  token no longer crosses the network in the clear and guessing now costs something; the
-  certificate's fingerprint is printed for the operator to compare, which is what stands in
-  for a public authority that will never vouch for an address on your own network. Still to
-  come: **a token per paired device**, so removing one machine does not mean re-pairing all
-  of them, and a PAKE such as SPAKE2 if it is ever worth the rigour. Detail in step 45 of
+  around it was. **Self-signed TLS**, **attempt limiting** and **a token per paired device**
+  have since shipped, so the token no longer crosses the network in the clear, guessing now
+  costs something, and a lost machine can be cut off on its own with `aether1 revoke <id>`
+  while the others carry on. The certificate's fingerprint is printed for the operator to
+  compare, which is what stands in for a public authority that will never vouch for an
+  address on your own network. The phrase now only opens the door — it is checked once when
+  a device pairs and is not a credential after that. Still to come: a PAKE such as SPAKE2,
+  if it is ever worth the rigour. Detail in step 45 of
   [IMPLEMENTATION.md](IMPLEMENTATION.md).
 - ~~Where does learned model routing keep its corrections?~~ **Settled: keyed on
   speciality, chosen in the HUD, stored in the settings table.** Each speciality gets the

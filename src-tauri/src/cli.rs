@@ -42,7 +42,11 @@ USAGE:
                                    from this machine only
     aether1 --serve --lan          Also announce on the LAN (mDNS) and accept connections
                                    from your network, gated by a one-time pairing phrase
-    aether1 pair                   Generate a new --lan pairing phrase, revoking the old one
+    aether1 pair                   Generate a new --lan pairing phrase, unpairing every
+                                   device that paired with the old one
+    aether1 devices                List the devices paired with this machine
+    aether1 revoke <ID>            Take one device's access away, leaving the rest alone
+    aether1 revoke all             Take every device's access away, keeping the phrase
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -82,6 +86,13 @@ pub enum Invocation {
     /// here -- with no instance running, it simply starts one.
     Window {
         toggle: bool,
+    },
+    /// `devices`: what has paired with this machine over --lan.
+    Devices,
+    /// `revoke <id>`: one device's access, taken away without disturbing the others.
+    /// `revoke all` takes every device's, leaving the phrase itself alone.
+    Revoke {
+        id: String,
     },
     /// `face`: the fullscreen avatar on a spare screen. Like `show`/`toggle` this reaches an
     /// already-running instance through the single-instance plugin rather than being handled
@@ -242,6 +253,17 @@ pub fn parse(argv: &[String]) -> Invocation {
             Some(extra) => Err(format!("pair takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Pair),
         }),
+        "devices" => free_text(rest).and_then(|extra| match extra {
+            Some(extra) => Err(format!("devices takes no arguments (got {extra:?})")),
+            None => Ok(Invocation::Devices),
+        }),
+        "revoke" => free_text(rest).and_then(|id| match id {
+            Some(id) => Ok(Invocation::Revoke { id }),
+            None => Err(
+                "revoke needs the id of a device, or `all` -- run `aether1 devices` to see them"
+                    .to_string(),
+            ),
+        }),
         "face" => free_text(rest).and_then(|extra| match extra {
             Some(extra) => Err(format!("face takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Face),
@@ -390,13 +412,89 @@ fn run_announce(name: Option<String>, port: Option<u16>) -> Result<String, Strin
 }
 
 fn run_pair() -> Result<String, String> {
-    let phrase = crate::serve_auth::rotate()?;
+    let (phrase, unpaired) = crate::serve_auth::rotate()?;
+    let devices = match unpaired {
+        0 => String::new(),
+        1 => "One device was unpaired and will have to pair again. ".to_string(),
+        many => format!("{many} devices were unpaired and will have to pair again. "),
+    };
     Ok(format!(
         "New --lan pairing phrase (shown once -- write it down now):\n\n    {phrase}\n\n\
-         Any phrase paired before this no longer works. Type this one into another AETHER1 \
-         instance's pairing prompt, or POST it as {{\"phrase\": ...}} to /api/pair, to let it \
-         reach this machine."
+         {devices}Any phrase paired before this no longer works. Type this one into another \
+         AETHER1 instance's pairing prompt, or POST it as {{\"phrase\": ...}} to /api/pair, to \
+         let it reach this machine.\n\n\
+         To cut off one machine rather than all of them, use `aether1 devices` and \
+         `aether1 revoke <id>` instead."
     ))
+}
+
+/// How long ago, in the roughest units that still mean something. A device list is read to
+/// answer "which one is the laptop I lent out", and an exact timestamp helps with that less
+/// than "yesterday" does.
+fn how_long_ago(seconds: u64) -> String {
+    match seconds {
+        0..=90 => "just now".to_string(),
+        91..=5399 => format!("{} minutes ago", seconds / 60),
+        5400..=86_399 => format!("{} hours ago", seconds / 3600),
+        _ => format!("{} days ago", seconds / 86_400),
+    }
+}
+
+fn run_devices() -> Result<String, String> {
+    let auth = crate::serve_auth::open_devices()?;
+    let devices = auth.list_devices();
+    if devices.is_empty() {
+        return Ok("No devices are paired with this machine.".to_string());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default();
+    let mut out = format!(
+        "{} device{} paired with this machine:\n",
+        devices.len(),
+        if devices.len() == 1 { "" } else { "s" }
+    );
+    for device in devices {
+        let ago = how_long_ago(now.saturating_sub(device.paired_at));
+        out.push_str(&format!(
+            "\n    {}  {}  (paired {ago})",
+            device.id, device.label
+        ));
+    }
+    out.push_str(
+        "\n\nRun `aether1 revoke <id>` to take one device's access away, or \
+         `aether1 revoke all` to take every one.",
+    );
+    Ok(out)
+}
+
+fn run_revoke(id: &str) -> Result<String, String> {
+    let auth = crate::serve_auth::open_devices()?;
+    // A device id is eight hex characters, so "all" can never be one of them and is safe to
+    // read as the word. It is the lost-the-laptop door: everything re-pairs, but the phrase
+    // you have written down stays the phrase. Rotating is the harsher `aether1 pair`.
+    if id == "all" {
+        let count = auth.revoke_all_devices()?;
+        return Ok(match count {
+            0 => "Nothing was paired, so nothing was revoked.".to_string(),
+            1 => "Revoked the one paired device. The phrase still works, so it can pair again."
+                .to_string(),
+            _ => format!(
+                "Revoked all {count} paired devices. The phrase is unchanged, so each one can \
+                 pair again with it."
+            ),
+        });
+    }
+    match auth.revoke_device(id)? {
+        Some(label) => Ok(format!(
+            "Revoked {id} ({label}). Every other paired device still works; that one has to \
+             pair again with the phrase."
+        )),
+        None => Err(format!(
+            "no device with the id {id} -- run `aether1 devices` to see what is paired"
+        )),
+    }
 }
 
 /// Runs a headless invocation and returns the process exit code. `App`, `Serve`, `Window`
@@ -419,6 +517,8 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Discover { timeout_secs } => run_discover(timeout_secs),
         Invocation::Announce { name, port } => run_announce(name, port),
         Invocation::Pair => run_pair(),
+        Invocation::Devices => run_devices(),
+        Invocation::Revoke { id } => run_revoke(&id),
         Invocation::Invalid(message) => {
             eprintln!("aether1: {message}\n\n{}", USAGE.trim_end());
             return 2;
@@ -612,5 +712,23 @@ mod tests {
     fn help_and_version_win_over_a_subcommand() {
         assert_eq!(parse_args(&["prompt", "hi", "--help"]), Invocation::Help);
         assert_eq!(parse_args(&["--version"]), Invocation::Version);
+    }
+
+    #[test]
+    fn revoke_takes_an_id_or_the_word_all() {
+        assert_eq!(
+            parse_args(&["revoke", "a1b2c3d4"]),
+            Invocation::Revoke {
+                id: "a1b2c3d4".to_string()
+            }
+        );
+        assert_eq!(
+            parse_args(&["revoke", "all"]),
+            Invocation::Revoke {
+                id: "all".to_string()
+            }
+        );
+        // Naming nothing is the dangerous reading -- it must not quietly mean "all".
+        assert!(matches!(parse_args(&["revoke"]), Invocation::Invalid(_)));
     }
 }

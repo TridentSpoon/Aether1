@@ -20,3 +20,4 @@ src-tauri/gen/
 .vscode/
 .idea/
 .claude/
+backend/serve_devices.json

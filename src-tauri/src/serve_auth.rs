@@ -17,9 +17,10 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use bip39::Mnemonic;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// How many words the pairing phrase has. 12 words is a 128-bit BIP-39 mnemonic -- already
@@ -66,19 +67,254 @@ fn hash_path() -> PathBuf {
         .join("serve_token.hash")
 }
 
-/// Holds only the hash -- never the phrase, never even the derived token in the clear --
-/// which is all `accepts` needs to check a presented token.
-pub struct ServeAuth {
+fn devices_path() -> PathBuf {
+    crate::project_root()
+        .join("backend")
+        .join("serve_devices.json")
+}
+
+/// How many bytes of randomness a device's own token is made of. 256 bits from the operating
+/// system's generator, unrelated to the phrase: a device token is not derived from anything,
+/// so learning one says nothing about the phrase or about any other device's.
+const TOKEN_BYTES: usize = 32;
+
+fn mint_token() -> Result<String, String> {
+    let mut bytes = [0u8; TOKEN_BYTES];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| format!("could not read randomness to make a device token: {e}"))?;
+    Ok(to_hex(&bytes))
+}
+
+/// A short handle for one device, shown when listing and typed when revoking. Derived from
+/// the token's hash rather than being a counter, so it is stable, unguessable from the
+/// outside, and says nothing about how many devices there are.
+fn device_id(token_hash: &str) -> String {
+    token_hash.chars().take(8).collect()
+}
+
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default()
+}
+
+/// One paired device. The token itself is never here -- only its hash, the same way the
+/// phrase was never on disk either.
+#[derive(Clone, Serialize, Deserialize)]
+struct Device {
+    id: String,
+    label: String,
     token_hash: String,
+    paired_at: u64,
+}
+
+/// What a listing shows. Deliberately not the hash: nothing outside this module has any use
+/// for it, and a list is something an operator might paste into a message asking for help.
+pub struct DeviceSummary {
+    pub id: String,
+    pub label: String,
+    pub paired_at: u64,
+}
+
+/// Holds the phrase's hash -- never the phrase, never a token in the clear -- plus one entry
+/// per device that has paired.
+///
+/// The phrase and a device's token do different jobs now. The phrase is what lets a *new*
+/// device in, checked once at `/api/pair` and never accepted as a credential afterwards; the
+/// token a device gets back is what it presents from then on. That split is what makes
+/// revoking one machine possible: before, every device carried the same phrase-derived
+/// token, so taking access from one meant taking it from all of them and pairing everything
+/// again.
+pub struct ServeAuth {
+    phrase_hash: String,
+    devices: Mutex<Vec<Device>>,
+    /// What the device file looked like when the list in memory was read from it. `aether1
+    /// revoke` runs in a separate process from `aether1 --serve`, so without this the server
+    /// would go on accepting a revoked device until it was restarted -- which is precisely
+    /// the moment revoking is for. Caught running the two side by side, not by a test.
+    stamp: Mutex<Option<Stamp>>,
+    devices_file: PathBuf,
+}
+
+/// Enough of a file's identity to notice it changed: when it was last written and how long
+/// it is. Cheap to take -- one `stat` -- which matters because it is taken per request.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    modified: Option<SystemTime>,
+    length: u64,
+}
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(Stamp {
+        modified: metadata.modified().ok(),
+        length: metadata.len(),
+    })
 }
 
 impl ServeAuth {
+    /// Whether this token belongs to a device that is still paired.
     pub fn accepts(&self, presented_token: &str) -> bool {
+        let presented = hash_token(presented_token);
+        let devices = self.devices();
+        // Every device is checked even after a match, so the time taken says nothing about
+        // which entry matched or how far down the list it was.
+        devices.iter().fold(false, |found, device| {
+            constant_time_eq(presented.as_bytes(), device.token_hash.as_bytes()) | found
+        })
+    }
+
+    /// Whether this is the token the pairing phrase derives to -- the one thing the phrase is
+    /// still good for, and not something `accepts` will take.
+    pub fn phrase_matches(&self, presented_token: &str) -> bool {
         constant_time_eq(
             hash_token(presented_token).as_bytes(),
-            self.token_hash.as_bytes(),
+            self.phrase_hash.as_bytes(),
         )
     }
+
+    fn devices(&self) -> Vec<Device> {
+        self.reload_if_changed();
+        self.lock().clone()
+    }
+
+    /// Re-reads the device file when it has changed underneath us, so a revocation made from
+    /// another process takes hold on the next request rather than the next restart.
+    fn reload_if_changed(&self) {
+        let current = stamp(&self.devices_file);
+        let mut remembered = self
+            .stamp
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *remembered == current {
+            return;
+        }
+        *self.lock() = load_devices(&self.devices_file);
+        *remembered = current;
+    }
+
+    /// Records the file as we just left it, so writing does not look like somebody else's
+    /// change and send us back to disk for what is already in memory.
+    fn restamp(&self) {
+        let current = stamp(&self.devices_file);
+        *self
+            .stamp
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = current;
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Device>> {
+        self.devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Mints a token for a newly paired device and remembers it. The token is returned once,
+    /// here, and never again -- only its hash is kept.
+    pub fn add_device(&self, label: &str) -> Result<String, String> {
+        let token = mint_token()?;
+        let token_hash = hash_token(&token);
+        let device = Device {
+            id: device_id(&token_hash),
+            label: tidy_label(label),
+            token_hash,
+            paired_at: now_seconds(),
+        };
+        {
+            let mut devices = self.lock();
+            devices.push(device);
+            save_devices(&self.devices_file, &devices)?;
+        }
+        self.restamp();
+        Ok(token)
+    }
+
+    pub fn list_devices(&self) -> Vec<DeviceSummary> {
+        self.devices()
+            .into_iter()
+            .map(|device| DeviceSummary {
+                id: device.id,
+                label: device.label,
+                paired_at: device.paired_at,
+            })
+            .collect()
+    }
+
+    /// Takes one device's access away without touching any other. Returns what was revoked,
+    /// so the caller can say which machine it just cut off rather than only that it did.
+    pub fn revoke_device(&self, id: &str) -> Result<Option<String>, String> {
+        // Against the list as it stands on disk, not a copy that may have gone stale while
+        // another process was revoking too -- otherwise saving would put the other's entry back.
+        self.reload_if_changed();
+        let mut devices = self.lock();
+        let Some(position) = devices.iter().position(|device| device.id == id) else {
+            return Ok(None);
+        };
+        let removed = devices.remove(position);
+        save_devices(&self.devices_file, &devices)?;
+        drop(devices);
+        self.restamp();
+        Ok(Some(removed.label))
+    }
+
+    /// Drops every paired device, which is what rotating the phrase has always promised:
+    /// "any phrase paired before this no longer works". Per-device tokens would quietly
+    /// break that promise if the devices those phrases produced outlived the rotation.
+    pub fn revoke_all_devices(&self) -> Result<usize, String> {
+        // Against the list as it stands on disk, not a copy that may have gone stale while
+        // another process was revoking too -- otherwise saving would put the other's entry back.
+        self.reload_if_changed();
+        let mut devices = self.lock();
+        let count = devices.len();
+        devices.clear();
+        save_devices(&self.devices_file, &devices)?;
+        drop(devices);
+        self.restamp();
+        Ok(count)
+    }
+}
+
+/// Keeps a device label short, printable and on one line. It arrives from the network -- a
+/// browser's User-Agent, or whatever a client chose to send -- so it is not to be trusted to
+/// be any of those things.
+fn tidy_label(label: &str) -> String {
+    let cleaned: String = label
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.is_empty() {
+        return "an unnamed device".to_string();
+    }
+    cleaned.chars().take(60).collect()
+}
+
+fn save_devices(path: &Path, devices: &[Device]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    let json = serde_json::to_string_pretty(devices)
+        .map_err(|e| format!("could not write out the device list: {e}"))?;
+    std::fs::write(path, json).map_err(|e| format!("could not save {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn load_devices(path: &Path) -> Vec<Device> {
+    // A missing file is an install with nothing paired yet. A corrupt one is treated the
+    // same way: refusing to start because a list of devices will not parse would lock the
+    // operator out of the only machine that can fix it, and the cost of being wrong is that
+    // devices pair again.
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
 }
 
 /// Whether `load_or_create` found a phrase already set up, or had to generate a fresh one.
@@ -118,33 +354,72 @@ fn generate_and_save_at(path: &Path) -> Result<(String, String), String> {
     Ok((phrase, hash))
 }
 
-fn load_or_create_at(path: &Path) -> Result<(ServeAuth, Setup), String> {
-    if let Ok(existing) = std::fs::read_to_string(path) {
-        let existing = existing.trim();
-        if !existing.is_empty() {
-            return Ok((
-                ServeAuth {
-                    token_hash: existing.to_string(),
-                },
-                Setup::Existing,
-            ));
+fn load_or_create_at(path: &Path, devices_file: &Path) -> Result<(ServeAuth, Setup), String> {
+    let existing = std::fs::read_to_string(path)
+        .ok()
+        .map(|found| found.trim().to_string())
+        .filter(|found| !found.is_empty());
+
+    let (phrase_hash, setup) = match existing {
+        Some(hash) => (hash, Setup::Existing),
+        None => {
+            let (phrase, hash) = generate_and_save_at(path)?;
+            (hash, Setup::New { phrase })
         }
+    };
+
+    let mut devices = load_devices(devices_file);
+    // An install that paired before devices had tokens of their own has exactly one
+    // credential in the wild: the phrase-derived token. It is recorded here as a device so
+    // those machines keep working across the upgrade -- and, being a device now, it can be
+    // revoked like any other once they have paired again.
+    if devices.is_empty() && matches!(setup, Setup::Existing) && !devices_file.exists() {
+        devices.push(Device {
+            id: device_id(&phrase_hash),
+            label: "paired before devices had tokens of their own".to_string(),
+            token_hash: phrase_hash.clone(),
+            paired_at: now_seconds(),
+        });
+        save_devices(devices_file, &devices)?;
     }
-    let (phrase, hash) = generate_and_save_at(path)?;
-    Ok((ServeAuth { token_hash: hash }, Setup::New { phrase }))
+
+    Ok((
+        ServeAuth {
+            phrase_hash,
+            devices: Mutex::new(devices),
+            stamp: Mutex::new(stamp(devices_file)),
+            devices_file: devices_file.to_path_buf(),
+        },
+        setup,
+    ))
 }
 
-/// Loads the stored pairing token, generating and saving a fresh one on first run.
+/// Loads the stored pairing token and the devices paired with it, generating a fresh phrase
+/// on first run.
 pub fn load_or_create() -> Result<(ServeAuth, Setup), String> {
-    load_or_create_at(&hash_path())
+    load_or_create_at(&hash_path(), &devices_path())
 }
 
 /// Generates a brand new phrase and overwrites the stored token, invalidating whatever
 /// devices were paired with the old one. Used by `aether1 pair` when the operator wants to
 /// revoke access rather than just add a device (adding a device re-uses the existing phrase
 /// -- there's nothing to rotate for that).
-pub fn rotate() -> Result<String, String> {
-    generate_and_save_at(&hash_path()).map(|(phrase, _hash)| phrase)
+pub fn rotate() -> Result<(String, usize), String> {
+    let (phrase, _hash) = generate_and_save_at(&hash_path())?;
+    // Every device paired under the old phrase goes with it, which is what "the old phrase no
+    // longer works" has always meant. Revoking one device is `revoke` -- this is the
+    // everything-at-once door, and it should stay the blunt one.
+    let devices = load_devices(&devices_path());
+    let count = devices.len();
+    save_devices(&devices_path(), &[])?;
+    Ok((phrase, count))
+}
+
+/// Loads the device list on its own, for `aether1 devices` and `aether1 revoke`, which have
+/// no server running and no phrase to check.
+pub fn open_devices() -> Result<ServeAuth, String> {
+    let (auth, _setup) = load_or_create_at(&hash_path(), &devices_path())?;
+    Ok(auth)
 }
 
 /// Turns a phrase someone typed in (e.g. into the HUD's pairing prompt) into the same token
@@ -338,90 +613,265 @@ mod tests {
         ))
     }
 
+    /// The phrase file and the device list, both fresh.
+    fn temp_paths(name: &str) -> (PathBuf, PathBuf) {
+        let hash = temp_path(name);
+        let devices = hash.with_extension("devices.json");
+        let _ = std::fs::remove_file(&hash);
+        let _ = std::fs::remove_file(&devices);
+        (hash, devices)
+    }
+
+    /// Pairs a device the way `/api/pair` does and hands back its token.
+    fn pair(auth: &ServeAuth, phrase: &str, label: &str) -> String {
+        let token = derive_token_from_phrase(phrase).unwrap();
+        assert!(auth.phrase_matches(&token), "the phrase should be accepted");
+        auth.add_device(label).unwrap()
+    }
+
     #[test]
     fn a_fresh_path_generates_a_phrase_and_saves_only_its_hash() {
-        let path = temp_path("fresh");
-        let _ = std::fs::remove_file(&path);
+        let (hash_file, devices_file) = temp_paths("fresh");
 
-        let (auth, setup) = load_or_create_at(&path).expect("should generate a fresh token");
+        let (auth, setup) =
+            load_or_create_at(&hash_file, &devices_file).expect("should generate a fresh token");
         let phrase = match setup {
             Setup::New { phrase } => phrase,
             Setup::Existing => panic!("a path with nothing on it should be treated as new"),
         };
         assert_eq!(phrase.split_whitespace().count(), WORD_COUNT);
 
-        let on_disk = std::fs::read_to_string(&path).unwrap();
+        let on_disk = std::fs::read_to_string(&hash_file).unwrap();
         assert!(
             !on_disk.contains(' '),
             "the phrase must never be written to disk, only its derived hash"
         );
 
-        let token = derive_token_from_phrase(&phrase).unwrap();
+        let token = pair(&auth, &phrase, "a laptop");
         assert!(auth.accepts(&token));
-
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn a_saved_token_is_loaded_rather_than_regenerated() {
-        let path = temp_path("existing");
-        let _ = std::fs::remove_file(&path);
+        let (hash_file, devices_file) = temp_paths("existing");
 
-        let (_auth, first_setup) = load_or_create_at(&path).unwrap();
+        let (first, first_setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
         let Setup::New { phrase } = first_setup else {
             panic!("a path with nothing on it should be treated as new")
         };
-        let original_token = derive_token_from_phrase(&phrase).unwrap();
+        let device_token = pair(&first, &phrase, "a laptop");
 
-        let (auth, second_setup) = load_or_create_at(&path).unwrap();
+        let (auth, second_setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
         assert!(matches!(second_setup, Setup::Existing));
 
-        // The original phrase must still work against the reloaded auth -- reloading must
-        // not have generated a different token underneath it.
-        assert!(auth.accepts(&original_token));
-
-        let _ = std::fs::remove_file(&path);
+        // A device paired before the restart must still be paired after it -- reloading is
+        // not a reason to make someone dig the phrase out again.
+        assert!(auth.accepts(&device_token));
+        assert_eq!(auth.list_devices().len(), 1);
     }
 
     #[test]
     fn the_wrong_phrase_is_rejected() {
-        let path = temp_path("wrong-phrase");
-        let _ = std::fs::remove_file(&path);
+        let (hash_file, devices_file) = temp_paths("wrong-phrase");
 
-        let (auth, setup) = load_or_create_at(&path).unwrap();
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
         let Setup::New { phrase } = setup else {
             panic!("expected a freshly generated phrase")
         };
-        let correct_token = derive_token_from_phrase(&phrase).unwrap();
-        assert!(auth.accepts(&correct_token));
+        assert!(auth.phrase_matches(&derive_token_from_phrase(&phrase).unwrap()));
 
         let wrong_mnemonic = Mnemonic::generate(WORD_COUNT).unwrap();
         let wrong_token = derive_token(&wrong_mnemonic);
+        assert!(!auth.phrase_matches(&wrong_token));
         assert!(!auth.accepts(&wrong_token));
+    }
 
-        let _ = std::fs::remove_file(&path);
+    #[test]
+    fn the_phrase_opens_the_door_but_is_not_a_key() {
+        let (hash_file, devices_file) = temp_paths("phrase-not-a-key");
+
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let Setup::New { phrase } = setup else {
+            panic!("expected a freshly generated phrase")
+        };
+        let phrase_token = derive_token_from_phrase(&phrase).unwrap();
+
+        // The phrase is what lets a new device in. It is not itself a credential: if it
+        // were, every device would be carrying the same one again and revoking a single
+        // machine would be impossible.
+        assert!(auth.phrase_matches(&phrase_token));
+        assert!(
+            !auth.accepts(&phrase_token),
+            "the phrase-derived token must not work as a device token"
+        );
+    }
+
+    #[test]
+    fn each_device_gets_its_own_token() {
+        let (hash_file, devices_file) = temp_paths("per-device");
+
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let Setup::New { phrase } = setup else {
+            panic!("expected a freshly generated phrase")
+        };
+
+        let laptop = pair(&auth, &phrase, "the laptop");
+        let phone = pair(&auth, &phrase, "the phone");
+
+        assert_ne!(laptop, phone, "two devices must not share a token");
+        assert!(auth.accepts(&laptop));
+        assert!(auth.accepts(&phone));
+        assert_eq!(auth.list_devices().len(), 2);
+    }
+
+    #[test]
+    fn revoking_one_device_leaves_the_others_alone() {
+        let (hash_file, devices_file) = temp_paths("revoke-one");
+
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let Setup::New { phrase } = setup else {
+            panic!("expected a freshly generated phrase")
+        };
+        let laptop = pair(&auth, &phrase, "the laptop");
+        let phone = pair(&auth, &phrase, "the phone");
+
+        let lost = auth
+            .list_devices()
+            .into_iter()
+            .find(|device| device.label == "the phone")
+            .expect("the phone should be listed");
+        assert_eq!(
+            auth.revoke_device(&lost.id).unwrap().as_deref(),
+            Some("the phone")
+        );
+
+        assert!(
+            !auth.accepts(&phone),
+            "the revoked device must be locked out"
+        );
+        assert!(
+            auth.accepts(&laptop),
+            "this is the whole point: the other machines keep working"
+        );
+
+        // And it survives a restart, rather than coming back when the list is reloaded.
+        let (reloaded, _) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        assert!(!reloaded.accepts(&phone));
+        assert!(reloaded.accepts(&laptop));
+    }
+
+    #[test]
+    fn revoking_an_id_that_is_not_there_says_so() {
+        let (hash_file, devices_file) = temp_paths("revoke-missing");
+        let (auth, _) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        assert_eq!(auth.revoke_device("nosuchid").unwrap(), None);
+    }
+
+    #[test]
+    fn revoking_everything_unpairs_every_device() {
+        let (hash_file, devices_file) = temp_paths("revoke-all");
+
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let Setup::New { phrase } = setup else {
+            panic!("expected a freshly generated phrase")
+        };
+        let laptop = pair(&auth, &phrase, "the laptop");
+        let phone = pair(&auth, &phrase, "the phone");
+
+        assert_eq!(auth.revoke_all_devices().unwrap(), 2);
+        assert!(!auth.accepts(&laptop));
+        assert!(!auth.accepts(&phone));
+        assert!(auth.list_devices().is_empty());
+    }
+
+    #[test]
+    fn a_revocation_from_another_process_takes_hold_without_a_restart() {
+        let (hash_file, devices_file) = temp_paths("cross-process-revoke");
+
+        // The running server.
+        let (server, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let Setup::New { phrase } = setup else {
+            panic!("a fresh path should be new");
+        };
+        let laptop = pair(&server, &phrase, "the laptop");
+        let phone = pair(&server, &phrase, "the phone");
+        assert!(server.accepts(&phone));
+
+        // `aether1 revoke` is a separate process, so it reads the same files fresh, revokes,
+        // and exits. The server is still running and still holds its own copy of the list.
+        let (cli, _) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let id = cli
+            .list_devices()
+            .into_iter()
+            .find(|device| device.label == "the phone")
+            .expect("the phone should be listed")
+            .id;
+        assert_eq!(
+            cli.revoke_device(&id).unwrap().as_deref(),
+            Some("the phone")
+        );
+
+        assert!(
+            !server.accepts(&phone),
+            "a revoked device must be shut out on its next request, not at the next restart"
+        );
+        assert!(
+            server.accepts(&laptop),
+            "and the machines that were not revoked must not be disturbed by the reload"
+        );
+    }
+
+    #[test]
+    fn a_device_paired_before_this_existed_keeps_working() {
+        let (hash_file, devices_file) = temp_paths("migration");
+
+        // An install from before device tokens: a phrase on disk, no device list, and one
+        // credential in the wild -- the token the phrase derives to.
+        let (phrase, _hash) = generate_and_save_at(&hash_file).unwrap();
+        let old_token = derive_token_from_phrase(&phrase).unwrap();
+
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        assert!(matches!(setup, Setup::Existing));
+        assert!(
+            auth.accepts(&old_token),
+            "upgrading must not silently lock out the machines already paired"
+        );
+
+        // And it is a device like any other, so it can be revoked once they have paired
+        // again rather than being a permanent exception.
+        let legacy = auth.list_devices().pop().expect("should be listed");
+        auth.revoke_device(&legacy.id).unwrap();
+        assert!(!auth.accepts(&old_token));
+    }
+
+    #[test]
+    fn a_label_from_the_network_is_not_taken_at_its_word() {
+        assert_eq!(tidy_label("  a   laptop \n"), "a laptop");
+        assert_eq!(tidy_label("two\nlines"), "two lines");
+        assert_eq!(tidy_label("   "), "an unnamed device");
+        assert_eq!(tidy_label(&"x".repeat(500)).chars().count(), 60);
     }
 
     #[test]
     fn rotating_invalidates_the_previous_phrase() {
-        let path = temp_path("rotate");
-        let _ = std::fs::remove_file(&path);
+        let (hash_file, devices_file) = temp_paths("rotate");
 
-        let (_auth, setup) = load_or_create_at(&path).unwrap();
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
         let Setup::New { phrase: old_phrase } = setup else {
             panic!("expected a freshly generated phrase")
         };
-        let old_token = derive_token_from_phrase(&old_phrase).unwrap();
+        let old_device = pair(&auth, &old_phrase, "a laptop");
 
-        let (new_phrase, new_hash) = generate_and_save_at(&path).unwrap();
+        let (new_phrase, _new_hash) = generate_and_save_at(&hash_file).unwrap();
         assert_ne!(old_phrase, new_phrase);
-        let reloaded = ServeAuth {
-            token_hash: new_hash,
-        };
-        assert!(!reloaded.accepts(&old_token));
-        assert!(reloaded.accepts(&derive_token_from_phrase(&new_phrase).unwrap()));
+        auth.revoke_all_devices().unwrap();
 
-        let _ = std::fs::remove_file(&path);
+        let (reloaded, _) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        assert!(
+            !reloaded.accepts(&old_device),
+            "a device paired under the old phrase must not outlive it"
+        );
+        assert!(reloaded.phrase_matches(&derive_token_from_phrase(&new_phrase).unwrap()));
     }
 
     #[test]

@@ -16,6 +16,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "bip39",
+ "getrandom 0.3.4",
  "mdns-sd",
  "msedge-tts",
  "portable-pty",

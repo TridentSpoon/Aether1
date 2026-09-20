@@ -222,8 +222,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         // still be told what it means on the day they run it somewhere unfamiliar.
         println!(
             "[AETHER1] --lan: reachable from your network over TLS, but every request needs \
-             the pairing token above (or POST /api/pair with the phrase) -- without it, \
-             AETHER1 refuses to show your conversation or run anything."
+             a token of its own -- a device gets one by POSTing the pairing phrase to \
+             /api/pair, and until then AETHER1 refuses to show your conversation or run \
+             anything. `aether1 devices` lists what is paired; `aether1 revoke <id>` cuts \
+             one off straight away."
         );
     } else {
         println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
@@ -337,6 +339,35 @@ async fn require_lan_token(
 #[derive(Deserialize)]
 struct PairRequest {
     phrase: String,
+    /// What to call this device in the list. Optional: a browser will not send one, so the
+    /// User-Agent stands in, and an operator can always tell one entry from another by when
+    /// it paired even if both are called the same thing.
+    #[serde(default)]
+    device: Option<String>,
+}
+
+/// The name a device gets when it did not choose one. A User-Agent is long and full of
+/// things nobody wants to read, so this keeps the part that identifies the browser and the
+/// system and throws the version soup away.
+fn label_from_user_agent(request_headers: &header::HeaderMap, peer: SocketAddr) -> String {
+    let agent = request_headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let browser = ["Firefox", "Edg", "Chrome", "Safari", "curl", "AETHER1"]
+        .into_iter()
+        .find(|name| agent.contains(name));
+    let system = ["Windows", "Macintosh", "Linux", "Android", "iPhone"]
+        .into_iter()
+        .find(|name| agent.contains(name));
+    match (browser, system) {
+        (Some(browser), Some(system)) => format!("{browser} on {system}"),
+        (Some(browser), None) => browser.to_string(),
+        (None, Some(system)) => system.to_string(),
+        // Nothing recognisable: the address it paired from is at least something the
+        // operator can match against a machine they own.
+        (None, None) => format!("a device at {}", peer.ip()),
+    }
 }
 
 /// The one route under `--lan` that needs no token -- it's what produces one. `phrase` is
@@ -346,6 +377,7 @@ struct PairRequest {
 async fn pair(
     State(lan): State<LanState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: header::HeaderMap,
     Json(req): Json<PairRequest>,
 ) -> Response {
     let ip = peer.ip();
@@ -362,12 +394,21 @@ async fn pair(
         )
             .into_response();
     };
-    if lan.auth.accepts(&token) {
-        lan.limiter.record_success(ip);
-        Json(serde_json::json!({ "token": token })).into_response()
-    } else {
+    if !lan.auth.phrase_matches(&token) {
         lan.limiter.record_failure(ip);
-        (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response()
+        return (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response();
+    }
+
+    lan.limiter.record_success(ip);
+    // The phrase is spent the moment it is checked: what goes back is a token minted for
+    // this device alone, so revoking it later takes access from this machine and no other.
+    let label = req
+        .device
+        .filter(|chosen| !chosen.trim().is_empty())
+        .unwrap_or_else(|| label_from_user_agent(&headers, peer));
+    match lan.auth.add_device(&label) {
+        Ok(device_token) => Json(serde_json::json!({ "token": device_token })).into_response(),
+        Err(e) => internal_error(e).into_response(),
     }
 }
 
