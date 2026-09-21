@@ -25,7 +25,7 @@ use persona::Provider;
 pub use persona::{Domain, Persona, Root};
 use providers::ChatContext;
 pub use providers::Sink;
-pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
+pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio, transcribe};
 pub use telemetry::Telemetry;
 pub use tts::{
     generate_speech_reporting, generate_speech_with, local_status as tts_local_status,

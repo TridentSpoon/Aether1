@@ -216,7 +216,33 @@ class VoiceAudioEngine {
         }
 
         return new Promise((resolve) => {
-            const audio = new Audio(audioUrl);
+            // `crossOrigin` before `src`, and it is load-bearing rather than tidy.
+            //
+            // This is the whole reason speech was inaudible in the native app. Routing the
+            // element through `createMediaElementSource` below means the graph is its *only*
+            // output -- the element no longer reaches the speakers by itself. WebKit mutes
+            // that node outright when the media would taint the page's origin:
+            // MediaElementAudioSourceNode::setFormat does `m_muted = wouldTaintOrigin()`
+            // and process() then zeroes its output bus, with no error, no rejected play()
+            // and no failed load anywhere. And the media *is* cross-origin here:
+            // convertFileSrc hands back `asset://localhost/...` on Linux and macOS (and
+            // `http://asset.localhost/...` on Windows) while the page itself is
+            // `tauri://localhost`. HTMLMediaElement::taintsOrigin only forgives that when
+            // the resource passed a CORS check, which an element with no crossOrigin
+            // attribute never attempts.
+            //
+            // So every engine synthesized correctly, every status field said "installed",
+            // the voice test reported that it spoke, and the machine was silent.
+            //
+            // Tauri's asset protocol already answers with `Access-Control-Allow-Origin` set
+            // to the window's origin, so asking for the CORS check is all that was missing.
+            // The HTTP transport serves audio from the page's own origin (API_BASE is empty
+            // in a browser), where a same-origin request passes regardless and nothing is
+            // ever tainted -- so this is safe on both transports and needs no CORS layer on
+            // the axum side.
+            const audio = new Audio();
+            audio.crossOrigin = 'anonymous';
+            audio.src = audioUrl;
             this.currentAudio = audio;
 
             let signalDetected = false;
@@ -232,7 +258,12 @@ class VoiceAudioEngine {
                     const source = this.audioCtx.createMediaElementSource(audio);
                     source.connect(this.analyser);
                 } catch (e) {
-                    // Fallback if CORS or already connected
+                    // Only thrown when this element already has a source node -- a fresh
+                    // Audio is created per clip above, so this is unreachable in practice.
+                    // Note what it does *not* catch: a cross-origin clip does not throw
+                    // here, it silently mutes the node, which is what the crossOrigin
+                    // assignment above exists to prevent. Leaving the analyser unattached
+                    // costs the frequency readout, never the audio.
                 }
             }
 

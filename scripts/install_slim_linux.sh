@@ -50,6 +50,11 @@ cp share/icons/aether1.png "$SHARE_DIR/icons/hicolor/256x256/apps/aether1.png" 2
 # (webkit2gtk, gtk3, etc., which desktop Linux almost always already has) plus Python/pip
 # for the two engines below and espeak-ng as the always-works fallback that needs no model
 # download the way Piper and whisper do.
+#
+# The GStreamer plugins are on the runtime list for the reason setup.sh spells out at
+# length: WebKitGTK plays <audio> through GStreamer and distributions make the decoding
+# plugins optional, so without them every voice engine works perfectly and the machine
+# stays silent.
 DISTRO="unknown"
 if [ -f /etc/os-release ]; then
     . /etc/os-release
@@ -62,21 +67,25 @@ if [ "$(id -u)" -ne 0 ]; then
     SUDO="sudo"
 fi
 
-echo "📦 Installing Python, pip, and espeak-ng ($DISTRO)..."
+echo "📦 Installing Python, pip, espeak-ng and the audio decoders ($DISTRO)..."
 DEPS_OK=1
 case "$DISTRO" in
     cachyos|arch|manjaro|endeavouros|garuda)
-        $SUDO pacman -Sy --needed --noconfirm python python-pip espeak-ng || DEPS_OK=0
+        $SUDO pacman -Sy --needed --noconfirm python python-pip espeak-ng \
+            gst-plugins-good gst-plugins-bad gst-libav || DEPS_OK=0
         ;;
     fedora|nobara|rhel|centos|bazzite)
-        $SUDO dnf install -y python3 python3-pip espeak-ng || DEPS_OK=0
+        $SUDO dnf install -y python3 python3-pip espeak-ng \
+            gstreamer1-plugins-good gstreamer1-plugins-bad-free || DEPS_OK=0
         ;;
     ubuntu|debian|pop|linuxmint|zorin|elementary)
-        $SUDO apt-get update && $SUDO apt-get install -y python3 python3-pip espeak-ng \
-            || DEPS_OK=0
+        $SUDO apt-get update && $SUDO apt-get install -y python3 python3-venv \
+            python3-pip espeak-ng gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav || DEPS_OK=0
         ;;
     opensuse*|suse|sles)
-        $SUDO zypper install -y python3 python3-pip espeak-ng || DEPS_OK=0
+        $SUDO zypper install -y python3 python3-pip espeak-ng \
+            gstreamer-plugins-good gstreamer-plugins-bad || DEPS_OK=0
         ;;
     *)
         DEPS_OK=0
@@ -87,7 +96,9 @@ esac
 if [ "$DEPS_OK" -ne 1 ]; then
     echo ""
     echo "⚠ Could not install Python/pip/espeak-ng automatically."
-    echo "  Install your distribution's equivalents of python3, python3-pip, and espeak-ng,"
+    echo "  Install your distribution's equivalents of python3, python3-pip, espeak-ng,"
+    echo "  and the GStreamer 'good' plugins plus gst-libav (without those last ones the" 
+    echo "  app plays no sound at all, however well speech synthesis itself works),"
     echo "  then re-run this script -- it is safe to run again."
 fi
 
@@ -99,8 +110,23 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-echo "🔊🎤 Installing Piper and Whisper (pip install --user)..."
-"$PYTHON" -m pip install --user --upgrade piper-tts faster-whisper
+# Not `pip install --user`. Arch, Debian 12+, Ubuntu 23.04+ and Fedora all mark the system
+# Python as externally managed (PEP 668), so that line now stops with
+# `error: externally-managed-environment` and this script would fail on exactly the
+# distributions it is aimed at. A virtual environment is what that error recommends;
+# Aether1 knows to look in this one (see paths::managed_python_env in src-tauri), so
+# nothing here needs to go on PATH.
+PYENV_DIR="$HOME/.local/share/aether1/pyenv"
+echo "🔊🎤 Installing Piper and Whisper into $PYENV_DIR ..."
+if [ ! -x "$PYENV_DIR/bin/python" ]; then
+    "$PYTHON" -m venv "$PYENV_DIR" || {
+        echo "❌ Could not create the Python environment at $PYENV_DIR."
+        echo "   On Debian and Ubuntu this usually means python3-venv is missing:"
+        echo "     sudo apt install python3-venv"
+        exit 1
+    }
+fi
+"$PYENV_DIR/bin/pip" install --upgrade piper-tts faster-whisper
 
 echo ""
 echo "======================================================================"

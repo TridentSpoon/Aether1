@@ -109,9 +109,10 @@ instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` ab
 
 The trade-off in the other direction: `aether1-slim-linux-x86_64.tar.gz` (also on
 [Releases](../../releases)) ships just the binary -- no Piper, no whisper.cpp, no models --
-and has its install script fetch speech separately: `pip install --user piper-tts
-faster-whisper`, plus `python3`/`espeak-ng` via your distribution's package manager if
-either is missing. A fraction of the offline bundle's size, at the cost of needing a
+and has its install script fetch speech separately into a Python environment of
+Aether1's own (`~/.local/share/aether1/pyenv` -- not the system Python, which current
+distributions refuse to let `pip` write to at all), plus `python3`, `espeak-ng` and the
+GStreamer audio decoders via your distribution's package manager if any are missing. A fraction of the offline bundle's size, at the cost of needing a
 network for that one install step (and the first time each engine's model downloads,
 which happens automatically the first time you actually speak or listen -- after that it's
 cached and works offline like everything else here).
@@ -221,13 +222,22 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 | Distribution | Packages |
 | --- | --- |
-| Arch, CachyOS, Manjaro, EndeavourOS | `base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify espeak-ng` |
-| Fedora, Nobara, RHEL | `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel curl wget file xdotool libnotify espeak-ng` plus the `c-development` group |
-| Debian, Ubuntu, Pop!\_OS, Mint | `build-essential pkg-config curl wget file libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libnotify-bin espeak-ng` |
-| openSUSE | `webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel libopenssl-devel curl wget file xdotool libnotify-tools espeak-ng` |
+| Arch, CachyOS, Manjaro, EndeavourOS | `base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify espeak-ng gst-plugins-good gst-plugins-bad gst-libav` |
+| Fedora, Nobara, RHEL | `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel curl wget file xdotool libnotify espeak-ng gstreamer1-plugins-good gstreamer1-plugins-bad-free` plus the `c-development` group |
+| Debian, Ubuntu, Pop!\_OS, Mint | `build-essential pkg-config curl wget file libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libnotify-bin espeak-ng gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav` |
+| openSUSE | `webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel libopenssl-devel curl wget file xdotool libnotify-tools espeak-ng gstreamer-plugins-good gstreamer-plugins-bad` |
 
 If the build fails, the error names the missing piece: look for a package ending in `-dev`
 or `-devel`, install it, and re-run `./setup.sh`.
+
+The GStreamer entries are not build dependencies and they are the ones worth not skipping.
+Aether1's window is WebKitGTK, and WebKitGTK plays `<audio>` through GStreamer -- but every
+distribution above packages the plugins that do the *decoding* as optional for it. On Arch,
+`gst-plugins-good` and `gst-libav` are optdepends of `webkit2gtk-4.1`, so installing the
+webview does not install them. Without them, Piper synthesizes correctly, every status
+screen in the app says "installed", the voice test reports that it spoke, and you hear
+nothing at all. The voice panel now checks for this directly and names the packages, but it
+is cheaper to just have them.
 
 ### Speech: what's local, what isn't, and what always works
 
@@ -236,7 +246,8 @@ is always something to speak with, on a machine that has done nothing but run se
 
 1. **[Piper](https://github.com/OHF-Voice/piper1-gpl)** -- the best-sounding local voice,
    if you install its binary (the offline installer above does this for you; otherwise
-   `pip install piper-tts`, or your package manager). The voice file itself Aether1 can
+   your package manager, or the Python route under "The two Piper traps" below). The voice
+   file itself Aether1 can
    fetch for you -- see below. **Two traps here, and between them they account for
    most "I installed it and it still doesn't talk" reports** -- see below.
 2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
@@ -255,8 +266,12 @@ will find first is [Piper](https://github.com/libratbag/piper), a GTK app for co
 gaming mice — and on Arch and CachyOS that is exactly what `sudo pacman -S piper` installs,
 because the mouse app is the one in the official repositories. Piper TTS is in the AUR:
 `yay -S piper-tts-bin`. On Debian and Ubuntu, `sudo apt install piper-tts`. On any
-distribution, `python3 -m pip install --user piper-tts` works without any package your
-distribution has to carry. (The old `linux_x86_64.tar.gz` release still works too, but it
+distribution, the Python package works without anything your distribution has to carry --
+but not via `pip install --user`, which Arch, Debian 12+, Ubuntu 23.04+ and Fedora all
+refuse now with `error: externally-managed-environment` (PEP 668). Put it in Aether1's own
+environment instead, which it knows to look in:
+`python3 -m venv ~/.local/share/aether1/pyenv && ~/.local/share/aether1/pyenv/bin/pip
+install piper-tts`. (The old `linux_x86_64.tar.gz` release still works too, but it
 is frozen: the original `rhasspy/piper` repository was archived in October 2025 and
 development moved to `OHF-Voice/piper1-gpl`, which ships no pre-built binaries.)
 

@@ -240,20 +240,29 @@ fn is_piper_tts(binary: &Path) -> bool {
 
 /// The Piper binary, if one is installed and is actually Piper.
 ///
-/// Cached: this spawns a process to answer, `voice_status` is re-asked every time the
-/// wizard is opened or a setting changes, and the answer cannot change without the machine
-/// being reinstalled under it. `OnceLock` rather than a field because the callers are
-/// scattered and none of them owns a place to keep it.
+/// **A found binary is cached; a miss is not.** This spawns up to three processes to
+/// answer and `voice_status` re-asks it every time the wizard is opened or a setting
+/// changes, so caching matters -- but the previous version cached the answer *either* way,
+/// on the reasoning that it could not change while the process ran. It can, and it does, in
+/// precisely the situation this whole module is for: the wizard says Piper is missing, the
+/// operator follows the steps it just printed, comes back, and Aether1 goes on insisting
+/// nothing is installed until the app is restarted. Nobody restarts an app to make an
+/// install register; they conclude the install failed. Piper being uninstalled mid-session
+/// is the case not handled here, and it costs one failed synthesis that falls through to
+/// the next engine, which is what `Engine::Auto` is for.
 pub fn piper_binary() -> Option<PathBuf> {
-    static FOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
-    FOUND
-        .get_or_init(|| {
-            PIPER_BINARIES
-                .iter()
-                .filter_map(|name| crate::paths::find_installed_binary(&[name]))
-                .find(|path| is_piper_tts(path))
-        })
-        .clone()
+    static FOUND: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(found) = FOUND.get() {
+        return Some(found.clone());
+    }
+    let found = PIPER_BINARIES
+        .iter()
+        .filter_map(|name| crate::paths::find_installed_binary(&[name]))
+        .find(|path| is_piper_tts(path))?;
+    // A race here just means two threads probed at once and one of them wins; both found
+    // a real Piper, so either answer is correct.
+    let _ = FOUND.set(found.clone());
+    Some(found)
 }
 
 /// Where a voice Aether1 fetched for itself is written.

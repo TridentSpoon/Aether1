@@ -23,6 +23,7 @@ mod commands;
 mod discovery;
 mod downloads;
 mod hotkey;
+mod installs;
 mod llm;
 mod local_only;
 mod model_scanner;
@@ -37,6 +38,10 @@ mod vault;
 mod voice_download;
 mod voice_setup;
 mod watchers;
+
+// installs::Machine is the trait the scan reads the machine through; brought in as `_` because
+// only its methods are called here, never its name.
+use installs::Machine as _;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -1500,6 +1505,80 @@ fn announce_crash<R: tauri::Runtime>(
     );
 }
 
+/// Every copy of AETHER1 on this machine, as the HUD reads it. The shape is flattened here
+/// rather than derived, so the wire format stays something a person can read in devtools
+/// and does not change whenever the Rust enums do.
+fn installs_payload(
+    found: &[installs::Install],
+    running: Option<&installs::Version>,
+) -> Vec<serde_json::Value> {
+    found
+        .iter()
+        .map(|install| {
+            let standing = installs::standing(install, running);
+            serde_json::json!({
+                "id": install.id,
+                "path": install.path.display().to_string(),
+                "kind": install.kind.describe(),
+                "version": install.version.as_ref().map(|version| version.label()),
+                "running": install.running,
+                "offered": standing.offered(),
+                "description": install.describe(),
+                "command": match &install.removal {
+                    installs::Removal::HandOver { command, .. } => Some(command.clone()),
+                    _ => None,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Step 48: what else is installed. Read on demand by the HUD, and at startup by the scan
+/// below -- both go through installs::detect so there is one answer, not two.
+#[tauri::command(async)]
+fn other_installs_rust() -> Vec<serde_json::Value> {
+    let machine = installs::ThisMachine;
+    let found = installs::detect(&machine);
+    let running = machine.running_version();
+    installs_payload(&found, running.as_ref())
+}
+
+/// Removes one copy, named by the id the scan gave it. Re-detects rather than trusting an
+/// id the HUD has been holding since startup: between the prompt appearing and the operator
+/// answering it, the copy may already be gone.
+#[tauri::command(async)]
+fn remove_install_rust(id: String) -> Result<String, String> {
+    let machine = installs::ThisMachine;
+    let found = installs::detect(&machine);
+    let install = found
+        .iter()
+        .find(|install| install.id == id)
+        .ok_or_else(|| format!("that copy is no longer here (id {id})"))?;
+    match installs::remove(install, &machine)? {
+        installs::Outcome::Removed { paths } => Ok(format!(
+            "Removed {} ({} file{} deleted).",
+            install.path.display(),
+            paths.len(),
+            if paths.len() == 1 { "" } else { "s" }
+        )),
+        installs::Outcome::Ran { .. } => Ok(format!("Uninstalled {}.", install.path.display())),
+        installs::Outcome::HandedOver { command } => Ok(format!(
+            "{} belongs to a package manager. Run this to remove it:\n{command}",
+            install.path.display()
+        )),
+    }
+}
+
+/// "Keep them, and stop asking." Answering the prompt with no is a decision, and a decision
+/// that is forgotten by the next launch is a prompt that never goes away.
+#[tauri::command(async)]
+fn keep_other_installs_rust(engine: tauri::State<'_, LlmEngine>) -> Result<(), String> {
+    engine
+        .db()
+        .set_setting(installs::NOTICE_SETTING, &serde_json::json!(false))
+        .map_err(|e| format!("could not save that: {e}"))
+}
+
 fn build_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
     // The native path creates backend/ as a side effect of setting up the audio cache in
@@ -1667,6 +1746,9 @@ fn main() {
             test_speech_rust,
             list_personas_rust,
             get_version_info,
+            other_installs_rust,
+            remove_install_rust,
+            keep_other_installs_rust,
             check_for_update_rust,
             apply_update_rust,
             install_gh_via_winget_rust,
@@ -1960,6 +2042,52 @@ fn main() {
                             announce_crash(&app_handle, &crash, amber.clone(), plain.clone());
                         }
                     }
+                });
+            }
+
+            // Step 48: the copies of AETHER1 that are not this one. Installing a second way
+            // never removes the first, so an old binary keeps sitting on PATH with a fixed
+            // bug still in it. Said once, at startup, and only when there is something to
+            // say -- on the machine of someone who installed it once this thread finds
+            // nothing and stays quiet forever.
+            //
+            // Detection only. Nothing is removed here: the prompt this raises is the ask,
+            // and an uninstall that happened before anyone was asked cannot be taken back.
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // After the window and the tray, so a scan that runs long does not delay
+                    // either, and after the operator has seen the app start.
+                    std::thread::sleep(Duration::from_secs(5));
+                    let engine = app_handle.state::<LlmEngine>();
+                    if !engine.db().get_setting_bool(installs::NOTICE_SETTING, true) {
+                        return;
+                    }
+                    let machine = installs::ThisMachine;
+                    let found = installs::detect(&machine);
+                    let running = machine.running_version();
+                    let others = installs::others(&found, running.as_ref());
+                    if others.is_empty() {
+                        return;
+                    }
+                    let headline = match others.len() {
+                        1 => "AETHER1 found another copy of itself installed".to_string(),
+                        n => format!("AETHER1 found {n} other copies of itself installed"),
+                    };
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = app_handle
+                        .notification()
+                        .builder()
+                        .title(headline.clone())
+                        .body("Open AETHER1 to remove them, or run `aether1 installs`.")
+                        .show();
+                    let _ = app_handle.emit(
+                        "old-installs-detected",
+                        serde_json::json!({
+                            "headline": headline,
+                            "installs": installs_payload(&others, running.as_ref()),
+                        }),
+                    );
                 });
             }
 

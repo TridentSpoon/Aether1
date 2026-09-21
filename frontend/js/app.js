@@ -3447,6 +3447,36 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.__TAURI__.core.invoke(cmd, args);
     }
 
+    // Step 48: another copy of AETHER1 is installed somewhere on this machine. The startup
+    // scan in main.rs finds them; this is where the operator is asked, because nothing is
+    // ever removed without being asked and an uninstall cannot be taken back.
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('old-installs-detected', async (event) => {
+            const payload = (event && event.payload) || {};
+            const installs = Array.isArray(payload.installs) ? payload.installs : [];
+            if (!installs.length) return;
+            const list = installs.map((install) => `  - ${install.description}`).join('\n');
+            const question = `${payload.headline}\n\n${list}\n\n`
+                + 'Remove them? Your vault, conversations and settings stay exactly where '
+                + 'they are -- only the program files go.';
+            if (!confirm(question)) {
+                // "No" is an answer worth keeping. Without this the same prompt comes back
+                // on every single launch, which is how a useful notice becomes noise.
+                tauriInvoke('keep_other_installs_rust').catch(() => {});
+                return;
+            }
+            const results = [];
+            for (const install of installs) {
+                try {
+                    results.push(await tauriInvoke('remove_install_rust', { id: install.id }));
+                } catch (error) {
+                    results.push(`${install.path}: ${error}`);
+                }
+            }
+            alert(results.join('\n\n'));
+        });
+    }
+
     // Synthesizes speech via the native TTS command and turns the local mp3 path it returns
     // into a URL the webview's <audio> element can actually load (convertFileSrc maps a
     // filesystem path to Tauri's asset:// protocol; see the assetProtocol scope this path's
@@ -3721,10 +3751,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const result = await voiceEngine.playTTSAudio(url, { audible });
         if (result && result.signalDetected === false) {
-            showVoiceFailedCard(new Error(
-                'Speech was synthesized, but no audio was actually heard -- the pipeline ' +
-                'downstream of synthesis (the webview’s audio output) produced silence.'
-            ));
+            // Silence here almost always has one cause on Linux, and it is one the backend
+            // can check for directly rather than leave as a description of a symptom: the
+            // webview's GStreamer decoders are missing (see media_playback_step in
+            // voice_setup.rs). Ask, so the card can carry the command that fixes it instead
+            // of a sentence about an audio pipeline nobody can act on.
+            let detail = 'Speech was synthesized, but no audio was actually heard -- the ' +
+                'pipeline downstream of synthesis (the webview’s audio output) produced ' +
+                'silence.';
+            try {
+                const advice = await tauriInvoke('voice_advice_rust');
+                const fix = advice?.speaking?.steps?.find((step) => step.command);
+                if (advice?.speaking?.stage === 'unheard' && fix) {
+                    detail = `${advice.speaking.headline} ${fix.detail}`;
+                }
+            } catch (e) {
+                // Fall through with the generic wording -- a failed probe is not a reason
+                // to say nothing about a failure we have already established.
+            }
+            showVoiceFailedCard(new Error(detail));
         }
     }
 

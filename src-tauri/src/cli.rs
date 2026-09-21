@@ -50,6 +50,9 @@ USAGE:
     aether1 crashes                List the crashes AETHER1 has seen on this machine
     aether1 models                 Show which local model each speciality runs on
     aether1 models <NAME> <MODEL>  Point one speciality at a model (`clear` to unset)
+    aether1 installs               List every copy of AETHER1 this machine has on it
+    aether1 installs remove <ID>   Remove one of them, by the id the list prints
+    aether1 installs remove old    Remove every copy older than the one you are running
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -104,6 +107,12 @@ pub enum Invocation {
     Models {
         persona: Option<String>,
         model: Option<String>,
+    },
+    /// `installs`: every copy of AETHER1 on this machine, and taking the stale ones away.
+    /// `remove` is None for a plain listing, or the id of one copy -- or the word `old`,
+    /// meaning every copy that is behind the one running.
+    Installs {
+        remove: Option<String>,
     },
     /// `face`: the fullscreen avatar on a spare screen. Like `show`/`toggle` this reaches an
     /// already-running instance through the single-instance plugin rather than being handled
@@ -273,6 +282,20 @@ pub fn parse(argv: &[String]) -> Invocation {
                     .to_string(),
             ),
         },
+        "installs" => free_text(rest).and_then(|extra| match extra {
+            None => Ok(Invocation::Installs { remove: None }),
+            Some(extra) => match extra.split_whitespace().collect::<Vec<_>>().as_slice() {
+                ["remove", target] => Ok(Invocation::Installs {
+                    remove: Some((*target).to_string()),
+                }),
+                ["remove"] => Err("installs remove needs an id, or the word `old` -- run \
+                                   `aether1 installs` to see them"
+                    .to_string()),
+                _ => Err(format!(
+                    "installs takes no arguments, or `remove <id>` (got {extra:?})"
+                )),
+            },
+        }),
         "say" => take_option(&rest, "--voice").and_then(|(voice, rest)| {
             let (no_play, rest) = take_flag(&rest, "--no-play");
             free_text(rest).map(|text| Invocation::Say {
@@ -677,6 +700,119 @@ fn run_revoke(id: &str) -> Result<String, String> {
     }
 }
 
+/// One row of `aether1 installs`: the id to name it by, what it is, and where it stands
+/// against the copy that is running.
+fn render_install(
+    install: &crate::installs::Install,
+    running: Option<&crate::installs::Version>,
+) -> String {
+    use crate::installs::Standing;
+    let note = match crate::installs::standing(install, running) {
+        Standing::Running => "the copy you are running".to_string(),
+        Standing::Stale => "older than the one you are running".to_string(),
+        Standing::Duplicate => {
+            "the same build as the one you are running, in a second place".to_string()
+        }
+        Standing::Newer => "newer than the one you are running -- left alone".to_string(),
+        Standing::Unknown => "cannot tell how old this one is".to_string(),
+        Standing::Keep(why) => format!("kept: {why}"),
+    };
+    format!(
+        "\n    {}  {}\n              {note}",
+        install.id,
+        install.describe()
+    )
+}
+
+fn run_installs(target: Option<&str>) -> Result<String, String> {
+    use crate::installs::Machine as _;
+    let machine = crate::installs::ThisMachine;
+    let found = crate::installs::detect(&machine);
+    let running = machine.running_version();
+    match target {
+        None => {
+            if found.is_empty() {
+                return Ok("No copy of AETHER1 was found anywhere this knows to look.".to_string());
+            }
+            let mut out = format!(
+                "{} cop{} of AETHER1 on this machine:\n",
+                found.len(),
+                if found.len() == 1 { "y" } else { "ies" }
+            );
+            for install in &found {
+                out.push_str(&render_install(install, running.as_ref()));
+            }
+            let stale = crate::installs::others(&found, running.as_ref());
+            out.push_str(
+                match stale.len() {
+                    0 => "\n\nNothing here is worth removing.".into(),
+                    1 => "\n\nRun `aether1 installs remove <id>` to take the older one away, or \
+                      `aether1 installs remove old` to do the same thing without typing the id."
+                        .to_string(),
+                    n => format!(
+                        "\n\nRun `aether1 installs remove <id>` to take one away, or \
+                     `aether1 installs remove old` to take all {n} of them."
+                    ),
+                }
+                .as_str(),
+            );
+            Ok(out)
+        }
+        Some("old") => {
+            let stale = crate::installs::others(&found, running.as_ref());
+            if stale.is_empty() {
+                return Ok("Nothing to remove: this is the only copy of AETHER1 here.".to_string());
+            }
+            let mut out = String::new();
+            for install in &stale {
+                match crate::installs::remove(install, &machine) {
+                    Ok(outcome) => out.push_str(&render_outcome(install, &outcome)),
+                    Err(message) => out.push_str(&format!("\n    {} -- {message}", install.id)),
+                }
+            }
+            Ok(out.trim_start_matches('\n').to_string())
+        }
+        Some(id) => {
+            let install = found
+                .iter()
+                .find(|install| install.id == id)
+                .ok_or_else(|| {
+                    format!("no copy with the id {id} -- run `aether1 installs` to see them")
+                })?;
+            let outcome = crate::installs::remove(install, &machine)?;
+            Ok(render_outcome(install, &outcome)
+                .trim_start_matches('\n')
+                .to_string())
+        }
+    }
+}
+
+/// What actually happened, said plainly -- two of the three outcomes did not delete
+/// anything, and the difference between "it is gone" and "it is gone once you run this"
+/// is the whole message.
+fn render_outcome(
+    install: &crate::installs::Install,
+    outcome: &crate::installs::Outcome,
+) -> String {
+    use crate::installs::Outcome;
+    match outcome {
+        Outcome::Removed { paths } => format!(
+            "\nRemoved {} ({} file{} deleted). Your vault, conversations and settings were not \
+             touched.",
+            install.path.display(),
+            paths.len(),
+            if paths.len() == 1 { "" } else { "s" }
+        ),
+        Outcome::Ran { command } => {
+            format!("\nRan {command} to uninstall {}.", install.path.display())
+        }
+        Outcome::HandedOver { command } => format!(
+            "\n{} is not AETHER1's to delete. Run this to remove it:\n    {command}",
+            install.path.display()
+        ),
+    }
+}
+
 /// Runs a headless invocation and returns the process exit code. `App`, `Serve`, `Window`
 /// and `Face` are handled by main() and are a no-op here.
 pub fn run(invocation: Invocation) -> i32 {
@@ -695,6 +831,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Status { json, events } => Ok(run_status(json, events)),
         Invocation::Crashes => run_crashes(),
         Invocation::Models { persona, model } => run_models(persona, model),
+        Invocation::Installs { remove } => run_installs(remove.as_deref()),
         Invocation::Say { text, voice, play } => run_say(text, voice, play),
         Invocation::Discover { timeout_secs } => run_discover(timeout_secs),
         Invocation::Announce { name, port } => run_announce(name, port),
@@ -840,6 +977,32 @@ mod tests {
             "the wider sweep of the event log is asked for, never volunteered"
         );
         assert_eq!(parse_args(&["crashes"]), Invocation::Crashes);
+        assert_eq!(
+            parse_args(&["installs"]),
+            Invocation::Installs { remove: None }
+        );
+        assert_eq!(
+            parse_args(&["installs", "remove", "a1b2c3d4"]),
+            Invocation::Installs {
+                remove: Some("a1b2c3d4".to_string())
+            }
+        );
+        assert_eq!(
+            parse_args(&["installs", "remove", "old"]),
+            Invocation::Installs {
+                remove: Some("old".to_string())
+            }
+        );
+        // `remove` with nothing named would otherwise have to guess which copy, and the
+        // guess is not recoverable.
+        assert!(matches!(
+            parse_args(&["installs", "remove"]),
+            Invocation::Invalid(_)
+        ));
+        assert!(matches!(
+            parse_args(&["installs", "everything"]),
+            Invocation::Invalid(_)
+        ));
         assert!(matches!(
             parse_args(&["crashes", "please"]),
             Invocation::Invalid(_)

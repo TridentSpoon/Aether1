@@ -2412,6 +2412,327 @@ signature proves what was downloaded. A token that is stolen, a release asset re
 copy passed hand to hand on a USB stick are all cases where the second question is the one
 that counts.
 
+### Step 47: diagnostics that fixes things, and a fix that has to prove itself
+
+**What this app calls diagnostics today is a report about the machine, not about itself.**
+`aether1 status` prints `Telemetry::diagnostic_report()` -- CPU, RAM, disk, network, top
+processes -- and `aether1 status --events` sweeps the system log for anything that went
+wrong recently. Both describe the computer AETHER1 is sitting on. Neither answers the
+question an operator actually asks when something feels off, which is *is AETHER1 working?*
+The closest thing to that answer is `setup::advise()`, and it looks at exactly one
+subsystem, the model, in the five stages a fresh install moves through and no further. Every
+other subsystem reports its own health in its own way, to whoever happened to call it: the
+voice fails inside `tts.rs`, the hotkey never fires on Wayland and says nothing, a missing
+`coredumpctl` is mentioned only if you run `aether1 crashes`.
+
+So the first half of this step is not self-healing at all. It is deciding what "everything
+is running" means, as a list, in one place.
+
+#### A check is a pure function of an observation
+
+This is the shape the whole step turns on, so it comes first. Every check is split in two:
+a **probe** that touches the world and returns a plain data structure, and a **verdict** that
+reads that structure and returns `Ok`, `Degraded` or `Failed` with a `setup::Step` attached
+for the human. `advise()` is already written this way -- it takes a `ScanResult` and two
+facts and decides, which is why its whole table of cases is unit-tested without an Ollama
+anywhere near it -- and that is the pattern the rest should follow.
+
+Three things follow, and they matter more than the tidiness:
+
+- An observation can be **recorded**. The bytes that made a check fail on one machine can be
+  written down, carried to another machine, and replayed.
+- A check can therefore be **tested against a machine it never saw**, in CI, for ever after.
+- A repair can be **verified** by re-running the same verdict against a fresh probe, which is
+  the difference between fixing something and hoping.
+
+The second half of this step -- the part about whether a fix is a real build requirement --
+is impossible without this and trivial with it.
+
+#### What "everything is running" means
+
+Two classes, and the difference between them decides everything downstream.
+
+**Things AETHER1 owns.** A fault here is AETHER1's own bug, and no amount of installing
+things on the machine is the answer.
+
+1. **The memory database.** `MemoryDb` opens, the schema is at the expected version, a write
+   round-trips, and the filesystem under it has room. A read-only or full disk is the most
+   common way this one fails.
+2. **The HUD is answering.** Step 32 already deals with a window that stopped responding;
+   this makes that a named check rather than a symptom.
+3. **The tray is present.** On Linux a tray icon needs a StatusNotifierItem host, and on a
+   bare window manager there is not one -- the icon simply never appears, which today looks
+   identical to the app not starting.
+4. **Background services match what was asked for.** Autostart is on and `ManagedOllama`
+   holds a live child, or autostart is off and it does not. A child that died is a fault;
+   an Ollama the operator started themselves is not AETHER1's to account for.
+5. **The watchers are watching.** The crash watcher has its reader (`coredumpctl` on Linux,
+   the event log on Windows), the poll is ticking, and the last sweep was recent.
+6. **The server, when it is meant to be up.** With `--serve`, the port is bound; with
+   `--lan`, the TLS certificate loads, its fingerprint matches the one that was shown, and
+   mDNS is announcing.
+7. **Consent is not silently stuck.** Proposals expire after fifteen minutes by design, so a
+   queue of expired ones nobody ever answered is a sign the card is not reaching the
+   operator at all.
+
+**Things AETHER1 depends on.** A fault here is about the machine, and this is the class where
+"fix it" can mean anything.
+
+8. **A model answers.** `model_scanner::models_at(endpoint)` returns something, and the
+   distinction step 19 insists on holds: no answer is a different fault from an empty list.
+9. **The configured model is installed.** Routing already knows this (`reported_missing`) and
+   already falls back with a notice; the check makes it visible before someone types at it.
+10. **Voice out.** An engine is found -- Piper, espeak-ng, or SAPI through PowerShell -- and
+    the voice files a Piper voice needs are both present, not just one.
+11. **Voice in.** The whisper binary runs and the model file is there and complete.
+12. **The hotkey is registered.** And, on Wayland, the check must say that a registered
+    global shortcut never fires there and the compositor binding is the supported route.
+    A known-impossible thing reported as healthy is worse than reporting it broken.
+13. **Room to work.** Enough disk for the model, voice and STT downloads that are configured
+    but not yet fetched.
+14. **The update path.** Signed in, or declined once and deliberately quiet (step 46). Never
+    nagging.
+
+`aether1 doctor` runs the list and prints it; `aether1 doctor --fix` runs the ladder below.
+It is a new verb rather than another flag on `status` because `status` is about the machine
+and this is about the app, and conflating them is what got us here. The HUD gets the same
+list in the settings panel, since the person most likely to need it is the one who cannot
+get a sentence out of the companion.
+
+**Three moments, and no fourth.** The whole list runs once at startup, so the app knows what
+it is standing on before the operator asks it for anything. After that nothing sweeps on a
+timer: a subsystem that fails during ordinary use runs its own check there and then, which
+is both cheaper and more precise than polling, and everything else waits for the operator to
+press Diagnose or type `aether1 doctor`. A companion quietly probing ports and spawning
+processes every minute costs more than it is worth, and these checks are individually cheap
+only for as long as they are not all running all the time.
+
+#### The ladder: how a failed check gets fixed
+
+Four rungs, cheapest first, and nothing skips a rung.
+
+**Rung 0 -- say it.** Every verdict carries a `setup::Step` already: an imperative, a
+sentence of why, and a command or a link. For most failures this is the whole fix and the
+operator does it in five seconds. `install_steps()` and `start_steps()` are already written
+per-OS with links; the rest of the checks owe the same.
+
+**Rung 1 -- the known repairs.** A table in the binary, `CheckId -> a repair already
+expressible as an existing tool`: start the managed Ollama, re-register the hotkey, retry
+the voice download that was interrupted, re-open the database. These are deterministic, they
+are written by hand, and **they need no model at all** -- which is the point, because a
+machine whose model endpoint is down is exactly the machine that cannot ask a model for
+help. Each one goes through `tools::consent`: proposed, shown, approved, logged with who
+approved it. A repair that is on the always-allow list runs without asking, and the log says
+it was a rule rather than a person, as it already does.
+
+**Rung 2 -- an agent.** Only when no known repair matches the check, or the known repair ran
+and the re-check still fails. This is step 15's hand-off with the failed check's bundle as
+context: the observation, the verdict, what rung 1 tried, and the step 37 machine
+description. The bundle is prose rather than JSON, for the reason step 13 already settled --
+small local models do better with sentences.
+
+The consent model does not loosen because the task is a repair:
+- The agent runs where step 15 says it runs -- the operator terminal's directory, or the
+  nominated work directory, never `$HOME`.
+- Foreground by default, with the operator watching. Background only under step 15's rule:
+  the plan is disclosed and approved whole up front, because an unattended agent must not
+  stall on a permission prompt.
+- Per-persona access and per-request elevation apply unchanged. "It is fixing something" is
+  not a reason to widen a grant, and a repair that needs elevation asks for it like anything
+  else.
+- **It still never installs an engine on its own.** That principle predates this step and
+  survives it. An agent may tell you what to install and why, and may run the package
+  manager if you approve that specific command; it does not decide to.
+
+**What the agent may repair is the ground AETHER1 stands on, not AETHER1.** The foundation
+is fair game: a service that is not running, a missing package, a permission, a
+half-downloaded file, a path pointing at nothing. AETHER1's own source is not -- on any
+machine, including a developer machine with the checkout sitting right there. And when the
+fault turns out to be in *another program*, the agent stops at words: it says what it found
+and what it would do, and the operator decides. Diagnosing is allowed everywhere; acting is
+allowed on AETHER1's foundation and nowhere else.
+
+**Rung 3 -- stop.** One known repair and one agent hand-off per check per session, then it
+stops and says plainly that it could not fix this. A loop that keeps trying is worse than a
+broken check, because it burns tokens and the operator stops reading it.
+
+**The re-check is mandatory.** After every repair, the probe runs again and the same verdict
+decides. A repair whose re-check still fails is recorded as a failed repair, which is
+evidence too -- knowing that a plausible fix does not work is worth as much as knowing one
+does.
+
+**And self-healing must not become a place bugs go to hide.** If the same check is repaired
+on every launch, that is not healing, it is a defect being suppressed once a day. The third
+identical repair of the same check should be reported as its own finding, separately from
+whatever it is nominally fixing.
+
+#### Feeding a fix back, and finding out whether it is a real requirement
+
+**A fix that worked on one machine is evidence, not a requirement.** That is the whole
+difficulty. The repair succeeded, so something was wrong; but "this machine was missing a
+package" and "every build is missing that package" look exactly the same from inside the
+machine that was missing it. Nothing about a successful fix distinguishes them. Only a test
+does, and the test has to run somewhere that machine is not.
+
+**1. The repair record.** Every attempt -- rung 1 or rung 2, succeeded or failed -- writes
+one record: the check, the recorded observation that produced the verdict, the OS, desktop
+and versions that matter to that check, exactly what was run or changed, and the re-check
+result. Successes and failures are recorded identically. This lands in the existing action
+log, which already keeps what was proposed, who approved it, and what happened.
+
+**2. Nothing leaves the machine unseen.** A repair record contains paths, a hostname, a
+package list and possibly a command line the operator typed. It is shown in full, it is
+editable before it goes anywhere, and it goes nowhere by default. Consent is per report, not
+a standing switch -- the same reasoning as step 16's per-call MCP consent: agreeing to send
+one report is not agreeing to be a telemetry source.
+
+**3. What "reported back to the repo" is, and when it is offered.** When the record looks
+like a missing dependency there is nobody to tell: the fix is a line in `setup.rs` so the
+next person is told about it, and that is a change a person makes. When it looks like an
+actual bug in AETHER1, the app offers to notify the developers, and taking that offer opens
+an **issue** carrying the record and the proposed test.
+
+An issue, and deliberately not a pull request: a machine-generated patch to the build is
+precisely the thing that must not arrive ready to merge, and the issue is where the triage
+below happens anyway. Step 46 already
+brings a GitHub identity into the app via device flow, so there is somebody to open it as --
+but that App is scoped `contents: read`, and opening issues needs `issues: write` added to
+it. That is a real widening of what the app can do to the repository and is called out here
+rather than assumed.
+
+**4. The proposed test is the point.** Because a check is a pure function of an observation,
+the observation that failed can be committed as a fixture, and the test reads: *given this
+observation, the check fails; given the observation after the repair, it passes.* It needs
+no Ollama, no Windows, no particular desktop -- it is a table entry beside the ones
+`setup.rs` already has. That is the mechanism by which a one-machine patch is promoted to a
+build requirement: it stops being a story about a machine and becomes a row in `cargo test`
+that will fail for everyone, for ever, if the check regresses.
+
+**5. Three verdicts, and a human picks.**
+   - **A bug, which is to say a build requirement.** The check was wrong or missing, or the app genuinely needs
+     something it does not ship or look for. The fix belongs in the code or the packaging --
+     a wider search path, a bundled dependency, a corrected probe.
+   - **A dependency, which is to say an environment fact.** The machine really was missing something the operator has to
+     install. Then the fix belongs in `setup.rs` as a per-OS step with a link, so the *next*
+     person is told rather than silently patched. This is the case that gets mistaken for
+     the first one most often.
+   - **One machine.** Nothing to change; the record stays as history and the repair table
+     keeps its entry.
+
+   The evidence that separates the first from the third is **repetition and replay**: the
+   same observation arriving from a second machine, or the fixture failing on a clean CI
+   runner. One report is an anecdote.
+
+**6. CI is the arbiter, and it has a hole worth naming.** `ci.yml` builds, tests, clippies
+and formats on `ubuntu-latest` only. A repair observed on Windows cannot be proven by CI as
+it stands. This is the strongest argument for the fixture approach being the primary
+mechanism rather than a nicety -- a recorded observation replays on any runner, so a
+Windows-shaped fault can be tested on the Linux runner that already exists. Adding a
+`windows-latest` job is a separate and larger question; step 13 shipped two platform readers
+with only one of them ever executed in CI, and that is the debt this would start paying.
+
+**7. The loop has to close, or the repair table rots.** When a repair becomes a build change,
+its entry in the rung-1 table is removed in the same commit -- the check now passes on its
+own. Otherwise the table grows into a pile of workarounds quietly papering over bugs that
+were fixed years earlier, and every one of them costs a consent prompt on somebody's
+machine.
+
+**What this step is not.** It is not an app that rewrites its own source. An agent at rung 2
+repairs the *machine*; a change to AETHER1's code leaves as a report for a person to act on,
+even on a developer machine that happens to have a checkout sitting right there. The
+difference between a program that fixes its environment and a program that edits itself is
+worth keeping sharp, and nothing here needs the second one.
+
+**Settled 2026-09-20.** The agent repairs the machine and never AETHER1's code; the point of
+repairing the machine is that the app should be running on a solid foundation, so the
+foundation is what it is allowed to touch. A fault in another program earns a notification
+and a suggestion, and the operator decides from there. A record that looks like a bug rather
+than a missing dependency gets an offer to notify the developers, which is a bug report on
+this repository, reviewed like any other. And it runs at startup, again the moment something
+actually fails, and whenever the operator asks -- never on a timer, because the cost of
+watching has to stay smaller than the cost of the thing being watched.
+
+### Step 48: the copies of itself it left behind — **shipped**
+
+AETHER1 has been installable five different ways, and not one of them knows about the others.
+`setup.sh` builds and copies a binary to `~/.local/bin`; the offline and slim bundles put a
+different binary in the same place; step 17 adds an AppImage, a `.deb` and an AUR package; and
+Windows has a per-user Inno Setup install. Install it a second way and the first one stays
+exactly where it was — an old binary still on `PATH`, a launcher entry still pointing at it,
+and a version in the tray that depends on which icon was clicked.
+
+The symptom is never "there are two installs". It is a bug that was fixed weeks ago still
+happening, and half an hour spent working out why the fix did not take. That is the whole
+reason this step exists: a duplicate install is invisible until it wastes your afternoon.
+
+**Detection is automatic, removal is not.** This is the one rule the rest of the step is built
+around, and it is not caution for its own sake: an uninstall cannot be undone, and the scan
+runs unattended at startup where nobody is watching it. So the scan finds, and the operator
+decides — a prompt in the HUD, or an id typed at `aether1 installs remove`. There is no path
+through this code that deletes something nobody asked about. Answering "keep them" is itself a
+decision worth storing (`installs_notice`), because a prompt that returns every launch is how
+a useful notice turns into noise you click through without reading.
+
+**An install is a program, never your data.** The vault, the conversation database, the
+settings and the paired devices all live under `~/.local/share/aether1`, and nothing in this
+step can reach them: `remove` checks every path against the data roots *before* it deletes
+anything, and refuses the whole removal rather than stopping halfway through one. A removal
+that stops halfway has already done the damage. A test holds that refusal in place, and it is
+the test most worth keeping of the ten.
+
+**What AETHER1 did not put there, AETHER1 does not delete.** A `.deb` or an AUR package
+belongs to dpkg or pacman; deleting its files behind the package manager's back leaves it
+believing the package is still installed, which is a worse state than the duplicate that
+started this. Those are handed over as the exact command to run — and that is also the honest
+answer to elevation, since removing a package needs root and AETHER1 asks for root nowhere
+else. A source checkout is not an install at all: it is reported so a developer machine does
+not look like it has a stray copy on it, and never offered.
+
+**A newer copy is never offered, and that asymmetry is deliberate.** The likeliest reason for
+a copy newer than the running one to exist is that it was just installed and the old icon was
+clicked out of habit. Removing it would quietly undo the upgrade — the exact failure this step
+is supposed to prevent, in reverse. Versions compare through the scheme the app already prints
+(`Aether1 0.3.Rev152`, where the revision is the merged pull request, so it is monotonic by
+construction). A package manager's `0.4.0` is not a point on that same line, so it does not
+pretend to be: two versions that cannot be compared produce "cannot tell how old this one is"
+and the copy is still offered, because a second copy is a problem whether or not its age can be
+read — but it is labelled as the guess it is, rather than being called stale on no evidence.
+
+- **New `src-tauri/src/installs.rs`** — `detect` returns every copy the machine can see, and
+  `remove` takes one away. The scan reads the machine through a `Machine` trait rather than
+  calling dpkg, pacman and the registry directly, so the tests run against a machine that does
+  not exist instead of needing a second AETHER1 actually installed on the runner.
+- **Where it looks:** `~/.local/bin/aether1` with its `.desktop` entry and icon; AppImages in
+  `~/Applications`, `~/Downloads`, `~/.local/bin`, `~/bin` and `/opt`; `/usr/local/bin` and
+  `/usr/bin`; `dpkg-query` and `pacman -Q`; and on Windows the Inno Setup uninstall key under
+  `HKCU`, read with `reg.exe` rather than by taking a registry crate for one query. Not a
+  search of the disk — an AppImage anywhere else was put there deliberately, and finding it
+  would mean reading every directory the operator has.
+- **`src-tauri/src/main.rs`** — a startup thread that scans five seconds after launch and says
+  something only when there is something to say, through the same notification path step 13
+  built; plus `other_installs_rust`, `remove_install_rust` and `keep_other_installs_rust`, all
+  `async` because the scan shells out and the window must not wait for it.
+- **`frontend/js/app.js`** — the prompt itself, on the `old-installs-detected` event.
+- **`aether1 installs`**, `aether1 installs remove <id>` and `aether1 installs remove old` —
+  the same answer from a terminal, and the surface that works with no HUD open. Naming an id
+  is what makes the command unambiguous; `remove` with nothing named is an error rather than a
+  guess.
+- **Piper and whisper.cpp are deliberately not in scope.** They live beside AETHER1 under
+  `~/.local/share` and whichever copy survives still uses them, so removing an install leaves
+  them alone. `install_slim_linux.sh` and `offline_install_linux.sh` already clean up after
+  *each other* for exactly those files, and that stays where it is.
+- **Verify:** a machine with a bundle install and an AppImage lists both and removes the older
+  on request; the vault, the database and the settings survive every removal, including one
+  that names the data directory outright; the running copy refuses to remove itself; a copy
+  newer than the running one is listed and not offered; an AUR install produces
+  `sudo pacman -R aether1` rather than a deletion; and a source checkout is reported and kept.
+
+*Ten tests in `installs.rs` and five more in `cli.rs` cover all of that. What a headless
+container cannot check is the same short list step 13 left: the desktop notification actually
+appearing, and the Windows registry read against a real registry.*
+
+---
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -2452,6 +2773,14 @@ event log, honest token telemetry, and native tool calling.
 6. **Step 46, updates for installed copies.** The updater in `main.rs` needs a git checkout
    and a logged-in `gh`, so everyone who installed from a Release is on whatever version
    they downloaded, permanently.
+7. **Step 47, diagnostics that fixes things.** `aether1 status` describes the machine and
+   nothing describes the app, so "is AETHER1 working?" has no answer and every subsystem
+   reports its health to whoever happens to call it. Specified, not started.
+8. ~~**Step 48, the copies of itself it left behind.**~~ **Shipped.** Installing AETHER1 a
+   second way never removed the first, so an old binary kept sitting on `PATH` with a bug in
+   it that had already been fixed. `aether1 installs` now finds every copy and removes the
+   stale ones on request. What a container cannot check is the desktop notification and the
+   Windows registry read.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) are now specs rather than sketches,
 settled in that order and written up in full above.

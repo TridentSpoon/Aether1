@@ -13,10 +13,12 @@
 //   1. whisper.cpp -- a prebuilt native binary with no Python dependency at all. This is
 //      what the fully-offline installer bundles (see scripts/package_offline_*), because
 //      it needs nothing else on the machine and never touches the network once installed.
-//   2. faster-whisper -- a `pip install faster-whisper` away, no native binary to bundle.
-//      This is what the small installer relies on instead: smaller artifact, at the cost of
-//      needing Python and a network reachable the first time a given model size is used
-//      (it caches itself under ~/.cache/huggingface after that).
+//   2. faster-whisper -- a Python package, no native binary to bundle. This is what the
+//      small installer relies on instead: smaller artifact, at the cost of needing Python
+//      and a network reachable the first time a given model size is used (it caches itself
+//      under ~/.cache/huggingface after that). It goes in a virtual environment Aether1
+//      owns rather than the system Python, which current distributions refuse to let pip
+//      write to at all -- see `python_binary` and `paths::managed_python_env`.
 //
 // Whichever is actually installed wins; a machine with both installed uses whisper.cpp,
 // since a dedicated native binary needs nothing from Python's own environment to keep
@@ -89,14 +91,44 @@ pub fn whisper_model(configured: Option<&str>) -> Option<PathBuf> {
     None
 }
 
-/// `python3` before `python`: on Linux, plenty of distributions no longer symlink the
+/// Aether1's own environment first, then `python3`, then `python`.
+///
+/// The environment comes first because it is the only one `faster-whisper` can reliably be
+/// *in*. A system Python on Arch, Debian 12+, Ubuntu 23.04+, Fedora or Homebrew refuses
+/// `pip install` outright (PEP 668, `error: externally-managed-environment`), so the route
+/// the wizard now gives people is a virtual environment under Aether1's own data directory
+/// -- see `paths::managed_python_env`. Nothing puts that interpreter on PATH, which is
+/// exactly the point, and also the reason it has to be looked for by name here: without
+/// this line the operator follows the instructions, the install succeeds, and Aether1 goes
+/// on reporting that it cannot hear them.
+///
+/// Then `python3` before `python`: on Linux, plenty of distributions no longer symlink the
 /// bare name at all, while `python3` is the one guarantee across all of them. On Windows,
 /// where a bare `python3` is rare, the fallback picks up whatever winget/python.org
 /// installed as plain `python`.
 fn python_binary() -> Option<PathBuf> {
-    which::which("python3")
-        .or_else(|_| which::which("python"))
-        .ok()
+    crate::paths::managed_python().or_else(|| {
+        which::which("python3")
+            .or_else(|_| which::which("python"))
+            .ok()
+    })
+}
+
+/// The command that creates Aether1's Python environment and puts `packages` in it, ready
+/// to be shown in the wizard and pasted into a terminal.
+///
+/// One string with `&&` rather than a list, because it is one thing the operator does and
+/// the second half is meaningless without the first. `python3 -m venv` needs no network and
+/// no privileges, and writes only inside Aether1's own data directory.
+pub fn managed_env_command(packages: &str) -> String {
+    let env = crate::paths::managed_python_env()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "~/.local/share/aether1/pyenv".to_string());
+    if cfg!(target_os = "windows") {
+        format!("python -m venv \"{env}\" && \"{env}\\Scripts\\pip\" install {packages}")
+    } else {
+        format!("python3 -m venv \"{env}\" && \"{env}/bin/pip\" install {packages}")
+    }
 }
 
 /// Whether faster-whisper is importable through whichever Python this machine has. Pip
@@ -104,9 +136,11 @@ fn python_binary() -> Option<PathBuf> {
 /// there is for whisper.cpp -- asking the interpreter directly is the only real check.
 fn faster_whisper_status() -> Result<PathBuf, String> {
     let python = python_binary().ok_or_else(|| {
-        "no python or python3 found on PATH -- install Python (winget on Windows, your \
-         package manager on Linux), then `pip install faster-whisper`"
-            .to_string()
+        format!(
+            "no Python found -- install Python (winget on Windows, your package manager on \
+             Linux), then run: {}",
+            managed_env_command("faster-whisper")
+        )
     })?;
     let mut cmd = Command::new(&python);
     cmd.args(["-c", "import faster_whisper"]);
@@ -115,10 +149,15 @@ fn faster_whisper_status() -> Result<PathBuf, String> {
     if ok {
         Ok(python)
     } else {
+        // Deliberately not `{python} -m pip install faster-whisper`: on every current
+        // distribution that is the line that answers with
+        // `error: externally-managed-environment` and sends somebody looking for
+        // --break-system-packages. The venv command works on all of them and is the one
+        // route this module can then actually find the result of.
         Err(format!(
-            "faster-whisper is not installed for {} -- run: {} -m pip install faster-whisper",
+            "faster-whisper is not installed for {} -- run: {}",
             python.display(),
-            python.display()
+            managed_env_command("faster-whisper")
         ))
     }
 }
