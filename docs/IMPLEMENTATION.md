@@ -905,10 +905,14 @@ tool, the visualizer runnable on its own, the voice stack callable from a script
 that means the vault format is documented and stable, `aether1 face` and `aether1 say`
 work without the HUD running, and nothing in the vault depends on Aether1 to be readable.
 
-### Step 19: several local models, and choosing between them
+### Step 19: several local models, and choosing between them — **the host half shipped**
 
-**A stated core requirement, deliberately not built yet.** Recorded here so the shape of it
-is known while earlier steps are designed, not so it gets started early.
+**The host half is built.** `llm/routing.rs` holds the rule and the shipped table,
+`model_scanner::models_at` asks the configured endpoint what it can run, `load_config`
+applies the choice on every turn for a local provider, `aether1 models` shows and sets it,
+and a dropdown sits beside the avatar in the HUD. The LAN half is still ahead — see "On
+network exposure" below, which is now an ordering constraint rather than a question, since
+step 45 shipped the authentication it was waiting on.
 
 The intent: the backend draws on more than one local model at a time, and sends a task to
 whichever suits it -- a small fast one for a summary or a routine reply, a larger one for
@@ -953,8 +957,40 @@ The open questions, in the order they will bite:
    to the suggestion, saying so once, so uninstalling a model is not a silent change of who
    you are talking to.
 
-**On network exposure.** Now that the LAN is confirmed in scope, this is no longer a
-question but an ordering constraint.
+**What was built, and the two decisions inside it worth knowing.**
+
+The routing key is the persona, so nothing classifies the request. A per-message classifier
+was the obvious alternative and it is the wrong one: it makes the choice invisible,
+unpredictable, and impossible to check. Keyed on the speciality, the whole feature reads back
+as a sentence — "L'kemi runs on Qwen-Coder" — which `aether1 models` prints one line at a
+time.
+
+The suggestion is a table of model *families* matched on name fragments, ordered
+most-specific first so `qwen` does not swallow `qwen-coder`. Where several models of one
+family are installed, measured speed from `model_benchmarks` breaks the tie; **and where
+nothing has been measured yet, the smaller model wins.** That second rule was added after
+running it: sorting ties by name alone put `qwen2.5-coder:32b` ahead of `:7b`, so a fresh
+install — the exact moment a suggestion matters most — was pointed at the largest model on
+the machine. Size is read off the tag, which almost always carries it, and a name claiming no
+size sorts last rather than reading as tiny.
+
+Three distinctions the implementation keeps, each of which would be a bug if collapsed:
+
+- **A server that did not answer is not an empty machine.** `models_at` returns None for the
+  first and an empty list for the second. Reading one as the other would tell the operator
+  their model had been uninstalled every time their server restarted.
+- **"No pick" is not "picked nothing".** Clearing removes the key rather than storing an
+  empty string, because the difference is exactly whether the suggestion is allowed to apply.
+- **A missing model does not discard the choice.** The setting is kept, the suggestion runs
+  in the meantime, and one line says so — once per model per session, on the telemetry tick
+  the HUD already listens to, rendered as the program speaking rather than as the persona.
+  Attributing machinery to the character is how an operator learns to distrust the character.
+
+Routing applies to local providers only. Swapping the model under a cloud call would change
+what somebody is billed for.
+
+**On network exposure.** The authentication this was waiting on shipped in step 45, so what
+remains is the reaching-out half. This is an ordering constraint rather than a question.
 
 Models on the **local host** need nothing beyond the current loopback bind: the scanner
 already finds them, and `--serve` stays closed to the outside.
@@ -1186,7 +1222,7 @@ answer looked like, so picking one changed the tone of the reply and almost noth
 Each directive now has a "What that means in practice" half — a test enforces that phrase is
 present in all seven speciality personas, which is a crude check for a real property. To the
 Point must put the answer in the first line and not restate the question. Coding must produce
-runnable code and name the failure mode. Cites Sources must say *which kind* of source a claim
+runnable code and name the failure mode. Scanning & Extraction must say *which kind* of source a claim
 has — read this session, recalled from training and unverifiable, or inferred — and never
 invent one to fill the shape. Security must ask whether a target is the operator's to test.
 
@@ -1214,7 +1250,7 @@ fallback directive without saying so.
 [PERSONA_ACCESS.md](PERSONA_ACCESS.md); this is the summary and why it is a document before it
 is code.
 
-Read-only tools currently run automatically for every persona, so Creative Work can read your
+Read-only tools currently run automatically for every persona, so Signal & Logic can read your
 firewall rules and Conversational can read your source tree. Nothing connects what the
 companion is *for* to what it reaches for without asking. The design gives each persona a
 domain — a set of read-only tools and path roots — that runs without a prompt, and makes
@@ -2616,6 +2652,85 @@ this repository, reviewed like any other. And it runs at startup, again the mome
 actually fails, and whenever the operator asks -- never on a timer, because the cost of
 watching has to stay smaller than the cost of the thing being watched.
 
+### Step 48: the copies of itself it left behind — **shipped**
+
+AETHER1 has been installable five different ways, and not one of them knows about the others.
+`setup.sh` builds and copies a binary to `~/.local/bin`; the offline and slim bundles put a
+different binary in the same place; step 17 adds an AppImage, a `.deb` and an AUR package; and
+Windows has a per-user Inno Setup install. Install it a second way and the first one stays
+exactly where it was — an old binary still on `PATH`, a launcher entry still pointing at it,
+and a version in the tray that depends on which icon was clicked.
+
+The symptom is never "there are two installs". It is a bug that was fixed weeks ago still
+happening, and half an hour spent working out why the fix did not take. That is the whole
+reason this step exists: a duplicate install is invisible until it wastes your afternoon.
+
+**Detection is automatic, removal is not.** This is the one rule the rest of the step is built
+around, and it is not caution for its own sake: an uninstall cannot be undone, and the scan
+runs unattended at startup where nobody is watching it. So the scan finds, and the operator
+decides — a prompt in the HUD, or an id typed at `aether1 installs remove`. There is no path
+through this code that deletes something nobody asked about. Answering "keep them" is itself a
+decision worth storing (`installs_notice`), because a prompt that returns every launch is how
+a useful notice turns into noise you click through without reading.
+
+**An install is a program, never your data.** The vault, the conversation database, the
+settings and the paired devices all live under `~/.local/share/aether1`, and nothing in this
+step can reach them: `remove` checks every path against the data roots *before* it deletes
+anything, and refuses the whole removal rather than stopping halfway through one. A removal
+that stops halfway has already done the damage. A test holds that refusal in place, and it is
+the test most worth keeping of the ten.
+
+**What AETHER1 did not put there, AETHER1 does not delete.** A `.deb` or an AUR package
+belongs to dpkg or pacman; deleting its files behind the package manager's back leaves it
+believing the package is still installed, which is a worse state than the duplicate that
+started this. Those are handed over as the exact command to run — and that is also the honest
+answer to elevation, since removing a package needs root and AETHER1 asks for root nowhere
+else. A source checkout is not an install at all: it is reported so a developer machine does
+not look like it has a stray copy on it, and never offered.
+
+**A newer copy is never offered, and that asymmetry is deliberate.** The likeliest reason for
+a copy newer than the running one to exist is that it was just installed and the old icon was
+clicked out of habit. Removing it would quietly undo the upgrade — the exact failure this step
+is supposed to prevent, in reverse. Versions compare through the scheme the app already prints
+(`Ver 0.4.152`, where the last number is the merged pull request, so it is monotonic by
+construction). A package manager's `0.4.0` is not a point on that same line, so it does not
+pretend to be: two versions that cannot be compared produce "cannot tell how old this one is"
+and the copy is still offered, because a second copy is a problem whether or not its age can be
+read — but it is labelled as the guess it is, rather than being called stale on no evidence.
+
+- **New `src-tauri/src/installs.rs`** — `detect` returns every copy the machine can see, and
+  `remove` takes one away. The scan reads the machine through a `Machine` trait rather than
+  calling dpkg, pacman and the registry directly, so the tests run against a machine that does
+  not exist instead of needing a second AETHER1 actually installed on the runner.
+- **Where it looks:** `~/.local/bin/aether1` with its `.desktop` entry and icon; AppImages in
+  `~/Applications`, `~/Downloads`, `~/.local/bin`, `~/bin` and `/opt`; `/usr/local/bin` and
+  `/usr/bin`; `dpkg-query` and `pacman -Q`; and on Windows the Inno Setup uninstall key under
+  `HKCU`, read with `reg.exe` rather than by taking a registry crate for one query. Not a
+  search of the disk — an AppImage anywhere else was put there deliberately, and finding it
+  would mean reading every directory the operator has.
+- **`src-tauri/src/main.rs`** — a startup thread that scans five seconds after launch and says
+  something only when there is something to say, through the same notification path step 13
+  built; plus `other_installs_rust`, `remove_install_rust` and `keep_other_installs_rust`, all
+  `async` because the scan shells out and the window must not wait for it.
+- **`frontend/js/app.js`** — the prompt itself, on the `old-installs-detected` event.
+- **`aether1 installs`**, `aether1 installs remove <id>` and `aether1 installs remove old` —
+  the same answer from a terminal, and the surface that works with no HUD open. Naming an id
+  is what makes the command unambiguous; `remove` with nothing named is an error rather than a
+  guess.
+- **Piper and whisper.cpp are deliberately not in scope.** They live beside AETHER1 under
+  `~/.local/share` and whichever copy survives still uses them, so removing an install leaves
+  them alone. `install_slim_linux.sh` and `offline_install_linux.sh` already clean up after
+  *each other* for exactly those files, and that stays where it is.
+- **Verify:** a machine with a bundle install and an AppImage lists both and removes the older
+  on request; the vault, the database and the settings survive every removal, including one
+  that names the data directory outright; the running copy refuses to remove itself; a copy
+  newer than the running one is listed and not offered; an AUR install produces
+  `sudo pacman -R aether1` rather than a deletion; and a source checkout is reported and kept.
+
+*Ten tests in `installs.rs` and five more in `cli.rs` cover all of that. What a headless
+container cannot check is the same short list step 13 left: the desktop notification actually
+appearing, and the Windows registry read against a real registry.*
+
 ### Step 49: writing code when the subscription lapses -- **shipped**
 
 **The problem is not a missing feature, it is a week without one.** Somebody pays for a
@@ -2681,6 +2796,7 @@ likely doing it from a terminal already.
 against a real Ollama. The advice, the catalogue ordering, the tag rule and the commands'
 contents are covered by tests.
 
+---
 
 ## Where this stands
 
@@ -2712,11 +2828,11 @@ a cloud subscription is not being paid for.
 3. ~~**Step 13, crash capture.**~~ **Shipped**, on both platforms. What is left is what a
    headless container cannot check: the tray colour, the notification, and the Windows reader
    against a real event log.
-4. **Step 19, several local models.** A stated core requirement, and still deliberately not
-   started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
-   download path it would need already exist in `setup.rs`. Its two design questions are
-   now answered -- routing is keyed on speciality and chosen from a dropdown -- so what
-   remains is the building.
+4. ~~**Step 19, several local models.**~~ **The host half shipped.** A speciality now runs
+   on the model it suits, chosen from a dropdown beside the avatar or from `aether1 models`,
+   with a suggestion from a table in the binary where the operator has not picked. What
+   remains is the LAN half: reaching a model server on another machine, which is an address
+   and an allowlist now that step 45 has done the dangerous half.
 5. **Step 45, the LAN transport.** TLS, attempt limiting and per-device tokens shipped, so
    a lost machine can now be cut off on its own with `aether1 revoke <id>`. What remains is
    a PAKE, if the rigour is ever wanted -- it closes a convincing-fake attack rather than a
@@ -2727,6 +2843,11 @@ a cloud subscription is not being paid for.
 7. **Step 47, diagnostics that fixes things.** `aether1 status` describes the machine and
    nothing describes the app, so "is AETHER1 working?" has no answer and every subsystem
    reports its health to whoever happens to call it. Specified, not started.
+8. ~~**Step 48, the copies of itself it left behind.**~~ **Shipped.** Installing AETHER1 a
+   second way never removed the first, so an old binary kept sitting on `PATH` with a bug in
+   it that had already been fixed. `aether1 installs` now finds every copy and removes the
+   stale ones on request. What a container cannot check is the desktop notification and the
+   Windows registry read.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) are now specs rather than sketches,
 settled in that order and written up in full above.

@@ -5,10 +5,12 @@
 // against the same conversation/settings state.
 
 mod db;
+pub mod flow;
 mod genesis;
 mod persona;
 mod pricing;
 mod providers;
+pub mod routing;
 mod stt;
 mod telemetry;
 pub mod tts;
@@ -18,13 +20,16 @@ use std::time::Instant;
 
 pub use db::{ActionRecord, ActionStatus, MemoryDb, Message, ModelBenchmark, SessionSummary};
 pub use genesis::Identity;
+// The voices behind a persona, re-exported because speech resolves them per persona at the
+// moment it speaks -- see commands::synthesize_speech.
+pub use genesis::{local_voice_for as persona_local_voice, voice_for as persona_voice};
 use persona::Provider;
 // Re-exported because commands.rs serves the persona catalogue to the HUD: the Settings list
 // is built from the enum rather than written out again in the markup.
 pub use persona::{Domain, Persona, Root};
 use providers::ChatContext;
 pub use providers::Sink;
-pub use stt::{local_status as stt_local_status, stage_audio, transcribe};
+pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio, transcribe};
 pub use telemetry::Telemetry;
 pub use tts::{
     generate_speech_reporting, generate_speech_with, local_status as tts_local_status,
@@ -283,7 +288,25 @@ pub struct LlmEngine {
     /// quietly does I/O on a timer is a getter that will one day be the reason the HUD
     /// stutters.
     capability: Mutex<Option<(String, providers::LocalCapability)>>,
+    /// What the configured endpoint last said it can run, with the endpoint it was asked
+    /// about and when. Step 19's routing needs this on every turn, and asking the server
+    /// every turn would put an HTTP round trip in front of each reply for a list that
+    /// changes when someone installs a model -- which is to say, rarely.
+    available: Mutex<Option<(String, Instant, Vec<String>)>>,
+    /// Models already reported missing this session, so "your model is gone" is said once
+    /// rather than before every reply. Per process rather than stored: the notice is about
+    /// this run of the app noticing, and a fact worth telling someone twice a week is not
+    /// worth telling them forty times an evening.
+    reported_missing: Mutex<std::collections::HashSet<String>>,
+    /// The line the routing wants the operator to see, waiting to be collected. Read and
+    /// cleared by `take_routing_notice`.
+    routing_notice: Mutex<Option<String>>,
 }
+
+/// How long the endpoint's model list is trusted before asking again. Short enough that
+/// installing a model and switching to it feels immediate, long enough that a conversation
+/// is not a series of round trips to `/api/tags`.
+const AVAILABLE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl LlmEngine {
     pub fn new(db: MemoryDb) -> LlmEngine {
@@ -291,7 +314,62 @@ impl LlmEngine {
             db,
             usage: Mutex::new(UsageStats::default()),
             capability: Mutex::new(None),
+            available: Mutex::new(None),
+            reported_missing: Mutex::new(std::collections::HashSet::new()),
+            routing_notice: Mutex::new(None),
         }
+    }
+
+    /// What the configured endpoint can run, cached for `AVAILABLE_TTL`.
+    ///
+    /// None throughout means "could not ask", which `routing::resolve` treats as a reason
+    /// to leave every stored choice alone rather than as an empty machine.
+    fn available_models(&self, endpoint: &str) -> Vec<String> {
+        {
+            let cached = self.available.lock().unwrap();
+            if let Some((known, at, models)) = cached.as_ref() {
+                if known == endpoint && at.elapsed() < AVAILABLE_TTL {
+                    return models.clone();
+                }
+            }
+        }
+        let models = crate::model_scanner::models_at(endpoint).unwrap_or_default();
+        *self.available.lock().unwrap() =
+            Some((endpoint.to_string(), Instant::now(), models.clone()));
+        models
+    }
+
+    /// The model this persona should run on, and the line to show if that is a surprise.
+    ///
+    /// The notice is parked rather than returned, because the caller here is building a
+    /// turn and has nowhere to put a sentence -- `take_routing_notice` is how the HUD and
+    /// the CLI collect it.
+    fn route(&self, persona: &Persona, endpoint: &str) -> Option<String> {
+        let available = self.available_models(endpoint);
+        let choice = routing::resolve(
+            &self.db,
+            persona,
+            &available,
+            &routing::measured_speeds(&self.db),
+        );
+        if let routing::Reason::Missing(gone) = &choice.reason {
+            // Once per model per session: the same missing model on every turn is the
+            // notice teaching the operator to ignore notices.
+            let first_time = self
+                .reported_missing
+                .lock()
+                .unwrap()
+                .insert(format!("{}|{gone}", persona.key()));
+            if first_time {
+                *self.routing_notice.lock().unwrap() = choice.notice(persona);
+            }
+        }
+        choice.model
+    }
+
+    /// Collects the routing's pending line, if there is one, and clears it.
+    pub fn take_routing_notice(&self) -> Option<String> {
+        self.routing_notice.lock().unwrap().take()
     }
 
     /// Which half of the telemetry panel this configuration makes sense for.
@@ -370,13 +448,26 @@ impl LlmEngine {
             }
         }
 
+        let provider = Provider::from_key(&provider_key);
+        let persona = Persona::from_key(&persona_key);
+
+        // Step 19. Only for a local provider: routing between models the operator has
+        // installed is the whole point, and quietly swapping the model on a cloud call
+        // would change what somebody is billed for.
+        let model_name = match provider {
+            Provider::Ollama | Provider::LmStudio => {
+                self.route(&persona, &endpoint).unwrap_or(model_name)
+            }
+            _ => model_name,
+        };
+
         Config {
             agent_name,
-            provider: Provider::from_key(&provider_key),
+            provider,
             model_name,
             api_key,
             endpoint,
-            persona: Persona::from_key(&persona_key),
+            persona,
             persona_key,
             custom_directive,
             local_only,

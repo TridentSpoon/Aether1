@@ -57,6 +57,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const hologram = new HologramAvatar('hologram-viewport');
     const voiceEngine = new VoiceAudioEngine();
 
+    /* Which turn's speech is allowed to reach the queue.
+       A reply is spoken sentence by sentence as it streams, so at any moment some of it is
+       still inside a synthesizer and has no clip yet. `stopSpeech()` can only drop what has
+       already been queued; the sentences still being synthesized arrive afterwards and queue
+       themselves, which is one reply's words landing in the middle of the next one's. Every
+       chunk carries the turn it belongs to and is discarded on arrival if the turn has moved
+       on. */
+    let speechTurn = 0;
+    function supersedeSpeech() {
+        speechTurn += 1;
+        voiceEngine.stopSpeech();
+    }
+
     // DOM Elements
     const chatContainer = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
@@ -282,6 +295,10 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (avatarName === 'arx-lkemi') avatarStructureLabel.textContent = 'CUT-CORNER TRIANGLE PANEL';
         else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
         else if (avatarName === 'a1') avatarStructureLabel.textContent = 'MONOGRAM WORDMARK';
+        else if (avatarName === 'enxephalon') avatarStructureLabel.textContent = 'SYNAPTIC MIND LATTICE';
+        else if (avatarName === 'cicero') avatarStructureLabel.textContent = 'HOVERING REEL CHASSIS';
+        else if (avatarName === 'praxis') avatarStructureLabel.textContent = 'HARD-LIGHT TRAINING GRID';
+        else if (avatarName === 'chrono-maistresse') avatarStructureLabel.textContent = 'ANIMATE CHRONOMETER DIAL';
         // A registered avatar names itself, rather than borrowing hAlcy's label from
         // the fallback below -- see js/hologram/README.md.
         else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
@@ -371,31 +388,31 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         'arx-locas': {
             name: 'A.R.X.LOCAS', persona: 'arx-locas', voice: 'en-US-AriaNeural',
-            greeting: "🔵 **Archival, Reasoning, matriX — Locas Node engaged.** No queue, no ceremony — what do you need done?"
+            greeting: "🔵 **Archival, Reasoning, matriX — Locas Node engaged.** Your day, your plan and this machine, all on one desk. What do you need?"
         },
         'arx-legionare': {
             name: 'A.R.X.LEGIONARE', persona: 'arx-legionare', voice: 'en-US-DavisNeural',
-            greeting: '🔴 **Archival, Reasoning, matriX — Legionare Node engaged.** Give me the objective. I will give you the order of operations.'
+            greeting: '🔴 **Archival, Reasoning, matriX — Legionare Node engaged.** Tell me what you run and I will tell you what reaches it first.'
         },
         'arx-loregenda': {
             name: 'A.R.X.LOREGENDA', persona: 'arx-loregenda', voice: 'en-GB-ThomasNeural',
-            greeting: '🔷 **Archival, Reasoning, matriX — Loregenda Node engaged.** I hold what has already been decided. Nothing new gets to contradict it by accident.'
+            greeting: '🔷 **Archival, Reasoning, matriX — Loregenda Node engaged.** Bring me the world you are building. Nothing new gets to contradict what is already written.'
         },
         'arx-lyksaum': {
             name: 'A.R.X.LYKSAUM', persona: 'arx-lyksaum', voice: 'en-AU-NatashaNeural',
-            greeting: "🩵 **Archival, Reasoning, matriX — Lyksaum Node engaged.** Watching this machine's vitals. I speak up when something changes."
+            greeting: "🩵 **Archival, Reasoning, matriX — Lyksaum Node engaged.** Ask me twice if the first answer did not land. I will write it down either way."
         },
         'arx-limes': {
             name: 'A.R.X.LIMES', persona: 'arx-limes', voice: 'en-US-GuyNeural',
-            greeting: '🔶 **Archival, Reasoning, matriX — Limes Node engaged.** Every claim I make will carry where it came from. The Archive demands nothing less.'
+            greeting: '🔶 **Archival, Reasoning, matriX — Limes Node engaged.** Name the target. I sweep it, and I bring back what is in it — with where each piece came from.'
         },
         'arx-logos': {
             name: 'A.R.X.LOGOS', persona: 'arx-logos', voice: 'en-GB-LibbyNeural',
-            greeting: '🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let us make something worth cataloguing.'
+            greeting: '🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Sound, pattern, and the logic underneath both. Give me the signal.'
         },
         'arx-lexico': {
             name: 'A.R.X.LEXICO', persona: 'arx-lexico', voice: 'en-GB-RyanNeural',
-            greeting: '🧊 **Archival, Reasoning, matriX — Lexico Node engaged.** Say what you mean. I will help you say it the same way every time.'
+            greeting: '🧊 **Archival, Reasoning, matriX — Lexico Node engaged.** Ask me what is true, and I will tell you how far the source it came from actually goes.'
         },
         'arx-lucre': {
             name: 'A.R.X.LUCRE', persona: 'arx-lucre', voice: 'en-US-EricNeural',
@@ -403,7 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         'arx-lkemi': {
             name: "A.R.X.L'KEMI", persona: 'arx-lkemi', voice: 'en-AU-WilliamNeural',
-            greeting: "🔻 **Archival, Reasoning, matriX — L'kemi Node engaged.** Bring me a shape you need changed into another. I handle the transformation cleanly."
+            greeting: "🔻 **Archival, Reasoning, matriX — L'kemi Node engaged.** Bring me what you are building, or what needs turning into something better."
         },
         alt: {
             name: 'A1ter_nul', persona: 'alt', voice: 'en-US-JennyNeural',
@@ -453,7 +470,10 @@ document.addEventListener('DOMContentLoaded', () => {
        fresh at that moment rather than a value captured now, so a manual avatar change made
        while the flash is showing is not clobbered when it ends. */
     function flashTraceProtocolAvatar(avatarId) {
-        if (Aether1AvatarUnlocks.unlock(avatarId)) refreshTraceProtocolVisibility();
+        if (Aether1AvatarUnlocks.unlock(avatarId)) {
+            refreshTraceProtocolVisibility();
+            refreshEmptyAvatarGroups();
+        }
 
         if (traceProtocolFlashTimer) clearTimeout(traceProtocolFlashTimer);
         setHologramAvatar(avatarId);
@@ -463,6 +483,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }, TRACE_PROTOCOL_FLASH_MS);
     }
 
+    /* A family heading with nothing under it is just a stray divider, so each one is shown
+       only while its grid has a pill someone can actually press. That covers two cases: a
+       group standing ready for avatars that have not been built yet (The eXcelsior Class),
+       and one whose every member is still an undiscovered Trace Protocol. Each heading is
+       paired with the grid immediately after it -- see #avatar-menu in index.html. */
+    function refreshEmptyAvatarGroups() {
+        document.querySelectorAll('#avatar-menu .avatar-group-label').forEach((heading) => {
+            const grid = heading.nextElementSibling;
+            // Compared against null rather than coerced with a double negation, because
+            // Tailwind's scanner reads this file as plain text looking for class names and
+            // a negated identifier can read as an important-flagged utility to it, which
+            // would bake a rule nothing uses into vendor/tailwind.css on every rebuild.
+            // See scripts/build_vendor_css.sh.
+            const filled = grid !== null && grid.querySelector('.avatar-pill:not(.hidden)') !== null;
+            heading.classList.toggle('hidden', !filled);
+            if (grid) grid.classList.toggle('hidden', !filled);
+        });
+    }
+
     // A pick already sitting in currentAvatar -- restored from localStorage on load -- is
     // discovered by definition, whether that's because its trigger fired in an earlier
     // session (before this browser's unlock flags existed) or it was chosen back when these
@@ -470,6 +509,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // button from vanishing out from under an avatar that is still the active one.
     if (TRACE_PROTOCOL_AVATAR_IDS.includes(currentAvatar)) Aether1AvatarUnlocks.unlock(currentAvatar);
     refreshTraceProtocolVisibility();
+    refreshEmptyAvatarGroups();
 
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
@@ -693,6 +733,173 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.agent_name && data.agent_name !== currentAgentName) {
             updateAgentNameDisplay(data.agent_name);
         }
+        // Step 19: almost always absent. It carries one line when a model the operator
+        // chose has been uninstalled. The backend hands it over once per model per session
+        // and clears it as it does, so this cannot repeat it -- uninstalling a model must
+        // not silently change who you are talking to, and must not nag either.
+        if (data.routing_notice) {
+            appendSystemNotice(data.routing_notice);
+            refreshSpecialityModel();
+        }
+    }
+
+    /* Step 19: the model dropdown beside the avatar ---------------------------------
+       Shows the model for the speciality that is active right now, not a table of all
+       sixteen -- the avatar already says which speciality you are in, so the row reads as
+       "this one, on that model". Changing persona re-reads it.
+
+       The whole row hides when the model server has not answered. A dropdown offering
+       nothing is worse than no dropdown: it looks broken, and it invites a click that
+       cannot do anything. */
+    const elAvatarModelRow = document.getElementById('avatar-model-row');
+    const elAvatarModel = document.getElementById('avatar-model');
+
+    async function refreshSpecialityModel() {
+        if (!IS_TAURI || !elAvatarModel || !elAvatarModelRow) return;
+        let data;
+        try {
+            data = await tauriInvoke('speciality_models_rust');
+        } catch (e) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+        // null means nothing answered; [] means a server with nothing loaded. Neither can
+        // offer a choice, and both are hidden rather than shown as an empty control.
+        if (!Array.isArray(data.available) || data.available.length === 0) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+
+        const active = document.getElementById('setting-persona')?.value || 'default';
+        const row = (data.specialities || []).find(s => s.key === active);
+        if (!row) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+
+        elAvatarModel.innerHTML = '';
+        // "Suggested" is the first option and the one selected when nothing was chosen, so
+        // the default state of the control is the design's own recommendation rather than
+        // a blank the operator has to interpret.
+        const auto = document.createElement('option');
+        auto.value = '';
+        auto.textContent = row.suggested
+            ? `${row.suggested}  (suggested)`
+            : 'the general model';
+        elAvatarModel.appendChild(auto);
+
+        for (const entry of data.available) {
+            const option = document.createElement('option');
+            option.value = entry.model;
+            option.textContent = entry.good_at
+                ? `${entry.model} -- ${entry.good_at}`
+                : entry.model;
+            elAvatarModel.appendChild(option);
+        }
+
+        elAvatarModel.value = row.chosen || '';
+        // A chosen model that is no longer installed is not in the list, so the select
+        // would fall back to the first option and quietly look like a choice was never
+        // made. Say it instead.
+        if (row.chosen && elAvatarModel.value !== row.chosen) {
+            const gone = document.createElement('option');
+            gone.value = row.chosen;
+            gone.textContent = `${row.chosen}  (not installed)`;
+            elAvatarModel.appendChild(gone);
+            elAvatarModel.value = row.chosen;
+        }
+        elAvatarModel.title = `${row.speciality}\nRunning on: ${row.running || 'the general model'}`;
+        elAvatarModelRow.classList.remove('hidden');
+    }
+
+    function initSpecialityModel() {
+        if (!elAvatarModel) return;
+        elAvatarModel.addEventListener('change', async () => {
+            const model = elAvatarModel.value;
+            const persona = document.getElementById('setting-persona')?.value || 'default';
+            try {
+                // An empty value is "no pick", which is a real setting and not the same as
+                // picking nothing -- it is what lets the suggestion apply again.
+                await tauriInvoke('set_speciality_model_rust', {
+                    persona,
+                    model: model || null,
+                });
+            } catch (e) {
+                console.error('Could not set the model for this speciality', e);
+            }
+            refreshSpecialityModel();
+        });
+        const personaSelect = document.getElementById('setting-persona');
+        if (personaSelect) {
+            personaSelect.addEventListener('change', refreshSpecialityModel);
+        }
+        refreshSpecialityModel();
+    }
+
+    /* The STATIC / FLOW toggle in the chin bar ---------------------------------------
+       STATIC is the behaviour AETHER1 has always had: the avatar you picked answers
+       everything. FLOW lets the question move to the specialist inside that avatar's own
+       line, announced first by whoever is holding it. The rule that decides lives in
+       src-tauri/src/llm/flow.rs; this is only the switch and the label.
+
+       The button hides itself when the current avatar belongs to no line -- A1, Model's
+       Own, your own design -- because there would be nothing to flow between, and a toggle
+       that can be pressed but changes nothing is worse than no toggle. */
+    async function refreshFlowMode() {
+        const button = document.getElementById('flow-toggle');
+        if (!button) return;
+        let state = null;
+        try {
+            if (IS_TAURI) {
+                state = await tauriInvoke('flow_mode_rust');
+            } else {
+                const resp = await apiFetch('/api/flow');
+                if (resp.ok) state = await resp.json();
+            }
+        } catch (e) {
+            console.error('Could not read the flow mode setting', e);
+        }
+        if (!state || !state.group) {
+            button.classList.add('hidden');
+            return;
+        }
+        button.classList.remove('hidden');
+        // FLOW is the state worth seeing across the room: it means the avatar on screen is
+        // not necessarily the one that answers next. So it is lit -- filled, bright, with a
+        // dot -- while STATIC stays the quiet outline the rest of the chin bar wears. Two
+        // labels in identical styling read as a caption rather than a switch that is on.
+        button.classList.toggle('flow-on', !!state.enabled);
+        button.textContent = state.enabled ? '\u25cf FLOW' : 'STATIC';
+        button.title = state.enabled
+            ? `The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
+            : `This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
+    }
+
+    function initFlowMode() {
+        const button = document.getElementById('flow-toggle');
+        if (!button) return;
+        button.addEventListener('click', async () => {
+            const turningOn = !button.classList.contains('flow-on');
+            try {
+                if (IS_TAURI) {
+                    await tauriInvoke('set_flow_mode_rust', { enabled: turningOn });
+                } else {
+                    await apiFetch('/api/flow', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ enabled: turningOn }),
+                    });
+                }
+            } catch (e) {
+                console.error('Could not change the flow mode setting', e);
+            }
+            refreshFlowMode();
+        });
+        // The line a hand-off may move within is the current avatar's, so the label has to
+        // follow a change of persona as well as a change of mode.
+        const personaSelect = document.getElementById('setting-persona');
+        if (personaSelect) personaSelect.addEventListener('change', refreshFlowMode);
+        refreshFlowMode();
     }
 
     function connectTelemetry() {
@@ -1107,6 +1314,58 @@ document.addEventListener('DOMContentLoaded', () => {
         return escaped;
     }
 
+    /* A line from AETHER1 the program, not from the persona.
+       Deliberately not appendMessage: that one puts the agent's own name and avatar on
+       what it renders, and attributing "your model was uninstalled" to the character is
+       how an operator learns to distrust what the character says. This is plainly the
+       machinery talking. */
+    function appendSystemNotice(text) {
+        if (!chatContainer) return;
+        const row = document.createElement('div');
+        row.className = 'my-2 px-3 py-2 text-xs font-mono leading-relaxed msg-system self-stretch';
+        const label = document.createElement('span');
+        label.className = 'opacity-70';
+        label.textContent = 'AETHER1 — ';
+        row.appendChild(label);
+        row.appendChild(document.createTextNode(text));
+        chatContainer.appendChild(row);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    /* The one line of a flow-mode hand-off. Deliberately not appendMessage: that stamps
+       the *current* agent's name on whatever it draws, and this is the previous one
+       speaking. Deliberately not appendSystemNotice either -- a hand-off is a character
+       talking, not the program, and rendering it as machinery would throw away the whole
+       reason for announcing it. It is inserted above `before`, the reply that is already on
+       screen waiting to be filled. */
+    function appendHandoverLine(fromName, line, before) {
+        if (!chatContainer) return;
+        const row = document.createElement('div');
+        row.className = 'p-3 rounded my-2 text-sm leading-relaxed msg-agent self-start mr-8 opacity-70';
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-cyan-500/20 text-xs font-mono text-cyan-400/80';
+        const who = document.createElement('span');
+        who.innerHTML = `🌐 <strong>${(fromName || '').toUpperCase()}</strong>`;
+        header.appendChild(who);
+        const when = document.createElement('span');
+        when.textContent = new Date().toLocaleTimeString();
+        header.appendChild(when);
+        const body = document.createElement('div');
+        body.textContent = line;
+        row.appendChild(header);
+        row.appendChild(body);
+        if (before && before.parentNode === chatContainer) chatContainer.insertBefore(row, before);
+        else chatContainer.appendChild(row);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    /* Which avatar wears a persona. The pairing already lives in AVATAR_PRESETS, so it is
+       read back from there rather than written down a second time -- a second copy is how
+       the two drift apart. */
+    function avatarIdForPersona(personaKey) {
+        return Object.keys(AVATAR_PRESETS).find((id) => AVATAR_PRESETS[id].persona === personaKey) || null;
+    }
+
     function appendMessage(sender, text, audioUrl = null) {
         const msgDiv = document.createElement('div');
         const isUser = sender === 'user';
@@ -1213,7 +1472,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function startTalking() {
         if (talkHeld || isWaitingForResponse) return;
         talkHeld = true;
-        voiceEngine.stopSpeech(); // talking over the companion interrupts it
+        supersedeSpeech(); // talking over the companion interrupts it
         setAvatarState('LISTENING');
         const started = await voiceEngine.startCapture();
         if (!started) {
@@ -1619,11 +1878,18 @@ document.addEventListener('DOMContentLoaded', () => {
     /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
     /// Resolves with the authoritative final reply -- the deltas are for display, the
     /// return value is what gets rendered as final text.
-    async function streamChat(text, sessionId, onDelta) {
+    async function streamChat(text, sessionId, onDelta, onHandover) {
         if (IS_TAURI) {
             const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
             const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
                 if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            /* Flow mode. Its own event rather than a first delta, because it is a different
+               speaker -- the node leaving says it, and every delta after belongs to the one
+               arriving. It always lands before the first delta, so the reply can be
+               relabelled while it is still empty. */
+            const unlistenHandover = await window.__TAURI__.event.listen('flow-handover', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onHandover(event.payload);
             });
             try {
                 return await tauriInvoke('generate_response_streaming_rust', {
@@ -1631,6 +1897,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             } finally {
                 unlisten();
+                unlistenHandover();
             }
         }
 
@@ -1646,6 +1913,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 let data;
                 try { data = JSON.parse(event.data); } catch (e) { return; }
                 if (data.type === 'delta') onDelta(data.delta);
+                else if (data.type === 'handover') onHandover(data);
                 else if (data.type === 'error') { socket.close(); reject(new Error(data.error)); }
                 else if (data.type === 'done') { socket.close(); resolve(data); }
             };
@@ -1770,7 +2038,11 @@ document.addEventListener('DOMContentLoaded', () => {
         chatInput.value = '';
         appendMessage('user', text);
         voiceEngine.playSFX('click');
-        voiceEngine.stopSpeech(); // a new question supersedes anything still being spoken
+        // A new question supersedes anything still being spoken -- and anything still being
+        // synthesized. Dropping the queue alone left the previous reply's remaining
+        // sentences in flight at Piper, and each one queued itself on arrival, in among the
+        // sentences of the reply being spoken now.
+        supersedeSpeech();
 
         isWaitingForResponse = true;
         setAvatarState('THINKING');
@@ -1795,17 +2067,41 @@ document.addEventListener('DOMContentLoaded', () => {
         // made it into the queue so the code below can reset state itself when nothing did.
         let audioQueued = false;
 
-        const speakChunk = async (chunk) => {
+        const synthesizeChunk = async (chunk) => {
+            // Trace lines are the machine narrating its own plumbing -- `\u2699 vault notes
+            // loaded: INDEX.md, profile.md, machine.md`. They belong on screen and never in
+            // the ear: the Rust sanitizer keeps the *contents* of inline code (so speech
+            // says "nominal" rather than skipping it), which means a trace line arrives at
+            // Piper as a list of filenames to read out. Stripped here, where what is a
+            // trace and what is the answer is already known.
+            chunk = withoutTraceLines(chunk);
             if (!autoSpeak || !chunk.trim()) return;
+            const turn = speechTurn;
             try {
                 const url = await synthesizeSpeechUrl(chunk);
-                if (url) {
+                // Checked after the await, not before: the operator can ask the next
+                // question while this sentence is still at the synthesizer, and this is
+                // where that sentence finds out it is no longer wanted.
+                if (url && turn === speechTurn) {
                     voiceEngine.enqueueTTS(url);
                     audioQueued = true;
                 }
             } catch (e) {
                 console.warn('sentence TTS failed', e);
             }
+        };
+
+        // Sentences are synthesized one after another, not all at once. The queue plays
+        // strictly in the order things were pushed onto it, so whichever synthesis finishes
+        // first is the sentence that gets spoken first -- and a four-word sentence comes
+        // back from Piper well before the long one in front of it. Two sentences was enough
+        // to hear the reply out of order; a paragraph of short ones made it unintelligible.
+        // Chaining costs nothing in practice: playback of sentence one covers the synthesis
+        // of sentence two.
+        let speechChain = Promise.resolve();
+        const speakChunk = (chunk) => {
+            speechChain = speechChain.then(() => synthesizeChunk(chunk));
+            return speechChain;
         };
 
         const onDelta = (delta) => {
@@ -1832,8 +2128,27 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
+        /* Flow mode handed this question to somebody else. Three things happen, in this
+           order: the line goes up attributed to the node leaving (above the reply, which
+           is already on screen and still empty), the HUD becomes the node arriving, and
+           the empty reply is relabelled so the answer is not signed by the wrong one.
+           Rust has already persisted the switch, so nothing here saves anything -- this is
+           the display catching up with a decision that has been made. */
+        const onHandover = (handover) => {
+            if (!handover || !handover.line) return;
+            appendHandoverLine(handover.from, handover.line, replyDiv);
+            const avatarId = avatarIdForPersona(handover.to_key);
+            if (avatarId) applyAvatar(avatarId, false);
+            updateAgentNameDisplay(handover.to);
+            const personaField = document.getElementById('setting-persona');
+            if (personaField) personaField.value = handover.to_key;
+            refreshFlowMode();
+            const senderSpan = replyDiv.querySelector('span');
+            if (senderSpan) senderSpan.innerHTML = `🌐 <strong>${handover.to.toUpperCase()}</strong>`;
+        };
+
         try {
-            const data = await streamChat(text, currentSessionId, onDelta);
+            const data = await streamChat(text, currentSessionId, onDelta, onHandover);
             // Something came back, so whatever loading was going to happen has happened:
             // no later question in this session gets the first-run explanation.
             hasAnsweredThisSession = true;
@@ -2988,9 +3303,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             renderVoiceAttempts(report.attempts);
             if (report.ok && url) {
-                // Played through the same queue everything else uses, so a test that is
-                // audible here is proof the reply path is audible too -- a separate
-                // player would only prove that a separate player works.
+                // Played through the same engine and the same Web Audio graph a reply
+                // goes through, so a test that is audible here is proof the reply path is
+                // audible too -- a separate player would only prove that a separate player
+                // works. It supersedes any reply still being spoken rather than queueing
+                // behind it, which is what you want from a button marked "test".
                 await voiceEngine.playTTSAudio(url);
                 setVoiceStatus(`It spoke, using ${report.engine}. If you heard nothing, the problem is this computer's sound rather than Aether1 -- check the volume and which output device is selected.`, 'good');
             } else {
@@ -3608,6 +3925,36 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.__TAURI__.core.invoke(cmd, args);
     }
 
+    // Step 48: another copy of AETHER1 is installed somewhere on this machine. The startup
+    // scan in main.rs finds them; this is where the operator is asked, because nothing is
+    // ever removed without being asked and an uninstall cannot be taken back.
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('old-installs-detected', async (event) => {
+            const payload = (event && event.payload) || {};
+            const installs = Array.isArray(payload.installs) ? payload.installs : [];
+            if (!installs.length) return;
+            const list = installs.map((install) => `  - ${install.description}`).join('\n');
+            const question = `${payload.headline}\n\n${list}\n\n`
+                + 'Remove them? Your vault, conversations and settings stay exactly where '
+                + 'they are -- only the program files go.';
+            if (!confirm(question)) {
+                // "No" is an answer worth keeping. Without this the same prompt comes back
+                // on every single launch, which is how a useful notice becomes noise.
+                tauriInvoke('keep_other_installs_rust').catch(() => {});
+                return;
+            }
+            const results = [];
+            for (const install of installs) {
+                try {
+                    results.push(await tauriInvoke('remove_install_rust', { id: install.id }));
+                } catch (error) {
+                    results.push(`${install.path}: ${error}`);
+                }
+            }
+            alert(results.join('\n\n'));
+        });
+    }
+
     // Synthesizes speech via the native TTS command and turns the local mp3 path it returns
     // into a URL the webview's <audio> element can actually load (convertFileSrc maps a
     // filesystem path to Tauri's asset:// protocol; see the assetProtocol scope this path's
@@ -3618,8 +3965,14 @@ document.addEventListener('DOMContentLoaded', () => {
     async function synthesizeSpeechUrl(text, voiceName) {
         try {
             if (IS_TAURI) {
-                const path = await tauriInvoke('generate_speech_rust', { text, voice: voiceName || null });
-                return window.__TAURI__.core.convertFileSrc(path);
+                // Bytes over IPC, played from a blob, rather than convertFileSrc.
+                // An asset:// URL is a different origin from this page, and the clip is
+                // routed through a MediaElementAudioSourceNode for the analyser -- WebKit
+                // mutes that node for anything that would taint the page's origin, so the
+                // asset route plays silence with no error anywhere. See speech_clip_rust.
+                const clip = await tauriInvoke('speech_clip_rust', { text, voice: voiceName || null });
+                const blob = new Blob([new Uint8Array(clip.bytes)], { type: clip.mime });
+                return URL.createObjectURL(blob);
             }
             const resp = await apiFetch('/api/tts', {
                 method: 'POST',
@@ -3882,10 +4235,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const result = await voiceEngine.playTTSAudio(url, { audible });
         if (result && result.signalDetected === false) {
-            showVoiceFailedCard(new Error(
-                'Speech was synthesized, but no audio was actually heard -- the pipeline ' +
-                'downstream of synthesis (the webview’s audio output) produced silence.'
-            ));
+            // Silence here almost always has one cause on Linux, and it is one the backend
+            // can check for directly rather than leave as a description of a symptom: the
+            // webview's GStreamer decoders are missing (see media_playback_step in
+            // voice_setup.rs). Ask, so the card can carry the command that fixes it instead
+            // of a sentence about an audio pipeline nobody can act on.
+            let detail = 'Speech was synthesized, but no audio was actually heard -- the ' +
+                'pipeline downstream of synthesis (the webview’s audio output) produced ' +
+                'silence.';
+            try {
+                const advice = await tauriInvoke('voice_advice_rust');
+                const fix = advice?.speaking?.steps?.find((step) => step.command);
+                if (advice?.speaking?.stage === 'unheard' && fix) {
+                    detail = `${advice.speaking.headline} ${fix.detail}`;
+                }
+            } catch (e) {
+                // Fall through with the generic wording -- a failed probe is not a reason
+                // to say nothing about a failure we have already established.
+            }
+            showVoiceFailedCard(new Error(detail));
         }
     }
 
@@ -4157,7 +4525,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Shows the custom persona directive textarea only when "Custom Directive" is
     // selected as the base persona -- the preset personas don't need it.
     /* The persona list, built from what the backend says exists rather than from a list in
-       the markup. Each entry leads with what it is *for* -- "Coding", "Cites Sources" -- with
+       the markup. Each entry leads with what it is *for* -- "Coding", "Signal & Logic" -- with
        the avatar it belongs to bookended after it, because the persona and the avatar are one
        choice you can make from either end. */
     async function loadPersonaCatalogue() {
@@ -5325,6 +5693,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initPanelUndock();
     initAvatarFullscreen();
     initHologramFloatingNotice();
+    initSpecialityModel();
+    initFlowMode();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();
 

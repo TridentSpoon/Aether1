@@ -149,6 +149,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/stt", post(stt))
         .route("/api/voice/status", get(voice_status))
         .route("/api/personas", get(list_personas))
+        .route("/api/flow", get(flow_mode).post(set_flow_mode))
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
@@ -512,6 +513,26 @@ async fn stt(
 
 async fn voice_status(State(state): State<AppState>) -> Json<Value> {
     Json(commands::voice_status(&state.engine))
+}
+
+/// The browser HUD's counterpart of `flow_mode_rust`, so the chin bar's STATIC/FLOW
+/// toggle is the same switch on both transports.
+async fn flow_mode(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::flow_mode(&state.engine))
+}
+
+#[derive(Deserialize)]
+struct FlowModeRequest {
+    enabled: bool,
+}
+
+async fn set_flow_mode(
+    State(state): State<AppState>,
+    Json(req): Json<FlowModeRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    commands::set_flow_mode(&state.engine, req.enabled)
+        .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 async fn list_personas() -> Json<Value> {
@@ -1098,23 +1119,49 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
     // and pushes deltas through a channel that this task forwards to the socket. Unbounded
     // so a slow client can never block generation itself -- the deltas are small and the
     // reply is bounded by the model's own output.
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // Two kinds of thing come back over one channel, in order: at most one hand-off, then
+    // the reply's deltas. One channel rather than two because the order between them is the
+    // whole point -- the node leaving speaks before the node arriving starts answering.
+    enum Chunk {
+        Handover(serde_json::Value),
+        Delta(String),
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Chunk>();
     let generation = {
         let session_id = session_id.clone();
+        let handover_tx = tx.clone();
         tokio::task::spawn_blocking(move || {
-            commands::generate_response_streamed(&engine, message, Some(session_id), &mut |delta| {
-                let _ = tx.send(delta.to_string());
-            })
+            commands::generate_response_streamed(
+                &engine,
+                message,
+                Some(session_id),
+                &mut |delta| {
+                    let _ = tx.send(Chunk::Delta(delta.to_string()));
+                },
+                &mut |handover| {
+                    let _ = handover_tx.send(Chunk::Handover(commands::handover_json(handover)));
+                },
+            )
         })
     };
 
-    while let Some(delta) = rx.recv().await {
+    while let Some(chunk) = rx.recv().await {
+        let frame = match chunk {
+            Chunk::Handover(payload) => {
+                let mut frame = payload;
+                if let Some(object) = frame.as_object_mut() {
+                    object.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("handover".to_string()),
+                    );
+                }
+                frame
+            }
+            Chunk::Delta(delta) => serde_json::json!({"type": "delta", "delta": delta}),
+        };
         if socket
-            .send(Message::Text(
-                serde_json::json!({"type": "delta", "delta": delta})
-                    .to_string()
-                    .into(),
-            ))
+            .send(Message::Text(frame.to_string().into()))
             .await
             .is_err()
         {

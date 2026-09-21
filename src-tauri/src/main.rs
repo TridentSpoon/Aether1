@@ -24,6 +24,7 @@ mod commands;
 mod discovery;
 mod downloads;
 mod hotkey;
+mod installs;
 mod llm;
 mod local_only;
 mod model_scanner;
@@ -38,6 +39,10 @@ mod vault;
 mod voice_download;
 mod voice_setup;
 mod watchers;
+
+// installs::Machine is the trait the scan reads the machine through; brought in as `_` because
+// only its methods are called here, never its name.
+use installs::Machine as _;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -70,11 +75,12 @@ const BUILT_COMMIT: &str = env!("AETHER1_GIT_COMMIT");
 /// checkout before any PR had ever been merged).
 const BUILT_PR_REV: &str = env!("AETHER1_PR_REV");
 
-/// Aether1 0.3.Rev{N} -- 0.x because still in dev; the 3 marks the project's third era
-/// (1: Antigravity project, 2: ported to Claude, 3: native Rust/Tauri rewrite); Rev{N} is
-/// the PR number this build was built from, so the version always tracks the last merge
-/// without needing a hand-maintained counter.
-const APP_VERSION: &str = concat!("Aether1 0.3.Rev", env!("AETHER1_PR_REV"));
+/// `Ver 0.4.126`: the major and minor of the package itself, then the PR number this build
+/// was built from, so the version always tracks the last merge without a hand-maintained
+/// counter. Assembled in build.rs, where the major and minor are read from Cargo.toml
+/// rather than written out again -- the previous spelling hard-coded "0.3" here while the
+/// package said 0.4.0, and the two had no way of noticing they disagreed.
+const APP_VERSION: &str = env!("AETHER1_VERSION");
 
 /// CARGO_MANIFEST_DIR is src-tauri/ at build time; frontend/ and the backend/ data
 /// directory (aether1_memory.db, audio_cache/) all live one level up, at the repo root --
@@ -599,12 +605,46 @@ fn generate_response_streaming_rust(
     session_id: Option<String>,
     stream_id: String,
 ) -> Result<serde_json::Value, String> {
-    commands::generate_response_streamed(&engine, prompt, session_id, &mut |delta| {
-        let _ = app.emit(
-            "chat-delta",
-            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
-        );
-    })
+    // The hand-off is emitted on its own event rather than as a first delta, because it is
+    // a different speaker: the node leaving says it, and the deltas that follow belong to
+    // the one arriving. It always lands before any delta, so the HUD can relabel the reply
+    // before there is anything in it.
+    let handover_app = app.clone();
+    let handover_stream = stream_id.clone();
+    commands::generate_response_streamed(
+        &engine,
+        prompt,
+        session_id,
+        &mut |delta| {
+            let _ = app.emit(
+                "chat-delta",
+                serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+            );
+        },
+        &mut |handover| {
+            let mut payload = commands::handover_json(handover);
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "stream_id".to_string(),
+                    serde_json::Value::String(handover_stream.clone()),
+                );
+            }
+            let _ = handover_app.emit("flow-handover", payload);
+        },
+    )
+}
+
+/// Flow mode's state, for the chin bar's toggle. Reports the line the current avatar
+/// belongs to as well, because FLOW with no line to move within does nothing and a toggle
+/// that claimed otherwise would be lying.
+#[tauri::command(async)]
+fn flow_mode_rust(engine: tauri::State<LlmEngine>) -> Result<serde_json::Value, String> {
+    Ok(commands::flow_mode(&engine))
+}
+
+#[tauri::command(async)]
+fn set_flow_mode_rust(engine: tauri::State<LlmEngine>, enabled: bool) -> Result<(), String> {
+    commands::set_flow_mode(&engine, enabled)
 }
 
 #[tauri::command(async)]
@@ -1098,6 +1138,42 @@ fn generate_speech_rust(
     Ok(path.to_string_lossy().to_string())
 }
 
+/// One spoken clip, as bytes, for the page to play from a blob.
+///
+/// **This exists because the asset protocol cannot carry audio the page can hear.** The
+/// obvious route -- synthesize to a file, hand the page `convertFileSrc(path)` -- produces
+/// an `asset://localhost/...` URL, which is a different origin from the page's own
+/// `tauri://localhost`. The page routes every clip through a `MediaElementAudioSourceNode`
+/// so the analyser can drive the avatar, and WebKit mutes that node outright for media that
+/// would taint the page's origin: silence, with no error, no failed load and no rejected
+/// `play()`. Asking the element for a CORS check does not rescue it either, because wry
+/// registers the asset scheme as *secure* and never as CORS-enabled, so WebKit will not
+/// grant CORS on it whatever headers come back.
+///
+/// Bytes over the IPC channel have none of that: a `blob:` URL minted in the page is the
+/// page's own origin, so nothing is ever tainted and the analyser keeps working. The same
+/// channel already carries recorded audio the other way for transcription, so this is the
+/// proven direction of travel rather than a new one.
+///
+/// The mime type is returned rather than guessed, because it decides whether the blob is
+/// playable at all and the engines disagree: Piper and the OS voices produce WAV, the cloud
+/// voice returns MP3.
+#[tauri::command(async)]
+fn speech_clip_rust(
+    engine: tauri::State<LlmEngine>,
+    text: String,
+    voice: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
+    let mime = match path.extension().and_then(|e| e.to_str()) {
+        Some("mp3") => "audio/mpeg",
+        _ => "audio/wav",
+    };
+    let bytes = std::fs::read(&path)
+        .map_err(|e| format!("could not read the clip at {}: {e}", path.display()))?;
+    Ok(serde_json::json!({ "bytes": bytes, "mime": mime }))
+}
+
 /// Builds (but does not show-if-already-open -- callers check first) the floating "desktop
 /// sprite" window: a small, transparent, undecorated, always-on-top webview showing just the
 /// hologram avatar (frontend/sprite.html reuses the same Three.js avatar code as the main
@@ -1278,6 +1354,81 @@ fn show_main_window_rust(app: tauri::AppHandle) -> Result<(), String> {
 /// that is the whole point of a desktop pet, but a decorated panel window opened via
 /// open_panel_window_rust has a corner checkbox (see the solo-pin-control markup in
 /// index.html and initSoloPanel in app.js) that calls this to opt in.
+/// Step 19's dropdown, as data: every speciality, what it will run on, and why.
+///
+/// One command rather than one per persona, because the dropdown is a table and asking
+/// sixteen times to draw it would put sixteen settings reads and a cached list lookup
+/// behind one panel opening.
+#[tauri::command]
+async fn speciality_models_rust(
+    engine: tauri::State<'_, LlmEngine>,
+) -> Result<serde_json::Value, String> {
+    let db = engine.db();
+    let endpoint = db.get_setting_string("llm_endpoint", "http://localhost:11434");
+    // Asked directly rather than through the engine's cache: a panel the operator just
+    // opened to change a model is exactly when a minute-old list is the wrong answer.
+    let answered = model_scanner::models_at(&endpoint);
+    let available = answered.clone().unwrap_or_default();
+    let speeds = llm::routing::measured_speeds(db);
+
+    let specialities: Vec<serde_json::Value> = llm::Persona::all()
+        .iter()
+        .map(|persona| {
+            let choice = llm::routing::resolve(db, persona, &available, &speeds);
+            let suggested = llm::routing::suggestion(persona, &available, &speeds);
+            serde_json::json!({
+                "key": persona.key(),
+                "speciality": persona.speciality(),
+                "chosen": llm::routing::choices(db).get(persona.key()),
+                "suggested": suggested,
+                "running": choice.model,
+                "reason": match choice.reason {
+                    llm::routing::Reason::Chosen => "chosen",
+                    llm::routing::Reason::Suggested => "suggested",
+                    llm::routing::Reason::Missing(_) => "missing",
+                    llm::routing::Reason::General => "general",
+                },
+                "notice": choice.notice(persona),
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "endpoint": endpoint,
+        // The three-way distinction the routing rests on, preserved for the panel: null is
+        // "nothing answered", [] is "answered with nothing loaded".
+        "available": answered.map(|models| {
+            models
+                .into_iter()
+                .map(|model| {
+                    serde_json::json!({
+                        "good_at": llm::routing::good_at(&model),
+                        "model": model,
+                    })
+                })
+                .collect::<Vec<_>>()
+        }),
+        "specialities": specialities,
+    }))
+}
+
+/// Points one speciality at a model, or clears it back to the suggestion.
+#[tauri::command]
+async fn set_speciality_model_rust(
+    engine: tauri::State<'_, LlmEngine>,
+    persona: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    let resolved = llm::Persona::from_key(&persona);
+    // from_key falls back rather than failing, so an unknown key would silently set the
+    // default persona's model -- a quiet wrong answer in a panel nobody would think to
+    // double-check.
+    if resolved.key() != persona.to_ascii_lowercase() {
+        return Err(format!("no speciality called {persona:?}"));
+    }
+    llm::routing::set_choice(engine.db(), &resolved, model.as_deref())
+}
+
 #[tauri::command]
 fn set_window_always_on_top_rust(
     window: tauri::WebviewWindow,
@@ -1443,6 +1594,80 @@ fn announce_crash<R: tauri::Runtime>(
     );
 }
 
+/// Every copy of AETHER1 on this machine, as the HUD reads it. The shape is flattened here
+/// rather than derived, so the wire format stays something a person can read in devtools
+/// and does not change whenever the Rust enums do.
+fn installs_payload(
+    found: &[installs::Install],
+    running: Option<&installs::Version>,
+) -> Vec<serde_json::Value> {
+    found
+        .iter()
+        .map(|install| {
+            let standing = installs::standing(install, running);
+            serde_json::json!({
+                "id": install.id,
+                "path": install.path.display().to_string(),
+                "kind": install.kind.describe(),
+                "version": install.version.as_ref().map(|version| version.label()),
+                "running": install.running,
+                "offered": standing.offered(),
+                "description": install.describe(),
+                "command": match &install.removal {
+                    installs::Removal::HandOver { command, .. } => Some(command.clone()),
+                    _ => None,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Step 48: what else is installed. Read on demand by the HUD, and at startup by the scan
+/// below -- both go through installs::detect so there is one answer, not two.
+#[tauri::command(async)]
+fn other_installs_rust() -> Vec<serde_json::Value> {
+    let machine = installs::ThisMachine;
+    let found = installs::detect(&machine);
+    let running = machine.running_version();
+    installs_payload(&found, running.as_ref())
+}
+
+/// Removes one copy, named by the id the scan gave it. Re-detects rather than trusting an
+/// id the HUD has been holding since startup: between the prompt appearing and the operator
+/// answering it, the copy may already be gone.
+#[tauri::command(async)]
+fn remove_install_rust(id: String) -> Result<String, String> {
+    let machine = installs::ThisMachine;
+    let found = installs::detect(&machine);
+    let install = found
+        .iter()
+        .find(|install| install.id == id)
+        .ok_or_else(|| format!("that copy is no longer here (id {id})"))?;
+    match installs::remove(install, &machine)? {
+        installs::Outcome::Removed { paths } => Ok(format!(
+            "Removed {} ({} file{} deleted).",
+            install.path.display(),
+            paths.len(),
+            if paths.len() == 1 { "" } else { "s" }
+        )),
+        installs::Outcome::Ran { .. } => Ok(format!("Uninstalled {}.", install.path.display())),
+        installs::Outcome::HandedOver { command } => Ok(format!(
+            "{} belongs to a package manager. Run this to remove it:\n{command}",
+            install.path.display()
+        )),
+    }
+}
+
+/// "Keep them, and stop asking." Answering the prompt with no is a decision, and a decision
+/// that is forgotten by the next launch is a prompt that never goes away.
+#[tauri::command(async)]
+fn keep_other_installs_rust(engine: tauri::State<'_, LlmEngine>) -> Result<(), String> {
+    engine
+        .db()
+        .set_setting(installs::NOTICE_SETTING, &serde_json::json!(false))
+        .map_err(|e| format!("could not save that: {e}"))
+}
+
 fn build_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
     // The native path creates backend/ as a side effect of setting up the audio cache in
@@ -1563,6 +1788,10 @@ fn main() {
             agent_genesis_rust,
             test_llm_connection_rust,
             scan_models_rust,
+            speciality_models_rust,
+            set_speciality_model_rust,
+            flow_mode_rust,
+            set_flow_mode_rust,
             setup_advice_rust,
             pull_model_rust,
             start_download_rust,
@@ -1602,6 +1831,7 @@ fn main() {
             get_settings_rust,
             save_settings_rust,
             generate_speech_rust,
+            speech_clip_rust,
             transcribe_rust,
             voice_status_rust,
             voice_advice_rust,
@@ -1610,6 +1840,9 @@ fn main() {
             test_speech_rust,
             list_personas_rust,
             get_version_info,
+            other_installs_rust,
+            remove_install_rust,
+            keep_other_installs_rust,
             check_for_update_rust,
             apply_update_rust,
             install_gh_via_winget_rust,
@@ -1843,6 +2076,11 @@ fn main() {
                         "telemetry": telemetry.to_wire_json(),
                         "tokens": engine.usage_snapshot(),
                         "agent_name": engine.agent_name(),
+                        // Step 19: usually null. It carries one line when a model the
+                        // operator picked has been uninstalled, said once per model per
+                        // session -- taken here rather than read, so collecting it is what
+                        // clears it and two windows cannot both claim to have shown it.
+                        "routing_notice": engine.take_routing_notice(),
                     });
                     let _ = app_handle.emit("telemetry-update", payload);
                     // Game Mode's "low usage" half: the HUD window is hidden (so its own
@@ -1898,6 +2136,52 @@ fn main() {
                             announce_crash(&app_handle, &crash, amber.clone(), plain.clone());
                         }
                     }
+                });
+            }
+
+            // Step 48: the copies of AETHER1 that are not this one. Installing a second way
+            // never removes the first, so an old binary keeps sitting on PATH with a fixed
+            // bug still in it. Said once, at startup, and only when there is something to
+            // say -- on the machine of someone who installed it once this thread finds
+            // nothing and stays quiet forever.
+            //
+            // Detection only. Nothing is removed here: the prompt this raises is the ask,
+            // and an uninstall that happened before anyone was asked cannot be taken back.
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // After the window and the tray, so a scan that runs long does not delay
+                    // either, and after the operator has seen the app start.
+                    std::thread::sleep(Duration::from_secs(5));
+                    let engine = app_handle.state::<LlmEngine>();
+                    if !engine.db().get_setting_bool(installs::NOTICE_SETTING, true) {
+                        return;
+                    }
+                    let machine = installs::ThisMachine;
+                    let found = installs::detect(&machine);
+                    let running = machine.running_version();
+                    let others = installs::others(&found, running.as_ref());
+                    if others.is_empty() {
+                        return;
+                    }
+                    let headline = match others.len() {
+                        1 => "AETHER1 found another copy of itself installed".to_string(),
+                        n => format!("AETHER1 found {n} other copies of itself installed"),
+                    };
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = app_handle
+                        .notification()
+                        .builder()
+                        .title(headline.clone())
+                        .body("Open AETHER1 to remove them, or run `aether1 installs`.")
+                        .show();
+                    let _ = app_handle.emit(
+                        "old-installs-detected",
+                        serde_json::json!({
+                            "headline": headline,
+                            "installs": installs_payload(&others, running.as_ref()),
+                        }),
+                    );
                 });
             }
 

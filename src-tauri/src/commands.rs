@@ -13,12 +13,17 @@ use crate::project_root;
 use crate::setup;
 use crate::tools;
 
+/// Told once, before a word of the reply exists, when flow mode is passing this question
+/// to somebody else. Separate from the delta sink because it is a different speaker: the
+/// node on its way out, not the one about to answer.
+pub type HandoverSink<'a> = &'a mut dyn FnMut(&llm::flow::Handover);
+
 pub fn generate_response(
     engine: &LlmEngine,
     prompt: String,
     session_id: Option<String>,
 ) -> Result<Value, String> {
-    generate_response_streamed(engine, prompt, session_id, &mut |_| {})
+    generate_response_streamed(engine, prompt, session_id, &mut |_| {}, &mut |_| {})
 }
 
 /// generate_response, with each piece of the reply handed to `sink` as it arrives. The
@@ -29,6 +34,7 @@ pub fn generate_response_streamed(
     prompt: String,
     session_id: Option<String>,
     sink: llm::Sink,
+    on_handover: HandoverSink,
 ) -> Result<Value, String> {
     if prompt.trim().is_empty() {
         return Err("Empty message".to_string());
@@ -36,6 +42,25 @@ pub fn generate_response_streamed(
     let session_id = valid_session_id(session_id)?;
 
     engine.add_message(&session_id, "user", &prompt);
+
+    // Flow mode, before a word is generated: the question has to reach whoever it belongs
+    // to, and the hand-off line belongs to the node on its way out, so it is said first and
+    // recorded first. A failure to persist the switch is not a reason to refuse the answer
+    // -- the current node simply keeps it.
+    let handover = llm::flow::consider(engine.db(), &prompt).filter(|h| {
+        match llm::flow::apply(engine.db(), h) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[AETHER1] Could not hand the question over: {e}");
+                false
+            }
+        }
+    });
+    if let Some(h) = &handover {
+        on_handover(h);
+        engine.add_message(&session_id, &h.speaker_name().to_lowercase(), &h.line);
+    }
+
     // Opened and drained around the one call that reads the vault, so the notes reported
     // belong to this answer and no other. Both are on this thread, which is the whole
     // reason the record can be a thread-local -- see vault::consulted.
@@ -60,6 +85,7 @@ pub fn generate_response_streamed(
         "reply": reply,
         "agent_name": agent_name,
         "notes": crate::vault::consulted::to_json(&notes),
+        "handover": handover.as_ref().map(handover_json),
     }))
 }
 
@@ -653,6 +679,26 @@ pub fn set_persona_access(engine: &LlmEngine, paths: Vec<String>) -> Result<Valu
     }))
 }
 
+/// The chin bar's STATIC/FLOW state: whether hand-offs are on, and the line the selected
+/// avatar belongs to. A `group` of null is what hides the toggle -- an avatar that belongs
+/// to no line has nothing to flow to.
+///
+/// Shared by both transports so the browser HUD shows the same switch the native window
+/// does; it used to exist only as a Tauri command, which left the toggle permanently
+/// hidden in a browser rather than merely inactive.
+pub fn flow_mode(engine: &LlmEngine) -> Value {
+    let db = engine.db();
+    let persona = llm::Persona::from_key(&db.get_setting_string("persona_type", "default"));
+    serde_json::json!({
+        "enabled": llm::flow::enabled(db),
+        "group": persona.group(),
+    })
+}
+
+pub fn set_flow_mode(engine: &LlmEngine, enabled: bool) -> Result<(), String> {
+    llm::flow::set_enabled(engine.db(), enabled)
+}
+
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling
 /// logic in /api/chat and /api/agent/genesis. Engine and voices come from settings, so the
 /// operator's choice of local-or-cloud applies wherever speech is produced.
@@ -664,7 +710,26 @@ pub fn synthesize_speech(
     let db = engine.db();
     let cache_dir = project_root().join("backend").join("audio_cache");
     let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);
-    let local_voice = db.get_setting_string("tts_local_voice", "");
+    let configured_local_voice = db.get_setting_string("tts_local_voice", "");
+
+    // The voice belongs to the avatar. Resolving it here, from whichever persona is
+    // selected at the moment of speech, is what makes that true for every way the avatar
+    // can change -- picked in Settings, forged from a purpose, handed over mid-conversation
+    // by flow mode -- without any of them having to remember to write a voice setting, and
+    // without overwriting the operator's own choice, which is still what a persona with no
+    // voice of its own speaks in. An explicit `voice` argument (the voice test) still wins.
+    let persona_key = db.get_setting_string("persona_type", "default");
+    let persona_voice = voice
+        .map(str::to_string)
+        .or_else(|| llm::persona_voice(&persona_key).map(str::to_string))
+        .unwrap_or(configured_voice);
+    // Piper speaks a model file rather than a voice name, so an identity's local voice is
+    // only usable once that model is on disk. A persona whose voice has not been downloaded
+    // speaks in the one the operator installed rather than failing to speak at all.
+    let local_voice = llm::persona_local_voice(&persona_key)
+        .and_then(llm::tts::installed_catalogue_voice)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or(configured_local_voice);
 
     // The cloud voice is the one path that used to leave the machine without anyone
     // choosing it: with Piper absent, `auto` quietly sent the text of everything the
@@ -678,7 +743,7 @@ pub fn synthesize_speech(
         &cache_dir,
         text,
         tts_engine,
-        Some(voice.unwrap_or(&configured_voice)),
+        Some(&persona_voice),
         Some(&local_voice),
     )
     .map_err(|why| {
@@ -836,6 +901,16 @@ pub fn voice_status(engine: &LlmEngine) -> Value {
             Err(why) => serde_json::json!({ "local": false, "why": why }),
         },
         "offline_capable": speech_out.is_ok() && speech_in.is_ok(),
+    })
+}
+
+/// The shape both front ends read: who is leaving, what they said, and who is answering.
+pub fn handover_json(handover: &llm::flow::Handover) -> Value {
+    serde_json::json!({
+        "from": handover.speaker_name(),
+        "line": handover.line,
+        "to": handover.to_name(),
+        "to_key": handover.to_key(),
     })
 }
 

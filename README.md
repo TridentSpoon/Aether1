@@ -109,9 +109,10 @@ instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` ab
 
 The trade-off in the other direction: `aether1-slim-linux-x86_64.tar.gz` (also on
 [Releases](../../releases)) ships just the binary -- no Piper, no whisper.cpp, no models --
-and has its install script fetch speech separately: `pip install --user piper-tts
-faster-whisper`, plus `python3`/`espeak-ng` via your distribution's package manager if
-either is missing. A fraction of the offline bundle's size, at the cost of needing a
+and has its install script fetch speech separately into a Python environment of
+Aether1's own (`~/.local/share/aether1/pyenv` -- not the system Python, which current
+distributions refuse to let `pip` write to at all), plus `python3`, `espeak-ng` and the
+GStreamer audio decoders via your distribution's package manager if any are missing. A fraction of the offline bundle's size, at the cost of needing a
 network for that one install step (and the first time each engine's model downloads,
 which happens automatically the first time you actually speak or listen -- after that it's
 cached and works offline like everything else here).
@@ -221,13 +222,22 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 | Distribution | Packages |
 | --- | --- |
-| Arch, CachyOS, Manjaro, EndeavourOS | `base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify espeak-ng` |
-| Fedora, Nobara, RHEL | `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel curl wget file xdotool libnotify espeak-ng` plus the `c-development` group |
-| Debian, Ubuntu, Pop!\_OS, Mint | `build-essential pkg-config curl wget file libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libnotify-bin espeak-ng` |
-| openSUSE | `webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel libopenssl-devel curl wget file xdotool libnotify-tools espeak-ng` |
+| Arch, CachyOS, Manjaro, EndeavourOS | `base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify espeak-ng gst-plugins-good gst-plugins-bad gst-libav` |
+| Fedora, Nobara, RHEL | `webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel openssl-devel curl wget file xdotool libnotify espeak-ng gstreamer1-plugins-good gstreamer1-plugins-bad-free` plus the `c-development` group |
+| Debian, Ubuntu, Pop!\_OS, Mint | `build-essential pkg-config curl wget file libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libnotify-bin espeak-ng gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav` |
+| openSUSE | `webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel libopenssl-devel curl wget file xdotool libnotify-tools espeak-ng gstreamer-plugins-good gstreamer-plugins-bad` |
 
 If the build fails, the error names the missing piece: look for a package ending in `-dev`
 or `-devel`, install it, and re-run `./setup.sh`.
+
+The GStreamer entries are not build dependencies and they are the ones worth not skipping.
+Aether1's window is WebKitGTK, and WebKitGTK plays `<audio>` through GStreamer -- but every
+distribution above packages the plugins that do the *decoding* as optional for it. On Arch,
+`gst-plugins-good` and `gst-libav` are optdepends of `webkit2gtk-4.1`, so installing the
+webview does not install them. Without them, Piper synthesizes correctly, every status
+screen in the app says "installed", the voice test reports that it spoke, and you hear
+nothing at all. The voice panel now checks for this directly and names the packages, but it
+is cheaper to just have them.
 
 ### Speech: what's local, what isn't, and what always works
 
@@ -236,7 +246,8 @@ is always something to speak with, on a machine that has done nothing but run se
 
 1. **[Piper](https://github.com/OHF-Voice/piper1-gpl)** -- the best-sounding local voice,
    if you install its binary (the offline installer above does this for you; otherwise
-   `pip install piper-tts`, or your package manager). The voice file itself Aether1 can
+   your package manager, or the Python route under "The two Piper traps" below). The voice
+   file itself Aether1 can
    fetch for you -- see below. **Two traps here, and between them they account for
    most "I installed it and it still doesn't talk" reports** -- see below.
 2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
@@ -255,8 +266,12 @@ will find first is [Piper](https://github.com/libratbag/piper), a GTK app for co
 gaming mice — and on Arch and CachyOS that is exactly what `sudo pacman -S piper` installs,
 because the mouse app is the one in the official repositories. Piper TTS is in the AUR:
 `yay -S piper-tts-bin`. On Debian and Ubuntu, `sudo apt install piper-tts`. On any
-distribution, `python3 -m pip install --user piper-tts` works without any package your
-distribution has to carry. (The old `linux_x86_64.tar.gz` release still works too, but it
+distribution, the Python package works without anything your distribution has to carry --
+but not via `pip install --user`, which Arch, Debian 12+, Ubuntu 23.04+ and Fedora all
+refuse now with `error: externally-managed-environment` (PEP 668). Put it in Aether1's own
+environment instead, which it knows to look in:
+`python3 -m venv ~/.local/share/aether1/pyenv && ~/.local/share/aether1/pyenv/bin/pip
+install piper-tts`. (The old `linux_x86_64.tar.gz` release still works too, but it
 is frozen: the original `rhasspy/piper` repository was archived in October 2025 and
 development moved to `OHF-Voice/piper1-gpl`, which ships no pre-built binaries.)
 
@@ -719,15 +734,46 @@ with what each one is for, and names the avatar it belongs to:
 | **Conversational** | Thinking a problem through with you. Asks the one clarifying question that would change the answer instead of guessing. | hAlcy |
 | **To the Point** | The answer in the first line. No preamble, no restating the question, no padding. | R.E.D. 9000 |
 | **Coding** | Working code, complete enough to run, with the failure mode named -- what breaks it, what it does not handle, what it costs. | The Nexus |
-| **Cites Sources** | Where every claim came from, and how sure it is: read from a file this session, recalled from training and unverifiable, or inferred. Never invents a citation. | A.R.X.LIMES |
-| **Creative Work** | Writing, design, and the shape of a sentence. Produces the draft rather than describing it. | A.R.X.LOGOS |
-| **Security & White Hat** | Exposure, hardening and authorised testing -- attack surface, blast radius, and asking whether a target is yours to test. | A1ter_nul |
+| **Assistant & System Ops** | Today's task, the schedule behind it, and what this machine is actually doing. The generalist the rest of the line falls back to. | A.R.X.LOCAS |
+| **Defence & Hardening** | Hardening what you run and closing what is exposed. Names what an attacker reaches first and gives the concrete change, not "follow best practice". | A.R.X.LEGIONARE |
+| **Scanning & Extraction** | Finding what is out there on a subject and pulling the useful part out, with where each piece came from. Says where it searched and where it did not. | A.R.X.LIMES |
+| **Worldbuilding & Fiction** | Worlds, characters and the prose that carries them, checked against what is already established so nothing new contradicts it by accident. | A.R.X.LOREGENDA |
+| **Teaching & Docs** | Explaining a thing until it actually lands, then offering the written version -- because an explanation nobody recorded has to be given again. | A.R.X.LYKSAUM |
+| **Signal & Logic** | Sound, pattern and formal logic. Separates what the data shows from what it is tempting to read into it, and says which it is doing. | A.R.X.LOGOS |
+| **Reference & Fact-Checking** | Looking a thing up, checking it, and saying how far the source can be trusted. Corrects a false premise in the question rather than answering around it. | A.R.X.LEXICO |
+| **Cost & Budget** | What something takes to run, build or keep, and where a budget is actually going. Names the recurring cost hiding behind a one-time-looking decision. | A.R.X.LUCRE |
+| **Software Development** | Writing it, scripting it, and refactoring what is already there. Says what a refactor preserves and what it necessarily changes. | A.R.X.L'KEMI |
+| **Security & White Hat** | Intrusion and authorised offensive testing -- attack surface, blast radius, and asking whether a target is yours to test. The other half of security from Defence & Hardening. | A1ter_nul |
 | **Model's Own** | No directive at all. Whatever the model brings on its own. | -- |
 | **Custom** | Your own directive, written in the box below the field. | -- |
 
 Picking an avatar switches to its persona, its voice and its name -- one choice you can make
 from either end. *Your own* is the exception: an avatar you designed has no persona of its
 own, so it leaves yours alone.
+
+### STATIC and FLOW
+
+The chin bar carries one more switch, next to the state badge. **STATIC** is what AETHER1 has
+always done: the avatar you picked answers everything. **FLOW** lets the question move to the
+specialist inside that avatar's own line -- the Umbrals, the Trace Protocols, the Singular
+Ascended Class -- and whoever is holding the conversation says so on the way out:
+
+```
+A.R.X.LOCAS: That one belongs to a specialist. Handing you to A.R.X.LEGIONARE.
+
+A.R.X.LEGIONARE: Tell me what you run and I will tell you what reaches it first.
+```
+
+The hand-off is decided by the same keyword table that turns a stated purpose into an
+identity, not by a model: it costs no round trip, and you can read the rule rather than
+wonder about it. It holds the current avatar unless the match is confident, because a missed
+hand-off is invisible and a wrong one interrupts you with a line that turned out to be
+unnecessary. It never crosses between lines -- you picked a cast, not a character -- and an
+avatar belonging to no line (A1, *Model's Own*, your own design) never flows at all, which is
+why the switch hides itself there.
+
+At the command line, `aether1 flow` reports the mode and the line it can move within, and
+`aether1 flow on` / `aether1 flow off` sets it.
 
 ### What each persona reaches without asking
 
@@ -748,8 +794,15 @@ save it, with the reason shown, rather than being stored and failing later.
 | **System Diagnosis** | System logs and service state |
 | **Security & White Hat** | Network configuration and service state |
 | **Coding** | The project directory (the folder Aether1 was started in — never your home directory, and only when it sits inside it) |
-| **Cites Sources** | Your notes and the project directory |
-| **Creative Work** | Your notes |
+| **Assistant & System Ops** | System logs and service state |
+| **Defence & Hardening** | Network configuration and service state |
+| **Scanning & Extraction** | Your notes and the project directory |
+| **Worldbuilding & Fiction** | Your notes |
+| **Teaching & Docs** | Your notes and the project directory |
+| **Signal & Logic** | Your notes |
+| **Reference & Fact-Checking** | Your notes and the project directory |
+| **Cost & Budget** | Your notes |
+| **Software Development** | The project directory |
 | **Conversational**, **To the Point**, **Model's Own**, **Custom** | Your notes, and the telemetry the HUD already shows |
 
 The last row is deliberate. Those four are styles rather than specialities, and inventing a

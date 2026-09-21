@@ -65,7 +65,9 @@ class VoiceAudioEngine {
         this.isDrainingQueue = true;
         try {
             while (this.ttsQueue.length) {
-                await this.playTTSAudio(this.ttsQueue.shift());
+                const url = this.ttsQueue.shift();
+                await this.playClip(url);
+                VoiceAudioEngine.releaseClip(url);
             }
         } finally {
             this.isDrainingQueue = false;
@@ -74,12 +76,44 @@ class VoiceAudioEngine {
         }
     }
 
-    /** Drops anything queued but not yet played (a new turn supersedes the old one). */
-    stopSpeech() {
-        this.ttsQueue = [];
+    /**
+     * Stops whatever is playing and releases whoever is awaiting it.
+     *
+     * Pausing alone is not enough: a paused element fires no `ended` and no `error`, so the
+     * awaiting `playTTSAudio` promise never settles and enqueueTTS's drain loop never gets
+     * its turn back. See the note on `finish` in playTTSAudio.
+     */
+    cutCurrentClip() {
         if (this.currentAudio) {
             this.currentAudio.pause();
-            this.currentAudio = null;
+        }
+        const settle = this.settleCurrent;
+        this.settleCurrent = null;
+        this.currentAudio = null;
+        if (settle) settle();
+    }
+
+    /** Drops anything queued but not yet played (a new turn supersedes the old one). */
+    stopSpeech() {
+        const dropped = this.ttsQueue;
+        this.ttsQueue = [];
+        dropped.forEach((url) => VoiceAudioEngine.releaseClip(url));
+        this.cutCurrentClip();
+    }
+
+    /**
+     * Frees a blob URL minted for one clip. The streaming path owns the clips it queues and
+     * plays each exactly once, so holding the blob afterwards only keeps the decoded audio
+     * alive for the life of the page. A URL that is not a blob (the HTTP transport's own
+     * /api/tts path) is left alone, as is one a caller deliberately keeps to replay.
+     */
+    static releaseClip(url) {
+        if (typeof url === 'string' && url.startsWith('blob:')) {
+            try {
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                // Already revoked, or no URL support -- nothing to recover from.
+            }
         }
     }
 
@@ -199,13 +233,26 @@ class VoiceAudioEngine {
      * rejects) with `{ played, error, signalDetected }` -- `signalDetected` is `null` when
      * there is no analyser to ask (Web Audio unsupported).
      */
+    /**
+     * Plays one clip on its own account -- a Replay Voice button, the voice test, a forged
+     * avatar's greeting. It supersedes whatever speech is in flight rather than joining it:
+     * dropping the queue is the point.
+     *
+     * Cutting only the *current* clip would leave the drain loop alive. Settling its await
+     * hands it its turn back, so it starts the next queued sentence immediately -- over the
+     * top of the clip that just pre-empted it. Two voices, from one page, with no second
+     * window involved.
+     */
     async playTTSAudio(audioUrl, opts = {}) {
+        this.stopSpeech();
+        return this.playClip(audioUrl, opts);
+    }
+
+    /** Plays one clip, pre-empting the current one but leaving the queue alone. */
+    async playClip(audioUrl, opts = {}) {
         const audible = opts.audible !== false;
 
-        if (this.currentAudio) {
-            this.currentAudio.pause();
-            this.currentAudio = null;
-        }
+        this.cutCurrentClip();
 
         if (this.audioCtx && this.audioCtx.state === 'suspended') {
             await this.audioCtx.resume();
@@ -216,6 +263,21 @@ class VoiceAudioEngine {
         }
 
         return new Promise((resolve) => {
+            // Every clip reaching here must be same-origin with this page, which is why
+            // the native transport hands over bytes and mints a blob rather than using
+            // convertFileSrc (see synthesizeSpeechUrl, and speech_clip_rust in main.rs).
+            //
+            // The reason is `createMediaElementSource` below: routing the element into the
+            // graph makes the graph its *only* output, and WebKit mutes a
+            // MediaElementAudioSourceNode whose media would taint the page's origin --
+            // setFormat does `m_muted = wouldTaintOrigin()` and process() then zeroes the
+            // output bus. No error, no failed load, no rejected play(); just silence, which
+            // is what an `asset://localhost/...` clip on a `tauri://localhost` page got.
+            //
+            // Setting `crossOrigin` does not rescue that, which was an earlier attempt at
+            // this and wrong: wry registers the asset scheme as secure and never as
+            // CORS-enabled, so WebKit will not grant CORS on it whatever headers come back.
+            // A blob URL sidesteps the question -- it is this page's own origin.
             const audio = new Audio(audioUrl);
             this.currentAudio = audio;
 
@@ -232,7 +294,12 @@ class VoiceAudioEngine {
                     const source = this.audioCtx.createMediaElementSource(audio);
                     source.connect(this.analyser);
                 } catch (e) {
-                    // Fallback if CORS or already connected
+                    // Only thrown when this element already has a source node -- a fresh
+                    // Audio is created per clip above, so this is unreachable in practice.
+                    // Note what it does *not* catch: a cross-origin clip does not throw
+                    // here, it silently mutes the node, which is why every clip reaching
+                    // this function is same-origin (see the note above). Leaving the
+                    // analyser unattached costs the frequency readout, never the audio.
                 }
             }
 
@@ -256,7 +323,20 @@ class VoiceAudioEngine {
                 requestAnimationFrame(pollFrequency);
             };
 
+            // Settling exactly once, and reachable from outside.
+            //
+            // `stopSpeech()` and the pre-empt at the top of this function both *pause* the
+            // outgoing clip, and a paused element fires neither `ended` nor `error` -- so
+            // whoever was awaiting it waited forever. That matters because enqueueTTS awaits
+            // this inside its drain loop while holding `isDrainingQueue`: one interruption
+            // latched that flag true for the life of the page, and every later clip was
+            // pushed onto a queue nothing would ever drain again. Speech simply stopped,
+            // with the queue silently filling up behind it.
+            let settled = false;
             const finish = () => {
+                if (settled) return;
+                settled = true;
+                if (this.settleCurrent === finish) this.settleCurrent = null;
                 this.currentAudio = null;
                 // Mid-queue, the next clip is about to start: staying SPEAKING keeps the
                 // avatar steady across the seam. enqueueTTS emits IDLE when it drains.
@@ -270,6 +350,8 @@ class VoiceAudioEngine {
                     signalDetected: this.analyser ? signalDetected : null,
                 });
             };
+
+            this.settleCurrent = finish;
 
             audio.onplay = () => {
                 pollFrequency();
