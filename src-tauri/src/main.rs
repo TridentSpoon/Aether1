@@ -74,11 +74,12 @@ const BUILT_COMMIT: &str = env!("AETHER1_GIT_COMMIT");
 /// checkout before any PR had ever been merged).
 const BUILT_PR_REV: &str = env!("AETHER1_PR_REV");
 
-/// Aether1 0.3.Rev{N} -- 0.x because still in dev; the 3 marks the project's third era
-/// (1: Antigravity project, 2: ported to Claude, 3: native Rust/Tauri rewrite); Rev{N} is
-/// the PR number this build was built from, so the version always tracks the last merge
-/// without needing a hand-maintained counter.
-const APP_VERSION: &str = concat!("Aether1 0.3.Rev", env!("AETHER1_PR_REV"));
+/// `Ver 0.4.126`: the major and minor of the package itself, then the PR number this build
+/// was built from, so the version always tracks the last merge without a hand-maintained
+/// counter. Assembled in build.rs, where the major and minor are read from Cargo.toml
+/// rather than written out again -- the previous spelling hard-coded "0.3" here while the
+/// package said 0.4.0, and the two had no way of noticing they disagreed.
+const APP_VERSION: &str = env!("AETHER1_VERSION");
 
 /// CARGO_MANIFEST_DIR is src-tauri/ at build time; frontend/ and the backend/ data
 /// directory (aether1_memory.db, audio_cache/) all live one level up, at the repo root --
@@ -1124,6 +1125,42 @@ fn generate_speech_rust(
     Ok(path.to_string_lossy().to_string())
 }
 
+/// One spoken clip, as bytes, for the page to play from a blob.
+///
+/// **This exists because the asset protocol cannot carry audio the page can hear.** The
+/// obvious route -- synthesize to a file, hand the page `convertFileSrc(path)` -- produces
+/// an `asset://localhost/...` URL, which is a different origin from the page's own
+/// `tauri://localhost`. The page routes every clip through a `MediaElementAudioSourceNode`
+/// so the analyser can drive the avatar, and WebKit mutes that node outright for media that
+/// would taint the page's origin: silence, with no error, no failed load and no rejected
+/// `play()`. Asking the element for a CORS check does not rescue it either, because wry
+/// registers the asset scheme as *secure* and never as CORS-enabled, so WebKit will not
+/// grant CORS on it whatever headers come back.
+///
+/// Bytes over the IPC channel have none of that: a `blob:` URL minted in the page is the
+/// page's own origin, so nothing is ever tainted and the analyser keeps working. The same
+/// channel already carries recorded audio the other way for transcription, so this is the
+/// proven direction of travel rather than a new one.
+///
+/// The mime type is returned rather than guessed, because it decides whether the blob is
+/// playable at all and the engines disagree: Piper and the OS voices produce WAV, the cloud
+/// voice returns MP3.
+#[tauri::command(async)]
+fn speech_clip_rust(
+    engine: tauri::State<LlmEngine>,
+    text: String,
+    voice: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
+    let mime = match path.extension().and_then(|e| e.to_str()) {
+        Some("mp3") => "audio/mpeg",
+        _ => "audio/wav",
+    };
+    let bytes = std::fs::read(&path)
+        .map_err(|e| format!("could not read the clip at {}: {e}", path.display()))?;
+    Ok(serde_json::json!({ "bytes": bytes, "mime": mime }))
+}
+
 /// Builds (but does not show-if-already-open -- callers check first) the floating "desktop
 /// sprite" window: a small, transparent, undecorated, always-on-top webview showing just the
 /// hologram avatar (frontend/sprite.html reuses the same Three.js avatar code as the main
@@ -1781,6 +1818,7 @@ fn main() {
             get_settings_rust,
             save_settings_rust,
             generate_speech_rust,
+            speech_clip_rust,
             transcribe_rust,
             voice_status_rust,
             voice_advice_rust,
