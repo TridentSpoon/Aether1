@@ -707,6 +707,25 @@ pub fn voice_advice(engine: &LlmEngine) -> crate::voice_setup::VoiceAdvice {
     )
 }
 
+/// What this machine still needs before it can write code offline, and the commands to do
+/// it with.
+///
+/// The facts the advisor needs are gathered here rather than inside it -- a fresh probe of
+/// the machine, how much memory it has, whether local-only mode is on, and which agent
+/// commands are on the PATH -- for the reason `setup_advice` does the same: it keeps
+/// `code_setup::advise` a pure function, and "no coding agent installed" is exactly the
+/// state the machine running the tests is never in.
+pub fn code_advice(engine: &LlmEngine) -> crate::code_setup::CodingAdvice {
+    let scan = model_scanner::scan_all();
+    let ram_total_gb = llm::Telemetry::snapshot().ram_total_gb;
+    crate::code_setup::advise(
+        &scan,
+        ram_total_gb,
+        crate::local_only::enabled(engine.db()),
+        crate::code_setup::AgentsFound::probe(),
+    )
+}
+
 /// The sentence the voice test speaks. Short enough to be quick, long enough that a voice
 /// which is technically producing audio but producing rubbish is audibly rubbish.
 pub const VOICE_TEST_SENTENCE: &str =

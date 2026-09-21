@@ -2616,6 +2616,72 @@ this repository, reviewed like any other. And it runs at startup, again the mome
 actually fails, and whenever the operator asks -- never on a timer, because the cost of
 watching has to stay smaller than the cost of the thing being watched.
 
+### Step 49: writing code when the subscription lapses -- **shipped**
+
+**The problem is not a missing feature, it is a week without one.** Somebody pays for a
+cloud coding assistant, the month turns, and they cannot afford it. The machine in front of
+them can still write code -- a 14B coding model on an ordinary 32 GB desktop is genuinely
+useful -- and the only thing standing between them and it is three facts and one
+incantation: which model fits in this machine's memory, how to get it, what to point at it,
+and what to type. Every one of those is answerable from things AETHER1 already knows, and
+getting any of them wrong looks identical to the tool being broken.
+
+**AETHER1 does not become the coding agent, and this step is the decision not to.** Driving
+an edit-and-run-the-tests loop over somebody's repository is what `opencode` and `aider`
+already do, and a worse copy of them living inside a companion HUD would be a year of work
+to arrive behind where those two are today. What AETHER1 has that they do not is the
+machine: it already knows the memory, the endpoint that answered, and which models are on
+it. So it does the part that is actually hard the first time -- choose, fetch, and hand over
+a command with the real address and the real model name already in it -- and stops.
+
+`code_setup.rs` is the third of the advisors, built to the shape `setup.rs` established and
+`voice_setup.rs` copied: probe the machine, name the single next thing, re-ask after every
+action rather than remembering a page number. Four stages, each the one before it solved --
+no server, no coding model, no agent, ready.
+
+**Three decisions inside it are worth writing down.**
+
+*The catalogue is sized against total RAM, not video memory.* Nothing in AETHER1 reads VRAM
+today, and inventing a number is worse than using the one the brain catalogue already
+trusts. The whole list is returned with each entry marked `fits`, and the HUD folds the ones
+that do not behind a tick -- somebody who knows their graphics card better than a heuristic
+does gets to pick past it.
+
+*A tag means a size, and no tag means latest.* `devstral` is pulled as `devstral` and
+reported back as `devstral:latest`, so an equality test tells somebody to download what they
+already have. Matching on the family instead -- the obvious fix -- marks `qwen2.5-coder:14b`
+installed because a `:7b` is present, and they are four gigabytes apart. So the tag decides
+which comparison applies, and a test fails loudly if that is ever collapsed into one. This
+was a real bug, found by a test written before the panel existed.
+
+*The context window is set explicitly, in every command.* Ollama's default context is small,
+and an agent handed a small window does not fail -- it silently forgets the top of the file
+it is editing and writes something that contradicts it. That is the same quiet failure
+`voice_setup.rs` exists to prevent, and it is worth a line of configuration in every connect
+step: `OLLAMA_CONTEXT_LENGTH` for opencode, `.aider.model.settings.yml` for aider.
+
+**The house rules are the answer to "it does not write like the rest of the repo".** No
+choice of model fixes that, because it is not a capability problem: the conventions are not
+written down anywhere a model can read them. Both agents look for an `AGENTS.md` at the root
+of a project and put it in front of the model every turn, so `code_setup::conventions()`
+writes them out -- comment the why, `--` not an em dash, decisions in pure functions, two
+states that mean different things stay separate, machinery speaks as the program. It is
+printed and never written: AETHER1 writes inside its own data directory and nowhere else,
+and `aether1 code conventions > AGENTS.md` is one command.
+
+**Where it lives.** A nested group inside The Brain rather than a group of its own, because
+it is the same server and the same download path -- a second model on the machine that is
+already answering, chosen for a different job. A top-level group would suggest a second
+thing to install. The download goes through `downloads::start`, which already knows how to
+drive Ollama's streaming pull and already refuses in local-only mode. `aether1 code` prints
+the same advice, because somebody setting this up because their subscription lapsed is quite
+likely doing it from a terminal already.
+
+**Not verifiable in a container:** the panel as drawn, and the two agents actually starting
+against a real Ollama. The advice, the catalogue ordering, the tag rule and the commands'
+contents are covered by tests.
+
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -2630,7 +2696,9 @@ step 42, a real terminal in the HUD that the companion provably cannot reach, an
 step 44 the avatar on a spare screen of its own. Plus local-only
 mode, the theme engine, the top bar, personas as specialities, per-persona access with per-request elevation
 *and* operator-widened fields, a command allowlist that ships usable, reading the Windows
-event log, honest token telemetry, and native tool calling.
+event log, honest token telemetry, and native tool calling. Plus, since step 49, a
+coding model chosen, fetched and wired to a coding agent from inside the app, for the weeks
+a cloud subscription is not being paid for.
 
 **Outstanding, in the order they are worth doing:**
 

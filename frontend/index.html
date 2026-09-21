@@ -1112,6 +1112,70 @@
                             </div>
                         </div>
                     </details>
+
+                    <!-- ------------------- WRITING CODE ------------------- -->
+                    <!-- Nested inside The Brain rather than given a group of its own,
+                         because it is the same server and the same download path as
+                         everything above it: a second model on the machine that is already
+                         answering, chosen for a different job. A top-level group would
+                         suggest a second thing to install.
+
+                         Almost everything in here is drawn by renderCodeAdvice from one
+                         probe. What is in the markup is the frame and the ids it fills. -->
+                    <details id="settings-group-coding" class="settings-group settings-group-nested">
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">&#9000; Writing code</span>
+                            <span class="settings-group-hint">for when the subscription lapses</span>
+                        </summary>
+                        <div class="settings-group-body">
+
+                            <div class="bg-cyan-950/30 border border-cyan-500/40 p-3 rounded-md space-y-2">
+                                <div class="text-xs font-mono text-cyan-200">Write code with no subscription behind it</div>
+                                <div class="text-[11px] font-mono text-slate-400 leading-snug">
+                                    A coding model runs on this computer and costs nothing to use. Aether1
+                                    works out which one fits in this machine's memory, downloads it, and
+                                    gives you the exact commands to point a coding program at it. Aether1
+                                    does not do the editing itself &mdash; it sets up something that does.
+                                </div>
+                                <div class="flex items-center justify-end">
+                                    <button id="btn-code-recheck" type="button" class="cyber-btn cyber-btn-active text-xs py-2 px-3 whitespace-nowrap">&#9000; Check this computer</button>
+                                </div>
+                            </div>
+
+                            <div id="code-headline" class="text-[11px] font-mono p-2 rounded border border-slate-600/40 bg-slate-900/60 text-slate-400">
+                                Press Check to see what this computer still needs.
+                            </div>
+
+                            <ol id="code-steps" class="space-y-2"></ol>
+
+                            <div id="code-models-wrap" class="hidden space-y-1.5">
+                                <label class="text-xs font-mono text-cyan-300 block">MODELS BUILT FOR CODE</label>
+                                <div id="code-models" class="space-y-1.5"></div>
+                                <label class="flex items-center gap-2 text-[11px] font-mono text-slate-500">
+                                    <input id="code-show-all" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                                    Also show the ones too big for this computer's memory
+                                </label>
+                            </div>
+
+                            <div id="code-agents" class="space-y-2"></div>
+
+                            <details id="code-conventions-wrap" class="hidden border border-slate-600/40 rounded p-3">
+                                <summary class="text-xs font-mono text-slate-300 cursor-pointer">&#128220; House rules for the model to follow</summary>
+                                <div class="space-y-2 mt-2">
+                                    <div class="text-[11px] font-mono text-slate-400 leading-snug">
+                                        A local model will not write like the rest of your project unless the
+                                        conventions are written down somewhere it can read them. Save this as
+                                        <span class="text-cyan-300">AGENTS.md</span> at the top of your project;
+                                        both programs below read it every turn.
+                                    </div>
+                                    <pre id="code-conventions" class="text-[10px] font-mono text-slate-300 bg-slate-950/80 border border-cyan-500/20 rounded p-2 max-h-56 overflow-auto whitespace-pre-wrap"></pre>
+                                    <button id="btn-code-copy-conventions" type="button" class="cyber-btn text-[11px] py-1 px-2.5">&#128203; Copy</button>
+                                </div>
+                            </details>
+
+                            <div id="code-status" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-500/20"></div>
+                        </div>
+                    </details>
                 </div>
             </details>
 

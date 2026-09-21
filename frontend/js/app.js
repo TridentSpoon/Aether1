@@ -2535,6 +2535,286 @@ document.addEventListener('DOMContentLoaded', () => {
         openSetupWizard();
     });
 
+    /* ====================== WRITING CODE ================================
+     * The third of the wizards, and the one with the narrowest reason to exist: the week
+     * somebody cannot pay for a cloud coding assistant, their machine can still do the
+     * work, and the only thing in the way is knowing which model fits in their memory and
+     * what to type to point an editor at it.
+     *
+     * It lives inside The Brain rather than beside it because it is the same server and
+     * the same download path -- a second model on the machine that is already answering,
+     * chosen for a different job. Everything below is drawn from one probe of the machine,
+     * re-asked after every action, for the reason setup.rs gives: a wizard that remembers
+     * which page it is on can claim a step that is not true.
+     *
+     * Aether1 does not become the editor. It chooses, fetches, and hands over a command
+     * with this machine's real address and real model name already in it.
+     */
+
+    const codeHeadline = document.getElementById('code-headline');
+    const codeSteps = document.getElementById('code-steps');
+    const codeModelsWrap = document.getElementById('code-models-wrap');
+    const codeModels = document.getElementById('code-models');
+    const codeShowAll = document.getElementById('code-show-all');
+    const codeAgents = document.getElementById('code-agents');
+    const codeConventionsWrap = document.getElementById('code-conventions-wrap');
+    const codeConventions = document.getElementById('code-conventions');
+    const codeStatus = document.getElementById('code-status');
+    const btnCodeRecheck = document.getElementById('btn-code-recheck');
+
+    let codeAdvice = null;
+    // The models this panel started downloading, so its own progress line reports on those
+    // rather than on every pull happening anywhere in the app.
+    const codeDownloading = new Set();
+    let codePollTimer = null;
+
+    function setCodeStatus(text, tone = 'info') {
+        if (!codeStatus) return;
+        codeStatus.classList.remove('hidden', 'text-cyan-300', 'text-green-400', 'text-red-400', 'text-slate-300', 'animate-pulse');
+        if (!text) { codeStatus.classList.add('hidden'); return; }
+        const tones = { info: 'text-slate-300', busy: 'text-cyan-300', good: 'text-green-400', bad: 'text-red-400' };
+        codeStatus.classList.add(tones[tone] || tones.info);
+        if (tone === 'busy') codeStatus.classList.add('animate-pulse');
+        codeStatus.textContent = text;
+    }
+
+    async function fetchCodeAdvice() {
+        if (IS_TAURI) return tauriInvoke('code_advice_rust');
+        const resp = await apiFetch('/api/code/advice');
+        if (!resp.ok) throw new Error(`coding check failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function fetchCodeConventions() {
+        if (IS_TAURI) return tauriInvoke('code_conventions_rust');
+        const resp = await apiFetch('/api/code/conventions');
+        if (!resp.ok) throw new Error(`could not read the house rules: ${resp.status}`);
+        return resp.text();
+    }
+
+    /* One model. Built as nodes rather than markup for the same reason the brain wizard's
+       cards are: a model name is whatever the server said it was. */
+    function codeModelRow(model) {
+        const row = document.createElement('div');
+        row.className = 'flex items-start justify-between gap-2 p-2 rounded border ' +
+            (model.recommended ? 'border-cyan-500/50 bg-cyan-950/20' : 'border-slate-600/40 bg-slate-900/40');
+
+        const left = document.createElement('div');
+        left.className = 'min-w-0 space-y-0.5';
+
+        const title = document.createElement('div');
+        title.className = 'text-xs font-mono text-cyan-200';
+        title.textContent = model.label + (model.recommended ? ' — best fit for this computer' : '');
+        left.appendChild(title);
+
+        const blurb = document.createElement('div');
+        blurb.className = 'text-[11px] font-mono text-slate-400 leading-snug';
+        blurb.textContent = model.blurb;
+        left.appendChild(blurb);
+
+        const meta = document.createElement('div');
+        meta.className = 'text-[10px] font-mono text-slate-500';
+        meta.textContent = `${model.name} — ${model.download}` + (model.fits ? '' : ' — more memory than this computer has');
+        left.appendChild(meta);
+
+        row.appendChild(left);
+
+        const action = document.createElement('div');
+        action.className = 'shrink-0';
+        if (model.installed) {
+            const here = document.createElement('span');
+            here.className = 'text-[11px] font-mono text-green-400 whitespace-nowrap';
+            here.textContent = '✔ downloaded';
+            action.appendChild(here);
+        } else {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'cyber-btn text-[11px] py-1 px-2.5 whitespace-nowrap';
+            button.textContent = '📥 Download';
+            button.addEventListener('click', () => handleCodeDownload(model.name, button));
+            action.appendChild(button);
+        }
+        row.appendChild(action);
+        return row;
+    }
+
+    function renderCodeModels(advice) {
+        if (!codeModels || !codeModelsWrap) return;
+        codeModels.innerHTML = '';
+
+        // The ones that do not fit are still offered -- somebody who knows their graphics
+        // card better than a memory heuristic does gets to pick past it -- but behind a
+        // tick, because a list where most entries are unusable is its own kind of unhelpful.
+        const all = advice.models || [];
+        const showAll = !!codeShowAll?.checked;
+        let list = all.filter(model => showAll || model.fits || model.installed);
+        // A machine under the floor has nothing that fits, and the tick that would reveal
+        // the rest lives inside this block -- so an empty filter shows everything instead
+        // of hiding the only way to get it back.
+        if (list.length === 0) list = all;
+        for (const model of list) codeModels.appendChild(codeModelRow(model));
+        codeModelsWrap.classList.toggle('hidden', all.length === 0);
+    }
+
+    /* One coding program, with the half of its instructions that applies: how to get it
+       when it is missing, how to point it at this machine when it is here. Showing both at
+       once is how somebody ends up pasting an install command over a working install. */
+    function codeAgentCard(agent) {
+        const card = document.createElement('div');
+        card.className = 'border rounded p-3 space-y-2 ' +
+            (agent.installed ? 'border-green-500/40 bg-green-950/10' : 'border-slate-600/40 bg-slate-900/40');
+
+        const head = document.createElement('div');
+        head.className = 'flex items-center justify-between gap-2';
+
+        const name = document.createElement('span');
+        name.className = 'text-xs font-mono text-cyan-200';
+        name.textContent = agent.label + (agent.recommended && !agent.installed ? ' — suggested' : '');
+        head.appendChild(name);
+
+        const state = document.createElement('span');
+        state.className = 'text-[11px] font-mono whitespace-nowrap ' + (agent.installed ? 'text-green-400' : 'text-slate-500');
+        state.textContent = agent.installed ? '✔ installed' : 'not installed';
+        head.appendChild(state);
+        card.appendChild(head);
+
+        const blurb = document.createElement('div');
+        blurb.className = 'text-[11px] font-mono text-slate-400 leading-snug';
+        blurb.textContent = agent.blurb;
+        card.appendChild(blurb);
+
+        const steps = document.createElement('ol');
+        steps.className = 'space-y-2';
+        const which = agent.installed ? (agent.connect || []) : (agent.install || []);
+        which.forEach((step, index) => steps.appendChild(renderSetupStep(step, index)));
+        card.appendChild(steps);
+
+        return card;
+    }
+
+    function renderCodeAdvice(advice) {
+        codeAdvice = advice;
+        if (codeHeadline) {
+            codeHeadline.textContent = advice.headline;
+            codeHeadline.classList.toggle('text-green-400', !advice.needs_attention);
+            codeHeadline.classList.toggle('text-slate-400', advice.needs_attention);
+        }
+
+        if (codeSteps) {
+            codeSteps.innerHTML = '';
+            (advice.steps || []).forEach((step, index) => codeSteps.appendChild(renderSetupStep(step, index)));
+        }
+
+        renderCodeModels(advice);
+
+        if (codeAgents) {
+            codeAgents.innerHTML = '';
+            // Nothing to drive until there is a model to drive it with, and a command
+            // naming a model that is not downloaded is a command that fails.
+            if (advice.stage !== 'no-server') {
+                for (const agent of advice.agents || []) codeAgents.appendChild(codeAgentCard(agent));
+            }
+        }
+
+        codeConventionsWrap?.classList.toggle('hidden', advice.stage === 'no-server');
+    }
+
+    async function refreshCodeAdvice({ quiet = false } = {}) {
+        if (!quiet) setCodeStatus('Looking at this computer...', 'busy');
+        try {
+            const advice = await fetchCodeAdvice();
+            renderCodeAdvice(advice);
+            if (!quiet) setCodeStatus('');
+            return advice;
+        } catch (e) {
+            setCodeStatus(`⚠ ${e.message || e}`, 'bad');
+            return null;
+        }
+    }
+
+    function stopCodePoll() {
+        if (codePollTimer) { clearInterval(codePollTimer); codePollTimer = null; }
+    }
+
+    /* The download goes through the same backend the brain wizard uses -- one place that
+       knows how to drive Ollama's streaming pull, and one place that refuses in local-only
+       mode. All this adds is a line saying where it has got to, because a 19 GB download
+       with no feedback is indistinguishable from a hung button. */
+    async function pollCodeDownloads() {
+        const data = await fetchDownloadStatus().catch(() => null);
+        const mine = ((data && data.downloads) || []).filter(d => codeDownloading.has(d.model));
+        if (mine.length === 0) { stopCodePoll(); return; }
+
+        const running = mine.filter(d => d.phase !== 'done' && d.phase !== 'failed');
+        if (running.length > 0) {
+            setCodeStatus(running.map(d => `${d.model}: ${downloadCaption(d)}`).join('  ·  '), 'busy');
+            return;
+        }
+
+        stopCodePoll();
+        const failed = mine.find(d => d.phase === 'failed');
+        if (failed) {
+            setCodeStatus(`⚠ ${failed.model}: ${failed.error || 'the download failed'}`, 'bad');
+        } else {
+            setCodeStatus(`✔ ${mine.map(d => d.model).join(', ')} ready.`, 'good');
+            voiceEngine.playSFX('incoming');
+        }
+        codeDownloading.clear();
+        await refreshCodeAdvice({ quiet: true });
+    }
+
+    async function handleCodeDownload(modelName, button) {
+        voiceEngine.playSFX('click');
+        if (button) button.disabled = true;
+        setCodeStatus(`Starting the download of ${modelName}...`, 'busy');
+        try {
+            const endpoint = codeAdvice?.endpoint || '';
+            const data = IS_TAURI
+                ? await tauriInvoke('start_download_rust', { modelName, endpoint })
+                : await (await apiFetch(
+                    `/api/setup/download?model_name=${encodeURIComponent(modelName)}&endpoint=${encodeURIComponent(endpoint)}`,
+                    { method: 'POST' }
+                )).json();
+
+            if (!data.ok) {
+                setCodeStatus(`⚠ ${data.message}`, 'bad');
+                if (button) button.disabled = false;
+                return;
+            }
+            codeDownloading.add(modelName);
+            stopCodePoll();
+            codePollTimer = setInterval(() => { pollCodeDownloads(); }, 1000);
+            pollCodeDownloads();
+        } catch (e) {
+            setCodeStatus(`⚠ ${e.message || e}`, 'bad');
+            if (button) button.disabled = false;
+        }
+    }
+
+    btnCodeRecheck?.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshCodeAdvice(); });
+    codeShowAll?.addEventListener('change', () => { if (codeAdvice) renderCodeModels(codeAdvice); });
+
+    // Probed when the group is opened rather than when Settings is, because the probe
+    // touches the network and most visits to Settings are not about this.
+    document.getElementById('settings-group-coding')?.addEventListener('toggle', async (event) => {
+        if (!event.target.open || codeAdvice) return;
+        await refreshCodeAdvice();
+        if (codeConventions && !codeConventions.textContent) {
+            codeConventions.textContent = await fetchCodeConventions().catch(() => '');
+        }
+    });
+
+    document.getElementById('btn-code-copy-conventions')?.addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        try {
+            await navigator.clipboard.writeText(codeConventions?.textContent || '');
+            button.textContent = '✔ Copied';
+            setTimeout(() => { button.textContent = '📋 Copy'; }, 1500);
+        } catch {
+            button.textContent = 'Select it and copy';
+        }
+    });
+
     /* ====================== GIVE IT A VOICE =============================
      * The brain wizard's twin, for the half of the companion that talks and listens.
      *

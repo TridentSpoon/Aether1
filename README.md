@@ -918,6 +918,8 @@ aether1 status                           # system diagnostic report (--json for 
 aether1 say "systems nominal"            # speak, in the configured persona voice
 aether1 toggle                           # summon/dismiss the HUD of a running instance
 aether1 face                             # avatar fullscreen on a spare screen (Esc closes it)
+aether1 code                             # set this machine up to write code offline
+aether1 code conventions > AGENTS.md     # house rules for a local coding model to follow
 aether1 --help
 ```
 

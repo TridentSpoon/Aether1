@@ -19,6 +19,7 @@
 
 mod background_services;
 mod cli;
+mod code_setup;
 mod commands;
 mod discovery;
 mod downloads;
@@ -1051,6 +1052,23 @@ fn voice_advice_rust(engine: tauri::State<LlmEngine>) -> voice_setup::VoiceAdvic
     commands::voice_advice(&engine)
 }
 
+/// Rust-native equivalent of GET /api/code/advice -- what this machine still needs before
+/// it can write code with no subscription behind it. A probe for the same reason the two
+/// above are: the answer is the machine's current state, not a page a wizard is on.
+#[tauri::command(async)]
+fn code_advice_rust(engine: tauri::State<LlmEngine>) -> code_setup::CodingAdvice {
+    commands::code_advice(&engine)
+}
+
+/// The house rules, for the operator to paste into their project as AGENTS.md. Handed over
+/// as text rather than written anywhere: Aether1 writes inside its own data directory and
+/// nowhere else, and a wizard that drops files into whatever folder happened to be open is
+/// a different kind of program from this one.
+#[tauri::command(async)]
+fn code_conventions_rust() -> String {
+    code_setup::conventions()
+}
+
 /// Rust-native equivalent of POST /api/voice/test. Speaks a fixed sentence and returns the
 /// report with the audio path folded in, so the HUD can both play it and say which engine
 /// managed it.
@@ -1587,6 +1605,8 @@ fn main() {
             transcribe_rust,
             voice_status_rust,
             voice_advice_rust,
+            code_advice_rust,
+            code_conventions_rust,
             test_speech_rust,
             list_personas_rust,
             get_version_info,
