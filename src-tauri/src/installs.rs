@@ -39,33 +39,63 @@ pub const NOTICE_SETTING: &str = "installs_notice";
 /// What a copy of AETHER1 says when asked its version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Version {
-    /// The scheme this app prints: `Aether1 0.3.Rev152`, where 152 is the pull request it
-    /// was built from (see build.rs). Monotonic by construction, so two of these always
-    /// compare.
-    Rev(u32),
+    /// The scheme this app prints: `Ver 0.4.152`, where 152 is the pull request it was
+    /// built from (see build.rs). The older spelling, `Aether1 0.3.Rev152`, says the same
+    /// thing and is still read: the whole point of this module is finding copies installed
+    /// before now, and those copies print what they printed when they were built.
+    ///
+    /// `pr` is what compares. It is a pull request number on one repository, so it only ever
+    /// increases -- across a major or minor bump as much as within one -- while the major
+    /// and minor are editorial and are kept only so a version can be shown back accurately.
+    Build { major: u32, minor: u32, pr: u32 },
     /// Whatever a package manager reports instead. Kept as text on purpose: a `0.4.0` from
-    /// dpkg and a `Rev152` from the binary are not points on the same number line, and
+    /// dpkg and a `0.4.152` from the binary are not points on the same number line, and
     /// pretending they are is how the wrong copy gets deleted.
     Opaque(String),
 }
 
 impl Version {
+    /// A build of this project at `major.minor`, from pull request `pr`. Only the tests
+    /// construct one directly -- everything else reads a version off a binary via `parse`.
+    #[cfg(test)]
+    pub fn build(major: u32, minor: u32, pr: u32) -> Version {
+        Version::Build { major, minor, pr }
+    }
+
     /// Reads a version out of a `--version` line or a package manager's answer. Deliberately
-    /// forgiving about what surrounds it -- `aether1 --version` prints `Aether1 0.3.Rev152
-    /// (a1b2c3d)`, an older build printed less, and a package manager prints a bare number.
+    /// forgiving about what surrounds it -- `aether1 --version` prints `Ver 0.4.152
+    /// (a1b2c3d)`, a build from before that prints `Aether1 0.3.Rev152`, an older one
+    /// printed less, and a package manager prints a bare number.
     pub fn parse(text: &str) -> Option<Version> {
         let text = text.trim();
         if text.is_empty() {
             return None;
         }
         let lowered = text.to_ascii_lowercase();
+        // The old spelling first, because `Aether1 0.3.Rev152` also contains a bare `0.3`
+        // that the three-number branch below would happily read as a version and get wrong.
         if let Some(at) = lowered.find("rev") {
             let digits: String = text[at + 3..]
                 .chars()
                 .take_while(|c| c.is_ascii_digit())
                 .collect();
-            if let Ok(rev) = digits.parse::<u32>() {
-                return Some(Version::Rev(rev));
+            if let Ok(pr) = digits.parse::<u32>() {
+                let (major, minor) = Version::major_minor_before(&text[..at]).unwrap_or((0, 0));
+                return Some(Version::Build { major, minor, pr });
+            }
+        }
+        // The current spelling: a token of exactly three numbers, `0.4.152`.
+        for token in text.split_whitespace() {
+            let token = token.trim_matches(['(', ')', ',']);
+            let mut parts = token.split('.');
+            if let (Some(a), Some(b), Some(c), None) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            {
+                if let (Ok(major), Ok(minor), Ok(pr)) =
+                    (a.parse::<u32>(), b.parse::<u32>(), c.parse::<u32>())
+                {
+                    return Some(Version::Build { major, minor, pr });
+                }
             }
         }
         // Not the Rev scheme: keep the first token that has a digit in it, which is the
@@ -75,9 +105,24 @@ impl Version {
             .map(|token| Version::Opaque(token.trim_matches(['(', ')', ',']).to_string()))
     }
 
+    /// The `major.minor` immediately before a `Rev`, for the old spelling. None when there
+    /// is no such number, which is what a build too old to print one gives.
+    fn major_minor_before(prefix: &str) -> Option<(u32, u32)> {
+        let token = prefix
+            .split_whitespace()
+            .next_back()?
+            .trim_end_matches('.')
+            .trim_matches(['(', ')', ',']);
+        let mut parts = token.split('.');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(a), Some(b), None) => Some((a.parse().ok()?, b.parse().ok()?)),
+            _ => None,
+        }
+    }
+
     pub fn label(&self) -> String {
         match self {
-            Version::Rev(rev) => format!("Rev{rev}"),
+            Version::Build { major, minor, pr } => format!("{major}.{minor}.{pr}"),
             Version::Opaque(text) => text.clone(),
         }
     }
@@ -87,7 +132,13 @@ impl Version {
     /// answer whenever either side is opaque, and the reason `Standing::Unknown` exists.
     pub fn older_than(&self, other: &Version) -> Option<bool> {
         match (self, other) {
-            (Version::Rev(mine), Version::Rev(theirs)) => Some(mine < theirs),
+            // On `pr` alone: see the note on the variant. Comparing the major and minor
+            // first would say the same thing, since pull request numbers keep climbing
+            // across a version bump, but it would imply the bump carries information about
+            // which build is newer, and it does not.
+            (Version::Build { pr: mine, .. }, Version::Build { pr: theirs, .. }) => {
+                Some(mine < theirs)
+            }
             _ => None,
         }
     }
@@ -672,7 +723,7 @@ mod tests {
             FakeMachine {
                 home,
                 running_exe: None,
-                running_version: Some(Version::Rev(120)),
+                running_version: Some(Version::build(0, 4, 120)),
                 versions: Vec::new(),
                 deb: None,
                 pacman: None,
@@ -749,12 +800,23 @@ mod tests {
         bin
     }
 
+    /// Both spellings this project has printed, because this module exists to find copies
+    /// installed in the past and those answer `--version` the way they always did. The old
+    /// one must keep its own major and minor rather than being restamped with today's: a
+    /// 0.3 build is not a 0.4 build, and the label is shown to somebody deciding which copy
+    /// to delete.
     #[test]
     fn reads_the_version_scheme_this_app_prints() {
         assert_eq!(
-            Version::parse("Aether1 0.3.Rev152 (a1b2c3d)"),
-            Some(Version::Rev(152))
+            Version::parse("Ver 0.4.152 (a1b2c3d)"),
+            Some(Version::build(0, 4, 152))
         );
+        assert_eq!(
+            Version::parse("Aether1 0.3.Rev152 (a1b2c3d)"),
+            Some(Version::build(0, 3, 152))
+        );
+        // A build too old to print a major.minor at all still yields its pull request.
+        assert_eq!(Version::parse("Rev7"), Some(Version::build(0, 0, 7)));
         assert_eq!(
             Version::parse("0.4.0-1"),
             Some(Version::Opaque("0.4.0-1".into()))
@@ -763,14 +825,39 @@ mod tests {
         assert_eq!(Version::parse("no numbers here"), None);
     }
 
+    /// The two spellings of the same build are the same build, and the label says which
+    /// version it is rather than inventing a scheme of its own.
+    #[test]
+    fn the_old_and_new_spellings_of_one_build_agree() {
+        let new = Version::parse("Ver 0.4.152").unwrap();
+        let old = Version::parse("Aether1 0.4.Rev152").unwrap();
+        assert_eq!(new, old);
+        assert_eq!(new.label(), "0.4.152");
+        // Across a version bump, the pull request is still what decides.
+        assert_eq!(
+            Version::build(0, 4, 152).older_than(&Version::build(0, 5, 160)),
+            Some(true)
+        );
+        assert_eq!(
+            Version::build(0, 5, 160).older_than(&Version::build(0, 4, 152)),
+            Some(false)
+        );
+    }
+
     #[test]
     fn two_revisions_compare_and_anything_else_refuses_to() {
-        assert_eq!(Version::Rev(10).older_than(&Version::Rev(20)), Some(true));
-        assert_eq!(Version::Rev(20).older_than(&Version::Rev(10)), Some(false));
+        assert_eq!(
+            Version::build(0, 4, 10).older_than(&Version::build(0, 4, 20)),
+            Some(true)
+        );
+        assert_eq!(
+            Version::build(0, 4, 20).older_than(&Version::build(0, 4, 10)),
+            Some(false)
+        );
         // A package manager's number is not on the same line as a Rev, and saying so is the
         // point: an uncomparable pair becomes Standing::Unknown, never Stale by accident.
         assert_eq!(
-            Version::Opaque("0.4.0".into()).older_than(&Version::Rev(10)),
+            Version::Opaque("0.4.0".into()).older_than(&Version::build(0, 4, 10)),
             None
         );
     }
@@ -785,8 +872,12 @@ mod tests {
         write(&home.join("Applications").join("Other.AppImage"), "no");
 
         let mut machine = FakeMachine::new(home.clone());
-        machine.versions.push((bin.clone(), Version::Rev(99)));
-        machine.versions.push((appimage.clone(), Version::Rev(118)));
+        machine
+            .versions
+            .push((bin.clone(), Version::build(0, 4, 99)));
+        machine
+            .versions
+            .push((appimage.clone(), Version::build(0, 4, 118)));
 
         let found = detect(&machine);
         let paths: Vec<&PathBuf> = found.iter().map(|install| &install.path).collect();
@@ -810,8 +901,10 @@ mod tests {
         let home = temp_home();
         let bin = install_user_bundle(&home);
         let mut machine = FakeMachine::new(home.clone());
-        machine.running_version = Some(Version::Rev(100));
-        machine.versions.push((bin.clone(), Version::Rev(140)));
+        machine.running_version = Some(Version::build(0, 4, 100));
+        machine
+            .versions
+            .push((bin.clone(), Version::build(0, 4, 140)));
 
         let found = detect(&machine);
         let running = machine.running_version();
@@ -830,8 +923,8 @@ mod tests {
         let home = temp_home();
         let bin = install_user_bundle(&home);
         let mut machine = FakeMachine::new(home.clone());
-        machine.running_version = Some(Version::Rev(120));
-        machine.versions.push((bin, Version::Rev(120)));
+        machine.running_version = Some(Version::build(0, 4, 120));
+        machine.versions.push((bin, Version::build(0, 4, 120)));
 
         let found = detect(&machine);
         let running = machine.running_version();

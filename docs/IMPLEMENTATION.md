@@ -2656,7 +2656,7 @@ not look like it has a stray copy on it, and never offered.
 a copy newer than the running one to exist is that it was just installed and the old icon was
 clicked out of habit. Removing it would quietly undo the upgrade — the exact failure this step
 is supposed to prevent, in reverse. Versions compare through the scheme the app already prints
-(`Aether1 0.3.Rev152`, where the revision is the merged pull request, so it is monotonic by
+(`Ver 0.4.152`, where the last number is the merged pull request, so it is monotonic by
 construction). A package manager's `0.4.0` is not a point on that same line, so it does not
 pretend to be: two versions that cannot be compared produce "cannot tell how old this one is"
 and the copy is still offered, because a second copy is a problem whether or not its age can be

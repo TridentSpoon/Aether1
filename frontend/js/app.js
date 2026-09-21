@@ -1796,6 +1796,13 @@ document.addEventListener('DOMContentLoaded', () => {
         let audioQueued = false;
 
         const speakChunk = async (chunk) => {
+            // Trace lines are the machine narrating its own plumbing -- `\u2699 vault notes
+            // loaded: INDEX.md, profile.md, machine.md`. They belong on screen and never in
+            // the ear: the Rust sanitizer keeps the *contents* of inline code (so speech
+            // says "nominal" rather than skipping it), which means a trace line arrives at
+            // Piper as a list of filenames to read out. Stripped here, where what is a
+            // trace and what is the answer is already known.
+            chunk = withoutTraceLines(chunk);
             if (!autoSpeak || !chunk.trim()) return;
             try {
                 const url = await synthesizeSpeechUrl(chunk);
@@ -3368,8 +3375,14 @@ document.addEventListener('DOMContentLoaded', () => {
     async function synthesizeSpeechUrl(text, voiceName) {
         try {
             if (IS_TAURI) {
-                const path = await tauriInvoke('generate_speech_rust', { text, voice: voiceName || null });
-                return window.__TAURI__.core.convertFileSrc(path);
+                // Bytes over IPC, played from a blob, rather than convertFileSrc.
+                // An asset:// URL is a different origin from this page, and the clip is
+                // routed through a MediaElementAudioSourceNode for the analyser -- WebKit
+                // mutes that node for anything that would taint the page's origin, so the
+                // asset route plays silence with no error anywhere. See speech_clip_rust.
+                const clip = await tauriInvoke('speech_clip_rust', { text, voice: voiceName || null });
+                const blob = new Blob([new Uint8Array(clip.bytes)], { type: clip.mime });
+                return URL.createObjectURL(blob);
             }
             const resp = await apiFetch('/api/tts', {
                 method: 'POST',
