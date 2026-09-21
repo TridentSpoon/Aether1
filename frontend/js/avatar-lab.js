@@ -23,9 +23,9 @@
         // group: 'The Umbrals' on its own registerAvatar def if it's built as a plugin.
         { id: 'arx-limes', label: 'A.R.X.LIMES', group: 'The Umbrals' },
         { id: 'arx-logos', label: 'A.R.X.LOGOS', group: 'The Umbrals' },
-        // The eXcelsior Class is nowhere in this list on purpose: enXephalon and
-        // C.I.C.E.R.O. are plugins, so the whole group lives on their own registerAvatar
-        // defs (group: 'The eXcelsior Class' in avatar-enxephalon.js and avatar-cicero.js).
+        // The eXcelsior Class is nowhere in this list on purpose: every member of it is a
+        // plugin, so the whole group lives on their own registerAvatar defs (group: 'The
+        // eXcelsior Class' in avatar-enxephalon.js, avatar-cicero.js and avatar-praxis.js).
         // fillAvatarPicker builds the <optgroup> from whatever carries the name, hand-built
         // entry or plugin alike.
     ];

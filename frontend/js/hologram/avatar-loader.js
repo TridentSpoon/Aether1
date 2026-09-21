@@ -47,6 +47,7 @@
         'operator':       { file: 'avatar-operator.js',       v: 3 },
         'enxephalon':     { file: 'avatar-enxephalon.js',     v: 1 },
         'cicero':         { file: 'avatar-cicero.js',         v: 1 },
+        'praxis':         { file: 'avatar-praxis.js',         v: 1 },
         /* The custom avatar is assembled from the shared parts library rather than modelled
            by hand, so its file is useless without it -- 56 KB that only this one avatar
            needs, which is exactly the kind of weight worth not carrying at launch. */
