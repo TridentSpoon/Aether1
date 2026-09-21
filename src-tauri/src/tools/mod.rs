@@ -744,7 +744,7 @@ mod tests {
     }
 
     /// Reading the event log is the diagnostic persona's job, so it runs unasked -- and is
-    /// not Creative Work's job, so there it is a proposal like anything else out of field.
+    /// not Signal & Logic's job, so there it is a proposal like anything else out of field.
     #[test]
     fn the_event_log_is_in_the_diagnostic_field_and_not_in_everyones() {
         assert!(Persona::Default.domain().allows_tool("read_event_log"));
@@ -786,7 +786,7 @@ mod tests {
     #[test]
     fn a_read_outside_the_personas_field_is_proposed_and_does_not_run() {
         let db = temp_db("domain_out_of_field");
-        // Creative Work has no business listing processes, so it asks.
+        // Signal & Logic has no business listing processes, so it asks.
         let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
         let mut registry = Registry::new();
         registry.register(probe("list_processes", false)).unwrap();
@@ -794,7 +794,7 @@ mod tests {
         let reply = run(&registry, &ctx, "list_processes", &json!({"path": "/tmp"})).unwrap();
         assert!(reply.starts_with("PROPOSED"), "{reply}");
         assert!(
-            reply.contains("Creative Work") && reply.contains("ask again next time"),
+            reply.contains("Signal & Logic") && reply.contains("ask again next time"),
             "the model has to be told it is a single call, not a mode: {reply}"
         );
 
@@ -868,7 +868,7 @@ mod tests {
     #[test]
     fn the_deny_list_wins_inside_a_domain_and_after_approval() {
         let db = temp_db("domain_deny_wins");
-        // Creative Work reads files, and its field is the vault -- so this denied file sits
+        // Signal & Logic reads files, and its field is the vault -- so this denied file sits
         // squarely inside the persona's own field rather than outside it.
         let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
         let registry = registry();

@@ -371,31 +371,31 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         'arx-locas': {
             name: 'A.R.X.LOCAS', persona: 'arx-locas', voice: 'en-US-AriaNeural',
-            greeting: "🔵 **Archival, Reasoning, matriX — Locas Node engaged.** No queue, no ceremony — what do you need done?"
+            greeting: "🔵 **Archival, Reasoning, matriX — Locas Node engaged.** Your day, your plan and this machine, all on one desk. What do you need?"
         },
         'arx-legionare': {
             name: 'A.R.X.LEGIONARE', persona: 'arx-legionare', voice: 'en-US-DavisNeural',
-            greeting: '🔴 **Archival, Reasoning, matriX — Legionare Node engaged.** Give me the objective. I will give you the order of operations.'
+            greeting: '🔴 **Archival, Reasoning, matriX — Legionare Node engaged.** Tell me what you run and I will tell you what reaches it first.'
         },
         'arx-loregenda': {
             name: 'A.R.X.LOREGENDA', persona: 'arx-loregenda', voice: 'en-GB-ThomasNeural',
-            greeting: '🔷 **Archival, Reasoning, matriX — Loregenda Node engaged.** I hold what has already been decided. Nothing new gets to contradict it by accident.'
+            greeting: '🔷 **Archival, Reasoning, matriX — Loregenda Node engaged.** Bring me the world you are building. Nothing new gets to contradict what is already written.'
         },
         'arx-lyksaum': {
             name: 'A.R.X.LYKSAUM', persona: 'arx-lyksaum', voice: 'en-AU-NatashaNeural',
-            greeting: "🩵 **Archival, Reasoning, matriX — Lyksaum Node engaged.** Watching this machine's vitals. I speak up when something changes."
+            greeting: "🩵 **Archival, Reasoning, matriX — Lyksaum Node engaged.** Ask me twice if the first answer did not land. I will write it down either way."
         },
         'arx-limes': {
             name: 'A.R.X.LIMES', persona: 'arx-limes', voice: 'en-US-GuyNeural',
-            greeting: '🔶 **Archival, Reasoning, matriX — Limes Node engaged.** Every claim I make will carry where it came from. The Archive demands nothing less.'
+            greeting: '🔶 **Archival, Reasoning, matriX — Limes Node engaged.** Name the target. I sweep it, and I bring back what is in it — with where each piece came from.'
         },
         'arx-logos': {
             name: 'A.R.X.LOGOS', persona: 'arx-logos', voice: 'en-GB-LibbyNeural',
-            greeting: '🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Every archive needs a curator with taste. Let us make something worth cataloguing.'
+            greeting: '🟣 **Archival, Reasoning, matriX — Logos Node engaged.** Sound, pattern, and the logic underneath both. Give me the signal.'
         },
         'arx-lexico': {
             name: 'A.R.X.LEXICO', persona: 'arx-lexico', voice: 'en-GB-RyanNeural',
-            greeting: '🧊 **Archival, Reasoning, matriX — Lexico Node engaged.** Say what you mean. I will help you say it the same way every time.'
+            greeting: '🧊 **Archival, Reasoning, matriX — Lexico Node engaged.** Ask me what is true, and I will tell you how far the source it came from actually goes.'
         },
         'arx-lucre': {
             name: 'A.R.X.LUCRE', persona: 'arx-lucre', voice: 'en-US-EricNeural',
@@ -403,7 +403,7 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         'arx-lkemi': {
             name: "A.R.X.L'KEMI", persona: 'arx-lkemi', voice: 'en-AU-WilliamNeural',
-            greeting: "🔻 **Archival, Reasoning, matriX — L'kemi Node engaged.** Bring me a shape you need changed into another. I handle the transformation cleanly."
+            greeting: "🔻 **Archival, Reasoning, matriX — L'kemi Node engaged.** Bring me what you are building, or what needs turning into something better."
         },
         alt: {
             name: 'A1ter_nul', persona: 'alt', voice: 'en-US-JennyNeural',
@@ -693,6 +693,155 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.agent_name && data.agent_name !== currentAgentName) {
             updateAgentNameDisplay(data.agent_name);
         }
+        // Step 19: almost always absent. It carries one line when a model the operator
+        // chose has been uninstalled. The backend hands it over once per model per session
+        // and clears it as it does, so this cannot repeat it -- uninstalling a model must
+        // not silently change who you are talking to, and must not nag either.
+        if (data.routing_notice) {
+            appendSystemNotice(data.routing_notice);
+            refreshSpecialityModel();
+        }
+    }
+
+    /* Step 19: the model dropdown beside the avatar ---------------------------------
+       Shows the model for the speciality that is active right now, not a table of all
+       sixteen -- the avatar already says which speciality you are in, so the row reads as
+       "this one, on that model". Changing persona re-reads it.
+
+       The whole row hides when the model server has not answered. A dropdown offering
+       nothing is worse than no dropdown: it looks broken, and it invites a click that
+       cannot do anything. */
+    const elAvatarModelRow = document.getElementById('avatar-model-row');
+    const elAvatarModel = document.getElementById('avatar-model');
+
+    async function refreshSpecialityModel() {
+        if (!IS_TAURI || !elAvatarModel || !elAvatarModelRow) return;
+        let data;
+        try {
+            data = await tauriInvoke('speciality_models_rust');
+        } catch (e) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+        // null means nothing answered; [] means a server with nothing loaded. Neither can
+        // offer a choice, and both are hidden rather than shown as an empty control.
+        if (!Array.isArray(data.available) || data.available.length === 0) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+
+        const active = document.getElementById('setting-persona')?.value || 'default';
+        const row = (data.specialities || []).find(s => s.key === active);
+        if (!row) {
+            elAvatarModelRow.classList.add('hidden');
+            return;
+        }
+
+        elAvatarModel.innerHTML = '';
+        // "Suggested" is the first option and the one selected when nothing was chosen, so
+        // the default state of the control is the design's own recommendation rather than
+        // a blank the operator has to interpret.
+        const auto = document.createElement('option');
+        auto.value = '';
+        auto.textContent = row.suggested
+            ? `${row.suggested}  (suggested)`
+            : 'the general model';
+        elAvatarModel.appendChild(auto);
+
+        for (const entry of data.available) {
+            const option = document.createElement('option');
+            option.value = entry.model;
+            option.textContent = entry.good_at
+                ? `${entry.model} -- ${entry.good_at}`
+                : entry.model;
+            elAvatarModel.appendChild(option);
+        }
+
+        elAvatarModel.value = row.chosen || '';
+        // A chosen model that is no longer installed is not in the list, so the select
+        // would fall back to the first option and quietly look like a choice was never
+        // made. Say it instead.
+        if (row.chosen && elAvatarModel.value !== row.chosen) {
+            const gone = document.createElement('option');
+            gone.value = row.chosen;
+            gone.textContent = `${row.chosen}  (not installed)`;
+            elAvatarModel.appendChild(gone);
+            elAvatarModel.value = row.chosen;
+        }
+        elAvatarModel.title = `${row.speciality}\nRunning on: ${row.running || 'the general model'}`;
+        elAvatarModelRow.classList.remove('hidden');
+    }
+
+    function initSpecialityModel() {
+        if (!elAvatarModel) return;
+        elAvatarModel.addEventListener('change', async () => {
+            const model = elAvatarModel.value;
+            const persona = document.getElementById('setting-persona')?.value || 'default';
+            try {
+                // An empty value is "no pick", which is a real setting and not the same as
+                // picking nothing -- it is what lets the suggestion apply again.
+                await tauriInvoke('set_speciality_model_rust', {
+                    persona,
+                    model: model || null,
+                });
+            } catch (e) {
+                console.error('Could not set the model for this speciality', e);
+            }
+            refreshSpecialityModel();
+        });
+        const personaSelect = document.getElementById('setting-persona');
+        if (personaSelect) {
+            personaSelect.addEventListener('change', refreshSpecialityModel);
+        }
+        refreshSpecialityModel();
+    }
+
+    /* The STATIC / FLOW toggle in the chin bar ---------------------------------------
+       STATIC is the behaviour AETHER1 has always had: the avatar you picked answers
+       everything. FLOW lets the question move to the specialist inside that avatar's own
+       line, announced first by whoever is holding it. The rule that decides lives in
+       src-tauri/src/llm/flow.rs; this is only the switch and the label.
+
+       The button hides itself when the current avatar belongs to no line -- A1, Model's
+       Own, your own design -- because there would be nothing to flow between, and a toggle
+       that can be pressed but changes nothing is worse than no toggle. */
+    async function refreshFlowMode() {
+        const button = document.getElementById('flow-toggle');
+        if (!button) return;
+        let state = null;
+        try {
+            if (IS_TAURI) state = await tauriInvoke('flow_mode_rust');
+        } catch (e) {
+            console.error('Could not read the flow mode setting', e);
+        }
+        if (!state || !state.group) {
+            button.classList.add('hidden');
+            return;
+        }
+        button.classList.remove('hidden');
+        button.textContent = state.enabled ? 'FLOW' : 'STATIC';
+        button.title = state.enabled
+            ? `The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
+            : `This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
+    }
+
+    function initFlowMode() {
+        const button = document.getElementById('flow-toggle');
+        if (!button) return;
+        button.addEventListener('click', async () => {
+            const turningOn = button.textContent.trim() !== 'FLOW';
+            try {
+                if (IS_TAURI) await tauriInvoke('set_flow_mode_rust', { enabled: turningOn });
+            } catch (e) {
+                console.error('Could not change the flow mode setting', e);
+            }
+            refreshFlowMode();
+        });
+        // The line a hand-off may move within is the current avatar's, so the label has to
+        // follow a change of persona as well as a change of mode.
+        const personaSelect = document.getElementById('setting-persona');
+        if (personaSelect) personaSelect.addEventListener('change', refreshFlowMode);
+        refreshFlowMode();
     }
 
     function connectTelemetry() {
@@ -1105,6 +1254,58 @@ document.addEventListener('DOMContentLoaded', () => {
         escaped = escaped.replace(/^## (.*$)/gim, '<h2 class="text-lg font-bold text-cyan-300 mt-2 mb-1">$1</h2>');
         escaped = escaped.replace(/\n/g, '<br/>');
         return escaped;
+    }
+
+    /* A line from AETHER1 the program, not from the persona.
+       Deliberately not appendMessage: that one puts the agent's own name and avatar on
+       what it renders, and attributing "your model was uninstalled" to the character is
+       how an operator learns to distrust what the character says. This is plainly the
+       machinery talking. */
+    function appendSystemNotice(text) {
+        if (!chatContainer) return;
+        const row = document.createElement('div');
+        row.className = 'my-2 px-3 py-2 text-xs font-mono leading-relaxed msg-system self-stretch';
+        const label = document.createElement('span');
+        label.className = 'opacity-70';
+        label.textContent = 'AETHER1 — ';
+        row.appendChild(label);
+        row.appendChild(document.createTextNode(text));
+        chatContainer.appendChild(row);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    /* The one line of a flow-mode hand-off. Deliberately not appendMessage: that stamps
+       the *current* agent's name on whatever it draws, and this is the previous one
+       speaking. Deliberately not appendSystemNotice either -- a hand-off is a character
+       talking, not the program, and rendering it as machinery would throw away the whole
+       reason for announcing it. It is inserted above `before`, the reply that is already on
+       screen waiting to be filled. */
+    function appendHandoverLine(fromName, line, before) {
+        if (!chatContainer) return;
+        const row = document.createElement('div');
+        row.className = 'p-3 rounded my-2 text-sm leading-relaxed msg-agent self-start mr-8 opacity-70';
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-cyan-500/20 text-xs font-mono text-cyan-400/80';
+        const who = document.createElement('span');
+        who.innerHTML = `🌐 <strong>${(fromName || '').toUpperCase()}</strong>`;
+        header.appendChild(who);
+        const when = document.createElement('span');
+        when.textContent = new Date().toLocaleTimeString();
+        header.appendChild(when);
+        const body = document.createElement('div');
+        body.textContent = line;
+        row.appendChild(header);
+        row.appendChild(body);
+        if (before && before.parentNode === chatContainer) chatContainer.insertBefore(row, before);
+        else chatContainer.appendChild(row);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    /* Which avatar wears a persona. The pairing already lives in AVATAR_PRESETS, so it is
+       read back from there rather than written down a second time -- a second copy is how
+       the two drift apart. */
+    function avatarIdForPersona(personaKey) {
+        return Object.keys(AVATAR_PRESETS).find((id) => AVATAR_PRESETS[id].persona === personaKey) || null;
     }
 
     function appendMessage(sender, text, audioUrl = null) {
@@ -1619,11 +1820,18 @@ document.addEventListener('DOMContentLoaded', () => {
     /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
     /// Resolves with the authoritative final reply -- the deltas are for display, the
     /// return value is what gets rendered as final text.
-    async function streamChat(text, sessionId, onDelta) {
+    async function streamChat(text, sessionId, onDelta, onHandover) {
         if (IS_TAURI) {
             const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
             const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
                 if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            /* Flow mode. Its own event rather than a first delta, because it is a different
+               speaker -- the node leaving says it, and every delta after belongs to the one
+               arriving. It always lands before the first delta, so the reply can be
+               relabelled while it is still empty. */
+            const unlistenHandover = await window.__TAURI__.event.listen('flow-handover', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onHandover(event.payload);
             });
             try {
                 return await tauriInvoke('generate_response_streaming_rust', {
@@ -1631,6 +1839,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             } finally {
                 unlisten();
+                unlistenHandover();
             }
         }
 
@@ -1646,6 +1855,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 let data;
                 try { data = JSON.parse(event.data); } catch (e) { return; }
                 if (data.type === 'delta') onDelta(data.delta);
+                else if (data.type === 'handover') onHandover(data);
                 else if (data.type === 'error') { socket.close(); reject(new Error(data.error)); }
                 else if (data.type === 'done') { socket.close(); resolve(data); }
             };
@@ -1832,8 +2042,27 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
+        /* Flow mode handed this question to somebody else. Three things happen, in this
+           order: the line goes up attributed to the node leaving (above the reply, which
+           is already on screen and still empty), the HUD becomes the node arriving, and
+           the empty reply is relabelled so the answer is not signed by the wrong one.
+           Rust has already persisted the switch, so nothing here saves anything -- this is
+           the display catching up with a decision that has been made. */
+        const onHandover = (handover) => {
+            if (!handover || !handover.line) return;
+            appendHandoverLine(handover.from, handover.line, replyDiv);
+            const avatarId = avatarIdForPersona(handover.to_key);
+            if (avatarId) applyAvatar(avatarId, false);
+            updateAgentNameDisplay(handover.to);
+            const personaField = document.getElementById('setting-persona');
+            if (personaField) personaField.value = handover.to_key;
+            refreshFlowMode();
+            const senderSpan = replyDiv.querySelector('span');
+            if (senderSpan) senderSpan.innerHTML = `🌐 <strong>${handover.to.toUpperCase()}</strong>`;
+        };
+
         try {
-            const data = await streamChat(text, currentSessionId, onDelta);
+            const data = await streamChat(text, currentSessionId, onDelta, onHandover);
             // Something came back, so whatever loading was going to happen has happened:
             // no later question in this session gets the first-run explanation.
             hasAnsweredThisSession = true;
@@ -3922,7 +4151,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Shows the custom persona directive textarea only when "Custom Directive" is
     // selected as the base persona -- the preset personas don't need it.
     /* The persona list, built from what the backend says exists rather than from a list in
-       the markup. Each entry leads with what it is *for* -- "Coding", "Cites Sources" -- with
+       the markup. Each entry leads with what it is *for* -- "Coding", "Signal & Logic" -- with
        the avatar it belongs to bookended after it, because the persona and the avatar are one
        choice you can make from either end. */
     async function loadPersonaCatalogue() {
@@ -5090,6 +5319,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initPanelUndock();
     initAvatarFullscreen();
     initHologramFloatingNotice();
+    initSpecialityModel();
+    initFlowMode();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();
 

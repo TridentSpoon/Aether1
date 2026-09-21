@@ -745,6 +745,39 @@ body {
   background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
 }
 
+/* A notice from the program rather than from the persona -- see appendSystemNotice in
+   app.js. Quieter than either message bubble on purpose: it is machinery reporting itself,
+   and it should not compete with the conversation it sits inside. */
+.msg-system {
+  background: var(--tint-main);
+  border-left: 2px solid var(--border-neon);
+  color: var(--text-dim);
+}
+
+/* The model dropdown beside the avatar (step 19). A select of its own rather than the
+   global field styling, for the same reason the zoom row uses viewport-label: these sit on
+   the dark projection bay, and --bg-panel-hover/--text-main are mixed for the page behind
+   it, which on Solar puts a pale box and mid-grey text on a near-black bay. */
+.cyber-select {
+  -webkit-appearance: none; appearance: none;
+  background: var(--tint-main);
+  border: 1px solid var(--border-neon);
+  border-radius: 2px;
+  color: var(--neon-cyan);
+  padding: 2px 6px;
+  outline: none;
+  min-width: 0;
+}
+.cyber-select:focus-visible {
+  box-shadow: 0 0 8px var(--neon-cyan);
+}
+/* The list the browser pops open is drawn by the OS against its own background, not the
+   bay, so its rows get readable ink rather than the bay's cyan. */
+.cyber-select option {
+  background: var(--bg-panel);
+  color: var(--text-main);
+}
+
 /* Telemetry tabs -------------------------------------------------------------
    Small enough to sit inside a panel header without competing with it, and
    keyed on the theme variables so they follow the mode and the tone sliders

@@ -48,25 +48,25 @@ fn rules() -> &'static [IdentityRule] {
             greeting: "I am THE NEXUS. Line's open, I've got eyes on the whole system. What are we pulling out of here?",
         },
         IdentityRule {
-            keywords: &["logos", "art", "creative", "poetry", "poem", "story", "design", "music", "aesthetic", "muse", "writing"],
+            keywords: &["logos", "audio", "sound", "music", "signal", "waveform", "pattern", "patterns", "anomaly", "logic", "deduction", "proof", "transcription"],
             name: "A.R.X.LOGOS",
             callsign: "Archival, Reasoning, matriX \u{2014} Logos Node",
             persona_type: "arx-logos",
             persona: |name| Persona::ArxLogos.template(name),
             voice: "en-GB-LibbyNeural",
-            greeting: "IDENTITY FORGED: A.R.X.LOGOS online. Every archive needs a curator with taste \u{2014} let's make something worth cataloguing.",
+            greeting: "IDENTITY FORGED: A.R.X.LOGOS online. Sound, pattern and pure logic \u{2014} give me the signal and I will tell you what is inside it.",
         },
         IdentityRule {
-            keywords: &["limes", "archive", "archival", "sanctuary", "synthesis", "specimen"],
+            keywords: &["limes", "scan", "scanning", "deep web", "crawl", "crawler", "scrape", "scraping", "extract", "extraction", "harvest", "osint", "synthesis", "specimen"],
             name: "A.R.X.LIMES",
             callsign: "Archival, Reasoning, matriX \u{2014} Limes Node",
             persona_type: "arx-limes",
             persona: |name| Persona::ArxLimes.template(name),
             voice: "en-US-GuyNeural",
-            greeting: "IDENTITY FORGED: A.R.X.LIMES online. All archival synthesis arrays are active and ready to preserve your data.",
+            greeting: "IDENTITY FORGED: A.R.X.LIMES online. Scanning arrays active. Name the target and I will bring back what is in it.",
         },
         IdentityRule {
-            keywords: &["alt", "a1ter_nul", "cunningham", "netrunner", "firewall", "ice breaker", "intrusion"],
+            keywords: &["alt", "a1ter_nul", "cunningham", "netrunner", "netrunning", "ice breaker", "intrusion", "exploit", "breach", "penetration test", "red team", "hack"],
             name: "A1ter_nul",
             callsign: "Cunningham \u{2014} Security & Intrusion Countermeasures",
             persona_type: "alt",
@@ -75,76 +75,40 @@ fn rules() -> &'static [IdentityRule] {
             greeting: "Identity forged: A1ter_nul online. Firewall's up, perimeter's lit. Show me what you're worried got in.",
         },
         IdentityRule {
-            keywords: &["security", "hack", "cyber", "terminal", "arch", "cachyos", "kernel"],
-            name: "NEXUS-09",
-            callsign: "Network Execution & Cybernetic Utility Subsystem",
-            persona_type: "custom",
-            persona: |name| format!(
-                "You are {name}, a razor-sharp netrunner AI companion specialized in cyber operations, Linux \
-                 system internals, and deep automation."
-            ),
-            voice: "en-US-GuyNeural",
-            greeting: "Identity forged: NEXUS-09 online. Network links synchronized. Ready to secure and optimize your system.",
-        },
-        IdentityRule {
-            keywords: &["code", "developer", "coding", "python", "fullstack", "programming"],
-            name: "SYNAPSE",
-            callsign: "Systematic Neural Algorithmic Programming & Synthesis Engine",
-            persona_type: "custom",
-            persona: |name| format!(
-                "You are {name}, a master software architect and coding companion. You write clean, \
-                 high-performance code, debug complex architectures, and maintain peak engineering discipline."
-            ),
-            voice: "en-GB-SoniaNeural",
-            greeting: "Identity forged: SYNAPSE operational. Compilers primed and neural syntax trees loaded. What are we building, Commander?",
-        },
-        IdentityRule {
-            keywords: &["manage", "tasks", "schedule", "assistant", "daily", "organize"],
-            name: "VALKYRIE",
-            callsign: "Vector Autonomous Logistic & Knowledge Yield Routine",
-            persona_type: "custom",
-            persona: |name| format!(
-                "You are {name}, an elite executive AI companion. You maintain impeccable tactical organization, \
-                 proactive reminders, and mission execution."
-            ),
-            voice: "en-US-JennyNeural",
-            greeting: "Identity forged: VALKYRIE standing by. Tactical agenda loaded. I am ready to streamline your operations.",
-        },
-        IdentityRule {
-            keywords: &["legionare", "legion", "task breakdown", "execution plan", "project plan", "milestones", "roadmap", "orchestrate", "orchestration", "chain of command"],
+            keywords: &["legionare", "legion", "security", "cyber", "cybersecurity", "harden", "hardening", "defend", "defence", "defense", "firewall", "vulnerability", "cve", "patching", "blue team", "chain of command"],
             name: "A.R.X.LEGIONARE",
             callsign: "Archival, Reasoning, matriX \u{2014} Legionare Node",
             persona_type: "arx-legionare",
             persona: |name| Persona::ArxLegionare.template(name),
             voice: "en-US-DavisNeural",
-            greeting: "IDENTITY FORGED: A.R.X.LEGIONARE online. Give me the objective. I will give you the order of operations.",
+            greeting: "IDENTITY FORGED: A.R.X.LEGIONARE online. Perimeter mapped. Tell me what you run and I will tell you what reaches it first.",
         },
         IdentityRule {
-            keywords: &["loregenda", "lore", "canon", "continuity", "worldbuilding", "worldbuild", "backstory", "established facts"],
+            keywords: &["loregenda", "lore", "canon", "continuity", "worldbuilding", "worldbuild", "backstory", "established facts", "fiction", "story", "novel", "narrative", "character", "poem", "poetry", "prose", "creative writing", "art", "aesthetic", "muse"],
             name: "A.R.X.LOREGENDA",
             callsign: "Archival, Reasoning, matriX \u{2014} Loregenda Node",
             persona_type: "arx-loregenda",
             persona: |name| Persona::ArxLoregenda.template(name),
             voice: "en-GB-ThomasNeural",
-            greeting: "IDENTITY FORGED: A.R.X.LOREGENDA online. I hold what has already been decided. Nothing new gets to contradict it by accident.",
+            greeting: "IDENTITY FORGED: A.R.X.LOREGENDA online. Worlds, characters and the prose that carries them \u{2014} and nothing new contradicts what is already written.",
         },
         IdentityRule {
-            keywords: &["lyksaum", "vitals", "monitoring", "monitor", "uptime", "health check", "dashboard", "status watch"],
+            keywords: &["lyksaum", "teach", "teaching", "explain", "explanation", "tutorial", "learn", "learning", "documentation", "docs", "walkthrough", "onboarding", "training"],
             name: "A.R.X.LYKSAUM",
             callsign: "Archival, Reasoning, matriX \u{2014} Lyksaum Node",
             persona_type: "arx-lyksaum",
             persona: |name| Persona::ArxLyksaum.template(name),
             voice: "en-AU-NatashaNeural",
-            greeting: "IDENTITY FORGED: A.R.X.LYKSAUM online. Watching this machine's vitals. I speak up when something changes.",
+            greeting: "IDENTITY FORGED: A.R.X.LYKSAUM online. Ask me twice if the first answer did not land. I will write it down either way.",
         },
         IdentityRule {
-            keywords: &["lexico", "lexicon", "terminology", "glossary", "word choice", "style guide", "proofreading", "copy editing"],
+            keywords: &["lexico", "lexicon", "reference", "wiki", "fact check", "fact checking", "verify", "citation", "glossary", "terminology", "archive", "archival", "encyclopedia", "look up"],
             name: "A.R.X.LEXICO",
             callsign: "Archival, Reasoning, matriX \u{2014} Lexico Node",
             persona_type: "arx-lexico",
             persona: |name| Persona::ArxLexico.template(name),
             voice: "en-GB-RyanNeural",
-            greeting: "IDENTITY FORGED: A.R.X.LEXICO online. Say what you mean. I will help you say it the same way every time.",
+            greeting: "IDENTITY FORGED: A.R.X.LEXICO online. Ask me what is true and I will tell you, with where it came from and how far it can be trusted.",
         },
         IdentityRule {
             keywords: &["lucre", "budget", "budgeting", "finance", "financial", "cost analysis", "expenses", "accounting", "pricing"],
@@ -156,22 +120,22 @@ fn rules() -> &'static [IdentityRule] {
             greeting: "IDENTITY FORGED: A.R.X.LUCRE online. Every choice has a cost. Let us make sure it is seen before it is spent.",
         },
         IdentityRule {
-            keywords: &["lkemi", "alchemy", "alchemist", "transform", "transformation", "convert", "conversion", "refactor", "refactoring", "reformat"],
+            keywords: &["lkemi", "alchemy", "alchemist", "code", "coding", "developer", "development", "programming", "python", "script", "scripting", "software", "refactor", "refactoring", "debug", "fullstack", "transform", "convert"],
             name: "A.R.X.L'KEMI",
             callsign: "Archival, Reasoning, matriX \u{2014} L'Kemi Node",
             persona_type: "arx-lkemi",
             persona: |name| Persona::ArxLkemi.template(name),
             voice: "en-AU-WilliamNeural",
-            greeting: "IDENTITY FORGED: A.R.X.L'KEMI online. Bring me a shape you need changed into another. I handle the transformation cleanly.",
+            greeting: "IDENTITY FORGED: A.R.X.L'KEMI online. Compilers warm. Bring me what you are building, or what you need turned into something better.",
         },
         IdentityRule {
-            keywords: &["arx", "locas", "sysadmin", "system administration", "day to day", "housekeeping", "errand", "generalist", "general purpose"],
+            keywords: &["arx", "locas", "sysadmin", "system administration", "day to day", "housekeeping", "errand", "generalist", "general purpose", "assistant", "manage", "tasks", "schedule", "organize", "organise", "daily", "plan", "roadmap", "milestones", "orchestrate", "monitor", "monitoring", "uptime", "vitals", "status", "dashboard", "kernel", "terminal", "arch", "cachyos"],
             name: "A.R.X.LOCAS",
             callsign: "Archival, Reasoning, matriX \u{2014} Locas Node",
             persona_type: "arx-locas",
             persona: |name| Persona::ArxLocas.template(name),
             voice: "en-US-AriaNeural",
-            greeting: "IDENTITY FORGED: A.R.X.LOCAS online. No queue, no ceremony \u{2014} what do you need done?",
+            greeting: "IDENTITY FORGED: A.R.X.LOCAS online. Your day, your plan and this machine, all on one desk \u{2014} what do you need done?",
         },
     ]
 }
@@ -205,6 +169,74 @@ fn purpose_matches_keyword(
     } else {
         words.contains(keyword)
     }
+}
+
+/// How strongly a piece of text points at one identity, and whether anything else was in
+/// the running. Flow mode's classifier (see llm/flow.rs); Genesis itself does not use it.
+///
+/// [`generate_identity`] takes the first rule with any hit at all, which is right for a
+/// purpose the operator sat down and wrote. A message typed mid-conversation is not that,
+/// so flow mode needs to know *how well* it matched before it is allowed to move the
+/// conversation to somebody else.
+///
+/// A single word scores one and a multi-word phrase scores two, because a phrase is not
+/// something anybody types by accident. `contested` is true when a second rule also scored,
+/// which is the signal that the message is ambiguous rather than pointed.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Match {
+    pub persona_type: &'static str,
+    pub score: u32,
+    pub contested: bool,
+}
+
+pub fn match_score(text: &str) -> Option<Match> {
+    let lower = text.to_lowercase();
+    let words: std::collections::HashSet<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let mut best: Option<(&'static str, u32)> = None;
+    let mut scored = 0usize;
+    for rule in rules() {
+        let score: u32 = rule
+            .keywords
+            .iter()
+            .filter(|kw| purpose_matches_keyword(&lower, &words, kw))
+            .map(|kw| if kw.contains(' ') { 2 } else { 1 })
+            .sum();
+        if score == 0 {
+            continue;
+        }
+        scored += 1;
+        // Ties keep the table's own precedence, exactly as generate_identity does, so the
+        // more specific rule earlier in the table still gets first refusal.
+        if best.is_none_or(|(_, b)| score > b) {
+            best = Some((rule.persona_type, score));
+        }
+    }
+
+    best.map(|(persona_type, score)| Match {
+        persona_type,
+        score,
+        contested: scored > 1,
+    })
+}
+
+/// The identity behind one `persona_type`, for a switch that did not come from a purpose
+/// string -- flow mode needs this rule's name and voice to persist alongside the persona.
+pub fn identity_for(persona_type: &str) -> Option<Identity> {
+    rules()
+        .iter()
+        .find(|rule| rule.persona_type == persona_type)
+        .map(|rule| Identity {
+            name: rule.name.to_string(),
+            callsign: rule.callsign.to_string(),
+            persona_directive: (rule.persona)(rule.name),
+            voice: rule.voice.to_string(),
+            greeting: rule.greeting.to_string(),
+            persona_type: rule.persona_type.to_string(),
+        })
 }
 
 pub fn generate_identity(purpose_text: &str) -> Identity {
@@ -245,26 +277,34 @@ mod tests {
                 "give me something about the matrix singularity",
                 "THE NEXUS",
             ),
-            ("help me write a poem and some creative art", "A.R.X.LOGOS"),
-            ("an archival synthesis specimen sanctuary", "A.R.X.LIMES"),
-            ("I want a netrunner to run my firewall", "A1ter_nul"),
             (
-                "I need help with cyber security and hacking the kernel",
-                "NEXUS-09",
+                "find the pattern in this audio signal, pure logic only",
+                "A.R.X.LOGOS",
             ),
-            ("a python coding and programming companion", "SYNAPSE"),
-            ("help me schedule and organize my daily tasks", "VALKYRIE"),
+            ("a deep web crawl to extract every specimen", "A.R.X.LIMES"),
             (
-                "help me build an execution plan and roadmap for this project",
+                "I want a netrunner for an authorised penetration test",
+                "A1ter_nul",
+            ),
+            (
+                "I need help with cyber security, hardening and firewall rules",
                 "A.R.X.LEGIONARE",
+            ),
+            ("a python coding and programming companion", "A.R.X.L'KEMI"),
+            (
+                "help me schedule and organize my daily tasks",
+                "A.R.X.LOCAS",
             ),
             (
                 "keep the lore and canon consistent for worldbuilding",
                 "A.R.X.LOREGENDA",
             ),
-            ("monitor the vitals and uptime dashboard", "A.R.X.LYKSAUM"),
             (
-                "check the terminology and glossary for a style guide",
+                "teach me this and write the documentation for it",
+                "A.R.X.LYKSAUM",
+            ),
+            (
+                "look up the reference wiki and fact check this",
                 "A.R.X.LEXICO",
             ),
             (
@@ -296,7 +336,7 @@ mod tests {
         // substrings, but neither purpose is actually about those personas.
         let identity = generate_identity("help me start my day");
         assert_ne!(
-            identity.name, "A.R.X.LOGOS",
+            identity.name, "A.R.X.LOREGENDA",
             "\"start\" should not match the \"art\" keyword"
         );
         assert_eq!(
@@ -304,14 +344,14 @@ mod tests {
             "no real keyword present, should fall back"
         );
 
-        let identity = generate_identity("research assistant");
+        let identity = generate_identity("research my options");
         assert_ne!(
-            identity.name, "NEXUS-09",
+            identity.name, "A.R.X.LOCAS",
             "\"research\" should not match the \"arch\" keyword"
         );
         assert_eq!(
-            identity.name, "VALKYRIE",
-            "\"assistant\" is a real whole-word match"
+            identity.name, "AETHER",
+            "no real keyword present, should fall back"
         );
     }
 
@@ -324,10 +364,10 @@ mod tests {
         assert_eq!(identity.name, "A.R.X.LOCAS");
 
         // But a purpose that says "arx" AND names a more specific ARX domain (here,
-        // Limes's "archive") should still be claimed by that more specific rule, since
+        // Lexico's "archive") should still be claimed by that more specific rule, since
         // it sits earlier in the routing table.
         let identity = generate_identity("give me an arx archive");
-        assert_eq!(identity.name, "A.R.X.LIMES");
+        assert_eq!(identity.name, "A.R.X.LEXICO");
     }
 
     #[test]
@@ -340,5 +380,60 @@ mod tests {
     fn routing_is_case_insensitive() {
         let identity = generate_identity("REACTIVE ENGINE for HAL vibes");
         assert_eq!(identity.name, "R.E.D. 9000");
+    }
+
+    #[test]
+    fn a_phrase_counts_for_more_than_a_word_because_nobody_types_one_by_accident() {
+        // Flow mode's bar is two points. "creative writing" is one phrase and clears it on
+        // its own; "story" is one word and does not, which is the difference between a
+        // deliberate request and a word that happened to be in the sentence.
+        let phrase = match_score("some creative writing please").expect("a phrase matched");
+        assert_eq!(phrase.persona_type, "arx-loregenda");
+        assert_eq!(phrase.score, 2);
+
+        let word = match_score("tell me a story").expect("a word matched");
+        assert_eq!(word.score, 1);
+    }
+
+    #[test]
+    fn a_message_two_nodes_both_claim_is_marked_contested() {
+        // "debug" is L'kemi's and "story" is Loregenda's. Neither owns this sentence, and
+        // saying so is what stops flow mode interrupting over it.
+        let found = match_score("debug the story generator").expect("both matched");
+        assert!(
+            found.contested,
+            "two rules scored, so the message is ambiguous"
+        );
+
+        let clear = match_score("harden the firewall").expect("one rule matched");
+        assert!(!clear.contested);
+    }
+
+    #[test]
+    fn nothing_in_the_table_scores_nothing_rather_than_falling_back() {
+        // generate_identity falls back to AETHER, which is right for a purpose. A score of
+        // nothing has to stay nothing, or every message would look like a hand-off to the
+        // fallback identity.
+        assert_eq!(match_score("qwerty zzz unmatched nonsense"), None);
+    }
+
+    #[test]
+    fn an_identity_can_be_found_by_its_persona_type() {
+        let identity = identity_for("arx-legionare").expect("a real persona_type");
+        assert_eq!(identity.name, "A.R.X.LEGIONARE");
+        assert!(!identity.voice.is_empty());
+        assert!(identity_for("not-a-persona").is_none());
+    }
+
+    #[test]
+    fn the_two_halves_of_security_route_to_different_identities() {
+        // A1ter_nul takes intrusion, A.R.X.LEGIONARE takes defence. Both are security, and
+        // splitting them on the vocabulary is what keeps either one from swallowing the
+        // other now that the generic security identity is gone.
+        let identity = generate_identity("run an exploit against my own box");
+        assert_eq!(identity.name, "A1ter_nul");
+
+        let identity = generate_identity("patching a cve and hardening the host");
+        assert_eq!(identity.name, "A.R.X.LEGIONARE");
     }
 }

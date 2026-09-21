@@ -734,15 +734,46 @@ with what each one is for, and names the avatar it belongs to:
 | **Conversational** | Thinking a problem through with you. Asks the one clarifying question that would change the answer instead of guessing. | hAlcy |
 | **To the Point** | The answer in the first line. No preamble, no restating the question, no padding. | R.E.D. 9000 |
 | **Coding** | Working code, complete enough to run, with the failure mode named -- what breaks it, what it does not handle, what it costs. | The Nexus |
-| **Cites Sources** | Where every claim came from, and how sure it is: read from a file this session, recalled from training and unverifiable, or inferred. Never invents a citation. | A.R.X.LIMES |
-| **Creative Work** | Writing, design, and the shape of a sentence. Produces the draft rather than describing it. | A.R.X.LOGOS |
-| **Security & White Hat** | Exposure, hardening and authorised testing -- attack surface, blast radius, and asking whether a target is yours to test. | A1ter_nul |
+| **Assistant & System Ops** | Today's task, the schedule behind it, and what this machine is actually doing. The generalist the rest of the line falls back to. | A.R.X.LOCAS |
+| **Defence & Hardening** | Hardening what you run and closing what is exposed. Names what an attacker reaches first and gives the concrete change, not "follow best practice". | A.R.X.LEGIONARE |
+| **Scanning & Extraction** | Finding what is out there on a subject and pulling the useful part out, with where each piece came from. Says where it searched and where it did not. | A.R.X.LIMES |
+| **Worldbuilding & Fiction** | Worlds, characters and the prose that carries them, checked against what is already established so nothing new contradicts it by accident. | A.R.X.LOREGENDA |
+| **Teaching & Docs** | Explaining a thing until it actually lands, then offering the written version -- because an explanation nobody recorded has to be given again. | A.R.X.LYKSAUM |
+| **Signal & Logic** | Sound, pattern and formal logic. Separates what the data shows from what it is tempting to read into it, and says which it is doing. | A.R.X.LOGOS |
+| **Reference & Fact-Checking** | Looking a thing up, checking it, and saying how far the source can be trusted. Corrects a false premise in the question rather than answering around it. | A.R.X.LEXICO |
+| **Cost & Budget** | What something takes to run, build or keep, and where a budget is actually going. Names the recurring cost hiding behind a one-time-looking decision. | A.R.X.LUCRE |
+| **Software Development** | Writing it, scripting it, and refactoring what is already there. Says what a refactor preserves and what it necessarily changes. | A.R.X.L'KEMI |
+| **Security & White Hat** | Intrusion and authorised offensive testing -- attack surface, blast radius, and asking whether a target is yours to test. The other half of security from Defence & Hardening. | A1ter_nul |
 | **Model's Own** | No directive at all. Whatever the model brings on its own. | -- |
 | **Custom** | Your own directive, written in the box below the field. | -- |
 
 Picking an avatar switches to its persona, its voice and its name -- one choice you can make
 from either end. *Your own* is the exception: an avatar you designed has no persona of its
 own, so it leaves yours alone.
+
+### STATIC and FLOW
+
+The chin bar carries one more switch, next to the state badge. **STATIC** is what AETHER1 has
+always done: the avatar you picked answers everything. **FLOW** lets the question move to the
+specialist inside that avatar's own line -- the Umbrals, the Trace Protocols, the Singular
+Ascended Class -- and whoever is holding the conversation says so on the way out:
+
+```
+A.R.X.LOCAS: That one belongs to a specialist. Handing you to A.R.X.LEGIONARE.
+
+A.R.X.LEGIONARE: Tell me what you run and I will tell you what reaches it first.
+```
+
+The hand-off is decided by the same keyword table that turns a stated purpose into an
+identity, not by a model: it costs no round trip, and you can read the rule rather than
+wonder about it. It holds the current avatar unless the match is confident, because a missed
+hand-off is invisible and a wrong one interrupts you with a line that turned out to be
+unnecessary. It never crosses between lines -- you picked a cast, not a character -- and an
+avatar belonging to no line (A1, *Model's Own*, your own design) never flows at all, which is
+why the switch hides itself there.
+
+At the command line, `aether1 flow` reports the mode and the line it can move within, and
+`aether1 flow on` / `aether1 flow off` sets it.
 
 ### What each persona reaches without asking
 
@@ -763,8 +794,15 @@ save it, with the reason shown, rather than being stored and failing later.
 | **System Diagnosis** | System logs and service state |
 | **Security & White Hat** | Network configuration and service state |
 | **Coding** | The project directory (the folder Aether1 was started in — never your home directory, and only when it sits inside it) |
-| **Cites Sources** | Your notes and the project directory |
-| **Creative Work** | Your notes |
+| **Assistant & System Ops** | System logs and service state |
+| **Defence & Hardening** | Network configuration and service state |
+| **Scanning & Extraction** | Your notes and the project directory |
+| **Worldbuilding & Fiction** | Your notes |
+| **Teaching & Docs** | Your notes and the project directory |
+| **Signal & Logic** | Your notes |
+| **Reference & Fact-Checking** | Your notes and the project directory |
+| **Cost & Budget** | Your notes |
+| **Software Development** | The project directory |
 | **Conversational**, **To the Point**, **Model's Own**, **Custom** | Your notes, and the telemetry the HUD already shows |
 
 The last row is deliberate. Those four are styles rather than specialities, and inventing a

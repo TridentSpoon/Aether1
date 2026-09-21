@@ -206,10 +206,16 @@ Missing, against the three things above:
 - **It proposes actions, it doesn't run errands.** Pillar 2's *change* and *do* verbs go
   through the consent path one action at a time. Nothing yet turns "clear out the build
   caches" into a plan with several steps in it.
-- **Thin context.** Telemetry reaches the prompt; logs, crashes, and the working
-  environment do not (step 13).
-- **One model at a time.** Choosing between several local models by what the question needs
-  is a stated core requirement and deliberately not started (step 19).
+- **Thin context, but less so.** Telemetry reaches the prompt, and since step 13 a crash
+  does too — the failing process, what killed it and the last lines of its log, carried into
+  the conversation the notification opens. The wider system log still does not, on purpose:
+  it is behind `aether1 status --events`, because a companion that reads the noise aloud is
+  one you turn off.
+- **One model per machine on the local network.** Step 19's host half shipped: several
+  models installed here are routed between by speciality, chosen from a dropdown beside the
+  avatar. Reaching a model server on *another* machine is still ahead, and is now an address
+  and an allowlist rather than a security problem, since step 45 shipped the authentication
+  it was waiting on.
 
 ## Target architecture
 
@@ -325,8 +331,9 @@ them are the kind a later reader would otherwise re-litigate.
   consent model entirely ours.
 - ~~Windows: a reduced capability set, or a parallel implementation?~~ **Settled:** a
   parallel implementation, because Windows is a peer and not a reduced target. Crash
-  capture helps here: it is unbuilt on *every* platform today, so it is a fresh design for
-  Linux and Windows together rather than a Linux feature to port afterwards.
+  capture proved it: it was unbuilt on *every* platform, so step 13 designed it for Linux
+  and Windows together rather than porting a Linux feature afterwards, and both readers are
+  compiled and tested on both.
 - ~~How long is the pairing phrase?~~ **Settled: it stays at 12 words, and the work is
   elsewhere.** 12 BIP-39 words is 128 bits, past the point where more words buy anything,
   so a longer phrase would be ceremony. The phrase was never the weak part — the transport
@@ -344,14 +351,19 @@ them are the kind a later reader would otherwise re-litigate.
   model that suits its job — a code-specialised model for L'kemi, something personable for
   Halcy — picked from a dropdown beside the avatar that marks one option *(suggested)*. The
   choice is the operator's, explicitly, rather than something inferred from a thumbs-down,
-  because an inferred preference is hard to inspect and this one has to be readable. See
-  step 19 of [IMPLEMENTATION.md](IMPLEMENTATION.md).
-- Where does the *suggestion* come from? Not from the network, whatever else it costs us:
-  principle 2 means a machine with no internet still has to see a sensible default. So the
-  suggestion is a small table shipped in the binary, matching model families to specialities
-  by name, with the local scoreboard in `model_benchmarks` breaking ties on measured speed.
-  A Hugging Face or Ollama lookup would rank by downloads, which measures popularity rather
-  than fitness, and would make a core affordance depend on being online.
+  because an inferred preference is hard to inspect and this one has to be readable.
+  **Built** — `llm/routing.rs`, with `aether1 models` printing the whole mapping one line at
+  a time, which is the test of whether "readable" was true. See step 19 of
+  [IMPLEMENTATION.md](IMPLEMENTATION.md).
+- ~~Where does the *suggestion* come from?~~ **Settled and built:** a small table shipped in
+  the binary, matching model families to specialities by name, with the local scoreboard in
+  `model_benchmarks` breaking ties on measured speed — and the smaller model winning where
+  nothing has been measured yet, since a fresh install is exactly when a suggestion matters
+  and a laptop pointed at a 32B is not a suggestion. Not from the network, whatever else it
+  costs: principle 2 means a machine with no internet still has to see a sensible default,
+  and a Hugging Face or Ollama lookup would rank by downloads, which measures popularity
+  rather than fitness. The table ages and is updated with releases. That is the honest cost
+  of the rule.
 
 ## Getting there
 

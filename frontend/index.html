@@ -432,6 +432,15 @@
             </button>
 
             <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent">
+                <!-- Step 19. Which local model this speciality runs on. Beside the avatar
+                     rather than buried in settings because the avatar IS the speciality:
+                     the row answers "who am I talking to, and on what" in one glance, and
+                     changing persona changes what this offers. Hidden entirely when the
+                     model server has not answered -- an empty dropdown is worse than none. -->
+                <div id="avatar-model-row" class="flex items-center gap-2 mb-1.5 hidden" title="Which local model this speciality runs on">
+                    <span class="viewport-label text-[9px] font-mono tracking-wider">MODEL</span>
+                    <select id="avatar-model" class="cyber-select flex-1 text-[10px] font-mono" aria-label="Local model for this speciality"></select>
+                </div>
                 <div class="flex items-center gap-2 mb-1.5" title="Manual zoom -- how big the avatar reads on screen">
                     <!-- viewport-label, not the page's own dim ink: these two sit on the
                          dark projection bay, and --text-dim is mixed for the page behind it.
@@ -490,6 +499,17 @@
         <span id="status-badge" class="px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
             IDLE
         </span>
+
+        <!-- STATIC / FLOW. In STATIC the avatar you picked answers everything. In FLOW the
+             question can move to the specialist inside that avatar's own line, announced by
+             whoever is holding it first. It sits here rather than in Settings because it
+             changes who you are talking to, which is a thing you want to see and reach
+             without opening a panel. Hidden when the current avatar belongs to no line,
+             since there would be nothing to flow between. -->
+        <button id="flow-toggle" type="button"
+                class="hidden ml-auto px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30 cursor-pointer hover:text-cyan-200">
+            STATIC
+        </button>
     </footer>
 
     <!-- ACTIVITY LOG MODAL -- everything the companion has actually done -->

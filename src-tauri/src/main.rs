@@ -603,12 +603,51 @@ fn generate_response_streaming_rust(
     session_id: Option<String>,
     stream_id: String,
 ) -> Result<serde_json::Value, String> {
-    commands::generate_response_streamed(&engine, prompt, session_id, &mut |delta| {
-        let _ = app.emit(
-            "chat-delta",
-            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
-        );
-    })
+    // The hand-off is emitted on its own event rather than as a first delta, because it is
+    // a different speaker: the node leaving says it, and the deltas that follow belong to
+    // the one arriving. It always lands before any delta, so the HUD can relabel the reply
+    // before there is anything in it.
+    let handover_app = app.clone();
+    let handover_stream = stream_id.clone();
+    commands::generate_response_streamed(
+        &engine,
+        prompt,
+        session_id,
+        &mut |delta| {
+            let _ = app.emit(
+                "chat-delta",
+                serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+            );
+        },
+        &mut |handover| {
+            let mut payload = commands::handover_json(handover);
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "stream_id".to_string(),
+                    serde_json::Value::String(handover_stream.clone()),
+                );
+            }
+            let _ = handover_app.emit("flow-handover", payload);
+        },
+    )
+}
+
+/// Flow mode's state, for the chin bar's toggle. Reports the line the current avatar
+/// belongs to as well, because FLOW with no line to move within does nothing and a toggle
+/// that claimed otherwise would be lying.
+#[tauri::command(async)]
+fn flow_mode_rust(engine: tauri::State<LlmEngine>) -> Result<serde_json::Value, String> {
+    let db = engine.db();
+    let persona = llm::Persona::from_key(&db.get_setting_string("persona_type", "default"));
+    Ok(serde_json::json!({
+        "enabled": llm::flow::enabled(db),
+        "group": persona.group(),
+    }))
+}
+
+#[tauri::command(async)]
+fn set_flow_mode_rust(engine: tauri::State<LlmEngine>, enabled: bool) -> Result<(), String> {
+    llm::flow::set_enabled(engine.db(), enabled)
 }
 
 #[tauri::command(async)]
@@ -1265,6 +1304,81 @@ fn show_main_window_rust(app: tauri::AppHandle) -> Result<(), String> {
 /// that is the whole point of a desktop pet, but a decorated panel window opened via
 /// open_panel_window_rust has a corner checkbox (see the solo-pin-control markup in
 /// index.html and initSoloPanel in app.js) that calls this to opt in.
+/// Step 19's dropdown, as data: every speciality, what it will run on, and why.
+///
+/// One command rather than one per persona, because the dropdown is a table and asking
+/// sixteen times to draw it would put sixteen settings reads and a cached list lookup
+/// behind one panel opening.
+#[tauri::command]
+async fn speciality_models_rust(
+    engine: tauri::State<'_, LlmEngine>,
+) -> Result<serde_json::Value, String> {
+    let db = engine.db();
+    let endpoint = db.get_setting_string("llm_endpoint", "http://localhost:11434");
+    // Asked directly rather than through the engine's cache: a panel the operator just
+    // opened to change a model is exactly when a minute-old list is the wrong answer.
+    let answered = model_scanner::models_at(&endpoint);
+    let available = answered.clone().unwrap_or_default();
+    let speeds = llm::routing::measured_speeds(db);
+
+    let specialities: Vec<serde_json::Value> = llm::Persona::all()
+        .iter()
+        .map(|persona| {
+            let choice = llm::routing::resolve(db, persona, &available, &speeds);
+            let suggested = llm::routing::suggestion(persona, &available, &speeds);
+            serde_json::json!({
+                "key": persona.key(),
+                "speciality": persona.speciality(),
+                "chosen": llm::routing::choices(db).get(persona.key()),
+                "suggested": suggested,
+                "running": choice.model,
+                "reason": match choice.reason {
+                    llm::routing::Reason::Chosen => "chosen",
+                    llm::routing::Reason::Suggested => "suggested",
+                    llm::routing::Reason::Missing(_) => "missing",
+                    llm::routing::Reason::General => "general",
+                },
+                "notice": choice.notice(persona),
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "endpoint": endpoint,
+        // The three-way distinction the routing rests on, preserved for the panel: null is
+        // "nothing answered", [] is "answered with nothing loaded".
+        "available": answered.map(|models| {
+            models
+                .into_iter()
+                .map(|model| {
+                    serde_json::json!({
+                        "good_at": llm::routing::good_at(&model),
+                        "model": model,
+                    })
+                })
+                .collect::<Vec<_>>()
+        }),
+        "specialities": specialities,
+    }))
+}
+
+/// Points one speciality at a model, or clears it back to the suggestion.
+#[tauri::command]
+async fn set_speciality_model_rust(
+    engine: tauri::State<'_, LlmEngine>,
+    persona: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    let resolved = llm::Persona::from_key(&persona);
+    // from_key falls back rather than failing, so an unknown key would silently set the
+    // default persona's model -- a quiet wrong answer in a panel nobody would think to
+    // double-check.
+    if resolved.key() != persona.to_ascii_lowercase() {
+        return Err(format!("no speciality called {persona:?}"));
+    }
+    llm::routing::set_choice(engine.db(), &resolved, model.as_deref())
+}
+
 #[tauri::command]
 fn set_window_always_on_top_rust(
     window: tauri::WebviewWindow,
@@ -1624,6 +1738,10 @@ fn main() {
             agent_genesis_rust,
             test_llm_connection_rust,
             scan_models_rust,
+            speciality_models_rust,
+            set_speciality_model_rust,
+            flow_mode_rust,
+            set_flow_mode_rust,
             setup_advice_rust,
             pull_model_rust,
             start_download_rust,
@@ -1905,6 +2023,11 @@ fn main() {
                         "telemetry": telemetry.to_wire_json(),
                         "tokens": engine.usage_snapshot(),
                         "agent_name": engine.agent_name(),
+                        // Step 19: usually null. It carries one line when a model the
+                        // operator picked has been uninstalled, said once per model per
+                        // session -- taken here rather than read, so collecting it is what
+                        // clears it and two windows cannot both claim to have shown it.
+                        "routing_notice": engine.take_routing_notice(),
                     });
                     let _ = app_handle.emit("telemetry-update", payload);
                     // Game Mode's "low usage" half: the HUD window is hidden (so its own

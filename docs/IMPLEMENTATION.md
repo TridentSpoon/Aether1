@@ -905,10 +905,14 @@ tool, the visualizer runnable on its own, the voice stack callable from a script
 that means the vault format is documented and stable, `aether1 face` and `aether1 say`
 work without the HUD running, and nothing in the vault depends on Aether1 to be readable.
 
-### Step 19: several local models, and choosing between them
+### Step 19: several local models, and choosing between them — **the host half shipped**
 
-**A stated core requirement, deliberately not built yet.** Recorded here so the shape of it
-is known while earlier steps are designed, not so it gets started early.
+**The host half is built.** `llm/routing.rs` holds the rule and the shipped table,
+`model_scanner::models_at` asks the configured endpoint what it can run, `load_config`
+applies the choice on every turn for a local provider, `aether1 models` shows and sets it,
+and a dropdown sits beside the avatar in the HUD. The LAN half is still ahead — see "On
+network exposure" below, which is now an ordering constraint rather than a question, since
+step 45 shipped the authentication it was waiting on.
 
 The intent: the backend draws on more than one local model at a time, and sends a task to
 whichever suits it -- a small fast one for a summary or a routine reply, a larger one for
@@ -953,8 +957,40 @@ The open questions, in the order they will bite:
    to the suggestion, saying so once, so uninstalling a model is not a silent change of who
    you are talking to.
 
-**On network exposure.** Now that the LAN is confirmed in scope, this is no longer a
-question but an ordering constraint.
+**What was built, and the two decisions inside it worth knowing.**
+
+The routing key is the persona, so nothing classifies the request. A per-message classifier
+was the obvious alternative and it is the wrong one: it makes the choice invisible,
+unpredictable, and impossible to check. Keyed on the speciality, the whole feature reads back
+as a sentence — "L'kemi runs on Qwen-Coder" — which `aether1 models` prints one line at a
+time.
+
+The suggestion is a table of model *families* matched on name fragments, ordered
+most-specific first so `qwen` does not swallow `qwen-coder`. Where several models of one
+family are installed, measured speed from `model_benchmarks` breaks the tie; **and where
+nothing has been measured yet, the smaller model wins.** That second rule was added after
+running it: sorting ties by name alone put `qwen2.5-coder:32b` ahead of `:7b`, so a fresh
+install — the exact moment a suggestion matters most — was pointed at the largest model on
+the machine. Size is read off the tag, which almost always carries it, and a name claiming no
+size sorts last rather than reading as tiny.
+
+Three distinctions the implementation keeps, each of which would be a bug if collapsed:
+
+- **A server that did not answer is not an empty machine.** `models_at` returns None for the
+  first and an empty list for the second. Reading one as the other would tell the operator
+  their model had been uninstalled every time their server restarted.
+- **"No pick" is not "picked nothing".** Clearing removes the key rather than storing an
+  empty string, because the difference is exactly whether the suggestion is allowed to apply.
+- **A missing model does not discard the choice.** The setting is kept, the suggestion runs
+  in the meantime, and one line says so — once per model per session, on the telemetry tick
+  the HUD already listens to, rendered as the program speaking rather than as the persona.
+  Attributing machinery to the character is how an operator learns to distrust the character.
+
+Routing applies to local providers only. Swapping the model under a cloud call would change
+what somebody is billed for.
+
+**On network exposure.** The authentication this was waiting on shipped in step 45, so what
+remains is the reaching-out half. This is an ordering constraint rather than a question.
 
 Models on the **local host** need nothing beyond the current loopback bind: the scanner
 already finds them, and `--serve` stays closed to the outside.
@@ -1186,7 +1222,7 @@ answer looked like, so picking one changed the tone of the reply and almost noth
 Each directive now has a "What that means in practice" half — a test enforces that phrase is
 present in all seven speciality personas, which is a crude check for a real property. To the
 Point must put the answer in the first line and not restate the question. Coding must produce
-runnable code and name the failure mode. Cites Sources must say *which kind* of source a claim
+runnable code and name the failure mode. Scanning & Extraction must say *which kind* of source a claim
 has — read this session, recalled from training and unverifiable, or inferred — and never
 invent one to fill the shape. Security must ask whether a target is the operator's to test.
 
@@ -1214,7 +1250,7 @@ fallback directive without saying so.
 [PERSONA_ACCESS.md](PERSONA_ACCESS.md); this is the summary and why it is a document before it
 is code.
 
-Read-only tools currently run automatically for every persona, so Creative Work can read your
+Read-only tools currently run automatically for every persona, so Signal & Logic can read your
 firewall rules and Conversational can read your source tree. Nothing connects what the
 companion is *for* to what it reaches for without asking. The design gives each persona a
 domain — a set of read-only tools and path roots — that runs without a prompt, and makes
@@ -2725,11 +2761,11 @@ event log, honest token telemetry, and native tool calling.
 3. ~~**Step 13, crash capture.**~~ **Shipped**, on both platforms. What is left is what a
    headless container cannot check: the tray colour, the notification, and the Windows reader
    against a real event log.
-4. **Step 19, several local models.** A stated core requirement, and still deliberately not
-   started. Step 29 makes it closer than it was: the catalogue, the memory sizing and the
-   download path it would need already exist in `setup.rs`. Its two design questions are
-   now answered -- routing is keyed on speciality and chosen from a dropdown -- so what
-   remains is the building.
+4. ~~**Step 19, several local models.**~~ **The host half shipped.** A speciality now runs
+   on the model it suits, chosen from a dropdown beside the avatar or from `aether1 models`,
+   with a suggestion from a table in the binary where the operator has not picked. What
+   remains is the LAN half: reaching a model server on another machine, which is an address
+   and an allowlist now that step 45 has done the dangerous half.
 5. **Step 45, the LAN transport.** TLS, attempt limiting and per-device tokens shipped, so
    a lost machine can now be cut off on its own with `aether1 revoke <id>`. What remains is
    a PAKE, if the rigour is ever wanted -- it closes a convincing-fake attack rather than a

@@ -23,7 +23,7 @@ Azure credentials, `gh` and Docker config, `.netrc`, `/etc/shadow`, DPAPI, crede
 `NTUSER.DAT` — regardless of tool, persona or approval.
 
 The gap this design closes: **read-only access is currently unscoped.** Any persona can read
-any file that is not on the deny list. The Creative Work persona can read your firewall rules;
+any file that is not on the deny list. The Signal & Logic persona can read your firewall rules;
 the Conversational one can read your project's source tree. Nothing is wrong with those files
 being readable in principle, but nothing connects *what the companion is for* to *what it
 reaches for without asking*.
@@ -73,8 +73,15 @@ pub enum Root {
 | **System Diagnosis** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | SystemLogs, ServiceState |
 | **Security & White Hat** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | NetworkConfig, ServiceState |
 | **Coding** | `read_file`, `list_dir`, `search_memory` | ProjectTree |
-| **Cites Sources** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
-| **Creative Work** | `search_memory`, `read_file`, `list_dir` | Vault |
+| **Defence & Hardening** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | NetworkConfig, ServiceState |
+| **Assistant & System Ops** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | SystemLogs, ServiceState |
+| **Software Development** | `read_file`, `list_dir`, `search_memory` | ProjectTree |
+| **Scanning & Extraction** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
+| **Reference & Fact-Checking** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
+| **Teaching & Docs** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
+| **Worldbuilding & Fiction** | `search_memory`, `read_file`, `list_dir` | Vault |
+| **Signal & Logic** | `search_memory`, `read_file`, `list_dir` | Vault |
+| **Cost & Budget** | `telemetry_detail`, `search_memory` | Vault |
 | **Conversational** | `telemetry_detail`, `search_memory` | Vault |
 | **To the Point** | `telemetry_detail`, `search_memory` | Vault |
 | **Model's Own** | `telemetry_detail`, `search_memory` | Vault |

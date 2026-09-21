@@ -1082,23 +1082,49 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
     // and pushes deltas through a channel that this task forwards to the socket. Unbounded
     // so a slow client can never block generation itself -- the deltas are small and the
     // reply is bounded by the model's own output.
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // Two kinds of thing come back over one channel, in order: at most one hand-off, then
+    // the reply's deltas. One channel rather than two because the order between them is the
+    // whole point -- the node leaving speaks before the node arriving starts answering.
+    enum Chunk {
+        Handover(serde_json::Value),
+        Delta(String),
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Chunk>();
     let generation = {
         let session_id = session_id.clone();
+        let handover_tx = tx.clone();
         tokio::task::spawn_blocking(move || {
-            commands::generate_response_streamed(&engine, message, Some(session_id), &mut |delta| {
-                let _ = tx.send(delta.to_string());
-            })
+            commands::generate_response_streamed(
+                &engine,
+                message,
+                Some(session_id),
+                &mut |delta| {
+                    let _ = tx.send(Chunk::Delta(delta.to_string()));
+                },
+                &mut |handover| {
+                    let _ = handover_tx.send(Chunk::Handover(commands::handover_json(handover)));
+                },
+            )
         })
     };
 
-    while let Some(delta) = rx.recv().await {
+    while let Some(chunk) = rx.recv().await {
+        let frame = match chunk {
+            Chunk::Handover(payload) => {
+                let mut frame = payload;
+                if let Some(object) = frame.as_object_mut() {
+                    object.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("handover".to_string()),
+                    );
+                }
+                frame
+            }
+            Chunk::Delta(delta) => serde_json::json!({"type": "delta", "delta": delta}),
+        };
         if socket
-            .send(Message::Text(
-                serde_json::json!({"type": "delta", "delta": delta})
-                    .to_string()
-                    .into(),
-            ))
+            .send(Message::Text(frame.to_string().into()))
             .await
             .is_err()
         {
