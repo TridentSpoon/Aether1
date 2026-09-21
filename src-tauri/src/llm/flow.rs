@@ -127,11 +127,11 @@ pub fn apply(db: &MemoryDb, handover: &Handover) -> Result<(), String> {
     )
     .map_err(|e| format!("could not switch the agent name: {e}"))?;
 
-    // The voice belongs to the identity, so it moves with it. A hand-off that kept the
-    // outgoing voice would have the new node speaking in the old one's.
-    if let Some(identity) = genesis::identity_for(handover.to_key()) {
-        let _ = db.set_setting("voice_name", &serde_json::Value::String(identity.voice));
-    }
+    // The voice moves with the identity too, but nothing is written for it here: speech
+    // resolves the voice from whichever persona is selected at the moment it speaks (see
+    // commands::synthesize_speech), so a hand-off is already a change of voice. Writing it
+    // as a setting would also overwrite the operator's own choice permanently, for a
+    // switch that may last one question.
     Ok(())
 }
 

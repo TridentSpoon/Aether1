@@ -638,17 +638,12 @@ fn generate_response_streaming_rust(
 /// that claimed otherwise would be lying.
 #[tauri::command(async)]
 fn flow_mode_rust(engine: tauri::State<LlmEngine>) -> Result<serde_json::Value, String> {
-    let db = engine.db();
-    let persona = llm::Persona::from_key(&db.get_setting_string("persona_type", "default"));
-    Ok(serde_json::json!({
-        "enabled": llm::flow::enabled(db),
-        "group": persona.group(),
-    }))
+    Ok(commands::flow_mode(&engine))
 }
 
 #[tauri::command(async)]
 fn set_flow_mode_rust(engine: tauri::State<LlmEngine>, enabled: bool) -> Result<(), String> {
-    llm::flow::set_enabled(engine.db(), enabled)
+    commands::set_flow_mode(&engine, enabled)
 }
 
 #[tauri::command(async)]

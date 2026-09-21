@@ -147,6 +147,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/stt", post(stt))
         .route("/api/voice/status", get(voice_status))
         .route("/api/personas", get(list_personas))
+        .route("/api/flow", get(flow_mode).post(set_flow_mode))
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
@@ -510,6 +511,26 @@ async fn stt(
 
 async fn voice_status(State(state): State<AppState>) -> Json<Value> {
     Json(commands::voice_status(&state.engine))
+}
+
+/// The browser HUD's counterpart of `flow_mode_rust`, so the chin bar's STATIC/FLOW
+/// toggle is the same switch on both transports.
+async fn flow_mode(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::flow_mode(&state.engine))
+}
+
+#[derive(Deserialize)]
+struct FlowModeRequest {
+    enabled: bool,
+}
+
+async fn set_flow_mode(
+    State(state): State<AppState>,
+    Json(req): Json<FlowModeRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    commands::set_flow_mode(&state.engine, req.enabled)
+        .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 async fn list_personas() -> Json<Value> {

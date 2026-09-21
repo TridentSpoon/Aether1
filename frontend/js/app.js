@@ -57,6 +57,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const hologram = new HologramAvatar('hologram-viewport');
     const voiceEngine = new VoiceAudioEngine();
 
+    /* Which turn's speech is allowed to reach the queue.
+       A reply is spoken sentence by sentence as it streams, so at any moment some of it is
+       still inside a synthesizer and has no clip yet. `stopSpeech()` can only drop what has
+       already been queued; the sentences still being synthesized arrive afterwards and queue
+       themselves, which is one reply's words landing in the middle of the next one's. Every
+       chunk carries the turn it belongs to and is discarded on arrival if the turn has moved
+       on. */
+    let speechTurn = 0;
+    function supersedeSpeech() {
+        speechTurn += 1;
+        voiceEngine.stopSpeech();
+    }
+
     // DOM Elements
     const chatContainer = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
@@ -837,7 +850,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!button) return;
         let state = null;
         try {
-            if (IS_TAURI) state = await tauriInvoke('flow_mode_rust');
+            if (IS_TAURI) {
+                state = await tauriInvoke('flow_mode_rust');
+            } else {
+                const resp = await apiFetch('/api/flow');
+                if (resp.ok) state = await resp.json();
+            }
         } catch (e) {
             console.error('Could not read the flow mode setting', e);
         }
@@ -846,7 +864,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         button.classList.remove('hidden');
-        button.textContent = state.enabled ? 'FLOW' : 'STATIC';
+        // FLOW is the state worth seeing across the room: it means the avatar on screen is
+        // not necessarily the one that answers next. So it is lit -- filled, bright, with a
+        // dot -- while STATIC stays the quiet outline the rest of the chin bar wears. Two
+        // labels in identical styling read as a caption rather than a switch that is on.
+        button.classList.toggle('flow-on', !!state.enabled);
+        button.textContent = state.enabled ? '\u25cf FLOW' : 'STATIC';
         button.title = state.enabled
             ? `The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
             : `This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
@@ -856,9 +879,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const button = document.getElementById('flow-toggle');
         if (!button) return;
         button.addEventListener('click', async () => {
-            const turningOn = button.textContent.trim() !== 'FLOW';
+            const turningOn = !button.classList.contains('flow-on');
             try {
-                if (IS_TAURI) await tauriInvoke('set_flow_mode_rust', { enabled: turningOn });
+                if (IS_TAURI) {
+                    await tauriInvoke('set_flow_mode_rust', { enabled: turningOn });
+                } else {
+                    await apiFetch('/api/flow', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ enabled: turningOn }),
+                    });
+                }
             } catch (e) {
                 console.error('Could not change the flow mode setting', e);
             }
@@ -1441,7 +1472,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function startTalking() {
         if (talkHeld || isWaitingForResponse) return;
         talkHeld = true;
-        voiceEngine.stopSpeech(); // talking over the companion interrupts it
+        supersedeSpeech(); // talking over the companion interrupts it
         setAvatarState('LISTENING');
         const started = await voiceEngine.startCapture();
         if (!started) {
@@ -2007,7 +2038,11 @@ document.addEventListener('DOMContentLoaded', () => {
         chatInput.value = '';
         appendMessage('user', text);
         voiceEngine.playSFX('click');
-        voiceEngine.stopSpeech(); // a new question supersedes anything still being spoken
+        // A new question supersedes anything still being spoken -- and anything still being
+        // synthesized. Dropping the queue alone left the previous reply's remaining
+        // sentences in flight at Piper, and each one queued itself on arrival, in among the
+        // sentences of the reply being spoken now.
+        supersedeSpeech();
 
         isWaitingForResponse = true;
         setAvatarState('THINKING');
@@ -2041,9 +2076,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // trace and what is the answer is already known.
             chunk = withoutTraceLines(chunk);
             if (!autoSpeak || !chunk.trim()) return;
+            const turn = speechTurn;
             try {
                 const url = await synthesizeSpeechUrl(chunk);
-                if (url) {
+                // Checked after the await, not before: the operator can ask the next
+                // question while this sentence is still at the synthesizer, and this is
+                // where that sentence finds out it is no longer wanted.
+                if (url && turn === speechTurn) {
                     voiceEngine.enqueueTTS(url);
                     audioQueued = true;
                 }

@@ -294,6 +294,15 @@ fn usable_voice(onnx: &Path) -> bool {
     voice_problem(onnx).is_none()
 }
 
+/// The path to a voice from the download catalogue, if it is here and usable, by its
+/// catalogue name. A persona's own Piper voice is named rather than pathed -- it is a
+/// choice made in the identity table, long before anyone knows where this machine keeps
+/// its voices -- so this is where the name becomes something Piper can be handed.
+pub(crate) fn installed_catalogue_voice(name: &str) -> Option<PathBuf> {
+    let path = voices_dir().join(format!("{name}.onnx"));
+    usable_voice(&path).then_some(path)
+}
+
 /// Why a `.onnx` cannot be used, in words that name the fix, or None when it can be.
 ///
 /// Separate from `usable_voice` so the wizard can say *which* of the two mistakes was made.
