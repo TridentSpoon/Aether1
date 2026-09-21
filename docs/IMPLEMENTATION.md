@@ -2616,6 +2616,87 @@ this repository, reviewed like any other. And it runs at startup, again the mome
 actually fails, and whenever the operator asks -- never on a timer, because the cost of
 watching has to stay smaller than the cost of the thing being watched.
 
+### Step 48: the copies of itself it left behind — **shipped**
+
+AETHER1 has been installable five different ways, and not one of them knows about the others.
+`setup.sh` builds and copies a binary to `~/.local/bin`; the offline and slim bundles put a
+different binary in the same place; step 17 adds an AppImage, a `.deb` and an AUR package; and
+Windows has a per-user Inno Setup install. Install it a second way and the first one stays
+exactly where it was — an old binary still on `PATH`, a launcher entry still pointing at it,
+and a version in the tray that depends on which icon was clicked.
+
+The symptom is never "there are two installs". It is a bug that was fixed weeks ago still
+happening, and half an hour spent working out why the fix did not take. That is the whole
+reason this step exists: a duplicate install is invisible until it wastes your afternoon.
+
+**Detection is automatic, removal is not.** This is the one rule the rest of the step is built
+around, and it is not caution for its own sake: an uninstall cannot be undone, and the scan
+runs unattended at startup where nobody is watching it. So the scan finds, and the operator
+decides — a prompt in the HUD, or an id typed at `aether1 installs remove`. There is no path
+through this code that deletes something nobody asked about. Answering "keep them" is itself a
+decision worth storing (`installs_notice`), because a prompt that returns every launch is how
+a useful notice turns into noise you click through without reading.
+
+**An install is a program, never your data.** The vault, the conversation database, the
+settings and the paired devices all live under `~/.local/share/aether1`, and nothing in this
+step can reach them: `remove` checks every path against the data roots *before* it deletes
+anything, and refuses the whole removal rather than stopping halfway through one. A removal
+that stops halfway has already done the damage. A test holds that refusal in place, and it is
+the test most worth keeping of the ten.
+
+**What AETHER1 did not put there, AETHER1 does not delete.** A `.deb` or an AUR package
+belongs to dpkg or pacman; deleting its files behind the package manager's back leaves it
+believing the package is still installed, which is a worse state than the duplicate that
+started this. Those are handed over as the exact command to run — and that is also the honest
+answer to elevation, since removing a package needs root and AETHER1 asks for root nowhere
+else. A source checkout is not an install at all: it is reported so a developer machine does
+not look like it has a stray copy on it, and never offered.
+
+**A newer copy is never offered, and that asymmetry is deliberate.** The likeliest reason for
+a copy newer than the running one to exist is that it was just installed and the old icon was
+clicked out of habit. Removing it would quietly undo the upgrade — the exact failure this step
+is supposed to prevent, in reverse. Versions compare through the scheme the app already prints
+(`Aether1 0.3.Rev152`, where the revision is the merged pull request, so it is monotonic by
+construction). A package manager's `0.4.0` is not a point on that same line, so it does not
+pretend to be: two versions that cannot be compared produce "cannot tell how old this one is"
+and the copy is still offered, because a second copy is a problem whether or not its age can be
+read — but it is labelled as the guess it is, rather than being called stale on no evidence.
+
+- **New `src-tauri/src/installs.rs`** — `detect` returns every copy the machine can see, and
+  `remove` takes one away. The scan reads the machine through a `Machine` trait rather than
+  calling dpkg, pacman and the registry directly, so the tests run against a machine that does
+  not exist instead of needing a second AETHER1 actually installed on the runner.
+- **Where it looks:** `~/.local/bin/aether1` with its `.desktop` entry and icon; AppImages in
+  `~/Applications`, `~/Downloads`, `~/.local/bin`, `~/bin` and `/opt`; `/usr/local/bin` and
+  `/usr/bin`; `dpkg-query` and `pacman -Q`; and on Windows the Inno Setup uninstall key under
+  `HKCU`, read with `reg.exe` rather than by taking a registry crate for one query. Not a
+  search of the disk — an AppImage anywhere else was put there deliberately, and finding it
+  would mean reading every directory the operator has.
+- **`src-tauri/src/main.rs`** — a startup thread that scans five seconds after launch and says
+  something only when there is something to say, through the same notification path step 13
+  built; plus `other_installs_rust`, `remove_install_rust` and `keep_other_installs_rust`, all
+  `async` because the scan shells out and the window must not wait for it.
+- **`frontend/js/app.js`** — the prompt itself, on the `old-installs-detected` event.
+- **`aether1 installs`**, `aether1 installs remove <id>` and `aether1 installs remove old` —
+  the same answer from a terminal, and the surface that works with no HUD open. Naming an id
+  is what makes the command unambiguous; `remove` with nothing named is an error rather than a
+  guess.
+- **Piper and whisper.cpp are deliberately not in scope.** They live beside AETHER1 under
+  `~/.local/share` and whichever copy survives still uses them, so removing an install leaves
+  them alone. `install_slim_linux.sh` and `offline_install_linux.sh` already clean up after
+  *each other* for exactly those files, and that stays where it is.
+- **Verify:** a machine with a bundle install and an AppImage lists both and removes the older
+  on request; the vault, the database and the settings survive every removal, including one
+  that names the data directory outright; the running copy refuses to remove itself; a copy
+  newer than the running one is listed and not offered; an AUR install produces
+  `sudo pacman -R aether1` rather than a deletion; and a source checkout is reported and kept.
+
+*Ten tests in `installs.rs` and five more in `cli.rs` cover all of that. What a headless
+container cannot check is the same short list step 13 left: the desktop notification actually
+appearing, and the Windows registry read against a real registry.*
+
+---
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
@@ -2659,6 +2740,11 @@ event log, honest token telemetry, and native tool calling.
 7. **Step 47, diagnostics that fixes things.** `aether1 status` describes the machine and
    nothing describes the app, so "is AETHER1 working?" has no answer and every subsystem
    reports its health to whoever happens to call it. Specified, not started.
+8. ~~**Step 48, the copies of itself it left behind.**~~ **Shipped.** Installing AETHER1 a
+   second way never removed the first, so an old binary kept sitting on `PATH` with a bug in
+   it that had already been fixed. `aether1 installs` now finds every copy and removes the
+   stale ones on request. What a container cannot check is the desktop notification and the
+   Windows registry read.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) are now specs rather than sketches,
 settled in that order and written up in full above.
