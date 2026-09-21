@@ -285,6 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (avatarName === 'enxephalon') avatarStructureLabel.textContent = 'SYNAPTIC MIND LATTICE';
         else if (avatarName === 'cicero') avatarStructureLabel.textContent = 'HOVERING REEL CHASSIS';
         else if (avatarName === 'praxis') avatarStructureLabel.textContent = 'HARD-LIGHT TRAINING GRID';
+        else if (avatarName === 'chrono-maistresse') avatarStructureLabel.textContent = 'ANIMATE CHRONOMETER DIAL';
         // A registered avatar names itself, rather than borrowing hAlcy's label from
         // the fallback below -- see js/hologram/README.md.
         else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
