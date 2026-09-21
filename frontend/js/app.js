@@ -3328,6 +3328,36 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.__TAURI__.core.invoke(cmd, args);
     }
 
+    // Step 48: another copy of AETHER1 is installed somewhere on this machine. The startup
+    // scan in main.rs finds them; this is where the operator is asked, because nothing is
+    // ever removed without being asked and an uninstall cannot be taken back.
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('old-installs-detected', async (event) => {
+            const payload = (event && event.payload) || {};
+            const installs = Array.isArray(payload.installs) ? payload.installs : [];
+            if (!installs.length) return;
+            const list = installs.map((install) => `  - ${install.description}`).join('\n');
+            const question = `${payload.headline}\n\n${list}\n\n`
+                + 'Remove them? Your vault, conversations and settings stay exactly where '
+                + 'they are -- only the program files go.';
+            if (!confirm(question)) {
+                // "No" is an answer worth keeping. Without this the same prompt comes back
+                // on every single launch, which is how a useful notice becomes noise.
+                tauriInvoke('keep_other_installs_rust').catch(() => {});
+                return;
+            }
+            const results = [];
+            for (const install of installs) {
+                try {
+                    results.push(await tauriInvoke('remove_install_rust', { id: install.id }));
+                } catch (error) {
+                    results.push(`${install.path}: ${error}`);
+                }
+            }
+            alert(results.join('\n\n'));
+        });
+    }
+
     // Synthesizes speech via the native TTS command and turns the local mp3 path it returns
     // into a URL the webview's <audio> element can actually load (convertFileSrc maps a
     // filesystem path to Tauri's asset:// protocol; see the assetProtocol scope this path's
