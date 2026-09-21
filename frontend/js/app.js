@@ -478,7 +478,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function refreshEmptyAvatarGroups() {
         document.querySelectorAll('#avatar-menu .avatar-group-label').forEach((heading) => {
             const grid = heading.nextElementSibling;
-            const filled = !!grid && !!grid.querySelector('.avatar-pill:not(.hidden)');
+            // Compared against null rather than coerced with a double negation, because
+            // Tailwind's scanner reads this file as plain text looking for class names and
+            // a negated identifier can read as an important-flagged utility to it, which
+            // would bake a rule nothing uses into vendor/tailwind.css on every rebuild.
+            // See scripts/build_vendor_css.sh.
+            const filled = grid !== null && grid.querySelector('.avatar-pill:not(.hidden)') !== null;
             heading.classList.toggle('hidden', !filled);
             if (grid) grid.classList.toggle('hidden', !filled);
         });
