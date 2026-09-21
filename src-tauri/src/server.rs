@@ -110,6 +110,8 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/scanner/status", get(scanner_status))
         .route("/api/setup/advice", get(setup_advice))
         .route("/api/voice/advice", get(voice_advice))
+        .route("/api/code/advice", get(code_advice))
+        .route("/api/code/conventions", get(code_conventions))
         .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
@@ -695,6 +697,20 @@ async fn setup_advice(State(state): State<AppState>) -> Json<serde_json::Value> 
 }
 
 /// Browser-transport twin of voice_advice_rust.
+async fn code_advice(State(state): State<AppState>) -> Json<crate::code_setup::CodingAdvice> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::code_advice(&state.engine))
+            .await
+            .expect("code_advice panicked"),
+    )
+}
+
+/// The house rules as plain text, so a browser can copy them and a terminal can redirect
+/// them straight into an AGENTS.md.
+async fn code_conventions() -> String {
+    crate::code_setup::conventions()
+}
+
 async fn voice_advice(State(state): State<AppState>) -> Json<crate::voice_setup::VoiceAdvice> {
     Json(
         tokio::task::spawn_blocking(move || commands::voice_advice(&state.engine))

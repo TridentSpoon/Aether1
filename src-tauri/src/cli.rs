@@ -56,6 +56,10 @@ USAGE:
     aether1 installs               List every copy of AETHER1 this machine has on it
     aether1 installs remove <ID>   Remove one of them, by the id the list prints
     aether1 installs remove old    Remove every copy older than the one you are running
+    aether1 code                   What this machine still needs before it can write code
+                                   offline, and the commands to set it up
+    aether1 code conventions       Print the house rules for a coding model to follow;
+                                   redirect it into an AGENTS.md at the top of your project
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -105,6 +109,12 @@ pub enum Invocation {
     },
     /// `crashes`: what has died on this machine recently, asked for rather than announced.
     Crashes,
+    /// `code`: the coding wizard, printed. `code conventions` prints the house rules
+    /// instead, so they can be redirected into a project's AGENTS.md in one line rather
+    /// than copied out of a panel.
+    Code {
+        conventions: bool,
+    },
     /// `models`: which local model each speciality runs on, and with two arguments, the
     /// setting of one. See llm/routing.rs for why the key is the speciality.
     Models {
@@ -276,6 +286,13 @@ pub fn parse(argv: &[String]) -> Invocation {
         "crashes" => free_text(rest).and_then(|extra| match extra {
             Some(extra) => Err(format!("crashes takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Crashes),
+        }),
+        "code" => free_text(rest).and_then(|extra| match extra.as_deref() {
+            None => Ok(Invocation::Code { conventions: false }),
+            Some("conventions") => Ok(Invocation::Code { conventions: true }),
+            Some(other) => Err(format!(
+                "code takes nothing, or the word `conventions` (got {other:?})"
+            )),
         }),
         "models" => match rest.len() {
             0 => Ok(Invocation::Models {
@@ -478,6 +495,104 @@ fn run_status(json: bool, events: bool) -> String {
 
 /// `aether1 crashes`. Deliberately shows muted programs too, marked -- the mute list stops
 /// AETHER1 interrupting you, and this is you doing the asking.
+/// The coding wizard as text: where this machine is, and the commands to move it on.
+///
+/// The same advisor the HUD panel draws, printed. Somebody who is setting this up because
+/// their subscription lapsed is quite likely doing it from a terminal in the first place,
+/// and a wizard only reachable from a settings panel is one more window to find.
+fn run_code(conventions: bool) -> String {
+    if conventions {
+        return crate::code_setup::conventions();
+    }
+
+    let engine = crate::build_llm_engine();
+    let advice = commands::code_advice(&engine);
+
+    let mut out = format!(
+        "AETHER1 -- writing code on this machine\n\n{}\n",
+        advice.headline
+    );
+
+    for (index, step) in advice.steps.iter().enumerate() {
+        out.push_str(&format!(
+            "\n{}. {}\n   {}\n",
+            index + 1,
+            step.title,
+            step.detail
+        ));
+        if let Some(command) = &step.command {
+            out.push_str(&indented(command));
+        }
+        if let Some(url) = &step.url {
+            out.push_str(&format!("\n       {url}\n"));
+        }
+    }
+
+    // Only worth listing while there is a choice to make. Once a coding model is here, the
+    // model line above the commands already names the one they will be run with.
+    if !advice.model_installed {
+        out.push_str("\nMODELS FOR THIS MACHINE (the marked one is the recommendation):\n");
+        for model in advice.models.iter().filter(|m| m.fits) {
+            let mark = if model.recommended { "->" } else { "  " };
+            out.push_str(&format!(
+                "  {mark} {:<22} {:<14} {}\n",
+                model.name, model.download, model.label
+            ));
+        }
+        out.push_str("\n     Download one with:  ollama pull <name>\n");
+    }
+
+    out.push_str(&format!(
+        "\nUSING: {}{}\n",
+        advice.model,
+        if advice.model_installed {
+            " (downloaded)"
+        } else {
+            " (not downloaded yet)"
+        }
+    ));
+
+    for agent in &advice.agents {
+        let state = if agent.installed {
+            "installed"
+        } else {
+            "not installed"
+        };
+        out.push_str(&format!(
+            "\n{} -- {state}\n   {}\n",
+            agent.label, agent.blurb
+        ));
+        let steps = if agent.installed {
+            &agent.connect
+        } else {
+            &agent.install
+        };
+        for step in steps {
+            out.push_str(&format!("\n   {}\n", step.title));
+            if let Some(command) = &step.command {
+                out.push_str(&indented(command));
+            }
+        }
+    }
+
+    out.push_str(
+        "\nBefore the first session, put the house rules at the top of your project:\n\
+         \n       aether1 code conventions > AGENTS.md\n\
+         \nBoth agents read that file every turn, and it does more to keep a local model in\n\
+         your style than a bigger model would.\n",
+    );
+    out
+}
+
+/// A command block, indented so it reads as something to paste rather than as prose. A
+/// multi-line command keeps its shape, which matters for the ones that write a config file.
+fn indented(command: &str) -> String {
+    command
+        .lines()
+        .map(|line| format!("       {line}\n"))
+        .collect()
+}
+
 /// `aether1 models`, both the showing and the setting.
 ///
 /// The showing is the important half: step 19's whole claim is that "which model for which
@@ -892,6 +1007,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Prompt { text, session } => run_prompt(text, session),
         Invocation::Status { json, events } => Ok(run_status(json, events)),
         Invocation::Crashes => run_crashes(),
+        Invocation::Code { conventions } => Ok(run_code(conventions)),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state } => run_flow(state.as_deref()),
         Invocation::Installs { remove } => run_installs(remove.as_deref()),
@@ -1072,6 +1188,28 @@ mod tests {
         ));
         assert!(matches!(
             parse_args(&["status", "please"]),
+            Invocation::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn code_is_recognized_with_and_without_its_one_word() {
+        assert_eq!(
+            parse_args(&["code"]),
+            Invocation::Code { conventions: false }
+        );
+        assert_eq!(
+            parse_args(&["code", "conventions"]),
+            Invocation::Code { conventions: true }
+        );
+    }
+
+    /// `code rules` is the obvious near-miss, and silently printing the wizard for it would
+    /// leave somebody wondering where their conventions went.
+    #[test]
+    fn code_rejects_a_word_it_does_not_know() {
+        assert!(matches!(
+            parse_args(&["code", "rules"]),
             Invocation::Invalid(_)
         ));
     }
