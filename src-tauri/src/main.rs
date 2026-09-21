@@ -603,12 +603,51 @@ fn generate_response_streaming_rust(
     session_id: Option<String>,
     stream_id: String,
 ) -> Result<serde_json::Value, String> {
-    commands::generate_response_streamed(&engine, prompt, session_id, &mut |delta| {
-        let _ = app.emit(
-            "chat-delta",
-            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
-        );
-    })
+    // The hand-off is emitted on its own event rather than as a first delta, because it is
+    // a different speaker: the node leaving says it, and the deltas that follow belong to
+    // the one arriving. It always lands before any delta, so the HUD can relabel the reply
+    // before there is anything in it.
+    let handover_app = app.clone();
+    let handover_stream = stream_id.clone();
+    commands::generate_response_streamed(
+        &engine,
+        prompt,
+        session_id,
+        &mut |delta| {
+            let _ = app.emit(
+                "chat-delta",
+                serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+            );
+        },
+        &mut |handover| {
+            let mut payload = commands::handover_json(handover);
+            if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "stream_id".to_string(),
+                    serde_json::Value::String(handover_stream.clone()),
+                );
+            }
+            let _ = handover_app.emit("flow-handover", payload);
+        },
+    )
+}
+
+/// Flow mode's state, for the chin bar's toggle. Reports the line the current avatar
+/// belongs to as well, because FLOW with no line to move within does nothing and a toggle
+/// that claimed otherwise would be lying.
+#[tauri::command(async)]
+fn flow_mode_rust(engine: tauri::State<LlmEngine>) -> Result<serde_json::Value, String> {
+    let db = engine.db();
+    let persona = llm::Persona::from_key(&db.get_setting_string("persona_type", "default"));
+    Ok(serde_json::json!({
+        "enabled": llm::flow::enabled(db),
+        "group": persona.group(),
+    }))
+}
+
+#[tauri::command(async)]
+fn set_flow_mode_rust(engine: tauri::State<LlmEngine>, enabled: bool) -> Result<(), String> {
+    llm::flow::set_enabled(engine.db(), enabled)
 }
 
 #[tauri::command(async)]
@@ -1701,6 +1740,8 @@ fn main() {
             scan_models_rust,
             speciality_models_rust,
             set_speciality_model_rust,
+            flow_mode_rust,
+            set_flow_mode_rust,
             setup_advice_rust,
             pull_model_rust,
             start_download_rust,

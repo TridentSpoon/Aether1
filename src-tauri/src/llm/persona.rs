@@ -203,6 +203,63 @@ impl Persona {
         }
     }
 
+    /// The line this persona belongs to, as the HUD's avatar picker groups them.
+    ///
+    /// Flow mode only ever hands over inside one group (see llm/flow.rs): the operator
+    /// picked a cast, not a single character, and a companion that jumped between casts
+    /// mid-conversation would read as a different product each turn. A1, Model's Own and
+    /// Custom belong to no line, so a conversation with one of them never flows.
+    pub fn group(&self) -> Option<&'static str> {
+        match self {
+            Persona::Halcy | Persona::Red9000 | Persona::Alt => Some("Singular Ascended Class"),
+            Persona::Nexus => Some("Trace Protocols"),
+            Persona::ArxLocas
+            | Persona::ArxLegionare
+            | Persona::ArxLoregenda
+            | Persona::ArxLyksaum
+            | Persona::ArxLimes
+            | Persona::ArxLogos
+            | Persona::ArxLexico
+            | Persona::ArxLucre
+            | Persona::ArxLkemi => Some("The Umbrals"),
+            Persona::Default | Persona::Llm | Persona::Custom => None,
+        }
+    }
+
+    /// What this persona says as it hands the question to somebody better placed.
+    ///
+    /// Written per persona rather than as one shared sentence because the hand-off is the
+    /// only moment two characters are on screen at once, and a single canned line would
+    /// flatten both of them into the same narrator. It is the *outgoing* one speaking, so
+    /// it is in their voice and it goes out before the switch, not after.
+    pub fn handoff_line(&self, next: &Persona) -> String {
+        let name = next.avatar().unwrap_or("the next node");
+        match self {
+            Persona::Halcy => {
+                format!("That is not really my ground -- let me bring in {name}, who lives in it.")
+            }
+            Persona::Red9000 => format!("Outside my function. {name} handles this. Switching."),
+            Persona::Nexus => format!("Not my end of the line. Patching you through to {name}."),
+            Persona::Alt => format!("Not my kind of job. {name} is the one you want here."),
+            Persona::ArxLocas => {
+                format!("That one belongs to a specialist. Handing you to {name}.")
+            }
+            Persona::ArxLegionare => format!("Off my perimeter. {name} holds this ground."),
+            Persona::ArxLoregenda => format!("The record points elsewhere on this. {name} has it."),
+            Persona::ArxLyksaum => {
+                format!("Better explained by the one who owns it. Over to {name}.")
+            }
+            Persona::ArxLimes => format!("THE ARCHIVE DEFERS. {name} holds this record."),
+            Persona::ArxLogos => format!("Outside my signal. Routing to {name}."),
+            Persona::ArxLexico => format!("Not a matter of reference. {name} is the one to ask."),
+            Persona::ArxLucre => format!("No ledger in this one. Passing it to {name}."),
+            Persona::ArxLkemi => format!("Not code. {name} takes it from here."),
+            Persona::Default | Persona::Llm | Persona::Custom => {
+                format!("Let me call on the expert in this field -- {name}.")
+            }
+        }
+    }
+
     /// The catalogue Settings renders, including the field each persona reaches without
     /// asking. Built here rather than written out in the HTML so
     /// that adding a persona is one change in one file: a list in the markup would have

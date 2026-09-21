@@ -499,6 +499,17 @@
         <span id="status-badge" class="px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
             IDLE
         </span>
+
+        <!-- STATIC / FLOW. In STATIC the avatar you picked answers everything. In FLOW the
+             question can move to the specialist inside that avatar's own line, announced by
+             whoever is holding it first. It sits here rather than in Settings because it
+             changes who you are talking to, which is a thing you want to see and reach
+             without opening a panel. Hidden when the current avatar belongs to no line,
+             since there would be nothing to flow between. -->
+        <button id="flow-toggle" type="button"
+                class="hidden ml-auto px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30 cursor-pointer hover:text-cyan-200">
+            STATIC
+        </button>
     </footer>
 
     <!-- ACTIVITY LOG MODAL -- everything the companion has actually done -->

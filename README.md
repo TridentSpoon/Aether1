@@ -751,6 +751,30 @@ Picking an avatar switches to its persona, its voice and its name -- one choice 
 from either end. *Your own* is the exception: an avatar you designed has no persona of its
 own, so it leaves yours alone.
 
+### STATIC and FLOW
+
+The chin bar carries one more switch, next to the state badge. **STATIC** is what AETHER1 has
+always done: the avatar you picked answers everything. **FLOW** lets the question move to the
+specialist inside that avatar's own line -- the Umbrals, the Trace Protocols, the Singular
+Ascended Class -- and whoever is holding the conversation says so on the way out:
+
+```
+A.R.X.LOCAS: That one belongs to a specialist. Handing you to A.R.X.LEGIONARE.
+
+A.R.X.LEGIONARE: Tell me what you run and I will tell you what reaches it first.
+```
+
+The hand-off is decided by the same keyword table that turns a stated purpose into an
+identity, not by a model: it costs no round trip, and you can read the rule rather than
+wonder about it. It holds the current avatar unless the match is confident, because a missed
+hand-off is invisible and a wrong one interrupts you with a line that turned out to be
+unnecessary. It never crosses between lines -- you picked a cast, not a character -- and an
+avatar belonging to no line (A1, *Model's Own*, your own design) never flows at all, which is
+why the switch hides itself there.
+
+At the command line, `aether1 flow` reports the mode and the line it can move within, and
+`aether1 flow on` / `aether1 flow off` sets it.
+
 ### What each persona reaches without asking
 
 A persona reads its own field automatically. Everything else — another tool, or a path outside

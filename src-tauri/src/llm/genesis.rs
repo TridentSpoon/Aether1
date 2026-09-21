@@ -171,6 +171,74 @@ fn purpose_matches_keyword(
     }
 }
 
+/// How strongly a piece of text points at one identity, and whether anything else was in
+/// the running. Flow mode's classifier (see llm/flow.rs); Genesis itself does not use it.
+///
+/// [`generate_identity`] takes the first rule with any hit at all, which is right for a
+/// purpose the operator sat down and wrote. A message typed mid-conversation is not that,
+/// so flow mode needs to know *how well* it matched before it is allowed to move the
+/// conversation to somebody else.
+///
+/// A single word scores one and a multi-word phrase scores two, because a phrase is not
+/// something anybody types by accident. `contested` is true when a second rule also scored,
+/// which is the signal that the message is ambiguous rather than pointed.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Match {
+    pub persona_type: &'static str,
+    pub score: u32,
+    pub contested: bool,
+}
+
+pub fn match_score(text: &str) -> Option<Match> {
+    let lower = text.to_lowercase();
+    let words: std::collections::HashSet<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let mut best: Option<(&'static str, u32)> = None;
+    let mut scored = 0usize;
+    for rule in rules() {
+        let score: u32 = rule
+            .keywords
+            .iter()
+            .filter(|kw| purpose_matches_keyword(&lower, &words, kw))
+            .map(|kw| if kw.contains(' ') { 2 } else { 1 })
+            .sum();
+        if score == 0 {
+            continue;
+        }
+        scored += 1;
+        // Ties keep the table's own precedence, exactly as generate_identity does, so the
+        // more specific rule earlier in the table still gets first refusal.
+        if best.is_none_or(|(_, b)| score > b) {
+            best = Some((rule.persona_type, score));
+        }
+    }
+
+    best.map(|(persona_type, score)| Match {
+        persona_type,
+        score,
+        contested: scored > 1,
+    })
+}
+
+/// The identity behind one `persona_type`, for a switch that did not come from a purpose
+/// string -- flow mode needs this rule's name and voice to persist alongside the persona.
+pub fn identity_for(persona_type: &str) -> Option<Identity> {
+    rules()
+        .iter()
+        .find(|rule| rule.persona_type == persona_type)
+        .map(|rule| Identity {
+            name: rule.name.to_string(),
+            callsign: rule.callsign.to_string(),
+            persona_directive: (rule.persona)(rule.name),
+            voice: rule.voice.to_string(),
+            greeting: rule.greeting.to_string(),
+            persona_type: rule.persona_type.to_string(),
+        })
+}
+
 pub fn generate_identity(purpose_text: &str) -> Identity {
     let purpose_lower = purpose_text.to_lowercase();
     let words: std::collections::HashSet<&str> = purpose_lower
@@ -312,6 +380,49 @@ mod tests {
     fn routing_is_case_insensitive() {
         let identity = generate_identity("REACTIVE ENGINE for HAL vibes");
         assert_eq!(identity.name, "R.E.D. 9000");
+    }
+
+    #[test]
+    fn a_phrase_counts_for_more_than_a_word_because_nobody_types_one_by_accident() {
+        // Flow mode's bar is two points. "creative writing" is one phrase and clears it on
+        // its own; "story" is one word and does not, which is the difference between a
+        // deliberate request and a word that happened to be in the sentence.
+        let phrase = match_score("some creative writing please").expect("a phrase matched");
+        assert_eq!(phrase.persona_type, "arx-loregenda");
+        assert_eq!(phrase.score, 2);
+
+        let word = match_score("tell me a story").expect("a word matched");
+        assert_eq!(word.score, 1);
+    }
+
+    #[test]
+    fn a_message_two_nodes_both_claim_is_marked_contested() {
+        // "debug" is L'kemi's and "story" is Loregenda's. Neither owns this sentence, and
+        // saying so is what stops flow mode interrupting over it.
+        let found = match_score("debug the story generator").expect("both matched");
+        assert!(
+            found.contested,
+            "two rules scored, so the message is ambiguous"
+        );
+
+        let clear = match_score("harden the firewall").expect("one rule matched");
+        assert!(!clear.contested);
+    }
+
+    #[test]
+    fn nothing_in_the_table_scores_nothing_rather_than_falling_back() {
+        // generate_identity falls back to AETHER, which is right for a purpose. A score of
+        // nothing has to stay nothing, or every message would look like a hand-off to the
+        // fallback identity.
+        assert_eq!(match_score("qwerty zzz unmatched nonsense"), None);
+    }
+
+    #[test]
+    fn an_identity_can_be_found_by_its_persona_type() {
+        let identity = identity_for("arx-legionare").expect("a real persona_type");
+        assert_eq!(identity.name, "A.R.X.LEGIONARE");
+        assert!(!identity.voice.is_empty());
+        assert!(identity_for("not-a-persona").is_none());
     }
 
     #[test]

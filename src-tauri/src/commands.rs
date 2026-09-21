@@ -13,12 +13,17 @@ use crate::project_root;
 use crate::setup;
 use crate::tools;
 
+/// Told once, before a word of the reply exists, when flow mode is passing this question
+/// to somebody else. Separate from the delta sink because it is a different speaker: the
+/// node on its way out, not the one about to answer.
+pub type HandoverSink<'a> = &'a mut dyn FnMut(&llm::flow::Handover);
+
 pub fn generate_response(
     engine: &LlmEngine,
     prompt: String,
     session_id: Option<String>,
 ) -> Result<Value, String> {
-    generate_response_streamed(engine, prompt, session_id, &mut |_| {})
+    generate_response_streamed(engine, prompt, session_id, &mut |_| {}, &mut |_| {})
 }
 
 /// generate_response, with each piece of the reply handed to `sink` as it arrives. The
@@ -29,6 +34,7 @@ pub fn generate_response_streamed(
     prompt: String,
     session_id: Option<String>,
     sink: llm::Sink,
+    on_handover: HandoverSink,
 ) -> Result<Value, String> {
     if prompt.trim().is_empty() {
         return Err("Empty message".to_string());
@@ -36,6 +42,25 @@ pub fn generate_response_streamed(
     let session_id = valid_session_id(session_id)?;
 
     engine.add_message(&session_id, "user", &prompt);
+
+    // Flow mode, before a word is generated: the question has to reach whoever it belongs
+    // to, and the hand-off line belongs to the node on its way out, so it is said first and
+    // recorded first. A failure to persist the switch is not a reason to refuse the answer
+    // -- the current node simply keeps it.
+    let handover = llm::flow::consider(engine.db(), &prompt).filter(|h| {
+        match llm::flow::apply(engine.db(), h) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[AETHER1] Could not hand the question over: {e}");
+                false
+            }
+        }
+    });
+    if let Some(h) = &handover {
+        on_handover(h);
+        engine.add_message(&session_id, &h.speaker_name().to_lowercase(), &h.line);
+    }
+
     // Opened and drained around the one call that reads the vault, so the notes reported
     // belong to this answer and no other. Both are on this thread, which is the whole
     // reason the record can be a thread-local -- see vault::consulted.
@@ -60,6 +85,7 @@ pub fn generate_response_streamed(
         "reply": reply,
         "agent_name": agent_name,
         "notes": crate::vault::consulted::to_json(&notes),
+        "handover": handover.as_ref().map(handover_json),
     }))
 }
 
@@ -817,6 +843,16 @@ pub fn voice_status(engine: &LlmEngine) -> Value {
             Err(why) => serde_json::json!({ "local": false, "why": why }),
         },
         "offline_capable": speech_out.is_ok() && speech_in.is_ok(),
+    })
+}
+
+/// The shape both front ends read: who is leaving, what they said, and who is answering.
+pub fn handover_json(handover: &llm::flow::Handover) -> Value {
+    serde_json::json!({
+        "from": handover.speaker_name(),
+        "line": handover.line,
+        "to": handover.to_name(),
+        "to_key": handover.to_key(),
     })
 }
 
