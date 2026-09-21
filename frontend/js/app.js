@@ -453,7 +453,10 @@ document.addEventListener('DOMContentLoaded', () => {
        fresh at that moment rather than a value captured now, so a manual avatar change made
        while the flash is showing is not clobbered when it ends. */
     function flashTraceProtocolAvatar(avatarId) {
-        if (Aether1AvatarUnlocks.unlock(avatarId)) refreshTraceProtocolVisibility();
+        if (Aether1AvatarUnlocks.unlock(avatarId)) {
+            refreshTraceProtocolVisibility();
+            refreshEmptyAvatarGroups();
+        }
 
         if (traceProtocolFlashTimer) clearTimeout(traceProtocolFlashTimer);
         setHologramAvatar(avatarId);
@@ -463,6 +466,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }, TRACE_PROTOCOL_FLASH_MS);
     }
 
+    /* A family heading with nothing under it is just a stray divider, so each one is shown
+       only while its grid has a pill someone can actually press. That covers two cases: a
+       group standing ready for avatars that have not been built yet (The eXcelsior Class),
+       and one whose every member is still an undiscovered Trace Protocol. Each heading is
+       paired with the grid immediately after it -- see #avatar-menu in index.html. */
+    function refreshEmptyAvatarGroups() {
+        document.querySelectorAll('#avatar-menu .avatar-group-label').forEach((heading) => {
+            const grid = heading.nextElementSibling;
+            const filled = !!grid && !!grid.querySelector('.avatar-pill:not(.hidden)');
+            heading.classList.toggle('hidden', !filled);
+            if (grid) grid.classList.toggle('hidden', !filled);
+        });
+    }
+
     // A pick already sitting in currentAvatar -- restored from localStorage on load -- is
     // discovered by definition, whether that's because its trigger fired in an earlier
     // session (before this browser's unlock flags existed) or it was chosen back when these
@@ -470,6 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // button from vanishing out from under an avatar that is still the active one.
     if (TRACE_PROTOCOL_AVATAR_IDS.includes(currentAvatar)) Aether1AvatarUnlocks.unlock(currentAvatar);
     refreshTraceProtocolVisibility();
+    refreshEmptyAvatarGroups();
 
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what

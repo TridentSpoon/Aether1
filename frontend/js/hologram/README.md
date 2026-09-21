@@ -102,7 +102,9 @@ HologramAvatar.registerAvatar({
     // Optional, and unrelated to build()'s own `group` below -- this one is a family
     // name for the picker to cluster related avatars under, e.g. 'The Umbrals' for the
     // A.R.X. line (see index.html's avatar-menu and js/avatar-lab.js's BUILT_IN, which
-    // group the same way). Leave it out for an avatar that stands on its own.
+    // group the same way). The families are 'Singular Ascended Class', 'Trace Protocols',
+    // 'The Umbrals' and 'The eXcelsior Class' -- spell one exactly to join it. Leave it
+    // out for an avatar that stands on its own.
     group: 'My family',
 
     // Runs once. Return an object with a `group`; anything else you put on it comes
