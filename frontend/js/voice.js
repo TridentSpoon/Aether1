@@ -66,7 +66,7 @@ class VoiceAudioEngine {
         try {
             while (this.ttsQueue.length) {
                 const url = this.ttsQueue.shift();
-                await this.playTTSAudio(url);
+                await this.playClip(url);
                 VoiceAudioEngine.releaseClip(url);
             }
         } finally {
@@ -233,7 +233,23 @@ class VoiceAudioEngine {
      * rejects) with `{ played, error, signalDetected }` -- `signalDetected` is `null` when
      * there is no analyser to ask (Web Audio unsupported).
      */
+    /**
+     * Plays one clip on its own account -- a Replay Voice button, the voice test, a forged
+     * avatar's greeting. It supersedes whatever speech is in flight rather than joining it:
+     * dropping the queue is the point.
+     *
+     * Cutting only the *current* clip would leave the drain loop alive. Settling its await
+     * hands it its turn back, so it starts the next queued sentence immediately -- over the
+     * top of the clip that just pre-empted it. Two voices, from one page, with no second
+     * window involved.
+     */
     async playTTSAudio(audioUrl, opts = {}) {
+        this.stopSpeech();
+        return this.playClip(audioUrl, opts);
+    }
+
+    /** Plays one clip, pre-empting the current one but leaving the queue alone. */
+    async playClip(audioUrl, opts = {}) {
         const audible = opts.audible !== false;
 
         this.cutCurrentClip();
@@ -281,9 +297,9 @@ class VoiceAudioEngine {
                     // Only thrown when this element already has a source node -- a fresh
                     // Audio is created per clip above, so this is unreachable in practice.
                     // Note what it does *not* catch: a cross-origin clip does not throw
-                    // here, it silently mutes the node, which is what the crossOrigin
-                    // assignment above exists to prevent. Leaving the analyser unattached
-                    // costs the frequency readout, never the audio.
+                    // here, it silently mutes the node, which is why every clip reaching
+                    // this function is same-origin (see the note above). Leaving the
+                    // analyser unattached costs the frequency readout, never the audio.
                 }
             }
 

@@ -2005,7 +2005,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // made it into the queue so the code below can reset state itself when nothing did.
         let audioQueued = false;
 
-        const speakChunk = async (chunk) => {
+        const synthesizeChunk = async (chunk) => {
             // Trace lines are the machine narrating its own plumbing -- `\u2699 vault notes
             // loaded: INDEX.md, profile.md, machine.md`. They belong on screen and never in
             // the ear: the Rust sanitizer keeps the *contents* of inline code (so speech
@@ -2023,6 +2023,19 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (e) {
                 console.warn('sentence TTS failed', e);
             }
+        };
+
+        // Sentences are synthesized one after another, not all at once. The queue plays
+        // strictly in the order things were pushed onto it, so whichever synthesis finishes
+        // first is the sentence that gets spoken first -- and a four-word sentence comes
+        // back from Piper well before the long one in front of it. Two sentences was enough
+        // to hear the reply out of order; a paragraph of short ones made it unintelligible.
+        // Chaining costs nothing in practice: playback of sentence one covers the synthesis
+        // of sentence two.
+        let speechChain = Promise.resolve();
+        const speakChunk = (chunk) => {
+            speechChain = speechChain.then(() => synthesizeChunk(chunk));
+            return speechChain;
         };
 
         const onDelta = (delta) => {
@@ -2944,9 +2957,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             renderVoiceAttempts(report.attempts);
             if (report.ok && url) {
-                // Played through the same queue everything else uses, so a test that is
-                // audible here is proof the reply path is audible too -- a separate
-                // player would only prove that a separate player works.
+                // Played through the same engine and the same Web Audio graph a reply
+                // goes through, so a test that is audible here is proof the reply path is
+                // audible too -- a separate player would only prove that a separate player
+                // works. It supersedes any reply still being spoken rather than queueing
+                // behind it, which is what you want from a button marked "test".
                 await voiceEngine.playTTSAudio(url);
                 setVoiceStatus(`It spoke, using ${report.engine}. If you heard nothing, the problem is this computer's sound rather than Aether1 -- check the volume and which output device is selected.`, 'good');
             } else {
