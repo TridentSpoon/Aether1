@@ -282,6 +282,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (avatarName === 'arx-lkemi') avatarStructureLabel.textContent = 'CUT-CORNER TRIANGLE PANEL';
         else if (avatarName === 'alt' || avatarName === 'cunningham' || avatarName === 'a1ter_nul') avatarStructureLabel.textContent = 'CHROMATIC-GLITCH GHOST BUST';
         else if (avatarName === 'a1') avatarStructureLabel.textContent = 'MONOGRAM WORDMARK';
+        else if (avatarName === 'enxephalon') avatarStructureLabel.textContent = 'SYNAPTIC MIND LATTICE';
         // A registered avatar names itself, rather than borrowing hAlcy's label from
         // the fallback below -- see js/hologram/README.md.
         else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {

@@ -27,9 +27,9 @@
  *   question), unlocking permanently into the picker the first time that happens -- see
  *   js/app.js's EASTER_EGG_RULES, checkEasterEggTriggers and flashEasterEgg.
  * - "The Umbrals": A.R.X.LIMES (2) and A.R.X.LOGOS (5), the A.R.X. name in general.
- * - "The eXcelsior Class": no members yet. The family exists in the pickers so its avatars
- *   have somewhere to go when they are built; index.html's avatar-menu keeps the heading
- *   off screen until one of them fills it.
+ * - "The eXcelsior Class": the plugin enXephalon. index.html's avatar-menu keeps a family
+ *   heading off screen while its grid is empty, which is how this one waited for its first
+ *   avatar.
  *
  * This file defines the class shell (construction, lifecycle, avatar/theme selection).
  * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,

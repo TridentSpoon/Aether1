@@ -23,10 +23,10 @@
         // group: 'The Umbrals' on its own registerAvatar def if it's built as a plugin.
         { id: 'arx-limes', label: 'A.R.X.LIMES', group: 'The Umbrals' },
         { id: 'arx-logos', label: 'A.R.X.LOGOS', group: 'The Umbrals' },
-        // The eXcelsior Class has no members yet. Nothing is listed for it here on purpose:
-        // fillAvatarPicker builds an <optgroup> from whatever avatars carry a group, so the
-        // family appears in the picker the moment the first one does -- here with
-        // group: 'The eXcelsior Class', or on its own registerAvatar def if it's a plugin.
+        // The eXcelsior Class is nowhere in this list on purpose: enXephalon is a plugin,
+        // so its half of the group lives on its own registerAvatar def (group: 'The
+        // eXcelsior Class' in avatar-enxephalon.js). fillAvatarPicker builds the
+        // <optgroup> from whatever carries the name, hand-built entry or plugin alike.
     ];
 
     const $ = (id) => document.getElementById(id);
