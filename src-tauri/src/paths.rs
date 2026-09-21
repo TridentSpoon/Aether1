@@ -53,6 +53,57 @@ pub fn expand_home(path: &str) -> PathBuf {
     }
 }
 
+/// The Python environment Aether1 calls its own, which is where the wizard tells people to
+/// put `faster-whisper` and, on Linux, `piper-tts`.
+///
+/// **It exists because a bare `pip install` is no longer a thing an operator can be told to
+/// run.** Arch, Debian 12+, Ubuntu 23.04+, Fedora and Homebrew all mark their system Python
+/// as externally managed (PEP 668), so `pip install faster-whisper` stops with
+/// `error: externally-managed-environment` and a paragraph about virtual environments. The
+/// override, `--break-system-packages`, does what it says and is never worth suggesting to
+/// somebody who only wanted their companion to hear them.
+///
+/// A virtual environment is what the error message itself recommends, and putting it here
+/// rather than somewhere the operator has to remember means two things: nothing is added to
+/// PATH, and this code can find what was installed into it without being told where. It is
+/// still the operator who creates it -- the wizard shows the command and says what it is
+/// for. Aether1 does not install runtime dependencies behind anyone's back.
+pub fn managed_python_env() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Aether1").join("pyenv"))
+    } else {
+        home_dir().map(|home| {
+            home.join(".local")
+                .join("share")
+                .join("aether1")
+                .join("pyenv")
+        })
+    }
+}
+
+/// Where a venv keeps its executables: `Scripts` on Windows, `bin` everywhere else.
+pub fn managed_python_bin_dir() -> Option<PathBuf> {
+    let sub = if cfg!(target_os = "windows") {
+        "Scripts"
+    } else {
+        "bin"
+    };
+    managed_python_env().map(|env| env.join(sub))
+}
+
+/// The interpreter inside that environment, if it has been created. None when it has not,
+/// which is the normal state and not an error -- callers fall back to the system Python.
+pub fn managed_python() -> Option<PathBuf> {
+    let name = if cfg!(target_os = "windows") {
+        "python.exe"
+    } else {
+        "python"
+    };
+    managed_python_bin_dir()
+        .map(|bin| bin.join(name))
+        .filter(|python| python.is_file())
+}
+
 /// Finds one of `names` as an executable: first on PATH (`which`), then directly inside
 /// this platform's offline-installer bin directory (`%LOCALAPPDATA%\Aether1\bin` on
 /// Windows, `~/.local/bin` on Linux/macOS -- exactly where aether1.iss / setup.sh's
@@ -71,19 +122,29 @@ pub fn find_installed_binary(names: &[&str]) -> Option<PathBuf> {
             return Some(found);
         }
     }
-    let bin_dir = if cfg!(target_os = "windows") {
-        std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Aether1").join("bin"))
-    } else {
-        home_dir().map(|home| home.join(".local").join("bin"))
-    }?;
     let exe_suffix = if cfg!(target_os = "windows") {
         ".exe"
     } else {
         ""
     };
-    names
-        .iter()
-        .map(|name| bin_dir.join(format!("{name}{exe_suffix}")))
+    let installer_bin = if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Aether1").join("bin"))
+    } else {
+        home_dir().map(|home| home.join(".local").join("bin"))
+    };
+    // PATH first, then the installer's directory, then Aether1's own Python environment --
+    // a `pip install piper-tts` into that venv leaves `piper` in its bin directory and
+    // nowhere else, which a PATH lookup can never see. Last of the three because a piper
+    // the operator installed through their package manager is the one they chose.
+    [installer_bin, managed_python_bin_dir()]
+        .into_iter()
+        .flatten()
+        .flat_map(|dir| {
+            names
+                .iter()
+                .map(|name| dir.join(format!("{name}{exe_suffix}")))
+                .collect::<Vec<_>>()
+        })
         .find(|candidate| candidate.is_file())
 }
 

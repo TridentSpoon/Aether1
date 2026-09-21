@@ -3602,10 +3602,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const result = await voiceEngine.playTTSAudio(url, { audible });
         if (result && result.signalDetected === false) {
-            showVoiceFailedCard(new Error(
-                'Speech was synthesized, but no audio was actually heard -- the pipeline ' +
-                'downstream of synthesis (the webview’s audio output) produced silence.'
-            ));
+            // Silence here almost always has one cause on Linux, and it is one the backend
+            // can check for directly rather than leave as a description of a symptom: the
+            // webview's GStreamer decoders are missing (see media_playback_step in
+            // voice_setup.rs). Ask, so the card can carry the command that fixes it instead
+            // of a sentence about an audio pipeline nobody can act on.
+            let detail = 'Speech was synthesized, but no audio was actually heard -- the ' +
+                'pipeline downstream of synthesis (the webview’s audio output) produced ' +
+                'silence.';
+            try {
+                const advice = await tauriInvoke('voice_advice_rust');
+                const fix = advice?.speaking?.steps?.find((step) => step.command);
+                if (advice?.speaking?.stage === 'unheard' && fix) {
+                    detail = `${advice.speaking.headline} ${fix.detail}`;
+                }
+            } catch (e) {
+                // Fall through with the generic wording -- a failed probe is not a reason
+                // to say nothing about a failure we have already established.
+            }
+            showVoiceFailedCard(new Error(detail));
         }
     }
 

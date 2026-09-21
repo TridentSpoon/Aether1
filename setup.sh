@@ -49,6 +49,17 @@ fi
 # espeak-ng -- the always-works speech fallback (see llm/tts.rs's Engine::Auto) that needs
 # no separate voice download the way Piper does, so it's the one TTS engine this script can
 # actually guarantee rather than just document.
+#
+# The GStreamer "good" plugins and gst-libav are on this list for a reason that costs hours
+# to find on your own. Every engine can synthesize perfectly and the machine still stays
+# silent, because the last step is the webview playing a file: Tauri's Linux webview is
+# WebKitGTK, and WebKitGTK decodes <audio> through GStreamer. Distributions treat the
+# plugins that do the decoding as *optional* for WebKitGTK -- on Arch, gst-plugins-good
+# and gst-libav are optdepends, so `pacman -S webkit2gtk-4.1` does not pull them in. The
+# WAV that Piper and espeak-ng produce is parsed by wavparse, which lives in
+# gst-plugins-good; the MP3 the online voice returns needs gst-libav. Without them the
+# <audio> element reports no error and plays nothing, which is indistinguishable from
+# "voice doesn't work" and is not visible anywhere in this app's own logs.
 echo "📦 Installing build dependencies ($DISTRO)..."
 DEPS_OK=1
 case "$DISTRO" in
@@ -56,6 +67,7 @@ case "$DISTRO" in
         $SUDO pacman -Sy --needed --noconfirm \
             git base-devel curl wget file openssl \
             webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg xdotool libnotify espeak-ng \
+            gst-plugins-good gst-plugins-bad gst-libav \
             || DEPS_OK=0
         ;;
     fedora|nobara|rhel|centos|bazzite)
@@ -63,6 +75,7 @@ case "$DISTRO" in
             git curl wget file openssl-devel \
             webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel \
             xdotool libnotify espeak-ng \
+            gstreamer1-plugins-good gstreamer1-plugins-bad-free \
             && $SUDO dnf group install -y "c-development" \
             || DEPS_OK=0
         ;;
@@ -71,6 +84,7 @@ case "$DISTRO" in
             git build-essential pkg-config curl wget file libssl-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
             libxdo-dev libnotify-bin espeak-ng \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
             || DEPS_OK=0
         ;;
     opensuse*|suse|sles)
@@ -78,6 +92,7 @@ case "$DISTRO" in
             git curl wget file libopenssl-devel \
             webkit2gtk3-soup2-devel gtk3-devel libappindicator3-devel librsvg-devel \
             xdotool libnotify-tools espeak-ng \
+            gstreamer-plugins-good gstreamer-plugins-bad \
             || DEPS_OK=0
         ;;
     *)
@@ -92,6 +107,8 @@ if [ "$DEPS_OK" -ne 1 ]; then
     echo "  Aether1 needs your distribution's equivalents of:"
     echo "    webkit2gtk 4.1, gtk3, libappindicator-gtk3, librsvg, openssl, xdotool,"
     echo "    a C toolchain (gcc/make/pkg-config), libnotify, and espeak-ng."
+    echo "    Also the GStreamer 'good' plugins and gst-libav -- without them the webview"
+    echo "    plays no sound at all, however well speech synthesis itself works."
     echo "  Install those, then re-run ./setup.sh. Continuing anyway in case they are"
     echo "  already present."
     echo ""
