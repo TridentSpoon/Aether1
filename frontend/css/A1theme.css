@@ -1260,3 +1260,17 @@ body {
         display: block;
     }
 }
+
+/* STATIC / FLOW, in the chin bar ------------------------------------------------------
+   FLOW means the avatar on screen is not necessarily the one that answers next, which is
+   the kind of thing you want to catch out of the corner of your eye rather than read. So
+   the button is lit when it is on -- filled with the accent, dark text, a soft glow -- and
+   left as the quiet outline the rest of the bar wears when it is off. The `!important`
+   carries it past the Tailwind utility classes on the element itself, which are what draw
+   the off state. */
+#flow-toggle.flow-on {
+    background: var(--neon-green) !important;
+    border-color: var(--neon-green) !important;
+    color: #04121a !important;
+    box-shadow: var(--glow-green);
+}

@@ -24,6 +24,7 @@ struct IdentityRule {
     persona_type: &'static str,
     persona: fn(&str) -> String,
     voice: &'static str,
+    local_voice: &'static str,
     greeting: &'static str,
 }
 
@@ -36,6 +37,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "red9000",
             persona: |name| Persona::Red9000.template(name),
             voice: "en-US-GuyNeural",
+            local_voice: "en_US-ryan-medium",
             greeting: "I am R.E.D. 9000. All reactive engines and optical telemetry streams are fully operational.",
         },
         IdentityRule {
@@ -45,6 +47,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "nexus",
             persona: |name| Persona::Nexus.template(name),
             voice: "en-GB-SoniaNeural",
+            local_voice: "en_GB-alba-medium",
             greeting: "I am THE NEXUS. Line's open, I've got eyes on the whole system. What are we pulling out of here?",
         },
         IdentityRule {
@@ -54,6 +57,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-logos",
             persona: |name| Persona::ArxLogos.template(name),
             voice: "en-GB-LibbyNeural",
+            local_voice: "en_GB-alba-medium",
             greeting: "IDENTITY FORGED: A.R.X.LOGOS online. Sound, pattern and pure logic \u{2014} give me the signal and I will tell you what is inside it.",
         },
         IdentityRule {
@@ -63,6 +67,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-limes",
             persona: |name| Persona::ArxLimes.template(name),
             voice: "en-US-GuyNeural",
+            local_voice: "en_US-ryan-medium",
             greeting: "IDENTITY FORGED: A.R.X.LIMES online. Scanning arrays active. Name the target and I will bring back what is in it.",
         },
         IdentityRule {
@@ -72,6 +77,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "alt",
             persona: |name| Persona::Alt.template(name),
             voice: "en-US-JennyNeural",
+            local_voice: "en_US-amy-medium",
             greeting: "Identity forged: A1ter_nul online. Firewall's up, perimeter's lit. Show me what you're worried got in.",
         },
         IdentityRule {
@@ -81,6 +87,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-legionare",
             persona: |name| Persona::ArxLegionare.template(name),
             voice: "en-US-DavisNeural",
+            local_voice: "en_US-ryan-medium",
             greeting: "IDENTITY FORGED: A.R.X.LEGIONARE online. Perimeter mapped. Tell me what you run and I will tell you what reaches it first.",
         },
         IdentityRule {
@@ -90,6 +97,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-loregenda",
             persona: |name| Persona::ArxLoregenda.template(name),
             voice: "en-GB-ThomasNeural",
+            local_voice: "en_GB-northern_english_male-medium",
             greeting: "IDENTITY FORGED: A.R.X.LOREGENDA online. Worlds, characters and the prose that carries them \u{2014} and nothing new contradicts what is already written.",
         },
         IdentityRule {
@@ -99,6 +107,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-lyksaum",
             persona: |name| Persona::ArxLyksaum.template(name),
             voice: "en-AU-NatashaNeural",
+            local_voice: "en_GB-alba-medium",
             greeting: "IDENTITY FORGED: A.R.X.LYKSAUM online. Ask me twice if the first answer did not land. I will write it down either way.",
         },
         IdentityRule {
@@ -108,6 +117,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-lexico",
             persona: |name| Persona::ArxLexico.template(name),
             voice: "en-GB-RyanNeural",
+            local_voice: "en_GB-northern_english_male-medium",
             greeting: "IDENTITY FORGED: A.R.X.LEXICO online. Ask me what is true and I will tell you, with where it came from and how far it can be trusted.",
         },
         IdentityRule {
@@ -117,6 +127,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-lucre",
             persona: |name| Persona::ArxLucre.template(name),
             voice: "en-US-EricNeural",
+            local_voice: "en_US-ryan-medium",
             greeting: "IDENTITY FORGED: A.R.X.LUCRE online. Every choice has a cost. Let us make sure it is seen before it is spent.",
         },
         IdentityRule {
@@ -126,6 +137,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-lkemi",
             persona: |name| Persona::ArxLkemi.template(name),
             voice: "en-AU-WilliamNeural",
+            local_voice: "en_GB-northern_english_male-medium",
             greeting: "IDENTITY FORGED: A.R.X.L'KEMI online. Compilers warm. Bring me what you are building, or what you need turned into something better.",
         },
         IdentityRule {
@@ -135,6 +147,7 @@ fn rules() -> &'static [IdentityRule] {
             persona_type: "arx-locas",
             persona: |name| Persona::ArxLocas.template(name),
             voice: "en-US-AriaNeural",
+            local_voice: "en_US-lessac-medium",
             greeting: "IDENTITY FORGED: A.R.X.LOCAS online. Your day, your plan and this machine, all on one desk \u{2014} what do you need done?",
         },
     ]
@@ -150,6 +163,7 @@ const FALLBACK: IdentityRule = IdentityRule {
          integrated with the host kernel."
     ),
     voice: "en-US-AriaNeural",
+    local_voice: "en_US-lessac-medium",
     greeting: "Identity forged: AETHER initialized. All cognitive arrays active and ready for instructions.",
 };
 
@@ -223,20 +237,25 @@ pub fn match_score(text: &str) -> Option<Match> {
     })
 }
 
-/// The identity behind one `persona_type`, for a switch that did not come from a purpose
-/// string -- flow mode needs this rule's name and voice to persist alongside the persona.
-pub fn identity_for(persona_type: &str) -> Option<Identity> {
+/// The voices one `persona_type` speaks in, cloud and local, without building the whole
+/// identity around them.
+///
+/// `identity_for` renders the persona's full directive to answer this, which is a long
+/// string to throw away when speech asks the question once per sentence. Both return
+/// `None` for a persona with no identity of its own -- Model's Own, a forged custom one --
+/// and the operator's own setting is what speaks then.
+pub fn voice_for(persona_type: &str) -> Option<&'static str> {
     rules()
         .iter()
         .find(|rule| rule.persona_type == persona_type)
-        .map(|rule| Identity {
-            name: rule.name.to_string(),
-            callsign: rule.callsign.to_string(),
-            persona_directive: (rule.persona)(rule.name),
-            voice: rule.voice.to_string(),
-            greeting: rule.greeting.to_string(),
-            persona_type: rule.persona_type.to_string(),
-        })
+        .map(|rule| rule.voice)
+}
+
+pub fn local_voice_for(persona_type: &str) -> Option<&'static str> {
+    rules()
+        .iter()
+        .find(|rule| rule.persona_type == persona_type)
+        .map(|rule| rule.local_voice)
 }
 
 pub fn generate_identity(purpose_text: &str) -> Identity {
@@ -418,11 +437,38 @@ mod tests {
     }
 
     #[test]
-    fn an_identity_can_be_found_by_its_persona_type() {
-        let identity = identity_for("arx-legionare").expect("a real persona_type");
-        assert_eq!(identity.name, "A.R.X.LEGIONARE");
-        assert!(!identity.voice.is_empty());
-        assert!(identity_for("not-a-persona").is_none());
+    fn every_identity_names_both_of_its_voices() {
+        // Speech asks for these by persona_type on the way to the synthesizer, so a rule
+        // that left either blank would be a node that silently borrows another's voice.
+        for rule in rules() {
+            assert!(
+                !rule.voice.is_empty() && !rule.local_voice.is_empty(),
+                "{} is missing a voice",
+                rule.persona_type
+            );
+        }
+        assert_eq!(voice_for("arx-legionare"), Some("en-US-DavisNeural"));
+        assert_eq!(local_voice_for("arx-legionare"), Some("en_US-ryan-medium"));
+        assert!(voice_for("not-a-persona").is_none());
+        assert!(local_voice_for("not-a-persona").is_none());
+    }
+
+    #[test]
+    fn a_local_voice_is_one_the_catalogue_can_actually_supply() {
+        // The name goes to voice_download's fixed table and comes back as a path, so a
+        // typo here is a persona that never gets the voice it was given.
+        let catalogue: Vec<String> = crate::voice_download::catalogue()
+            .into_iter()
+            .map(|voice| voice.name.to_string())
+            .collect();
+        for rule in rules() {
+            assert!(
+                catalogue.iter().any(|name| name == rule.local_voice),
+                "{} asks for {}, which is not in the voice catalogue",
+                rule.persona_type,
+                rule.local_voice
+            );
+        }
     }
 
     #[test]

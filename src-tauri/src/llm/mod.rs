@@ -20,6 +20,9 @@ use std::time::Instant;
 
 pub use db::{ActionRecord, ActionStatus, MemoryDb, Message, ModelBenchmark, SessionSummary};
 pub use genesis::Identity;
+// The voices behind a persona, re-exported because speech resolves them per persona at the
+// moment it speaks -- see commands::synthesize_speech.
+pub use genesis::{local_voice_for as persona_local_voice, voice_for as persona_voice};
 use persona::Provider;
 // Re-exported because commands.rs serves the persona catalogue to the HUD: the Settings list
 // is built from the enum rather than written out again in the markup.
