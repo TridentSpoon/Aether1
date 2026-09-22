@@ -48,6 +48,10 @@ USAGE:
     aether1 revoke <ID>            Take one device's access away, leaving the rest alone
     aether1 revoke all             Take every device's access away, keeping the phrase
     aether1 crashes                List the crashes AETHER1 has seen on this machine
+    aether1 doctor                 Check AETHER1 itself -- every part of it, and what is
+                                   wrong with the ones that are not working
+    aether1 doctor --fix           Also offer the repairs it knows how to make, asking
+                                   before each one
     aether1 models                 Show which local model each speciality runs on
     aether1 models <NAME> <MODEL>  Point one speciality at a model (`clear` to unset)
     aether1 flow                   Show whether the avatar follows the question (STATIC or
@@ -69,6 +73,14 @@ OPTIONS:
     prompt --session <ID>          Conversation to continue (default: \"default\",
                                    the same history the HUD shows)
     status --json                  Emit the raw telemetry JSON instead of a report
+    doctor --fix                   Offer each repair in turn. Nothing is changed without a
+                                   typed y, and a repair that needs root is never run by
+                                   AETHER1 at all -- it is handed to you as the command
+    doctor --json                  The recorded observation and the verdicts, as JSON
+    doctor --report [FILE]         Write the observation and the verdicts where you can read
+                                   them and paste them into a bug report. Sends nothing
+    doctor --replay <FILE>         Judge an observation recorded on another machine, which is
+                                   how a fault seen once becomes a test
     say --voice <NAME>             Override the configured voice
     say --no-play                  Synthesize only; print the audio file path
     --serve --lan                  The pairing phrase is shown once, the first time you run
@@ -109,6 +121,21 @@ pub enum Invocation {
     },
     /// `crashes`: what has died on this machine recently, asked for rather than announced.
     Crashes,
+    /// `doctor`: whether AETHER1 itself is working, and the repairs it is allowed to make to
+    /// the machine underneath it. A verb of its own rather than another `status` flag,
+    /// because `status` is about the computer and this is about the app -- conflating them is
+    /// what left the app with no way to say it was broken. See doctor.rs.
+    Doctor {
+        /// Offer the repairs. Each one is still asked about individually at the moment of
+        /// acting; this flag only decides whether they are offered at all.
+        fix: bool,
+        json: bool,
+        /// Where to write the pasteable report. `Some(None)` is --report with no path, which
+        /// picks one under the temp directory and prints it.
+        report: Option<Option<String>>,
+        /// An observation recorded elsewhere, judged instead of this machine.
+        replay: Option<String>,
+    },
     /// `code`: the coding wizard, printed. `code conventions` prints the house rules
     /// instead, so they can be redirected into a project's AGENTS.md in one line rather
     /// than copied out of a panel.
@@ -229,6 +256,59 @@ fn parse_discover(rest: Vec<String>) -> Result<Invocation, String> {
     }
 }
 
+/// `doctor`, and the four ways of asking it. Hand-rolled like the rest: `--replay` takes a
+/// path, `--report` takes an optional one, and the two flags that take nothing are order-free.
+fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
+    let mut fix = false;
+    let mut json = false;
+    let mut report: Option<Option<String>> = None;
+    let mut replay: Option<String> = None;
+    let mut iter = rest.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--fix" => fix = true,
+            "--json" => json = true,
+            "--replay" => match iter.next() {
+                Some(path) => replay = Some(path.clone()),
+                None => return Err("--replay needs the path of a recorded observation".into()),
+            },
+            // The path is optional, and the next argument is only the path when it is not
+            // another flag -- `doctor --report --fix` must not write to a file called --fix.
+            "--report" => {
+                let mut peeked = iter.clone();
+                match peeked.next() {
+                    Some(path) if !path.starts_with("--") => {
+                        report = Some(Some(path.clone()));
+                        iter.next();
+                    }
+                    _ => report = Some(None),
+                }
+            }
+            other => {
+                return Err(format!(
+                    "doctor does not take {other:?} -- it takes --fix, --json, --report [FILE] \
+                     or --replay <FILE>"
+                ))
+            }
+        }
+    }
+    if replay.is_some() && fix {
+        // The observation came from another machine. Repairing this one from it would be
+        // acting on a fault nobody here has.
+        return Err(
+            "--replay judges an observation from somewhere else, so there is nothing here to \
+             fix -- run `aether1 doctor --fix` on the machine that recorded it"
+                .into(),
+        );
+    }
+    Ok(Invocation::Doctor {
+        fix,
+        json,
+        report,
+        replay,
+    })
+}
+
 fn parse_announce(rest: Vec<String>) -> Result<Invocation, String> {
     let (name, rest) = take_option(&rest, "--name")?;
     let (port, rest) = take_option(&rest, "--port")?;
@@ -283,6 +363,7 @@ pub fn parse(argv: &[String]) -> Invocation {
                 None => Ok(Invocation::Status { json, events }),
             })
         }
+        "doctor" => parse_doctor(rest),
         "crashes" => free_text(rest).and_then(|extra| match extra {
             Some(extra) => Err(format!("crashes takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Crashes),
@@ -704,6 +785,213 @@ fn run_models(persona: Option<String>, model: Option<String>) -> Result<String, 
     Ok(out)
 }
 
+/// `aether1 doctor`: the report, and -- with --fix -- the repairs, one asked-for question at a
+/// time.
+///
+/// The asking happens here rather than in doctor.rs on purpose. `doctor::apply` is the act,
+/// and the operator's y is what calls it; keeping the prompt in the interface means there is
+/// no code path anywhere that can repair something without a person having answered. On a
+/// pipe there is nobody to answer, so nothing is changed and the report says what it would
+/// have offered.
+fn run_doctor(
+    fix: bool,
+    json: bool,
+    report: Option<Option<String>>,
+    replay: Option<String>,
+) -> Result<String, String> {
+    use crate::doctor;
+
+    // A recorded observation from another machine: judged, never repaired. This is the whole
+    // reason the observation is a data structure -- a fault seen once on somebody's desktop
+    // can be read here, and in a test, on a machine that never had it.
+    if let Some(path) = replay {
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| format!("could not read {path}: {e}"))?;
+        // The file may be a whole --report bundle, which is prose with the observation at the
+        // end; take the JSON out of it rather than making the operator edit the file.
+        let observation = match raw.find('{') {
+            Some(at) => &raw[at..],
+            None => raw.as_str(),
+        };
+        let health = doctor::replay(observation)?;
+        return Ok(format!(
+            "Judging an observation recorded elsewhere -- nothing here was looked at.\n\n{}",
+            render_health(&health)
+        ));
+    }
+
+    let engine = crate::build_llm_engine();
+    // Facts::default(): the window, the tray registration and the watcher's poll are facts
+    // about the running desktop process, and this is not it. The report says so per check
+    // rather than guessing.
+    let (observation, health) = doctor::report(&engine, &doctor::Facts::default());
+
+    if json {
+        let bundle = serde_json::json!({ "observation": observation, "health": health });
+        return serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string());
+    }
+
+    if let Some(target) = report {
+        let text = doctor::bug_report(&observation, &health);
+        let path = match target {
+            Some(path) => std::path::PathBuf::from(path),
+            None => std::env::temp_dir().join("aether1-doctor-report.txt"),
+        };
+        std::fs::write(&path, &text)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        return Ok(format!(
+            "Written to {}.\n\nIt goes nowhere on its own. Read it before you send it \
+             anywhere -- it names paths, the model you use and the programs installed here -- \
+             and `aether1 doctor --replay` on that file judges it again anywhere.",
+            path.display()
+        ));
+    }
+
+    let mut out = render_health(&health);
+    if fix {
+        out.push_str(&run_doctor_fixes(&engine, &health));
+    } else if health.checks.iter().any(|check| check.repair.is_some()) {
+        out.push_str(
+            "\nSome of this AETHER1 can repair itself. Run `aether1 doctor --fix` to be asked \
+             about each one.\n",
+        );
+    }
+    Ok(out)
+}
+
+/// The report as an operator reads it: the broken things first, each with what is true and
+/// what to do, then the ones that are fine as one line each.
+fn render_health(health: &crate::doctor::Health) -> String {
+    use crate::doctor::Verdict;
+
+    let mut out = format!("AETHER1 -- is it working?\n\n{}\n", health.headline);
+
+    for check in health.checks.iter().filter(|c| c.verdict != Verdict::Ok) {
+        out.push_str(&format!(
+            "\n[{}] {}\n     {}\n",
+            check.verdict.mark(),
+            check.title,
+            check.detail
+        ));
+        for step in &check.steps {
+            out.push_str(&format!(
+                "\n     -> {}\n        {}\n",
+                step.title, step.detail
+            ));
+            if let Some(command) = &step.command {
+                out.push_str(&indented(command));
+            }
+            if let Some(url) = &step.url {
+                out.push_str(&format!("\n       {url}\n"));
+            }
+        }
+    }
+
+    let working: Vec<&str> = health
+        .checks
+        .iter()
+        .filter(|c| c.verdict == Verdict::Ok)
+        .map(|c| c.title)
+        .collect();
+    if !working.is_empty() {
+        out.push_str(&format!("\nWorking: {}\n", working.join(", ")));
+    }
+
+    for line in &health.repeated {
+        out.push_str(&format!("\n[!!] {line}\n"));
+    }
+
+    out
+}
+
+/// The repairs, offered one at a time. Returns what happened, to be appended to the report.
+fn run_doctor_fixes(engine: &crate::llm::LlmEngine, health: &crate::doctor::Health) -> String {
+    use crate::doctor::RepairKind;
+
+    let repairable: Vec<_> = health
+        .checks
+        .iter()
+        .filter_map(|check| check.repair.clone().map(|repair| (check.id, repair)))
+        .collect();
+    if repairable.is_empty() {
+        return "\nThere is nothing here AETHER1 knows how to repair by itself.\n".to_string();
+    }
+
+    let mut out = String::from("\nREPAIRS\n");
+    for (check, repair) in repairable {
+        out.push_str(&format!("\n  {}\n     {}\n", repair.title, repair.detail));
+        match &repair.kind {
+            // Never run from here, whatever the operator answers: the command needs root, and
+            // AETHER1 holding a password is a bigger change to this program than any package.
+            RepairKind::HandOver { command } => {
+                out.push_str(&format!("\n     Run it yourself:\n{}", indented(command)));
+                continue;
+            }
+            RepairKind::InApp => {
+                out.push_str(
+                    "\n     This one only the running app can do -- open AETHER1 and press it \
+                     in Settings -> Diagnostics.\n",
+                );
+                continue;
+            }
+            RepairKind::Run => {}
+        }
+
+        // Nothing is changed on a pipe. A script that ran `aether1 doctor --fix` in a cron job
+        // would otherwise be exactly the silent auto-repair this is not.
+        if !std::io::stdin().is_terminal() {
+            out.push_str(
+                "\n     Not changed: there is no terminal here to ask. Run this from a shell \
+                 and answer y.\n",
+            );
+            continue;
+        }
+
+        match ask_yes("     Do this now? [y/N] ") {
+            Ok(false) => {
+                out.push_str("\n     Left alone.\n");
+                continue;
+            }
+            Err(error) => {
+                out.push_str(&format!("\n     Not changed: {error}\n"));
+                continue;
+            }
+            Ok(true) => {}
+        }
+
+        match crate::doctor::apply(engine, check, repair.id) {
+            Ok(outcome) => {
+                out.push_str(&format!("\n     {}\n", outcome.message));
+                // The re-check is what makes this a repair rather than a hope, so it is
+                // reported whether it is good news or not.
+                if let (Some(verdict), Some(detail)) = (outcome.rechecked, outcome.recheck_detail) {
+                    out.push_str(&format!("     Afterwards: [{}] {detail}\n", verdict.mark()));
+                }
+            }
+            Err(error) => out.push_str(&format!("\n     {error}\n")),
+        }
+    }
+    out
+}
+
+/// One yes-or-no question on the terminal. Anything but a y is a no, because the expensive
+/// mistake here is acting on a keypress somebody did not mean.
+fn ask_yes(question: &str) -> Result<bool, String> {
+    use std::io::Write;
+    print!("{question}");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("could not ask: {e}"))?;
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| format!("could not read your answer: {e}"))?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 fn run_crashes() -> Result<String, String> {
     use crate::watchers::crash::{self, Availability};
 
@@ -1033,6 +1321,12 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Prompt { text, session } => run_prompt(text, session),
         Invocation::Status { json, events } => Ok(run_status(json, events)),
         Invocation::Crashes => run_crashes(),
+        Invocation::Doctor {
+            fix,
+            json,
+            report,
+            replay,
+        } => run_doctor(fix, json, report, replay),
         Invocation::Code { conventions } => Ok(run_code(conventions)),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state } => run_flow(state.as_deref()),
@@ -1073,6 +1367,90 @@ mod tests {
             .map(String::from)
             .collect();
         parse(&argv)
+    }
+
+    fn doctor(args: &[&str]) -> Invocation {
+        let mut argv = vec!["doctor"];
+        argv.extend_from_slice(args);
+        parse_args(&argv)
+    }
+
+    #[test]
+    fn doctor_takes_its_flags_in_any_order() {
+        assert_eq!(
+            doctor(&[]),
+            Invocation::Doctor {
+                fix: false,
+                json: false,
+                report: None,
+                replay: None,
+            }
+        );
+        assert_eq!(
+            doctor(&["--json", "--fix"]),
+            Invocation::Doctor {
+                fix: true,
+                json: true,
+                report: None,
+                replay: None,
+            }
+        );
+    }
+
+    #[test]
+    fn doctors_report_path_is_optional_and_never_eats_a_flag() {
+        assert_eq!(
+            doctor(&["--report"]),
+            Invocation::Doctor {
+                fix: false,
+                json: false,
+                report: Some(None),
+                replay: None,
+            }
+        );
+        assert_eq!(
+            doctor(&["--report", "/tmp/out.txt"]),
+            Invocation::Doctor {
+                fix: false,
+                json: false,
+                report: Some(Some("/tmp/out.txt".to_string())),
+                replay: None,
+            }
+        );
+        // The flag after --report is a flag, not a filename: writing the report to a file
+        // called "--fix" and silently not fixing anything is the worst of both.
+        assert_eq!(
+            doctor(&["--report", "--fix"]),
+            Invocation::Doctor {
+                fix: true,
+                json: false,
+                report: Some(None),
+                replay: None,
+            }
+        );
+    }
+
+    #[test]
+    fn replaying_someone_elses_observation_cannot_repair_this_machine() {
+        assert!(matches!(
+            doctor(&["--replay", "/tmp/obs.json", "--fix"]),
+            Invocation::Invalid(_)
+        ));
+        assert_eq!(
+            doctor(&["--replay", "/tmp/obs.json"]),
+            Invocation::Doctor {
+                fix: false,
+                json: false,
+                report: None,
+                replay: Some("/tmp/obs.json".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn doctor_says_what_it_takes_rather_than_ignoring_a_typo() {
+        assert!(matches!(doctor(&["--fixx"]), Invocation::Invalid(_)));
+        assert!(matches!(doctor(&["--replay"]), Invocation::Invalid(_)));
     }
 
     #[test]
