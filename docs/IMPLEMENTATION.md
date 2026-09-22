@@ -2962,6 +2962,62 @@ and a model that did not say is not thereby small.
 against a real Ollama. The advice, the catalogue ordering, the tag rule, the size rule and
 the commands' contents are covered by tests.
 
+#### Follow-up: what AETHER CODE may look at
+
+The panel shipped with no capabilities at all, which was the right place to stop for one
+step and the wrong place to stay. A coding assistant that cannot see the file you are asking
+about, or the pull request you are asking about, spends its answers asking you to paste
+things in. So it can look now -- at this machine, at GitHub through `gh`, at a public page
+-- under a permission model written down in `code_perms.rs` as four rules.
+
+**Three grants, each named, each a switch.** `system` (files, folders, what the hardware
+is), `github` (the GitHub CLI) and `internet` (fetch a public page). Separate rows in
+Settings under "What it may do", separate lines in `aether1 code perms`, and separate
+switches: these are three different questions and answering them together would mean the
+operator who wanted one had to accept all three. They are also separate from
+`tools_enabled`, which is the *companion's* permission and always was a different decision.
+All three default to on, because they were asked for, and a permission you have to go and
+switch on after asking for it is a worse answer than the one that was asked for.
+
+**Reads run; writes do not exist.** Not "writes are refused" -- there is no write tool in
+`code_tools.rs` to gate. `read_file` and `list_dir` are the companion's own, so `fs_guard`
+is one list of denied paths rather than two, and `machine` reports the hardware. `gh` is
+checked against a whitelist of subcommands that only look, on the same rule the command
+allowlist uses one level up: **no argument to this pair can change anything.** That excludes
+more than it looks like it should. `repo clone`, `run download` and `release download` write
+files. `pr checkout` moves the working tree. `browse` opens a browser on the operator's
+desktop. `auth token` prints a credential into a conversation that is stored in a database,
+and is the one read refused for what it returns rather than for what it does.
+
+`gh api` is the hole in every read/write split done by subcommand, because its verb is a
+flag: `gh api /repos/x/y` and `gh api -X DELETE /repos/x/y` are the same subcommand. It is
+judged by its method instead, and by the flags that imply a body -- `-f`, `-F`, `--field`,
+`--input` -- since those send a POST without ever naming one.
+
+**The terminal is still the only thing that changes this machine.** A refused write is not a
+dead end: the refusal tells the model to put the command in a fenced `bash` block, which is
+what `commands_in` turns into a button that types into the operator's terminal. So the
+consent model did not change and did not need to -- the Return key is still the whole of it,
+and `check_terminal_isolation.sh` passes unchanged, because nothing in `code_perms.rs` or
+`code_tools.rs` names the terminal either.
+
+**Fail closed, everywhere.** A `gh` pair this table has not heard of is refused rather than
+guessed at; `gh` grows verbs faster than the table does. A flag standing where the verb
+should be is refused rather than skipped, because `--repo x list` and `--draft list` put
+different words in the same position. A URL is refused unless it is http or https *and*
+resolves to something that is not this machine or this LAN -- a grant to read the internet
+is not a grant to read `http://127.0.0.1:11434`, and the address is checked again after a
+redirect. Local-only mode outranks the internet grant outright.
+
+**Why the panel has its own fence filter.** The companion's `protocol::FenceFilter` swallows
+every fenced block while it streams, which is right for an avatar answering in prose and
+exactly wrong here: in this panel a `bash` block is the button and a `rust` block is the
+answer. `code_chat`'s filter reads the tag on the opening fence and swallows only `tool`.
+
+**Not verifiable in a container:** `gh` actually answering (the classifier and the refusals
+are covered by tests, the spawn is not), a real coding model choosing to call a tool, and
+the Settings rows as drawn.
+
 ---
 
 ## Where this stands

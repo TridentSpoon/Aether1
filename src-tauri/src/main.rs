@@ -20,7 +20,9 @@
 mod background_services;
 mod cli;
 mod code_chat;
+mod code_perms;
 mod code_setup;
+mod code_tools;
 mod commands;
 mod discovery;
 mod doctor;

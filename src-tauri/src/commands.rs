@@ -508,6 +508,12 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "hotkey_toggle": crate::hotkey::DEFAULT_TOGGLE,
         "desktop_sprite_enabled": false,
         "local_only": false,
+        // AETHER CODE's three read permissions, granted unless switched off. See
+        // code_perms.rs for why the default is on and why there is no write permission
+        // listed beside them.
+        "code_perm_system": true,
+        "code_perm_github": true,
+        "code_perm_internet": true,
         // Startup & Performance: launch AETHER1 at login, auto-start Ollama when AETHER1
         // starts, whether the voice self-test speaks its confirmation phrase or checks
         // silently, and whether Game Mode is currently switched on (persisted so it

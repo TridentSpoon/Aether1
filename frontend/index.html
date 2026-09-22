@@ -1453,6 +1453,34 @@
                             read &mdash; passwords and keys stay off limits regardless.
                         </p>
                     </div>
+
+                    <!-- The coding panel answers a different question from the avatar and
+                         gets its own switches for the same reason: "may my companion read
+                         my files" and "may the coding model call gh" are not one decision.
+                         See code_perms.rs. -->
+                    <div class="space-y-1 pt-3 border-t border-cyan-500/20">
+                        <label class="text-xs font-mono text-cyan-300 block">AETHER CODE MAY LOOK AT</label>
+                        <div class="flex items-center gap-2">
+                            <input id="setting-code-perm-system" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-code-perm-system" class="text-xs font-mono text-slate-300">This machine &mdash; your files and what the hardware is</label>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input id="setting-code-perm-github" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-code-perm-github" class="text-xs font-mono text-slate-300">GitHub, through the <span class="font-mono">gh</span> command</label>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input id="setting-code-perm-internet" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                            <label for="setting-code-perm-internet" class="text-xs font-mono text-slate-300">The internet, for documentation it needs</label>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
+                            All three only read. The coding model cannot edit a file, commit, merge or
+                            install anything &mdash; <span class="font-mono">gh pr view</span> runs,
+                            <span class="font-mono">gh pr merge</span> is refused. When the next step
+                            would change something it writes the command out instead, and that command
+                            becomes a button that types it into your terminal. Nothing enters your
+                            terminal but your own Return key.
+                        </p>
+                    </div>
                 </div>
             </details>
 

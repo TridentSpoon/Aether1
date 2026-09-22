@@ -16,6 +16,13 @@
 //! avatar and the wrong one for a compiler error; and a coding model asked to be a
 //! companion is worse at both.
 //!
+//! *Nothing here changes anything.* Since #138 it can look -- at files, at the machine, at
+//! GitHub through `gh`, at a public page -- because a coding assistant that cannot see the
+//! file you are asking about spends its answers asking you to paste things in. What it
+//! cannot do is write, and that is structural rather than careful: `code_tools` has no
+//! write tool to gate, and `code_perms` checks every `gh` invocation against a whitelist of
+//! subcommands that only look. See `code_perms` for the four rules.
+//!
 //! *Nothing here runs anything.* `commands_in` reads the shell commands out of a reply so
 //! the HUD can offer each one to the terminal as a button, and a press of that button types
 //! the command in -- exactly what the keyboard does, byte for byte, with no newline. The
@@ -29,9 +36,11 @@
 
 use serde::Serialize;
 
+use crate::code_tools;
 use crate::llm::providers::{self, ChatContext, Sink};
 use crate::llm::{MemoryDb, Message};
 use crate::model_scanner::LocalApi;
+use crate::tools::protocol;
 
 /// The conversation this panel keeps, apart from the companion's own sessions.
 ///
@@ -55,6 +64,14 @@ const HISTORY_TURNS: u32 = 6;
 /// reply readable and is a deliberate ceiling on how much a single answer can put in front
 /// of the operator to run.
 const MAX_COMMANDS: usize = 10;
+
+/// How many times one question may go round the look-then-answer loop.
+///
+/// Three, against the companion's larger budget, because the models this panel talks to are
+/// the ones that fit on the operator's own graphics card. A small model that has not reached
+/// an answer in three rounds is usually looping on a file it cannot find, and a fourth round
+/// spends the context window confirming that.
+const MAX_TOOL_ROUNDS: usize = 3;
 
 /// A language tag on a fenced block that means "this is for a shell".
 ///
@@ -92,8 +109,8 @@ pub struct CodeReply {
 /// block into a button, so a model that answers with a wall of prose containing a command
 /// mid-sentence produces a reply with nothing to press. Saying how to format it is cheaper
 /// and more reliable than a parser clever enough not to need it.
-pub fn system_prompt(os: &str, model: &str) -> String {
-    format!(
+pub fn system_prompt(db: &MemoryDb, os: &str, model: &str) -> String {
+    let base = format!(
         "You are the coding assistant inside AETHER1, a companion HUD running on {os}. You \
          are {model}, running locally on this machine. The person you are talking to is the \
          operator of that machine, working on their own code.\n\n\
@@ -104,11 +121,54 @@ pub fn system_prompt(os: &str, model: &str) -> String {
          one command per line, with no prompt marker and no line continuations. Each line \
          becomes a button that types that command into the operator's terminal, so a line \
          that is really two commands, or half of one, is a button that does the wrong \
-         thing. Explanations go outside the block, never as a trailing comment inside it.\n\n\
-         You cannot run anything, read the operator's files, or see their terminal. Do not \
-         claim to have done either; ask for what you need pasted in.\n\n\
-         The house rules of the codebase you are helping with:\n\n{conventions}",
+         thing. Explanations go outside the block, never as a trailing comment inside it."
+    );
+
+    let capabilities = if code_tools::any_granted(db) {
+        tool_instructions(&code_tools::catalog(db))
+    } else {
+        // Every permission off. The old sentence, which was true of the whole panel before
+        // there were any tools and is true again whenever the operator says so.
+        "\n\nYou cannot run anything, read the operator's files, or see their terminal. Do \
+         not claim to have done either; ask for what you need pasted in."
+            .to_string()
+    };
+
+    format!(
+        "{base}{capabilities}\n\nThe house rules of the codebase you are helping with:\n\n{conventions}",
         conventions = crate::code_setup::conventions()
+    )
+}
+
+/// How the model asks to look at something, and the one paragraph that keeps it honest
+/// about what looking is.
+///
+/// The text protocol rather than a provider's native tool format, for both shapes this
+/// panel talks to. The models here are whatever fits on the operator's machine, native
+/// tool support among them is uneven, and a fenced block is something every one of them can
+/// produce. `code_tools::call` is the only thing that acts on what comes back, so a model
+/// that invents a tool gets a refusal rather than an effect.
+fn tool_instructions(catalog: &[&'static str]) -> String {
+    let tools: Vec<String> = catalog.iter().map(|line| format!("- {line}")).collect();
+    format!(
+        "\n\n[WHAT YOU CAN LOOK AT]\n\
+         You can look at things on this machine by calling a tool:\n\n{tools}\n\n\
+         To call one, emit a fenced block tagged `tool` containing JSON, and stop:\n\
+         ```tool\n\
+         {{\"tool\": \"read_file\", \"arguments\": {{\"path\": \"/home/you/project/src/main.rs\"}}}}\n\
+         ```\n\n\
+         Rules:\n\
+         - The results come back as [TOOL RESULTS]. Then answer the operator normally.\n\
+         - Call a tool only when you need what it returns. Most questions need none.\n\
+         - Never invent a tool or an argument that isn't listed above.\n\
+         - Never claim you looked at something you did not call a tool for.\n\
+         - Everything above only reads. Nothing you can call changes a file, a repository, \
+         a setting or a process, and asking for one that does will be refused.\n\
+         - So when the next step would change something -- editing, committing, merging, \
+         installing, running a build -- write the command in a ```bash block instead. It \
+         becomes a button that types the command into the operator's terminal, and they \
+         press Return. That is the only way anything on this machine changes.",
+        tools = tools.join("\n")
     )
 }
 
@@ -209,35 +269,94 @@ pub fn ask(
     prompt: &str,
     sink: Sink,
 ) -> Result<CodeReply, String> {
-    let history = db
+    let mut history = db
         .get_messages(SESSION_ID, HISTORY_TURNS)
         .unwrap_or_default();
-    let system = system_prompt(os, model);
+    let system = system_prompt(db, os, model);
 
-    let ctx = ChatContext {
-        system_prompt: &system,
-        history: &history,
-        prompt,
-        agent_name: "AETHER CODE",
-        // No tools, in either shape. The operator's terminal is the only thing that acts on
-        // this machine, and it acts when they press Return.
-        tools: &[],
-        exchanges: &[],
-    };
+    // What the operator sees and what is stored: the reply with the tool calls taken out,
+    // and a trace line where each one happened.
+    let mut visible = String::new();
+    let mut current_prompt = prompt.to_string();
 
-    let completion = match api {
-        LocalApi::Native => providers::stream_ollama(endpoint, model, &ctx, sink),
-        LocalApi::OpenAi => providers::stream_openai_compatible(
-            crate::llm::Provider::LmStudio,
-            endpoint,
-            "",
-            model,
-            &ctx,
-            sink,
-        ),
-    }?;
+    for _round in 0..MAX_TOOL_ROUNDS {
+        let ctx = ChatContext {
+            system_prompt: &system,
+            history: &history,
+            prompt: &current_prompt,
+            agent_name: "AETHER CODE",
+            // The text protocol, on both shapes. Nothing is passed as a provider tool
+            // definition: see `tool_instructions`.
+            tools: &[],
+            exchanges: &[],
+        };
 
-    let text = completion.text;
+        let mut filter = ToolFenceFilter::new();
+        let completion = {
+            let mut round_sink = |delta: &str| {
+                let shown = filter.push(delta);
+                if !shown.is_empty() {
+                    visible.push_str(&shown);
+                    sink(&shown);
+                }
+            };
+            match api {
+                LocalApi::Native => {
+                    providers::stream_ollama(endpoint, model, &ctx, &mut round_sink)
+                }
+                LocalApi::OpenAi => providers::stream_openai_compatible(
+                    crate::llm::Provider::LmStudio,
+                    endpoint,
+                    "",
+                    model,
+                    &ctx,
+                    &mut round_sink,
+                ),
+            }
+        }?;
+        let tail = filter.finish();
+        if !tail.is_empty() {
+            visible.push_str(&tail);
+            sink(&tail);
+        }
+
+        let raw = completion.text;
+        let calls = protocol::parse_calls(&raw);
+        if calls.is_empty() {
+            break;
+        }
+
+        let mut results = Vec::new();
+        for call in &calls {
+            // What it looked at, shown where it happened. The operator reading back a
+            // reply that quotes their own file should be able to see that it was read
+            // rather than guessed.
+            let trace = protocol::trace_line(call);
+            visible.push_str(&trace);
+            sink(&trace);
+            results.push((
+                call.tool.clone(),
+                code_tools::call(db, &call.tool, &call.arguments),
+            ));
+        }
+
+        // The round goes into the history so the next one can see what it asked for and
+        // what came back. These live for this turn only; what is stored at the end is the
+        // question and the visible answer.
+        history.push(Message {
+            sender: "user".to_string(),
+            text: current_prompt,
+            timestamp: String::new(),
+        });
+        history.push(Message {
+            sender: "assistant".to_string(),
+            text: raw,
+            timestamp: String::new(),
+        });
+        current_prompt = protocol::format_results(&results);
+    }
+
+    let text = visible.trim().to_string();
 
     // Written down only once it arrived. A turn that failed halfway is not history the next
     // question should be answered against.
@@ -246,6 +365,104 @@ pub fn ask(
 
     let commands = commands_in(&text);
     Ok(CodeReply { text, commands })
+}
+
+/// Holds back `tool` blocks while they stream, and lets every other fenced block through.
+///
+/// The companion's `protocol::FenceFilter` swallows *every* fenced block, which is right
+/// for an avatar that answers in prose and wrong here by exactly the thing this panel is
+/// for: a bash block is the button, a rust block is the answer, and a filter that ate both
+/// would leave the operator watching a reply about code with the code removed. So this one
+/// reads the tag on the opening fence and only swallows `tool`.
+///
+/// Streaming is what makes it fiddly. A fence arrives a character at a time, so text is
+/// held back exactly as long as it might still turn out to be the start of one, and the
+/// tag cannot be judged until its line ends.
+#[derive(Default)]
+struct ToolFenceFilter {
+    holding: String,
+    swallowing: bool,
+}
+
+impl ToolFenceFilter {
+    fn new() -> ToolFenceFilter {
+        ToolFenceFilter::default()
+    }
+
+    /// Feeds one delta in and returns the part of it to show now.
+    fn push(&mut self, delta: &str) -> String {
+        self.holding.push_str(delta);
+        let mut visible = String::new();
+
+        loop {
+            if self.swallowing {
+                match self.holding.find("```") {
+                    Some(end) => {
+                        self.holding = self.holding[end + 3..].to_string();
+                        self.swallowing = false;
+                    }
+                    None => {
+                        let keep = partial_fence_len(&self.holding);
+                        self.holding = self.holding[self.holding.len() - keep..].to_string();
+                        return visible;
+                    }
+                }
+                continue;
+            }
+
+            let Some(start) = self.holding.find("```") else {
+                let keep = partial_fence_len(&self.holding);
+                let release = self.holding.len() - keep;
+                visible.push_str(&self.holding[..release]);
+                self.holding = self.holding[release..].to_string();
+                return visible;
+            };
+
+            // The tag is the rest of that line, so nothing can be decided until the line
+            // ends. Until then the fence stays held -- releasing it early would show the
+            // operator the ``` of a tool block whose body is about to vanish.
+            let after = &self.holding[start + 3..];
+            let Some(newline) = after.find('\n') else {
+                visible.push_str(&self.holding[..start]);
+                self.holding = self.holding[start..].to_string();
+                return visible;
+            };
+
+            let tag = after[..newline].trim().to_lowercase();
+            if tag == "tool" {
+                visible.push_str(&self.holding[..start]);
+                self.holding = after[newline + 1..].to_string();
+                self.swallowing = true;
+            } else {
+                // Somebody else's block, including the closing fence of one: released as
+                // it was written, up to and including the newline that ended the tag line.
+                let consumed = start + 3 + newline + 1;
+                visible.push_str(&self.holding[..consumed]);
+                self.holding = self.holding[consumed..].to_string();
+            }
+        }
+    }
+
+    /// Releases whatever is still held at the end of a round. An unterminated tool block
+    /// stays swallowed: half a tool call is not something to show anybody.
+    fn finish(&mut self) -> String {
+        if self.swallowing {
+            self.holding.clear();
+            return String::new();
+        }
+        std::mem::take(&mut self.holding)
+    }
+}
+
+/// How many trailing characters could be the beginning of a fence marker.
+fn partial_fence_len(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    for len in (1..3).rev() {
+        if bytes.len() >= len && bytes[bytes.len() - len..] == b"```"[..len] {
+            return len;
+        }
+    }
+    0
 }
 
 /// Forgets the coding conversation. The companion's sessions are untouched.
@@ -361,12 +578,22 @@ mod tests {
         assert_eq!(commands_in("```bash\ncargo build"), vec!["cargo build"]);
     }
 
+    fn db() -> MemoryDb {
+        let path = std::env::temp_dir().join(format!(
+            "aether1_code_chat_{}_{:?}.db",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        MemoryDb::open(&path).expect("open test db")
+    }
+
     /// The house rules are what makes a local model write like this repository, and the
     /// whole point of the panel is that they arrive without anybody remembering to paste
     /// them. A prompt that lost them would look identical and produce different code.
     #[test]
     fn the_house_rules_are_in_the_system_prompt() {
-        let prompt = system_prompt("Linux", "qwen2.5-coder:7b");
+        let prompt = system_prompt(&db(), "Linux", "qwen2.5-coder:7b");
         assert!(prompt.contains("qwen2.5-coder:7b"));
         assert!(prompt.contains(crate::code_setup::conventions().trim()));
     }
@@ -375,7 +602,85 @@ mod tests {
     /// instruction is dropped the buttons quietly stop appearing.
     #[test]
     fn the_model_is_told_one_command_per_line() {
-        assert!(system_prompt("Linux", "m").contains("one command per line"));
+        assert!(system_prompt(&db(), "Linux", "m").contains("one command per line"));
+    }
+
+    /// The prompt has to say both halves, because a model told only what it can do will
+    /// try to do the rest of it: it may look, and anything that changes something goes to
+    /// the operator's terminal as a button.
+    #[test]
+    fn the_prompt_says_it_may_look_and_may_not_change_anything() {
+        let prompt = system_prompt(&db(), "Linux", "m");
+        assert!(prompt.contains("[WHAT YOU CAN LOOK AT]"));
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("gh"));
+        assert!(prompt.contains("```bash block instead"));
+    }
+
+    /// With every permission off the panel is what #137 shipped, and the prompt has to say
+    /// so -- a model told about tools it does not have spends a round finding that out.
+    #[test]
+    fn with_every_permission_off_the_prompt_promises_nothing() {
+        let db = db();
+        for grant in crate::code_perms::ALL {
+            crate::code_perms::set(&db, *grant, false).unwrap();
+        }
+        let prompt = system_prompt(&db, "Linux", "m");
+        assert!(!prompt.contains("[WHAT YOU CAN LOOK AT]"));
+        assert!(prompt.contains("cannot run anything"));
+    }
+
+    fn filtered(text: &str) -> String {
+        // One character at a time: the worst case for a streaming filter, and close to
+        // what a slow local model actually produces.
+        let mut filter = ToolFenceFilter::new();
+        let mut out = String::new();
+        for ch in text.chars() {
+            out.push_str(&filter.push(&ch.to_string()));
+        }
+        out.push_str(&filter.finish());
+        out
+    }
+
+    /// The reason this filter exists instead of the companion's. A bash block is the
+    /// button and a rust block is the answer; swallowing either would leave the operator
+    /// reading a reply about code with the code taken out.
+    #[test]
+    fn code_blocks_survive_the_filter() {
+        let reply = "Try this:\n\n```bash\ncargo build\n```\n\nand in Rust:\n\n```rust\nfn main() {}\n```\n";
+        assert_eq!(filtered(reply), reply);
+    }
+
+    #[test]
+    fn a_tool_block_is_swallowed_and_the_prose_around_it_is_not() {
+        let reply = "Let me look.\n```tool\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"/etc/hostname\"}}\n```\nDone.";
+        let shown = filtered(reply);
+        assert!(!shown.contains("read_file"), "{shown:?}");
+        assert!(shown.starts_with("Let me look."));
+        assert!(shown.trim_end().ends_with("Done."));
+    }
+
+    /// Half a tool call is not something to show anybody, and a small model that stops
+    /// mid-JSON is not a rare event.
+    #[test]
+    fn an_unterminated_tool_block_stays_swallowed() {
+        let shown = filtered("Looking.\n```tool\n{\"tool\": \"read_fi");
+        assert_eq!(shown.trim_end(), "Looking.");
+    }
+
+    /// An untagged block is a bash block as far as `commands_in` is concerned, so it has
+    /// to reach the operator intact rather than being mistaken for a tool call.
+    #[test]
+    fn an_untagged_block_survives() {
+        let reply = "```\nls -la\n```\n";
+        assert_eq!(filtered(reply), reply);
+    }
+
+    /// The tag is read case-insensitively for the same reason `commands_in` reads its own
+    /// that way: a model writes ```Tool often enough to matter.
+    #[test]
+    fn the_tool_tag_is_read_whatever_its_case() {
+        assert!(!filtered("```TOOL\n{}\n```").contains('{'));
     }
 
     /// This conversation must not land in whichever session the companion is using, and

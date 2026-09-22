@@ -5003,6 +5003,12 @@ document.addEventListener('DOMContentLoaded', () => {
             // environment-forced mode and overrides the saved value on screen.
             loadVoiceStatus();
             document.getElementById('setting-tools').checked = s.tools_enabled === true;
+            // Absent means on, matching code_perms::granted -- these three were asked for
+            // and default to granted, so an unsaved key must not read as "off" here while
+            // the panel is in fact allowed to look.
+            document.getElementById('setting-code-perm-system').checked = s.code_perm_system !== false;
+            document.getElementById('setting-code-perm-github').checked = s.code_perm_github !== false;
+            document.getElementById('setting-code-perm-internet').checked = s.code_perm_internet !== false;
             document.getElementById('setting-command-allowlist').value =
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             loadPersonaAccess();
@@ -5132,6 +5138,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // happen. See setting-hotkey-wrap, hidden on that path.
                 ...(IS_TAURI ? { hotkey_toggle: document.getElementById('setting-hotkey').value.trim() } : {}),
                 tools_enabled: document.getElementById('setting-tools').checked,
+                code_perm_system: document.getElementById('setting-code-perm-system').checked,
+                code_perm_github: document.getElementById('setting-code-perm-github').checked,
+                code_perm_internet: document.getElementById('setting-code-perm-internet').checked,
                 command_allowlist: document.getElementById('setting-command-allowlist').value
                     .split(',').map(p => p.trim()).filter(Boolean),
                 auto_speak: document.getElementById('setting-autospeak').checked,

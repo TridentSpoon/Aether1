@@ -12,7 +12,7 @@
 // entire basis of the safety model, so it is part of the tool's declaration rather than
 // something the caller decides per call.
 
-mod builtin;
+pub(crate) mod builtin;
 pub mod consent;
 pub mod domain;
 mod eventlog;

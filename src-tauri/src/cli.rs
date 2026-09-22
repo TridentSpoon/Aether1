@@ -66,6 +66,9 @@ USAGE:
                                    conversation the HUD's Aether Code tab keeps
     aether1 code conventions       Print the house rules for a coding model to follow;
                                    redirect it into an AGENTS.md at the top of your project
+    aether1 code perms             What AETHER CODE is allowed to look at (the system,
+                                   the GitHub CLI, the internet) -- all of it read-only
+    aether1 code perms <n> on|off  Turn one of those three on or off
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -146,6 +149,13 @@ pub enum Invocation {
         /// A question for the coding model, when there is one. The same conversation the
         /// HUD's Aether Code tab keeps, so a question asked here is remembered there.
         ask: Option<String>,
+    },
+    /// `code perms`: what AETHER CODE is allowed to look at, and with two arguments, the
+    /// setting of one. See code_perms.rs for why there is no write permission to set.
+    CodePerms {
+        /// Which one, when the operator is changing it rather than reading the list.
+        grant: Option<String>,
+        on: Option<bool>,
     },
     /// `models`: which local model each speciality runs on, and with two arguments, the
     /// setting of one. See llm/routing.rs for why the key is the speciality.
@@ -388,6 +398,34 @@ pub fn parse(argv: &[String]) -> Invocation {
                     })
                 }
             }
+            // `perms` on its own lists them; with two words it sets one. Nothing in
+            // between: `code perms github` reads as a question and would be answered by
+            // silence, so it is an error that says which two words were expected.
+            Some("perms") => match &rest[1..] {
+                [] => Ok(Invocation::CodePerms {
+                    grant: None,
+                    on: None,
+                }),
+                [grant, state] => match state.to_lowercase().as_str() {
+                    "on" => Ok(Invocation::CodePerms {
+                        grant: Some(grant.to_string()),
+                        on: Some(true),
+                    }),
+                    "off" => Ok(Invocation::CodePerms {
+                        grant: Some(grant.to_string()),
+                        on: Some(false),
+                    }),
+                    other => Err(format!(
+                        "a permission is `on` or `off`, not {other:?} -- for example \
+                         `code perms github off`"
+                    )),
+                },
+                _ => Err(
+                    "code perms takes nothing, or a permission and `on`/`off` -- for example \
+                     `code perms internet off`"
+                        .to_string(),
+                ),
+            },
             _ => free_text(rest).and_then(|extra| match extra.as_deref() {
                 None => Ok(Invocation::Code {
                     conventions: false,
@@ -398,8 +436,8 @@ pub fn parse(argv: &[String]) -> Invocation {
                     ask: None,
                 }),
                 Some(other) => Err(format!(
-                    "code takes nothing, the word `conventions`, or `ask <question>` (got \
-                     {other:?})"
+                    "code takes nothing, the word `conventions`, `perms`, or \
+                     `ask <question>` (got {other:?})"
                 )),
             }),
         },
@@ -653,6 +691,55 @@ fn run_code_ask(question: &str) -> String {
             out
         }
     }
+}
+
+/// `aether1 code perms` -- what the coding panel may look at, and the switch for each one.
+///
+/// The list is deliberately not only a list of switches: it ends with the rule that has no
+/// switch, because "what can this thing do to my machine" is the question somebody typing
+/// this is really asking, and three yeses would be a misleading answer on their own.
+fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, String> {
+    use crate::code_perms::{self, Grant};
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let (Some(name), Some(on)) = (grant.as_deref(), on) {
+        let Some(grant) = Grant::from_key(&name.to_lowercase()) else {
+            let known: Vec<&str> = code_perms::ALL.iter().map(|g| g.key()).collect();
+            return Err(format!(
+                "there is no permission called {name:?}. There are three: {}",
+                known.join(", ")
+            ));
+        };
+        code_perms::set(db, grant, on)?;
+        return Ok(format!(
+            "AETHER CODE may {} {}.\n",
+            if on { "now" } else { "no longer" },
+            grant.description()[0..1].to_lowercase() + &grant.description()[1..]
+        ));
+    }
+
+    let mut out = "AETHER CODE -- what it is allowed to look at\n\n".to_string();
+    for grant in code_perms::ALL {
+        out.push_str(&format!(
+            "  {:<9} {}   {}\n",
+            grant.key(),
+            if code_perms::granted(db, *grant) {
+                "ON "
+            } else {
+                "OFF"
+            },
+            grant.description()
+        ));
+    }
+    out.push_str(
+        "\n  Change one with `aether1 code perms <name> on` or `... off`.\n\n\
+         Every one of these only reads. Nothing AETHER CODE can call changes a file, a\n\
+         repository or a setting -- a command that would is written into your terminal for\n\
+         you to run, and nothing enters it but your own Return key.\n",
+    );
+    Ok(out)
 }
 
 fn run_code(conventions: bool, ask: Option<String>) -> String {
@@ -1406,6 +1493,7 @@ pub fn run(invocation: Invocation) -> i32 {
             replay,
         } => run_doctor(fix, json, report, replay),
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
+        Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state } => run_flow(state.as_deref()),
         Invocation::Installs { remove } => run_installs(remove.as_deref()),
@@ -1690,6 +1778,45 @@ mod tests {
                 ask: None
             }
         );
+    }
+
+    #[test]
+    fn code_perms_is_recognized_on_its_own_and_as_a_switch() {
+        assert_eq!(
+            parse_args(&["code", "perms"]),
+            Invocation::CodePerms {
+                grant: None,
+                on: None
+            }
+        );
+        assert_eq!(
+            parse_args(&["code", "perms", "github", "off"]),
+            Invocation::CodePerms {
+                grant: Some("github".to_string()),
+                on: Some(false)
+            }
+        );
+        assert_eq!(
+            parse_args(&["code", "perms", "internet", "ON"]),
+            Invocation::CodePerms {
+                grant: Some("internet".to_string()),
+                on: Some(true)
+            }
+        );
+    }
+
+    /// Half a switch. `code perms github` reads as a question, and answering it by doing
+    /// nothing is how somebody comes away believing they turned something off.
+    #[test]
+    fn code_perms_refuses_half_a_switch() {
+        assert!(matches!(
+            parse_args(&["code", "perms", "github"]),
+            Invocation::Invalid(_)
+        ));
+        assert!(matches!(
+            parse_args(&["code", "perms", "github", "maybe"]),
+            Invocation::Invalid(_)
+        ));
     }
 
     /// `code rules` is the obvious near-miss, and silently printing the wizard for it would

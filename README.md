@@ -976,6 +976,8 @@ aether1 face                             # avatar fullscreen on a spare screen (
 aether1 code                             # set this machine up to write code offline
 aether1 code ask "why won't this compile"  # ask the coding model, from a terminal
 aether1 code conventions > AGENTS.md     # house rules for a local coding model to follow
+aether1 code perms                       # what AETHER CODE may look at (all of it read-only)
+aether1 code perms github off            # ...and the switch for one of the three
 aether1 --help
 ```
 
