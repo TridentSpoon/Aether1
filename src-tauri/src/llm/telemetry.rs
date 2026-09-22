@@ -58,6 +58,13 @@ pub struct Telemetry {
     /// None on a desktop (or anywhere the OS reports no battery) rather than an error --
     /// see battery_status.
     pub battery: Option<BatteryInfo>,
+    /// The graphics adapters on this machine. Empty where nothing could be identified -- a
+    /// container, a headless server, a driver that publishes nothing -- which the monitor
+    /// treats as "leave the row out", not as a fault.
+    ///
+    /// On a program whose job is running models this is the number that decides what it can
+    /// run, and it was the one piece of the machine this report did not mention.
+    pub gpus: Vec<crate::gpu::Gpu>,
     pub top_processes: Vec<(String, f32)>,
 }
 
@@ -171,6 +178,9 @@ impl Telemetry {
             uptime: format_uptime(System::uptime()),
             status,
             battery: battery_status(),
+            // Read once and kept: see gpu::cached. A snapshot on a tick must not start a
+            // process to re-learn something that cannot change.
+            gpus: crate::gpu::cached().to_vec(),
             top_processes,
         }
     }
@@ -209,6 +219,14 @@ impl Telemetry {
                 "state": b.state,
                 "on_battery": b.on_battery,
             })),
+            // An empty list rather than null: the frontend hides the row either way, and a
+            // list it can always iterate is one fewer thing for it to get wrong.
+            "gpus": self.gpus.iter().map(|g| serde_json::json!({
+                "name": g.name,
+                "summary": g.summary(),
+                "vram_gb": g.vram_gb.map(|v| round_to(v, 1)),
+                "integrated": g.integrated,
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -236,6 +254,17 @@ impl Telemetry {
             self.network_download_kbps,
             self.network_upload_kbps,
         );
+
+        if !self.gpus.is_empty() {
+            report.push_str(&format!(
+                "Graphics: {}\n",
+                self.gpus
+                    .iter()
+                    .map(|gpu| gpu.summary())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
 
         if let Some(battery) = &self.battery {
             report.push_str(&format!(

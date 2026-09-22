@@ -534,6 +534,13 @@ fn run_code(conventions: bool) -> String {
         out.push_str("\nMODELS FOR THIS MACHINE (the marked one is the recommendation):\n");
         for model in advice.models.iter().filter(|m| m.fits) {
             let mark = if model.recommended { "->" } else { "  " };
+            // Which side of the card's line this one falls on. Without it the row above the
+            // recommendation looks like an equally good option that the wizard just missed.
+            let speed = if model.fits_on_gpu {
+                "  [fits on the card]"
+            } else {
+                ""
+            };
             // The second job these can do, said on the row rather than in a footnote: it is
             // the difference between one download and two.
             let both = if model.runs_aether1 {
@@ -542,10 +549,11 @@ fn run_code(conventions: bool) -> String {
                 ""
             };
             out.push_str(&format!(
-                "  {mark} {:<22} {:<14} {}{both}\n",
+                "  {mark} {:<22} {:<14} {}{speed}{both}\n",
                 model.name, model.download, model.label
             ));
         }
+        out.push_str(&format!("\n     {}\n", advice.sized_against));
         out.push_str("\n     Download one with:  ollama pull <name>\n");
     }
 

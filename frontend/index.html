@@ -310,6 +310,17 @@
                     </div>
                 </div>
 
+                <!-- Graphics -- hidden when nothing here reported a card. Not a gauge: the
+                     adapters are read once at startup (gpu::cached) rather than on every
+                     tick, because two of the three probes start a process and the monitor
+                     must not spawn one a second. So this row is set once and then stands. -->
+                <div id="gpu-section" class="space-y-1 hidden">
+                    <div class="flex justify-between text-xs font-mono gap-2">
+                        <span class="text-slate-300">GRAPHICS</span>
+                        <span id="gpu-val" class="text-cyan-400 font-bold text-right">--</span>
+                    </div>
+                </div>
+
                 <!-- Battery -- hidden entirely on a desktop (no battery to report); see
                      updateHardwareTelemetry, which un-hides this the first time telemetry
                      carries a non-null battery reading. -->

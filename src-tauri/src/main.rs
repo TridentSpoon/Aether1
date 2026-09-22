@@ -23,6 +23,7 @@ mod code_setup;
 mod commands;
 mod discovery;
 mod downloads;
+mod gpu;
 mod hotkey;
 mod installs;
 mod llm;
