@@ -62,6 +62,8 @@ USAGE:
     aether1 installs remove old    Remove every copy older than the one you are running
     aether1 code                   What this machine still needs before it can write code
                                    offline, and the commands to set it up
+    aether1 code ask <question>    Ask the coding model something, in the same
+                                   conversation the HUD's Aether Code tab keeps
     aether1 code conventions       Print the house rules for a coding model to follow;
                                    redirect it into an AGENTS.md at the top of your project
     aether1 discover               List other AETHER1 instances announcing themselves on
@@ -141,6 +143,9 @@ pub enum Invocation {
     /// than copied out of a panel.
     Code {
         conventions: bool,
+        /// A question for the coding model, when there is one. The same conversation the
+        /// HUD's Aether Code tab keeps, so a question asked here is remembered there.
+        ask: Option<String>,
     },
     /// `models`: which local model each speciality runs on, and with two arguments, the
     /// setting of one. See llm/routing.rs for why the key is the speciality.
@@ -368,13 +373,36 @@ pub fn parse(argv: &[String]) -> Invocation {
             Some(extra) => Err(format!("crashes takes no arguments (got {extra:?})")),
             None => Ok(Invocation::Crashes),
         }),
-        "code" => free_text(rest).and_then(|extra| match extra.as_deref() {
-            None => Ok(Invocation::Code { conventions: false }),
-            Some("conventions") => Ok(Invocation::Code { conventions: true }),
-            Some(other) => Err(format!(
-                "code takes nothing, or the word `conventions` (got {other:?})"
-            )),
-        }),
+        "code" => match rest.first().map(String::as_str) {
+            // `ask` takes the whole rest of the line as one question, quoted or not, the
+            // way `prompt` does -- a question typed at a shell is full of words the shell
+            // would otherwise have opinions about.
+            Some("ask") => {
+                let question = rest[1..].join(" ").trim().to_string();
+                if question.is_empty() {
+                    Err("code ask needs a question after it".to_string())
+                } else {
+                    Ok(Invocation::Code {
+                        conventions: false,
+                        ask: Some(question),
+                    })
+                }
+            }
+            _ => free_text(rest).and_then(|extra| match extra.as_deref() {
+                None => Ok(Invocation::Code {
+                    conventions: false,
+                    ask: None,
+                }),
+                Some("conventions") => Ok(Invocation::Code {
+                    conventions: true,
+                    ask: None,
+                }),
+                Some(other) => Err(format!(
+                    "code takes nothing, the word `conventions`, or `ask <question>` (got \
+                     {other:?})"
+                )),
+            }),
+        },
         "models" => match rest.len() {
             0 => Ok(Invocation::Models {
                 persona: None,
@@ -581,9 +609,59 @@ fn run_status(json: bool, events: bool) -> String {
 /// The same advisor the HUD panel draws, printed. Somebody who is setting this up because
 /// their subscription lapsed is quite likely doing it from a terminal in the first place,
 /// and a wizard only reachable from a settings panel is one more window to find.
-fn run_code(conventions: bool) -> String {
+/// `aether1 code ask` -- the same conversation the HUD's tab keeps, from a terminal.
+///
+/// Streamed to stdout as it arrives, because the whole point of a local model is that it is
+/// yours and the cost of that is that it is slow: a minute of nothing, then a paragraph, is
+/// indistinguishable from a hang.
+///
+/// The commands are listed under the answer rather than offered as anything to press. In a
+/// terminal the operator is already at a prompt -- what they need is the line to copy, not
+/// a button, and AETHER1 typing into the shell that launched it would be a different and
+/// much worse idea than the HUD's button, which types into a shell it started itself.
+fn run_code_ask(question: &str) -> String {
+    use std::io::Write;
+
+    let engine = crate::build_llm_engine();
+    let mut streamed = false;
+    let result = commands::code_chat_ask(&engine, question, &mut |delta| {
+        streamed = true;
+        print!("{delta}");
+        let _ = std::io::stdout().flush();
+    });
+
+    match result {
+        Err(why) => format!("\n{why}\n"),
+        Ok(reply) => {
+            // Nothing streamed means the provider answered in one piece, so the text has
+            // not been printed yet and printing it now is the only way it is seen.
+            let mut out = if streamed {
+                "\n".to_string()
+            } else {
+                format!("{}\n", reply.text)
+            };
+            if !reply.commands.is_empty() {
+                out.push_str("\nCOMMANDS IN THAT ANSWER:\n");
+                for command in &reply.commands {
+                    out.push_str(&format!("    {command}\n"));
+                }
+                out.push_str(
+                    "\n     Nothing above has been run. In the HUD each of these is a button \
+                     that types it\n     into the terminal, still waiting on your Return key.\n",
+                );
+            }
+            out
+        }
+    }
+}
+
+fn run_code(conventions: bool, ask: Option<String>) -> String {
     if conventions {
         return crate::code_setup::conventions();
+    }
+
+    if let Some(question) = ask {
+        return run_code_ask(&question);
     }
 
     let engine = crate::build_llm_engine();
@@ -1327,7 +1405,7 @@ pub fn run(invocation: Invocation) -> i32 {
             report,
             replay,
         } => run_doctor(fix, json, report, replay),
-        Invocation::Code { conventions } => Ok(run_code(conventions)),
+        Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state } => run_flow(state.as_deref()),
         Invocation::Installs { remove } => run_installs(remove.as_deref()),
@@ -1600,11 +1678,17 @@ mod tests {
     fn code_is_recognized_with_and_without_its_one_word() {
         assert_eq!(
             parse_args(&["code"]),
-            Invocation::Code { conventions: false }
+            Invocation::Code {
+                conventions: false,
+                ask: None
+            }
         );
         assert_eq!(
             parse_args(&["code", "conventions"]),
-            Invocation::Code { conventions: true }
+            Invocation::Code {
+                conventions: true,
+                ask: None
+            }
         );
     }
 

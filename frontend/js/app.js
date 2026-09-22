@@ -3193,6 +3193,274 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    /* ====================================================================== */
+    /* AETHER CODE -- the second conversation in the chat panel.               */
+    /*                                                                        */
+    /* Same act as the companion's chat, different model behind it: whichever  */
+    /* coding model is downloaded, with the repository's house rules already   */
+    /* in front of it (src-tauri/src/code_chat.rs). Kept as a tab rather than  */
+    /* a panel because it is a conversation, and the conversation panel is     */
+    /* where the operator already is.                                          */
+    /*                                                                        */
+    /* The one thing here that is not ordinary chat is the row of commands     */
+    /* under a reply. Each button TYPES its command into the operator's        */
+    /* terminal and stops -- no newline, so nothing runs until they press      */
+    /* Return. That is the whole consent model, and it is why the buttons do   */
+    /* not exist in a browser: there is no terminal there to type into.        */
+    /* ====================================================================== */
+
+    /* Set by the terminal block below, which owns the shell. null until then,
+       and null forever in a browser. */
+    let terminalBridge = null;
+
+    const codeChatMessages = document.getElementById('code-chat-messages');
+    const codeChatInput = document.getElementById('code-chat-input');
+    const codeChatModel = document.getElementById('code-chat-model');
+    let codeChatBusy = false;
+    let codeChatLoaded = false;
+
+    function switchChatTab(which) {
+        document.querySelectorAll('[data-chat-view]').forEach(view => {
+            const mine = view.getAttribute('data-chat-view') === which;
+            view.classList.toggle('hidden', !mine);
+            view.classList.toggle('flex', mine);
+        });
+        document.querySelectorAll('.chat-tab').forEach(tab => {
+            const mine = tab.getAttribute('data-chat-tab') === which;
+            tab.setAttribute('aria-selected', mine ? 'true' : 'false');
+            tab.classList.toggle('text-cyan-300', mine);
+            tab.classList.toggle('border-cyan-400', mine);
+            tab.classList.toggle('text-slate-400', !mine);
+            tab.classList.toggle('border-transparent', !mine);
+        });
+        if (which === 'code') {
+            /* Nothing is probed until the tab is opened: a scan of the machine's ports
+               on every launch, for a panel nobody looked at, is work the operator did
+               not ask for. */
+            if (!codeChatLoaded) { codeChatLoaded = true; loadCodeChat(); }
+            codeChatInput?.focus();
+        }
+    }
+
+    document.querySelectorAll('.chat-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            switchChatTab(tab.getAttribute('data-chat-tab'));
+        });
+    });
+
+    /* Which model is answering, said above the conversation rather than discovered by
+       asking it. Reuses the coding panel's own advice so the tab and the setup panel can
+       never disagree about what is installed. */
+    async function refreshCodeChatModel() {
+        if (!codeChatModel) return;
+        try {
+            const advice = IS_TAURI
+                ? await tauriInvoke('code_advice_rust')
+                : await (await apiFetch('/api/code/advice')).json();
+            if (!advice || !advice.model_installed) {
+                codeChatModel.textContent = advice && advice.model
+                    ? `no coding model downloaded yet -- ${advice.model} is the one for this machine`
+                    : 'no coding model downloaded yet';
+                codeChatModel.className = 'text-amber-400/80 truncate';
+                return;
+            }
+            codeChatModel.textContent = `answering: ${advice.model}`;
+            codeChatModel.className = 'text-slate-400 truncate';
+        } catch (e) {
+            codeChatModel.textContent = 'could not reach the model server';
+            codeChatModel.className = 'text-amber-400/80 truncate';
+        }
+    }
+
+    /* One command, with the button that puts it in the terminal.
+       In a browser the button is replaced by the command alone: there is no terminal
+       behind it, and a button that cannot work is worse than no button. */
+    function codeCommandRow(command) {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2 mt-1';
+
+        const text = document.createElement('code');
+        text.className = 'flex-1 min-w-0 truncate font-mono text-[11px] text-cyan-200 bg-slate-950/60 border border-cyan-500/20 rounded px-2 py-1';
+        text.textContent = command;
+        text.title = command;
+        row.appendChild(text);
+
+        if (!IS_TAURI) return row;
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'cyber-btn text-[10px] py-1 px-2 whitespace-nowrap shrink-0';
+        button.textContent = '⌨ To terminal';
+        button.title = 'Types this into the terminal. It does not run until you press Return.';
+        button.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            const typed = await sendToTerminal(command);
+            /* Said on the button rather than in the conversation: the operator is looking
+               at the button they just pressed, and the terminal is where the answer is. */
+            button.textContent = typed ? '✔ in the terminal' : '⚠ no shell';
+            setTimeout(() => { button.textContent = '⌨ To terminal'; }, 2500);
+        });
+        row.appendChild(button);
+        return row;
+    }
+
+    function appendCodeMessage(sender, text, commands) {
+        if (!codeChatMessages) return null;
+        const isUser = sender === 'user';
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `p-3 rounded my-2 text-sm leading-relaxed ${isUser ? 'msg-user self-end ml-8' : 'msg-agent self-start mr-8'}`;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-cyan-500/20 text-xs font-mono text-cyan-400/80';
+        const who = document.createElement('span');
+        who.innerHTML = isUser ? '👤 <strong>OPERATOR</strong>' : '⌨ <strong>AETHER CODE</strong>';
+        header.appendChild(who);
+        const when = document.createElement('span');
+        when.textContent = new Date().toLocaleTimeString();
+        header.appendChild(when);
+        msgDiv.appendChild(header);
+
+        const body = document.createElement('div');
+        body.innerHTML = formatMarkdown(text);
+        msgDiv.appendChild(body);
+
+        const strip = document.createElement('div');
+        strip.className = 'mt-2 pt-1 border-t border-cyan-500/10';
+        msgDiv.appendChild(strip);
+        msgDiv.bodyDiv = body;
+        msgDiv.commandStrip = strip;
+        renderCodeCommands(msgDiv, commands);
+
+        codeChatMessages.appendChild(msgDiv);
+        codeChatMessages.scrollTop = codeChatMessages.scrollHeight;
+        return msgDiv;
+    }
+
+    function renderCodeCommands(msgDiv, commands) {
+        const strip = msgDiv?.commandStrip;
+        if (!strip) return;
+        strip.innerHTML = '';
+        if (!Array.isArray(commands) || commands.length === 0) {
+            strip.classList.add('hidden');
+            return;
+        }
+        strip.classList.remove('hidden');
+        const label = document.createElement('div');
+        label.className = 'text-[10px] font-mono text-slate-500';
+        label.textContent = IS_TAURI
+            ? 'Nothing below has been run. A button types it in; your Return key runs it.'
+            : 'Copy these into a terminal -- the button only exists in the desktop app.';
+        strip.appendChild(label);
+        commands.forEach(command => strip.appendChild(codeCommandRow(command)));
+    }
+
+    /* What was said before, so reopening the tab is not a blank page. The commands are
+       worked out again by the backend from the stored text, so a reply loaded from the
+       database offers exactly what it offered when it arrived. */
+    async function loadCodeChat() {
+        refreshCodeChatModel();
+        if (!codeChatMessages) return;
+        try {
+            const history = IS_TAURI
+                ? await tauriInvoke('code_chat_history_rust')
+                : await (await apiFetch('/api/code/chat/history')).json();
+            (history || []).forEach(m => appendCodeMessage(m.sender, m.text, m.commands));
+        } catch (e) {
+            /* An empty tab is the right failure here: the conversation is a convenience,
+               and the composer below it still works. */
+        }
+    }
+
+    async function streamCodeChat(text, onDelta) {
+        if (IS_TAURI) {
+            const streamId = `c${Date.now()}${Math.random().toString(16).slice(2)}`;
+            const unlisten = await window.__TAURI__.event.listen('code-chat-delta', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            try {
+                return await tauriInvoke('code_chat_ask_rust', { prompt: text, streamId });
+            } finally {
+                unlisten();
+            }
+        }
+        const resp = await apiFetch('/api/code/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text }),
+        });
+        if (!resp.ok) throw new Error((await resp.text()) || 'the coding model did not answer');
+        return await resp.json();
+    }
+
+    async function sendCodeChat() {
+        if (codeChatBusy) return;
+        const text = (codeChatInput?.value || '').trim();
+        if (!text) return;
+        codeChatInput.value = '';
+        codeChatBusy = true;
+
+        appendCodeMessage('user', text, []);
+        const replyDiv = appendCodeMessage('agent', '', []);
+        replyDiv?.classList.add('typing-cursor');
+        let rendered = '';
+
+        try {
+            const reply = await streamCodeChat(text, (delta) => {
+                if (!delta) return;
+                rendered += delta;
+                replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
+                codeChatMessages.scrollTop = codeChatMessages.scrollHeight;
+            });
+            /* The return value is authoritative, not the accumulated deltas: the browser
+               path has no deltas at all, and the command list only exists here. */
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(reply.text || rendered);
+            renderCodeCommands(replyDiv, reply.commands);
+        } catch (err) {
+            const why = (err && (err.message || err)) || 'the coding model did not answer';
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(String(why));
+            replyDiv.classList.add('text-amber-300');
+            refreshCodeChatModel();
+        } finally {
+            replyDiv?.classList.remove('typing-cursor');
+            codeChatBusy = false;
+            codeChatMessages.scrollTop = codeChatMessages.scrollHeight;
+        }
+    }
+
+    document.getElementById('btn-code-chat-send')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        sendCodeChat();
+    });
+    codeChatInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCodeChat(); }
+    });
+    document.getElementById('btn-code-chat-clear')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        try {
+            if (IS_TAURI) await tauriInvoke('code_chat_clear_rust');
+            else await apiFetch('/api/code/chat/clear', { method: 'POST' });
+            if (codeChatMessages) codeChatMessages.innerHTML = '';
+        } catch (e) { /* nothing to forget */ }
+    });
+
+    /* Puts a command in front of the operator, in their own shell.
+     *
+     * Starts the shell if it is not running -- being told "start a terminal first" by the
+     * program that just offered you the button is a pointless extra step -- and then types
+     * and stops. Returns false when there is no terminal at all, which in practice means a
+     * browser, where the button is never drawn in the first place. */
+    async function sendToTerminal(command) {
+        if (!terminalBridge) return false;
+        try {
+            if (!terminalBridge.running()) await terminalBridge.ensureStarted();
+            return terminalBridge.type(command);
+        } catch (e) {
+            return false;
+        }
+    }
+
+
     /* ====================== IS IT WORKING? ==============================
      * Step 47's list, in the HUD. The backend does all the deciding -- every verdict,
      * detail and proposed repair arrives as text from doctor.rs -- so this file draws
@@ -5569,6 +5837,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const setState = (text) => { if (terminalState) terminalState.textContent = text; };
 
+        /* Starting a shell is the same three steps whether the button or Aether Code asks
+           for it, and they have to be the same three: a shell started one way and revealed
+           the other leaves the panel showing its "not started" note over a running
+           terminal. */
+        async function openShell() {
+            terminalSurface.classList.remove('hidden');
+            terminalNote?.classList.add('hidden');
+            if (!shell) {
+                shell = Aether1Terminal.mount(terminalSurface, {
+                    invoke: tauriInvoke,
+                    listen: (name, handler) => window.__TAURI__.event.listen(name, handler),
+                    onState: setState,
+                });
+            }
+            await shell.start();
+            btnTerminalStart.textContent = '⏹ Close the shell';
+        }
+
+        /* The only way anything outside this block reaches the shell, and it is deliberately
+           two verbs wide: start one if there is none, and type. There is no "run" here and
+           there is not going to be one -- see terminal.js's type(). */
+        terminalBridge = {
+            running: () => !!shell && shell.running(),
+            ensureStarted: openShell,
+            type: (text) => (shell ? shell.type(text) : false),
+        };
+
         btnTerminalStart?.addEventListener('click', async () => {
             voiceEngine.playSFX('click');
             if (shell && shell.running()) {
@@ -5582,17 +5877,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             try {
-                terminalSurface.classList.remove('hidden');
-                terminalNote?.classList.add('hidden');
-                if (!shell) {
-                    shell = Aether1Terminal.mount(terminalSurface, {
-                        invoke: tauriInvoke,
-                        listen: (name, handler) => window.__TAURI__.event.listen(name, handler),
-                        onState: setState,
-                    });
-                }
-                await shell.start();
-                btnTerminalStart.textContent = '⏹ Close the shell';
+                await openShell();
             } catch (err) {
                 terminalSurface.classList.add('hidden');
                 terminalNote?.classList.remove('hidden');

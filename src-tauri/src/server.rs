@@ -118,6 +118,9 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/advice", get(voice_advice))
         .route("/api/code/advice", get(code_advice))
         .route("/api/code/conventions", get(code_conventions))
+        .route("/api/code/chat", post(code_chat))
+        .route("/api/code/chat/history", get(code_chat_history))
+        .route("/api/code/chat/clear", post(code_chat_clear))
         .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
@@ -752,6 +755,49 @@ async fn code_advice(State(state): State<AppState>) -> Json<crate::code_setup::C
 /// them straight into an AGENTS.md.
 async fn code_conventions() -> String {
     crate::code_setup::conventions()
+}
+
+#[derive(Deserialize)]
+struct CodeChatRequest {
+    message: String,
+}
+
+/// The browser twin of code_chat_ask_rust.
+///
+/// Answered whole rather than streamed, because the browser fallback has no event channel
+/// and a second streaming transport is a lot of machinery for a panel whose buttons do not
+/// work here anyway -- the terminal exists only in the native window, so a browser gets the
+/// answer and the commands to copy, and nothing to press.
+async fn code_chat(
+    State(state): State<AppState>,
+    Json(req): Json<CodeChatRequest>,
+) -> Result<Json<crate::code_chat::CodeReply>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let reply = tokio::task::spawn_blocking(move || {
+        commands::code_chat_ask(&engine, &req.message, &mut |_| {})
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(reply))
+}
+
+async fn code_chat_history(State(state): State<AppState>) -> Json<Vec<Value>> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::code_chat_history(&state.engine))
+            .await
+            .expect("code_chat_history panicked"),
+    )
+}
+
+async fn code_chat_clear(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    tokio::task::spawn_blocking(move || commands::code_chat_clear(&state.engine))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn voice_advice(State(state): State<AppState>) -> Json<crate::voice_setup::VoiceAdvice> {

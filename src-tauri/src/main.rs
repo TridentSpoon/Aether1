@@ -19,6 +19,7 @@
 
 mod background_services;
 mod cli;
+mod code_chat;
 mod code_setup;
 mod commands;
 mod discovery;
@@ -634,6 +635,37 @@ fn generate_response_streaming_rust(
             let _ = handover_app.emit("flow-handover", payload);
         },
     )
+}
+
+/// A question for the coding model, streamed back as `code-chat-delta` events the same way
+/// the companion's own replies are, and returned whole with the commands it offered.
+///
+/// `async` for the reason every other long call here is: a local model on a machine without
+/// a card can take a minute to answer, and a blocking command holds the window's IPC thread
+/// for that whole minute -- which looks exactly like the app having crashed.
+#[tauri::command(async)]
+fn code_chat_ask_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    prompt: String,
+    stream_id: String,
+) -> Result<code_chat::CodeReply, String> {
+    commands::code_chat_ask(&engine, &prompt, &mut |delta| {
+        let _ = app.emit(
+            "code-chat-delta",
+            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+        );
+    })
+}
+
+#[tauri::command(async)]
+fn code_chat_history_rust(engine: tauri::State<LlmEngine>) -> Vec<serde_json::Value> {
+    commands::code_chat_history(&engine)
+}
+
+#[tauri::command(async)]
+fn code_chat_clear_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
+    commands::code_chat_clear(&engine)
 }
 
 /// What only the running desktop process can answer about itself, gathered in one place so
@@ -1894,6 +1926,9 @@ fn main() {
             voice_status_rust,
             voice_advice_rust,
             code_advice_rust,
+            code_chat_ask_rust,
+            code_chat_history_rust,
+            code_chat_clear_rust,
             code_conventions_rust,
             test_speech_rust,
             list_personas_rust,

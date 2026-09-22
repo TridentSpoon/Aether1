@@ -489,6 +489,21 @@
                 <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: HALCY</span>
             </div>
 
+            <!-- Two conversations in one panel, because they are the same act -- typing a
+                 question and reading an answer -- with different models behind them. The
+                 companion answers as itself; AETHER CODE answers as whichever coding model
+                 is downloaded, with the house rules already in front of it. See
+                 src-tauri/src/code_chat.rs for why they are kept apart rather than merged. -->
+            <div class="flex border-b border-cyan-500/20 bg-slate-950/40 text-[10px] font-mono">
+                <button type="button" id="tab-chat-conversation" data-chat-tab="conversation"
+                        class="chat-tab px-3 py-1.5 text-cyan-300 border-b-2 border-cyan-400"
+                        aria-selected="true">CONVERSATION</button>
+                <button type="button" id="tab-chat-code" data-chat-tab="code"
+                        class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
+                        aria-selected="false">AETHER CODE</button>
+            </div>
+
+            <div id="chat-view-conversation" class="flex-1 min-h-0 flex flex-col" data-chat-view="conversation">
             <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
 
             <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
@@ -500,6 +515,25 @@
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
                     </button>
+                </div>
+            </div>
+            </div>
+
+            <!-- AETHER CODE. Hidden until the tab is pressed; the first press asks the
+                 backend which model is answering, and nothing is probed before that. -->
+            <div id="chat-view-code" class="flex-1 min-h-0 flex-col hidden" data-chat-view="code">
+                <div class="px-4 py-1.5 bg-slate-950/40 border-b border-cyan-500/10 flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <span id="code-chat-model" class="text-slate-400 truncate">checking what is here...</span>
+                    <button type="button" id="btn-code-chat-clear" class="text-slate-500 hover:text-cyan-300 shrink-0">clear</button>
+                </div>
+                <div id="code-chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
+                <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
+                    <div class="flex items-center gap-2">
+                        <input id="code-chat-input" type="text" placeholder="Ask about code, a command, an error..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                        <button id="btn-code-chat-send" class="cyber-btn px-4 py-2 text-sm rounded">
+                            Ask
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

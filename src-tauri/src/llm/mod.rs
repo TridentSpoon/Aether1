@@ -9,7 +9,7 @@ pub mod flow;
 mod genesis;
 mod persona;
 mod pricing;
-mod providers;
+pub(crate) mod providers;
 pub mod routing;
 mod stt;
 mod telemetry;
@@ -23,10 +23,9 @@ pub use genesis::Identity;
 // The voices behind a persona, re-exported because speech resolves them per persona at the
 // moment it speaks -- see commands::synthesize_speech.
 pub use genesis::{local_voice_for as persona_local_voice, voice_for as persona_voice};
-use persona::Provider;
 // Re-exported because commands.rs serves the persona catalogue to the HUD: the Settings list
 // is built from the enum rather than written out again in the markup.
-pub use persona::{Domain, Persona, Root};
+pub use persona::{Domain, Persona, Provider, Root};
 use providers::ChatContext;
 pub use providers::Sink;
 pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio, transcribe};

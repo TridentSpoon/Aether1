@@ -845,6 +845,82 @@ pub fn code_advice(engine: &LlmEngine) -> crate::code_setup::CodingAdvice {
     )
 }
 
+/// Puts a question to the coding model and streams the answer back.
+///
+/// The server and the model are found the same way the panel finds them -- one scan, the
+/// server with models on it, the best coding model already downloaded -- rather than from
+/// the `llm_provider` and `llm_model` settings. Those name what the *companion* runs on,
+/// which is a different model for a different job and is frequently a cloud one; asking a
+/// paid API a question the operator opened this panel to keep local would be the wrong
+/// answer in the most expensive possible way.
+pub fn code_chat_ask(
+    engine: &LlmEngine,
+    prompt: &str,
+    sink: llm::Sink,
+) -> Result<crate::code_chat::CodeReply, String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("Nothing to ask.".to_string());
+    }
+
+    let scan = model_scanner::scan_all();
+    let server = scan
+        .local_servers
+        .iter()
+        .find(|server| !server.models.is_empty())
+        .ok_or_else(|| {
+            "No AI is running on this computer, so there is nothing here to ask. Open The \
+             Brain and set a server up first."
+                .to_string()
+        })?;
+
+    let advice = code_advice(engine);
+    if !advice.model_installed {
+        return Err(format!(
+            "No coding model is downloaded yet. {} is the one for this machine -- download \
+             it from the coding panel under The Brain, and this will use it.",
+            advice.model
+        ));
+    }
+
+    let os = llm::Telemetry::snapshot().os_name;
+    crate::code_chat::ask(
+        engine.db(),
+        &server.endpoint,
+        server.api,
+        &advice.model,
+        &os,
+        prompt,
+        sink,
+    )
+}
+
+/// What has been said in the coding conversation, for a panel that was just opened.
+pub fn code_chat_history(engine: &LlmEngine) -> Vec<serde_json::Value> {
+    crate::code_chat::transcript(engine.db())
+        .into_iter()
+        .map(|message| {
+            // The commands are worked out again here rather than stored, so a reply
+            // reloaded from the database offers exactly what it offered when it arrived.
+            let commands = if message.sender == "user" {
+                Vec::new()
+            } else {
+                crate::code_chat::commands_in(&message.text)
+            };
+            serde_json::json!({
+                "sender": message.sender,
+                "text": message.text,
+                "timestamp": message.timestamp,
+                "commands": commands,
+            })
+        })
+        .collect()
+}
+
+pub fn code_chat_clear(engine: &LlmEngine) -> Result<(), String> {
+    crate::code_chat::clear(engine.db())
+}
+
 /// The sentence the voice test speaks. Short enough to be quick, long enough that a voice
 /// which is technically producing audio but producing rubbish is audibly rubbish.
 pub const VOICE_TEST_SENTENCE: &str =

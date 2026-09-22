@@ -134,6 +134,29 @@
             fit();
         }
 
+        /* Types text into the shell, exactly as the keyboard would, and stops.
+         *
+         * This is the one way anything outside this file puts characters in here, and the
+         * one rule it enforces is the reason it can exist at all: **no newline, ever.** A
+         * shell runs a line the instant the newline arrives, so text carrying its own
+         * newlines would execute itself on the way in, and the operator's Return key --
+         * which is the whole consent model for a command the model suggested -- would
+         * never get a say. The Rust side already yields one command per line with no
+         * newline in it; this refuses them again because this is where the bytes actually
+         * reach a pty, and a guarantee is worth having at the boundary that can break it.
+         *
+         * Returns false when there is no shell running, so the caller can start one. */
+        function type(text) {
+            if (!id) return false;
+            const clean = String(text).replace(/[\r\n]+/g, ' ').trim();
+            if (!clean) return false;
+            const bytes = new TextEncoder().encode(clean);
+            invoke('terminal_write_rust', { id, bytes: bytesToBase64(bytes) })
+                .catch(() => { /* raced with the shell exiting */ });
+            term.focus();
+            return true;
+        }
+
         async function stop() {
             if (!id) return;
             const closing = id;
@@ -158,6 +181,7 @@
         return {
             start,
             stop,
+            type,
             fit,
             destroy() {
                 observer.disconnect();
