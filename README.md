@@ -972,6 +972,7 @@ aether1 say "systems nominal"            # speak, in the configured persona voic
 aether1 toggle                           # summon/dismiss the HUD of a running instance
 aether1 face                             # avatar fullscreen on a spare screen (Esc closes it)
 aether1 code                             # set this machine up to write code offline
+aether1 code ask "why won't this compile"  # ask the coding model, from a terminal
 aether1 code conventions > AGENTS.md     # house rules for a local coding model to follow
 aether1 --help
 ```

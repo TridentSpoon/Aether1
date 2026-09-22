@@ -2824,6 +2824,54 @@ line, and both the panel and `aether1 code` now say what the recommendation was 
 against, because on the machines where the two rules disagree a small recommendation
 otherwise reads as the wizard having failed to notice the memory.
 
+#### Follow-up: AETHER CODE, a tab and a way into the terminal
+
+The setup wizard chose a model, fetched it, and handed over a command -- and then there was
+nowhere to *ask* it anything. The model was on the machine, the house rules were written,
+and the only way to reach either was to leave the HUD and start an agent against a checked
+out project. Most coding questions are not that: how do I write this, why does this not
+compile, what is the flag. So the chat panel has two tabs now, CONVERSATION and AETHER CODE.
+
+**It is a second conversation, not a second personality.** Different model (whichever coding
+model is downloaded, found the same way the setup panel finds it, never the `llm_model` the
+companion is on -- which is frequently a cloud one, and asking a paid API a question the
+operator opened this panel to keep local would be wrong in the most expensive way),
+different system prompt (`code_setup::conventions()` wholesale, which is the whole reason a
+local model writes like this repository), different history (`code_chat::SESSION_ID`), no
+persona, no flow, no tools.
+
+**The terminal half is where the design actually is.** `terminal.rs` opens with the reason
+it exists: handing a model a shell is the single change that turns a mistake or a prompt
+injection into an unrecoverable afternoon, and `check_terminal_isolation.sh` fails the build
+if a tool, a route or the shared command layer ever names the module. None of that moved.
+What was added is one verb on the frontend handle: **type, and stop.**
+
+A reply's shell commands become a row of buttons, and a button types its command into the
+operator's own shell and leaves the cursor there. **No newline, ever** -- enforced in the
+parser, which yields one command per line, and again in `terminal.js`, where the bytes
+actually reach a pty. The operator's Return key is what runs it, and that is the entire
+consent model: a model that can put text in front of you is a different thing from one that
+can execute it. Nothing in `code_chat.rs`, `commands.rs`, `server.rs` or `tools/` mentions
+the terminal, so the isolation check passes unchanged, and the buttons exist only in the
+native window because that is the only place a terminal exists at all.
+
+**Four rules in `commands_in`, each a way to get it wrong.** A multi-line block is several
+buttons rather than one, because a paste carrying its own newlines runs every line but the
+last the moment it lands. A transcript's `$ ` marker is stripped, because typing `$ ls` runs
+a program called `$`. A line ending in a backslash is not offered, because half a command
+leaves the shell at a continuation prompt, which reads as the terminal having hung. And
+nothing outside a fenced block is ever offered, so a model that mentions `rm -rf` in a
+sentence produces no button for it.
+
+An untagged fenced block *is* treated as shell. That is the one guess here, and it is the
+right way round: the block is shown in full beside the button, the button types rather than
+runs, so a wrong guess costs a line the operator deletes.
+
+`aether1 code ask <question>` is the same conversation from a terminal, streamed as it
+arrives, with the commands listed underneath to copy. It offers no buttons and never types
+anywhere: AETHER1 writing into the shell that launched it would be a different and much
+worse idea than the HUD's button, which types into a shell it started itself.
+
 **The house rules are the answer to "it does not write like the rest of the repo".** No
 choice of model fixes that, because it is not a capability problem: the conventions are not
 written down anywhere a model can read them. Both agents look for an `AGENTS.md` at the root
