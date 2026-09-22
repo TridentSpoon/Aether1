@@ -3193,6 +3193,191 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    /* ====================== IS IT WORKING? ==============================
+     * Step 47's list, in the HUD. The backend does all the deciding -- every verdict,
+     * detail and proposed repair arrives as text from doctor.rs -- so this file draws
+     * rows and presses buttons and has no opinion of its own about what is broken.
+     *
+     * Two rules it does enforce, because they are about the interface rather than the
+     * diagnosis. A repair whose kind is `hand-over` gets a command to copy and never a
+     * button: it needs root, and AETHER1 does not ask for passwords. And a button is
+     * pressed once -- the backend refuses the same repair twice in a session anyway, and
+     * a button that can be mashed invites exactly the loop that refusal exists to stop.
+     */
+
+    const doctorHeadline = document.getElementById('doctor-headline');
+    const doctorChecks = document.getElementById('doctor-checks');
+    const doctorStatus = document.getElementById('doctor-status');
+    const btnDoctorRun = document.getElementById('btn-doctor-run');
+
+    function setDoctorStatus(text, tone = 'info') {
+        if (!doctorStatus) return;
+        doctorStatus.classList.remove('hidden', 'text-cyan-300', 'text-green-400', 'text-red-400', 'text-slate-300', 'animate-pulse');
+        if (!text) { doctorStatus.classList.add('hidden'); return; }
+        const tones = { info: 'text-slate-300', busy: 'text-cyan-300', good: 'text-green-400', bad: 'text-red-400' };
+        doctorStatus.classList.add(tones[tone] || tones.info);
+        if (tone === 'busy') doctorStatus.classList.add('animate-pulse');
+        doctorStatus.textContent = text;
+    }
+
+    async function fetchDoctorReport() {
+        if (IS_TAURI) return tauriInvoke('doctor_report_rust');
+        const resp = await apiFetch('/api/doctor');
+        if (!resp.ok) throw new Error(`the self-check failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function requestDoctorRepair(check, repair) {
+        if (IS_TAURI) return tauriInvoke('doctor_repair_rust', { check, repair });
+        const resp = await apiFetch('/api/doctor/repair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ check, repair }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        return resp.json();
+    }
+
+    /* One row. Built as nodes rather than markup because every string in it -- a detail, a
+       command, a model name -- came from the machine, and a path with a < in it must not
+       become part of this page. */
+    function doctorRow(check) {
+        const tone = {
+            ok: ['border-green-500/30', 'text-green-400'],
+            unknown: ['border-slate-500/30', 'text-slate-400'],
+            degraded: ['border-amber-500/40', 'text-amber-400'],
+            failed: ['border-red-500/40', 'text-red-400'],
+        }[check.verdict] || ['border-cyan-500/20', 'text-cyan-300'];
+
+        const row = document.createElement('div');
+        row.className = `bg-slate-900/70 border rounded p-2 space-y-1 ${tone[0]}`;
+
+        const title = document.createElement('span');
+        title.className = `text-xs font-mono ${tone[1]}`;
+        const mark = check.verdict === 'ok' ? '✔' : check.verdict === 'unknown' ? '?' : '✖';
+        title.textContent = `${mark} ${check.title}`;
+        row.appendChild(title);
+
+        const detail = document.createElement('p');
+        detail.className = 'text-[11px] font-mono text-slate-300 leading-snug';
+        detail.textContent = check.detail;
+        row.appendChild(detail);
+
+        for (const step of check.steps || []) {
+            const line = document.createElement('p');
+            line.className = 'text-[10px] font-mono text-slate-400 leading-snug';
+            line.textContent = `→ ${step.title}: ${step.detail}`;
+            row.appendChild(line);
+            if (step.command) row.appendChild(doctorCommand(step.command));
+            if (step.url) {
+                const link = document.createElement('a');
+                link.className = 'text-[10px] font-mono text-cyan-400 underline';
+                link.href = step.url;
+                link.target = '_blank';
+                link.rel = 'noreferrer';
+                link.textContent = step.url;
+                row.appendChild(link);
+            }
+        }
+
+        if (check.repair) row.appendChild(doctorRepairRow(check));
+        return row;
+    }
+
+    function doctorCommand(command) {
+        const box = document.createElement('code');
+        box.className = 'block text-[10px] font-mono text-cyan-200 bg-slate-950 border border-cyan-500/20 rounded p-1.5 whitespace-pre-wrap break-all select-all';
+        box.textContent = command;
+        return box;
+    }
+
+    /* The repair, offered rather than made. `hand-over` prints the command and stops there
+       -- that is the line this whole feature does not cross. */
+    function doctorRepairRow(check) {
+        const repair = check.repair;
+        const wrap = document.createElement('div');
+        wrap.className = 'pt-1 space-y-1 border-t border-cyan-500/10';
+
+        const what = document.createElement('p');
+        what.className = 'text-[10px] font-mono text-slate-300 leading-snug';
+        what.textContent = repair.detail;
+        wrap.appendChild(what);
+
+        if (repair.kind === 'hand-over') {
+            const why = document.createElement('p');
+            why.className = 'text-[10px] font-mono text-amber-400 leading-snug';
+            why.textContent = 'AETHER1 will not run this one: it needs root, and AETHER1 never asks for your password. Run it yourself, then restart AETHER1.';
+            wrap.appendChild(why);
+            if (repair.command) wrap.appendChild(doctorCommand(repair.command));
+            return wrap;
+        }
+
+        const button = document.createElement('button');
+        button.className = 'cyber-btn text-[11px] py-1 px-3 text-cyan-300';
+        button.textContent = repair.title;
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            setDoctorStatus(`${repair.title}...`, 'busy');
+            try {
+                const outcome = await requestDoctorRepair(check.key, repair.id);
+                // The re-check is the answer, not the repair's own exit code: a fix whose
+                // check still fails is a failed fix, and saying otherwise is how a repair
+                // table turns into a pile of workarounds.
+                const better = outcome.rechecked === 'ok';
+                setDoctorStatus(
+                    better ? `${outcome.message} -- fixed.` : `${outcome.message} -- still not right: ${outcome.recheck_detail || ''}`,
+                    better ? 'good' : 'bad',
+                );
+                await refreshDoctor({ quiet: true });
+            } catch (e) {
+                setDoctorStatus(`⚠ ${e.message || e}`, 'bad');
+                button.disabled = false;
+            }
+        });
+        wrap.appendChild(button);
+        return wrap;
+    }
+
+    async function refreshDoctor({ quiet = false } = {}) {
+        if (!doctorChecks) return;
+        if (!quiet) setDoctorStatus('Checking every part of AETHER1...', 'busy');
+        if (btnDoctorRun) btnDoctorRun.disabled = true;
+        try {
+            const report = await fetchDoctorReport();
+            const health = report.health || report;
+            if (doctorHeadline) doctorHeadline.textContent = health.headline || '';
+            doctorChecks.replaceChildren();
+            // Broken first, then everything that is fine: the order somebody reads in when
+            // they came here because something is wrong.
+            const order = { failed: 0, degraded: 1, unknown: 2, ok: 3 };
+            const checks = [...(health.checks || [])].sort(
+                (a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9),
+            );
+            for (const check of checks) doctorChecks.appendChild(doctorRow(check));
+            for (const line of health.repeated || []) {
+                const warn = document.createElement('p');
+                warn.className = 'text-[11px] font-mono text-amber-400 leading-snug';
+                warn.textContent = `⚠ ${line}`;
+                doctorChecks.appendChild(warn);
+            }
+            if (!quiet) setDoctorStatus(health.needs_attention ? '' : 'Nothing needs doing.', 'good');
+        } catch (e) {
+            setDoctorStatus(`⚠ ${e.message || e}`, 'bad');
+        } finally {
+            if (btnDoctorRun) btnDoctorRun.disabled = false;
+        }
+    }
+
+    btnDoctorRun?.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshDoctor(); });
+
+    // Checked when the group is opened, not when Settings is: the probe spawns processes and
+    // opens connections, and most visits to Settings are not about this. Same reason the
+    // coding group probes on open, and the same reason doctor.rs has no timer.
+    document.getElementById('settings-group-doctor')?.addEventListener('toggle', (event) => {
+        if (!event.target.open || doctorChecks?.childElementCount) return;
+        refreshDoctor();
+    });
+
     /* ====================== GIVE IT A VOICE =============================
      * The brain wizard's twin, for the half of the companion that talks and listens.
      *

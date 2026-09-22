@@ -41,6 +41,11 @@ use crate::vault;
 struct AppState {
     engine: Arc<LlmEngine>,
     telemetry_tx: broadcast::Sender<Value>,
+    /// Whether this server was started with --lan. Carried on the state because
+    /// `/api/doctor` reports it: the TLS certificate and the mDNS announcement only exist in
+    /// the --lan case, and a check that claimed otherwise would be reporting a fault on a
+    /// loopback server for missing things it was never asked to have.
+    lan: bool,
 }
 
 /// What the two `--lan` gates share: the token to check against, and the record of who has
@@ -98,6 +103,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
     let state = AppState {
         engine,
         telemetry_tx,
+        lan,
     };
     let static_service =
         ServeDir::new(project_root().join("frontend")).append_index_html_on_directories(true);
@@ -150,6 +156,8 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/status", get(voice_status))
         .route("/api/personas", get(list_personas))
         .route("/api/flow", get(flow_mode).post(set_flow_mode))
+        .route("/api/doctor", get(doctor_report))
+        .route("/api/doctor/repair", post(doctor_repair))
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
@@ -513,6 +521,41 @@ async fn stt(
 
 async fn voice_status(State(state): State<AppState>) -> Json<Value> {
     Json(commands::voice_status(&state.engine))
+}
+
+/// The browser HUD's counterpart of `doctor_report_rust`. The facts a desktop process would
+/// fill in are left unset on purpose: this process is a server, not the window, so it cannot
+/// say whether a HUD is answering or a hotkey registered, and the report says so per row
+/// rather than reporting a thing nobody asked as healthy.
+///
+/// It does say what it *can* see about serving, which the desktop app cannot: this is the
+/// process that bound the port.
+async fn doctor_report(State(state): State<AppState>) -> Json<Value> {
+    let facts = crate::doctor::Facts {
+        in_app: false,
+        serving: Some(true),
+        lan: Some(state.lan),
+        ..Default::default()
+    };
+    Json(commands::doctor_report(&state.engine, facts))
+}
+
+#[derive(Deserialize)]
+struct DoctorRepairRequest {
+    check: String,
+    repair: String,
+}
+
+/// One repair, asked for from the browser HUD's Diagnostics panel. Reachable only with a
+/// valid token under --lan, like every other mutating route here; the in-app repairs are not
+/// offered, because this process holds no window to make them with.
+async fn doctor_repair(
+    State(state): State<AppState>,
+    Json(req): Json<DoctorRepairRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::doctor_repair(&state.engine, &req.check, &req.repair, None)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 /// The browser HUD's counterpart of `flow_mode_rust`, so the chin bar's STATIC/FLOW

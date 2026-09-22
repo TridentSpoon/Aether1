@@ -44,6 +44,28 @@ pub fn show_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Whether the last attempt to register a chord succeeded, for anyone asking from outside.
+/// `None` until something has tried, which is what a process with no hotkey to register --
+/// `aether1 doctor` in a terminal -- honestly reports. A static rather than a returned value
+/// because the question is asked much later, by doctor.rs, from a different call stack.
+static REGISTERED: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+
+/// The answer to "did the hotkey take?", or None when nothing in this process has tried.
+pub fn registered() -> Option<bool> {
+    match REGISTERED.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
+}
+
+fn remember(result: &Result<(), String>) {
+    REGISTERED.store(
+        if result.is_ok() { 1 } else { 0 },
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// Registers `chord` as the toggle hotkey, replacing whatever was registered before.
 /// Returns the parse/registration error rather than panicking: a bad chord in the settings
 /// table must not stop the app from starting.
@@ -58,7 +80,7 @@ pub fn register<R: Runtime>(app: &AppHandle<R>, chord: &str) -> Result<(), Strin
     // means a failed re-register can't leave two chords both live.
     let _ = manager.unregister_all();
 
-    manager
+    let result = manager
         .on_shortcut(shortcut, |app, _shortcut, event| {
             // Press only. Without this the handler runs again on release and the window
             // toggles straight back.
@@ -66,7 +88,9 @@ pub fn register<R: Runtime>(app: &AppHandle<R>, chord: &str) -> Result<(), Strin
                 toggle_window(app);
             }
         })
-        .map_err(|e| format!("could not register {chord:?}: {e}"))
+        .map_err(|e| format!("could not register {chord:?}: {e}"));
+    remember(&result);
+    result
 }
 
 /// Re-reads hotkey_toggle from the settings table and registers it. Called at startup and
@@ -77,8 +101,10 @@ pub fn reregister_from_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), St
         .db()
         .get_setting_string("hotkey_toggle", DEFAULT_TOGGLE);
     if chord.trim().is_empty() {
-        // An empty chord is how the operator turns the hotkey off.
+        // An empty chord is how the operator turns the hotkey off. Nothing was attempted, so
+        // the registration question goes back to having no answer rather than a false one.
         let _ = app.global_shortcut().unregister_all();
+        REGISTERED.store(-1, std::sync::atomic::Ordering::Relaxed);
         return Ok(());
     }
     register(app, chord.trim())

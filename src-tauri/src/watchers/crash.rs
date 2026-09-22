@@ -559,6 +559,10 @@ impl CrashWatch {
     /// does not suddenly announce the crash it had an hour ago.
     pub fn poll(&mut self, muted: &[String]) -> Result<Vec<Crash>, String> {
         let found = self.reader.crashes_since(self.since)?;
+        // Recorded on the way through, and only on a sweep that actually read the machine:
+        // `aether1 doctor` asks "is the watcher watching?", and a reader that errored every
+        // time would otherwise look identical to one ticking along.
+        LAST_SWEEP.store(now_seconds(), std::sync::atomic::Ordering::Relaxed);
         let mut news = Vec::new();
         for crash in found {
             if !self.seen.is_new(&crash) {
@@ -577,6 +581,23 @@ impl Default for CrashWatch {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// When the last sweep finished, as unix seconds, or 0 when no sweep has run in this
+/// process. A static rather than a field on `CrashWatch` because the question is asked from
+/// outside the watcher -- doctor.rs runs in the same process and holds no handle to it -- and
+/// there is only ever one watch per process.
+static LAST_SWEEP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How long ago the crash watcher last swept, or None when nothing has swept here. A
+/// terminal invocation of `aether1 doctor` starts no watcher, so None is its usual answer and
+/// means "not asked", not "stopped".
+pub fn secs_since_last_sweep() -> Option<u64> {
+    let at = LAST_SWEEP.load(std::sync::atomic::Ordering::Relaxed);
+    if at == 0 {
+        return None;
+    }
+    Some(now_seconds().saturating_sub(at))
 }
 
 fn now_seconds() -> u64 {

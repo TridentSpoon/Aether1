@@ -2412,7 +2412,7 @@ signature proves what was downloaded. A token that is stolen, a release asset re
 copy passed hand to hand on a USB stick are all cases where the second question is the one
 that counts.
 
-### Step 47: diagnostics that fixes things, and a fix that has to prove itself
+### Step 47: diagnostics that fixes things, and a fix that has to prove itself -- **shipped, rungs 0 and 1**
 
 **What this app calls diagnostics today is a report about the machine, not about itself.**
 `aether1 status` prints `Telemetry::diagnostic_report()` -- CPU, RAM, disk, network, top
@@ -2652,6 +2652,60 @@ this repository, reviewed like any other. And it runs at startup, again the mome
 actually fails, and whenever the operator asks -- never on a timer, because the cost of
 watching has to stay smaller than the cost of the thing being watched.
 
+#### What shipped, and what the consent question turned out to be
+
+`src-tauri/src/doctor.rs`. All fourteen checks, the probe/verdict split, rung 0, rung 1, and
+rung 3's one-attempt limit. Three surfaces: `aether1 doctor` in a terminal, the 🩺 group in
+Settings, and `/api/doctor` for the browser HUD. Three moments and no timer, as settled: the
+whole list runs three seconds after launch (on a thread, so it is not in front of the window
+appearing), on demand from either surface, and nothing sweeps.
+
+**The consent question got a sharper answer than the spec had.** The design said rung 1 runs
+through `tools::consent`, and the ask that prompted the implementation was explicit that
+installing a missing dependency must still be asked for at the moment of acting. What that
+turns into, once the repairs are written out, is a split by *what the act needs* rather than by
+how dangerous it sounds:
+
+- A repair inside AETHER1's own reach -- start the model server it is configured to use,
+  download the voice or the model it is configured to have, expire the proposals nobody
+  answered, re-register the hotkey -- is proposed, and made when the operator says so. In a
+  terminal that is a typed `y` per repair; in the HUD it is the button for that one repair.
+  There is no batch, no `--yes`, and on a pipe nothing is changed at all, because a
+  `doctor --fix` in a cron job would be exactly the silent auto-repair this is not.
+- A repair that needs root is **never run by AETHER1**, approval or no approval. It is handed
+  over as the exact command. An app that installs packages is an app that holds a password,
+  and that is a bigger change to what AETHER1 is than any missing decoder is worth. This is
+  the same line `installs.rs` already draws around package-manager copies, and it is why the
+  GStreamer decoders -- the one dependency whose absence is genuinely invisible -- arrive as a
+  command with a paragraph rather than a button.
+
+`Verdict` grew a fourth value the spec did not have: `Unknown`. Several of these facts exist
+only inside the desktop process -- whether the window answers, whether the hotkey took, whether
+the watcher's poll is ticking -- and `aether1 doctor` in a terminal is a different process. The
+alternative was reporting those as healthy, and a known-unknowable reported as fine is the kind
+of silence this project treats as a bug.
+
+**Rung 2 and the feedback loop are not built, and are not pretended.** Rung 2 is step 15's
+agent hand-off, which has not shipped; there is nothing to hand off to yet. The GitHub issue is
+step 46's identity plus an `issues: write` scope the App does not have. What is built instead is
+the honest subset: `aether1 doctor --report` writes the verdicts *and the observation* where the
+operator can read them, edit them and paste them, and it says in the file that it goes nowhere
+on its own. When step 15 and step 46 land, the record and the fixture are already the shape the
+issue needs.
+
+**The fixture mechanism works end to end.** `aether1 doctor --json` prints the observation,
+`aether1 doctor --replay <file>` judges one recorded anywhere -- including inside a `--report`
+bundle, so the file a person was going to send is directly replayable -- and the twenty-odd
+tests in `doctor.rs` are exactly that: hand-written observations, judged, with no Ollama, no
+desktop session and no Windows. One of them takes a Linux observation of a missing tray host
+and judges it as Windows to prove the OS is read from the record rather than from the runner.
+
+**Still to do here:** rung 2 when step 15 lands, the issue when step 46 does, and the update
+check itself (check 14 reports "no update path in this build yet" rather than a fault, which is
+true and will stop being true). And two verdicts nobody has been able to exercise in a
+container: the tray-host probe against a real session bus, and the window check against a HUD
+that has actually stopped answering.
+
 ### Step 48: the copies of itself it left behind — **shipped**
 
 AETHER1 has been installable five different ways, and not one of them knows about the others.
@@ -2878,7 +2932,8 @@ mode, the theme engine, the top bar, personas as specialities, per-persona acces
 *and* operator-widened fields, a command allowlist that ships usable, reading the Windows
 event log, honest token telemetry, and native tool calling. Plus, since step 49, a
 coding model chosen, fetched and wired to a coding agent from inside the app, for the weeks
-a cloud subscription is not being paid for.
+a cloud subscription is not being paid for. Plus, since step 47, an app that can say whether it
+is working and repair the ground it stands on when told to.
 
 **Outstanding, in the order they are worth doing:**
 
@@ -2904,9 +2959,12 @@ a cloud subscription is not being paid for.
 6. **Step 46, updates for installed copies.** The updater in `main.rs` needs a git checkout
    and a logged-in `gh`, so everyone who installed from a Release is on whatever version
    they downloaded, permanently.
-7. **Step 47, diagnostics that fixes things.** `aether1 status` describes the machine and
-   nothing describes the app, so "is AETHER1 working?" has no answer and every subsystem
-   reports its health to whoever happens to call it. Specified, not started.
+7. ~~**Step 47, diagnostics that fixes things.**~~ **Rungs 0 and 1 shipped.** `aether1 doctor`
+   now answers "is AETHER1 working?" as fourteen checks, and repairs the ones it has a
+   hand-written repair for -- each one asked for at the moment of acting, and a repair needing
+   root handed over as a command rather than run. Rung 2 waits on step 15's agent hand-off and
+   the bug-report-as-issue waits on step 46's GitHub identity; until then `doctor --report`
+   writes the bundle out for a person to send.
 8. ~~**Step 48, the copies of itself it left behind.**~~ **Shipped.** Installing AETHER1 a
    second way never removed the first, so an old binary kept sitting on `PATH` with a bug in
    it that had already been fixed. `aether1 installs` now finds every copy and removes the
