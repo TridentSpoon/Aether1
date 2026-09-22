@@ -794,6 +794,7 @@ pub fn code_advice(engine: &LlmEngine) -> crate::code_setup::CodingAdvice {
     crate::code_setup::advise(
         &scan,
         ram_total_gb,
+        crate::gpu::cached(),
         crate::local_only::enabled(db),
         crate::code_setup::AgentsFound::probe(),
         own_model.as_deref(),

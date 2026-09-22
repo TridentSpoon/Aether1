@@ -90,6 +90,10 @@ pub struct CodingModel {
     pub needs_gb: f64,
     /// Whether this machine has the memory to run it comfortably.
     pub fits: bool,
+    /// Whether it fits on the graphics card, which is the difference between an answer that
+    /// arrives while you are still reading the question and one you wait for. `false` on a
+    /// machine with no dedicated card, where every model runs on the processor.
+    pub fits_on_gpu: bool,
     /// The one pre-selected for this machine.
     pub recommended: bool,
     /// Whether the server already has it, so the HUD offers Use rather than Download.
@@ -111,7 +115,8 @@ pub struct CodingModel {
 /// The two rules from `setup::CATALOGUE` hold here too, and `catalogue_is_ordered_by_memory`
 /// enforces the first: `needs_gb` never decreases down the list, because the picker takes
 /// the *last* entry that fits, which makes the last entry of each memory group that group's
-/// recommendation.
+/// recommendation. The video-memory column is held to the same rule by the same test, for
+/// the same reason -- `models_for` takes the last entry that fits on the card too.
 ///
 /// Every entry is a model trained for code rather than a general model that can also write
 /// some. That is the whole point of a separate list: on a 16 GB machine the best chat model
@@ -121,7 +126,11 @@ pub struct CodingModel {
 /// The memory figures are generous for the reason `setup.rs` gives -- a model that loads in
 /// its theoretical minimum and then swaps for forty seconds per edit is, to the person who
 /// followed this wizard, a broken program.
-const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
+/// The video-memory figures are the weights plus a working margin for the context: what it
+/// takes for the whole model to sit on the card. A model over the line still runs -- the
+/// parts that do not fit are worked out by the processor instead -- it is just slower, which
+/// is why `fits_on_gpu` is a separate answer from `fits` rather than a smaller list.
+const CATALOGUE: &[(&str, &str, &str, &str, f64, f64, bool)] = &[
     (
         "qwen2.5-coder:1.5b",
         "Qwen 2.5 Coder (tiny)",
@@ -129,6 +138,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
          across several files, but it runs on almost anything.",
         "about 1 GB",
         4.0,
+        2.0,
         false,
     ),
     (
@@ -138,6 +148,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
          function at a time.",
         "about 1.9 GB",
         5.0,
+        3.0,
         false,
     ),
     (
@@ -147,6 +158,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
          to it. A sensible floor for real work.",
         "about 4.7 GB",
         10.0,
+        6.0,
         true,
     ),
     (
@@ -156,6 +168,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
          the best pick for an ordinary 32 GB machine.",
         "about 9 GB",
         18.0,
+        11.0,
         true,
     ),
     (
@@ -165,6 +178,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
          Every parameter works on every word, so it is accurate and it is slow.",
         "about 14 GB",
         26.0,
+        16.0,
         true,
     ),
     (
@@ -175,6 +189,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
          all. Reads a very long file without losing the thread.",
         "about 19 GB",
         30.0,
+        22.0,
         true,
     ),
     (
@@ -184,26 +199,45 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
          memory to do it. Same trick as the 30B: big on disk, small per word.",
         "about 46 GB",
         56.0,
+        50.0,
         true,
     ),
 ];
 
-/// The models worth offering on a machine with `ram_total_gb` of memory, marking which the
-/// server already has.
+/// The models worth offering on a machine with `ram_total_gb` of memory and, when it has a
+/// dedicated graphics card, `vram_gb` of video memory, marking which the server already has.
 ///
 /// Like the brain catalogue, the whole list comes back whatever the machine is. Hiding the
 /// big one from somebody who knows their hardware better than this heuristic does is worse
 /// than letting them pick it and find out.
-pub fn models_for(ram_total_gb: f64, installed: &[String]) -> Vec<CodingModel> {
+///
+/// **The card decides the recommendation when there is one.** A local model is not really
+/// running on the computer, it is running on whichever memory holds its weights, and the
+/// difference between the two is not a few percent: a model that sits entirely on the card
+/// answers while you are still reading the question, and the same model a gigabyte over the
+/// line has part of itself worked out by the processor at a fraction of the speed. Sizing an
+/// edit-and-test loop off system memory alone is how somebody with a 4 GB laptop card and
+/// plenty of RAM gets told to download a model that will make them give up on the feature.
+/// So the card's own ladder picks, and system memory is the fallback for a machine with no
+/// dedicated card -- where the models genuinely do run on the processor out of system RAM.
+pub fn models_for(
+    ram_total_gb: f64,
+    vram_gb: Option<f64>,
+    installed: &[String],
+) -> Vec<CodingModel> {
     // The same seventy percent the brain catalogue spends, and for the same reason: the OS,
     // the webview and the HUD are already resident, and the figure handed in is total
     // rather than free.
     let usable = ram_total_gb * 0.7;
+    // A card is not running a desktop, a webview and a browser out of the same pool, so it
+    // keeps far more of what it has. What it does lose is the compositor's framebuffers and
+    // whatever the HUD's own three.js scene is holding, which is what the tenth is for.
+    let usable_vram = vram_gb.map(|gb| gb * 0.9);
 
     let mut choices: Vec<CodingModel> = CATALOGUE
         .iter()
         .map(
-            |(name, label, blurb, download, needs_gb, runs_aether1)| CodingModel {
+            |(name, label, blurb, download, needs_gb, needs_vram_gb, runs_aether1)| CodingModel {
                 installed: has_model(installed, name),
                 name: name.to_string(),
                 label: label.to_string(),
@@ -211,21 +245,49 @@ pub fn models_for(ram_total_gb: f64, installed: &[String]) -> Vec<CodingModel> {
                 download: download.to_string(),
                 needs_gb: *needs_gb,
                 fits: *needs_gb <= usable,
+                fits_on_gpu: usable_vram.is_some_and(|room| *needs_vram_gb <= room),
                 recommended: false,
                 runs_aether1: *runs_aether1,
             },
         )
         .collect();
 
-    // The largest that fits, or the smallest on the list if nothing does. A machine under
-    // the floor still gets a recommendation, because "your computer is unsuitable" is not a
-    // next step.
-    let best = choices
-        .iter()
-        .rposition(|choice| choice.needs_gb <= usable)
-        .unwrap_or(0);
+    // The largest that fits on the card. A card too small for even the first entry is not a
+    // card worth sizing against -- an old laptop chip with 1 GB would otherwise veto a
+    // machine with 64 GB of system memory -- so that case falls through to the memory rule
+    // as if there were no card at all.
+    let on_card = choices.iter().rposition(|choice| choice.fits_on_gpu);
+
+    // The largest that fits in memory, or the smallest on the list if nothing does. A
+    // machine under the floor still gets a recommendation, because "your computer is
+    // unsuitable" is not a next step.
+    let best = on_card.unwrap_or_else(|| {
+        choices
+            .iter()
+            .rposition(|choice| choice.needs_gb <= usable)
+            .unwrap_or(0)
+    });
     choices[best].recommended = true;
     choices
+}
+
+/// The sentence under the model list saying what the recommendation was measured against.
+///
+/// Worth saying out loud because the answer is surprising on exactly the machines where it
+/// matters: somebody with 64 GB of system memory and a small card is being offered a small
+/// model, and without this line that reads as the wizard failing to notice the 64 GB.
+pub fn sized_against(ram_total_gb: f64, gpu: Option<&crate::gpu::Gpu>) -> String {
+    match gpu {
+        Some(card) if card.vram_gb.is_some() => format!(
+            "Sized for {}, so the whole model sits on the card. Anything past that still \
+             runs, with the part that does not fit worked out by the processor instead.",
+            card.summary()
+        ),
+        _ => format!(
+            "Sized for {ram_total_gb:.0} GB of system memory. No dedicated graphics card was \
+             found, so these run on the processor."
+        ),
+    }
 }
 
 /// Whether a server's model list contains `name`.
@@ -592,6 +654,9 @@ pub struct CodingAdvice {
     pub model_installed: bool,
     /// The context window the connect steps ask for.
     pub context_tokens: u32,
+    /// What the recommendation was measured against, in a sentence, so the reason a large
+    /// machine is being offered a small model is on the panel rather than inferred.
+    pub sized_against: String,
     /// The model AETHER1 itself is configured to run on, when that is a model on this
     /// machine. `None` for a cloud provider, where none of this applies, and for a fresh
     /// install that has not chosen one.
@@ -617,6 +682,7 @@ pub struct CodingAdvice {
 pub fn advise(
     scan: &ScanResult,
     ram_total_gb: f64,
+    gpus: &[crate::gpu::Gpu],
     local_only: bool,
     found: AgentsFound,
     aether1_model: Option<&str>,
@@ -634,7 +700,9 @@ pub fn advise(
     let installed: Vec<String> = running.map(|s| s.models.clone()).unwrap_or_default();
     let endpoint = running.map(|s| s.endpoint.clone());
 
-    let models = models_for(ram_total_gb, &installed);
+    // The card, not the machine, when there is one. See `models_for`.
+    let card = crate::gpu::dedicated(gpus);
+    let models = models_for(ram_total_gb, card.and_then(|gpu| gpu.vram_gb), &installed);
 
     // The model every command below is built around. A coding model that is already here
     // beats one that would have to be downloaded, however much better the download is --
@@ -666,6 +734,7 @@ pub fn advise(
         chosen.runs_aether1 && (aether1_model_too_small || aether1_model.is_none());
 
     let num_ctx = context_tokens(ram_total_gb);
+    let sized_against = sized_against(ram_total_gb, card);
 
     // Built before the stage is decided rather than after, so "is an agent installed?" is
     // answered by the same list the HUD draws. Deciding it separately is how a panel ends
@@ -766,6 +835,7 @@ pub fn advise(
         model,
         model_installed,
         context_tokens: num_ctx,
+        sized_against,
         aether1_model,
         aether1_model_too_small,
         covers_aether1_too,
@@ -832,17 +902,30 @@ mod tests {
 
     /// Rule 1 of the catalogue, and the one `models_for` silently depends on: it takes the
     /// *last* entry that fits, so a list that is not sorted by memory recommends the wrong
-    /// model on every machine rather than failing anywhere visible.
+    /// model on every machine rather than failing anywhere visible. Both columns, because
+    /// there are now two ladders and `models_for` takes the last entry that fits on each.
     #[test]
     fn catalogue_is_ordered_by_memory() {
         let mut previous = 0.0;
-        for (name, _, _, _, needs_gb, _) in CATALOGUE {
+        let mut previous_vram = 0.0;
+        for (name, _, _, _, needs_gb, needs_vram_gb, _) in CATALOGUE {
             assert!(
                 *needs_gb >= previous,
                 "{name} needs less memory than the entry before it; the catalogue must not \
                  decrease, because models_for picks the last entry that fits"
             );
+            assert!(
+                *needs_vram_gb >= previous_vram,
+                "{name} needs less video memory than the entry before it; the same rule \
+                 applies, because models_for picks the last entry that fits on the card"
+            );
+            assert!(
+                needs_vram_gb < needs_gb,
+                "{name} wants more video memory than system memory, which would mean a card \
+                 big enough to run it on a machine too small to load it"
+            );
             previous = *needs_gb;
+            previous_vram = *needs_vram_gb;
         }
     }
 
@@ -851,7 +934,7 @@ mod tests {
     /// wizard recommended can leave it still saying "download a model built for code".
     #[test]
     fn every_catalogue_entry_reads_as_a_coding_model() {
-        for (name, _, _, _, _, _) in CATALOGUE {
+        for (name, _, _, _, _, _, _) in CATALOGUE {
             assert!(
                 is_coding_model(name),
                 "{name} is not matched by is_coding_model"
@@ -872,7 +955,7 @@ mod tests {
     #[test]
     fn an_implicit_latest_tag_counts_as_installed() {
         let installed = vec!["devstral:latest".to_string()];
-        let models = models_for(64.0, &installed);
+        let models = models_for(64.0, None, &installed);
         let devstral = models.iter().find(|m| m.name == "devstral").unwrap();
         assert!(devstral.installed);
     }
@@ -883,7 +966,7 @@ mod tests {
     /// both jobs and then, once it is selected, calls it too small for one of them.
     #[test]
     fn the_table_and_the_size_rule_agree_on_every_entry() {
-        for (name, _, _, _, _, runs_aether1) in CATALOGUE {
+        for (name, _, _, _, _, _, runs_aether1) in CATALOGUE {
             assert_eq!(
                 *runs_aether1,
                 !too_small_for_tools(name),
@@ -898,7 +981,7 @@ mod tests {
     #[test]
     fn the_catalogue_never_stops_running_aether1_once_it_starts() {
         let mut started = false;
-        for (name, _, _, _, _, runs_aether1) in CATALOGUE {
+        for (name, _, _, _, _, _, runs_aether1) in CATALOGUE {
             if *runs_aether1 {
                 started = true;
             } else {
@@ -930,6 +1013,7 @@ mod tests {
         let advice = advise(
             &scan_with(&["qwen2.5-coder:7b"]),
             32.0,
+            &[],
             false,
             NO_AGENTS,
             Some("llama3.2:1b"),
@@ -949,6 +1033,7 @@ mod tests {
         let advice = advise(
             &scan_with(&["qwen2.5-coder:7b"]),
             32.0,
+            &[],
             false,
             NO_AGENTS,
             Some("qwen2.5-coder:14b"),
@@ -961,7 +1046,14 @@ mod tests {
     /// it does would be the panel promising something the download will not deliver.
     #[test]
     fn a_model_below_the_floor_does_not_claim_to_cover_both() {
-        let advice = advise(&scan_with(&[]), 6.0, false, NO_AGENTS, Some("llama3.2:1b"));
+        let advice = advise(
+            &scan_with(&[]),
+            6.0,
+            &[],
+            false,
+            NO_AGENTS,
+            Some("llama3.2:1b"),
+        );
         let pick = advice.models.iter().find(|m| m.recommended).unwrap();
         assert!(!pick.runs_aether1);
         assert!(advice.aether1_model_too_small);
@@ -972,7 +1064,7 @@ mod tests {
     #[test]
     fn a_bigger_size_of_the_same_family_is_not_installed() {
         let installed = vec!["qwen2.5-coder:7b".to_string()];
-        let models = models_for(64.0, &installed);
+        let models = models_for(64.0, None, &installed);
         let seven = models
             .iter()
             .find(|m| m.name == "qwen2.5-coder:7b")
@@ -987,14 +1079,14 @@ mod tests {
 
     #[test]
     fn a_small_machine_is_recommended_a_small_model() {
-        let models = models_for(8.0, &[]);
+        let models = models_for(8.0, None, &[]);
         let pick = models.iter().find(|m| m.recommended).unwrap();
         assert_eq!(pick.name, "qwen2.5-coder:3b");
     }
 
     #[test]
     fn a_workstation_is_recommended_the_largest_that_fits() {
-        let models = models_for(64.0, &[]);
+        let models = models_for(64.0, None, &[]);
         let pick = models.iter().find(|m| m.recommended).unwrap();
         assert_eq!(pick.name, "qwen3-coder:30b");
     }
@@ -1003,7 +1095,7 @@ mod tests {
     /// next step, and the smallest model is genuinely worth a try.
     #[test]
     fn a_machine_below_the_floor_still_gets_a_recommendation() {
-        let models = models_for(2.0, &[]);
+        let models = models_for(2.0, None, &[]);
         assert_eq!(models.iter().filter(|m| m.recommended).count(), 1);
         assert!(!models[0].fits);
         assert!(models[0].recommended);
@@ -1013,14 +1105,116 @@ mod tests {
     /// a RAM heuristic does gets to pick past it.
     #[test]
     fn models_that_do_not_fit_are_still_offered() {
-        let models = models_for(8.0, &[]);
+        let models = models_for(8.0, None, &[]);
         assert_eq!(models.len(), CATALOGUE.len());
         assert!(models.iter().any(|m| !m.fits));
     }
 
+    fn card(name: &str, vram_gb: f64) -> crate::gpu::Gpu {
+        crate::gpu::Gpu {
+            name: name.to_string(),
+            vram_gb: Some(vram_gb),
+            integrated: false,
+        }
+    }
+
+    /// The case that started this: a big machine with a mid-sized card. Sized off system
+    /// memory alone it is told to download 19 GB of Qwen 3 Coder, most of which will not fit
+    /// on the card and will be worked out by the processor one word at a time.
+    #[test]
+    fn a_card_smaller_than_the_machine_decides_the_recommendation() {
+        let by_ram = models_for(64.0, None, &[]);
+        assert_eq!(
+            by_ram.iter().find(|m| m.recommended).unwrap().name,
+            "qwen3-coder:30b"
+        );
+
+        let by_card = models_for(64.0, Some(16.0), &[]);
+        let pick = by_card.iter().find(|m| m.recommended).unwrap();
+        assert_eq!(pick.name, "qwen2.5-coder:14b");
+        assert!(pick.fits_on_gpu);
+        // Still listed, and still marked as something this machine can run -- just not
+        // something the card can hold.
+        let bigger = by_card
+            .iter()
+            .find(|m| m.name == "qwen3-coder:30b")
+            .unwrap();
+        assert!(bigger.fits);
+        assert!(!bigger.fits_on_gpu);
+    }
+
+    /// A laptop card: 4 GB against 16 GB of system memory. The memory rule offers the 7B,
+    /// which on that machine means half the model on the processor.
+    #[test]
+    fn a_small_laptop_card_pulls_the_recommendation_down() {
+        let models = models_for(16.0, Some(4.0), &[]);
+        assert_eq!(
+            models.iter().find(|m| m.recommended).unwrap().name,
+            "qwen2.5-coder:3b"
+        );
+    }
+
+    /// Onboard graphics are not a budget of their own -- their memory is the system memory
+    /// already counted -- so `gpu::dedicated` hands `None` here and the memory rule stands.
+    #[test]
+    fn onboard_graphics_leave_the_memory_rule_alone() {
+        let onboard = [crate::gpu::Gpu {
+            name: "AMD Radeon Graphics".to_string(),
+            vram_gb: Some(0.5),
+            integrated: true,
+        }];
+        assert!(crate::gpu::dedicated(&onboard).is_none());
+        let models = models_for(32.0, None, &[]);
+        assert_eq!(
+            models.iter().find(|m| m.recommended).unwrap().name,
+            "qwen2.5-coder:14b"
+        );
+    }
+
+    /// A card too small for anything on the list must not veto the machine it is in. An old
+    /// 1 GB display adapter in a 64 GB workstation would otherwise recommend the 1.5B.
+    #[test]
+    fn a_card_too_small_for_the_list_falls_back_to_memory() {
+        let models = models_for(64.0, Some(1.0), &[]);
+        assert!(models.iter().all(|m| !m.fits_on_gpu));
+        assert_eq!(
+            models.iter().find(|m| m.recommended).unwrap().name,
+            "qwen3-coder:30b"
+        );
+    }
+
+    /// The panel has to say which of the two rules it used, because on the machines where
+    /// they disagree the answer looks like a bug otherwise.
+    #[test]
+    fn the_panel_says_what_it_sized_against() {
+        let with_card = sized_against(64.0, Some(&card("Radeon RX 6800 XT", 16.0)));
+        assert!(with_card.contains("Radeon RX 6800 XT"));
+        assert!(with_card.contains("16 GB"));
+
+        let without = sized_against(32.0, None);
+        assert!(without.contains("32 GB of system memory"));
+        assert!(without.contains("dedicated graphics card was found"));
+    }
+
+    /// End to end: the advice a desktop with a 6800 XT gets is the card's answer, not the
+    /// machine's.
+    #[test]
+    fn the_advice_is_built_around_the_model_the_card_can_hold() {
+        let advice = advise(
+            &scan_with(&[]),
+            64.0,
+            &[card("Radeon RX 6800 XT", 16.0)],
+            false,
+            NO_AGENTS,
+            None,
+        );
+        assert_eq!(advice.model, "qwen2.5-coder:14b");
+        assert!(advice.sized_against.contains("Radeon RX 6800 XT"));
+    }
+
     #[test]
     fn nothing_running_points_back_at_the_brain() {
-        let advice = advise(&empty_scan(), 32.0, false, NO_AGENTS, None);
+        let advice = advise(&empty_scan(), 32.0, &[], false, NO_AGENTS, None);
         assert_eq!(advice.stage, Stage::NoServer);
         assert!(advice.needs_attention);
         assert!(advice.endpoint.is_none());
@@ -1028,7 +1222,14 @@ mod tests {
 
     #[test]
     fn a_server_of_chat_models_is_told_to_get_a_coding_one() {
-        let advice = advise(&scan_with(&["llama3.2:3b"]), 32.0, false, NO_AGENTS, None);
+        let advice = advise(
+            &scan_with(&["llama3.2:3b"]),
+            32.0,
+            &[],
+            false,
+            NO_AGENTS,
+            None,
+        );
         assert_eq!(advice.stage, Stage::NoCodingModel);
         assert!(!advice.model_installed);
         assert_eq!(advice.endpoint.as_deref(), Some("http://localhost:11434"));
@@ -1039,6 +1240,7 @@ mod tests {
         let advice = advise(
             &scan_with(&["qwen2.5-coder:7b"]),
             32.0,
+            &[],
             false,
             NO_AGENTS,
             None,
@@ -1054,7 +1256,14 @@ mod tests {
             opencode: true,
             aider: false,
         };
-        let advice = advise(&scan_with(&["qwen2.5-coder:7b"]), 32.0, false, found, None);
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b"]),
+            32.0,
+            &[],
+            false,
+            found,
+            None,
+        );
         assert_eq!(advice.stage, Stage::Ready);
         assert!(!advice.needs_attention);
     }
@@ -1066,6 +1275,7 @@ mod tests {
         let advice = advise(
             &scan_with(&["qwen2.5-coder:14b"]),
             32.0,
+            &[],
             false,
             NO_AGENTS,
             None,
@@ -1105,7 +1315,7 @@ mod tests {
             models: vec!["qwen2.5-coder:7b".to_string()],
             label: "OpenAI-compatible server".to_string(),
         }];
-        let advice = advise(&scan, 32.0, false, NO_AGENTS, None);
+        let advice = advise(&scan, 32.0, &[], false, NO_AGENTS, None);
 
         let commands = |key: &str| -> String {
             advice
@@ -1137,6 +1347,7 @@ mod tests {
         let advice = advise(
             &scan_with(&["qwen2.5-coder:7b"]),
             32.0,
+            &[],
             false,
             NO_AGENTS,
             None,
@@ -1160,7 +1371,7 @@ mod tests {
     fn a_server_on_another_port_is_carried_into_the_commands() {
         let mut scan = empty_scan();
         scan.local_servers = vec![server(1234, &["qwen2.5-coder:7b"])];
-        let advice = advise(&scan, 32.0, false, NO_AGENTS, None);
+        let advice = advise(&scan, 32.0, &[], false, NO_AGENTS, None);
         let opencode = advice.agents.iter().find(|a| a.key == "opencode").unwrap();
         let config: String = opencode
             .connect
@@ -1177,6 +1388,7 @@ mod tests {
         let advice = advise(
             &scan_with(&["qwen2.5-coder:7b"]),
             64.0,
+            &[],
             false,
             NO_AGENTS,
             None,
@@ -1191,7 +1403,14 @@ mod tests {
 
     #[test]
     fn local_only_is_said_before_anything_that_needs_the_network() {
-        let advice = advise(&scan_with(&["llama3.2:3b"]), 32.0, true, NO_AGENTS, None);
+        let advice = advise(
+            &scan_with(&["llama3.2:3b"]),
+            32.0,
+            &[],
+            true,
+            NO_AGENTS,
+            None,
+        );
         assert!(advice.local_only);
         assert!(advice.steps[0].title.contains("Local-only"));
     }
@@ -1204,7 +1423,14 @@ mod tests {
             opencode: true,
             aider: true,
         };
-        let advice = advise(&scan_with(&["qwen3-coder:30b"]), 64.0, true, found, None);
+        let advice = advise(
+            &scan_with(&["qwen3-coder:30b"]),
+            64.0,
+            &[],
+            true,
+            found,
+            None,
+        );
         assert_eq!(advice.stage, Stage::Ready);
         assert!(!advice.steps[0].title.contains("Local-only"));
     }

@@ -2756,11 +2756,11 @@ no server, no coding model, no agent, ready.
 
 **Three decisions inside it are worth writing down.**
 
-*The catalogue is sized against total RAM, not video memory.* Nothing in AETHER1 reads VRAM
-today, and inventing a number is worse than using the one the brain catalogue already
-trusts. The whole list is returned with each entry marked `fits`, and the HUD folds the ones
-that do not behind a tick -- somebody who knows their graphics card better than a heuristic
-does gets to pick past it.
+*The catalogue is sized against the graphics card when there is one, and system memory
+otherwise.* It shipped sized against RAM alone, which was wrong on the machines this feature
+is for -- see the follow-up below. The whole list is returned either way, with each entry
+marked `fits` and `fits_on_gpu`, and the HUD folds the ones that do not fit behind a tick --
+somebody who knows their hardware better than a heuristic does gets to pick past it.
 
 *A tag means a size, and no tag means latest.* `devstral` is pulled as `devstral` and
 reported back as `devstral:latest`, so an equality test tells somebody to download what they
@@ -2774,6 +2774,55 @@ and an agent handed a small window does not fail -- it silently forgets the top 
 it is editing and writes something that contradicts it. That is the same quiet failure
 `voice_setup.rs` exists to prevent, and it is worth a line of configuration in every connect
 step: `OLLAMA_CONTEXT_LENGTH` for opencode, `.aider.model.settings.yml` for aider.
+
+#### Follow-up: the hardware monitor never looked at the graphics card
+
+Sizing the coding catalogue off system memory was flagged as an oversight, and it was a
+bigger one than the catalogue: the hardware monitor reported CPU, RAM, disk, network and
+battery, on a program whose entire job is running models, and said nothing about the one
+number that decides what it can run.
+
+**A local model does not run on the computer, it runs on whichever memory holds its
+weights.** That is not a few percent. A model that sits entirely on the card answers while
+you are still reading the question; the same model a gigabyte over the line has part of
+itself worked out by the processor, and an edit-and-test loop at that speed is one somebody
+abandons. So a 16 GB card in a 64 GB machine is offered the 14B and not the 30B, and a 4 GB
+laptop card in a 16 GB machine is offered the 3B rather than the 7B its memory would suggest.
+
+`gpu.rs` is the probe, split the way every advisor here is split -- something that touches
+the machine, and pure functions that read what came back, which is the half the tests
+exercise against recorded output and a `/sys/class/drm` tree built in a temp directory.
+There is no crate that answers this on all three platforms without a driver binding, so each
+is asked the way it answers: Linux reads sysfs, which needs no process and covers AMD and
+Intel, plus `nvidia-smi` where it exists because the proprietary driver publishes no size
+there; Windows reads the adapter's registry key, because `Win32_VideoController.AdapterRAM`
+is a 32-bit field and every card above 4 GB reports exactly 4 GB through it; macOS asks
+`system_profiler`, and on Apple Silicon there is no separate figure to report because the
+RAM number is already the right one.
+
+**Three rules the design turns on.**
+
+*Integrated graphics are not a budget.* An APU's memory is system memory, already counted,
+and adding it would count the same gigabytes twice. Nothing distinguishes a stolen carve-out
+from a small card reliably across drivers, so the size itself decides: under two gigabytes
+is treated as shared. It only changes whether the figure is used as a separate budget -- it
+never hides an adapter from the monitor.
+
+*A card too small for anything on the list must not veto the machine it is in.* An old 1 GB
+display adapter in a 64 GB workstation falls through to the memory rule as if there were no
+card at all, rather than recommending the 1.5B.
+
+*`None` is not zero.* A probe that found no figure and a card with no memory are different
+facts, and a monitor that prints `0 GB` for the first is lying about the hardware rather
+than admitting it did not find out. The row stays hidden instead.
+
+The adapters are read **once**, behind a `OnceLock`, because `Telemetry::snapshot` runs on a
+tick and two of the three probes start a process -- a hardware monitor that spawns
+`nvidia-smi` once a second is a worse problem than the one it was added to solve. The HUD
+row is written the first reading in and then left alone, `aether1 status` gains a `Graphics:`
+line, and both the panel and `aether1 code` now say what the recommendation was measured
+against, because on the machines where the two rules disagree a small recommendation
+otherwise reads as the wizard having failed to notice the memory.
 
 **The house rules are the answer to "it does not write like the rest of the repo".** No
 choice of model fixes that, because it is not a capability problem: the conventions are not

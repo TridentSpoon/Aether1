@@ -155,6 +155,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const elDiskVal = document.getElementById('disk-percent-val');
     const elNetDown = document.getElementById('net-download-val');
     const elNetUp = document.getElementById('net-upload-val');
+    const elGpuSection = document.getElementById('gpu-section');
+    const elGpuVal = document.getElementById('gpu-val');
     const elBatterySection = document.getElementById('battery-section');
     const elBatteryGauge = document.getElementById('battery-gauge-fill');
     const elBatteryVal = document.getElementById('battery-percent-val');
@@ -931,6 +933,8 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    let gpuRowDrawn = false;
+
     function updateHardwareTelemetry(data) {
         if (!data) return;
         const cpuPct = data.cpu ? data.cpu.total_percent : 0;
@@ -953,6 +957,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (elNetDown) elNetDown.textContent = `${data.network ? data.network.download_kbps : 0} KB/s`;
         if (elNetUp) elNetUp.textContent = `${data.network ? data.network.upload_kbps : 0} KB/s`;
+
+        // The card AETHER1 would run a model on, which is the number the whole hardware
+        // monitor was missing. Written once and then left alone: the adapters are read at
+        // startup and never re-probed, so re-setting this every tick would be work for a
+        // string that cannot have changed. An empty list means nothing answered -- a
+        // machine with no card, or a probe this platform does not have -- and the row stays
+        // hidden rather than printing a zero that reads as a fault.
+        if (!gpuRowDrawn && Array.isArray(data.gpus) && data.gpus.length > 0) {
+            gpuRowDrawn = true;
+            if (elGpuVal) elGpuVal.textContent = data.gpus.map(gpu => gpu.summary).join(', ');
+            if (elGpuSection) elGpuSection.classList.remove('hidden');
+        }
 
         // data.battery is null on a desktop (see Telemetry::to_wire_json) -- the section
         // stays hidden for the life of the app in that case rather than showing a
@@ -2933,6 +2949,17 @@ document.addEventListener('DOMContentLoaded', () => {
         meta.textContent = `${model.name} — ${model.download}` + (model.fits ? '' : ' — more memory than this computer has');
         left.appendChild(meta);
 
+        // Which side of the graphics card's line this one falls on, said on the row that
+        // offers it. It is the difference between an answer that arrives while you are
+        // reading the question and one you wait through, and without it the row above the
+        // recommendation looks like an equally good pick the panel simply overlooked.
+        if (model.fits && model.fits_on_gpu) {
+            const fast = document.createElement('div');
+            fast.className = 'text-[10px] font-mono text-cyan-400/80';
+            fast.textContent = '⚡ fits on the graphics card';
+            left.appendChild(fast);
+        }
+
         // The second job, on the row rather than in a footnote, because it is the
         // difference between one download and two.
         if (model.runs_aether1) {
@@ -2978,6 +3005,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // of hiding the only way to get it back.
         if (list.length === 0) list = all;
         for (const model of list) codeModels.appendChild(codeModelRow(model));
+
+        // What the recommendation was measured against. Worth a line because on exactly the
+        // machines where the two rules disagree -- plenty of memory, a modest card -- being
+        // offered a small model reads as the panel having failed to notice the memory.
+        if (advice.sized_against) {
+            const note = document.createElement('div');
+            note.className = 'text-[10px] font-mono text-slate-500 leading-snug pt-1';
+            note.textContent = advice.sized_against;
+            codeModels.appendChild(note);
+        }
+
         codeModelsWrap.classList.toggle('hidden', all.length === 0);
     }
 
