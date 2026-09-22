@@ -23,6 +23,7 @@ mod code_chat;
 mod code_setup;
 mod commands;
 mod discovery;
+mod doctor;
 mod downloads;
 mod gpu;
 mod hotkey;
@@ -665,6 +666,60 @@ fn code_chat_history_rust(engine: tauri::State<LlmEngine>) -> Vec<serde_json::Va
 #[tauri::command(async)]
 fn code_chat_clear_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
     commands::code_chat_clear(&engine)
+}
+
+/// What only the running desktop process can answer about itself, gathered in one place so
+/// both the command below and the startup check read the same facts. See doctor.rs for why
+/// these are passed in rather than probed: a fact nobody can establish is reported as unknown,
+/// never as healthy.
+fn doctor_facts(app: &tauri::AppHandle) -> doctor::Facts {
+    let window = app.get_webview_window(MAIN_LABEL);
+    doctor::Facts {
+        in_app: true,
+        hud_windows: Some(window.is_some() as u32),
+        // `is_visible` is a round trip into the webview's own process: a window that answers
+        // it is answering, which is as much as can be asked without waiting on JavaScript.
+        hud_responding: window.map(|window| window.is_visible().is_ok()),
+        managed_ollama: Some(
+            app.state::<background_services::ManagedOllama>()
+                .is_managed(),
+        ),
+        hotkey_registered: hotkey::registered(),
+        // This process is the desktop app; the server is a separate invocation, and the port
+        // probe in doctor.rs is what says whether one is up.
+        serving: None,
+        lan: None,
+        mdns_announcing: None,
+        tls_fingerprint: None,
+    }
+}
+
+/// Settings -> Diagnostics: every check, and what AETHER1 would repair about the failing ones.
+/// Reading this changes nothing.
+#[tauri::command(async)]
+fn doctor_report_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+) -> Result<serde_json::Value, String> {
+    Ok(commands::doctor_report(&engine, doctor_facts(&app)))
+}
+
+/// One repair, because the operator pressed the button for it. **This command is the
+/// go-ahead** -- nothing else in the app calls it, nothing calls it on a timer, and
+/// `doctor::apply` refuses the same repair twice in one session.
+#[tauri::command(async)]
+fn doctor_repair_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    check: String,
+    repair: String,
+) -> Result<serde_json::Value, String> {
+    // The one repair that needs a handle this command has and doctor.rs does not.
+    let handle = app.clone();
+    let in_app = move |_repair: doctor::RepairId| -> Result<String, String> {
+        hotkey::reregister_from_settings(&handle).map(|()| "re-registered the hotkey".to_string())
+    };
+    commands::doctor_repair(&engine, &check, &repair, Some(&in_app))
 }
 
 /// Flow mode's state, for the chin bar's toggle. Reports the line the current avatar
@@ -1825,6 +1880,8 @@ fn main() {
             set_speciality_model_rust,
             flow_mode_rust,
             set_flow_mode_rust,
+            doctor_report_rust,
+            doctor_repair_rust,
             setup_advice_rust,
             pull_model_rust,
             start_download_rust,
@@ -1959,6 +2016,45 @@ fn main() {
                         );
                     }
                 }
+            }
+
+            // Step 47, the first of doctor.rs's three moments: the whole list runs once at
+            // startup, so the app knows what it is standing on before anyone asks it for
+            // anything. On a thread, because it spawns a few processes and opens two short
+            // connections and none of that belongs in front of the window appearing; and
+            // after a pause, because the Ollama that autostart just started deserves a
+            // moment to answer before being reported as silent.
+            //
+            // It only says so. Nothing is repaired here: a fix at startup is a fix nobody
+            // agreed to, and the whole design of this rests on that not happening.
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(3));
+                    let engine = app_handle.state::<LlmEngine>();
+                    let facts = doctor_facts(&app_handle);
+                    let (_, health) = doctor::report(&engine, &facts);
+                    println!("[AETHER1] self-check: {}", health.headline);
+                    for check in health
+                        .checks
+                        .iter()
+                        .filter(|check| check.verdict != doctor::Verdict::Ok)
+                    {
+                        println!(
+                            "[AETHER1]   [{}] {} -- {}",
+                            check.verdict.mark(),
+                            check.title,
+                            check.detail
+                        );
+                    }
+                    if health.worst() != doctor::Verdict::Ok {
+                        println!(
+                            "[AETHER1] Settings -> Diagnostics has the same list, with the \
+                             repairs AETHER1 can make to what is broken. `aether1 doctor` \
+                             prints it in a terminal."
+                        );
+                    }
+                });
             }
 
             // Native tray icon so there's a visible indicator (and a quick way to

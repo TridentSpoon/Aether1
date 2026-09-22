@@ -968,6 +968,8 @@ runs the desktop app answers from a terminal without the HUD open:
 aether1 prompt "what is eating my RAM"   # ask; the reply goes to stdout
 echo "status" | aether1 prompt           # or pipe the question in
 aether1 status                           # system diagnostic report (--json for raw)
+aether1 doctor                           # is AETHER1 itself working? every part of it, checked
+aether1 doctor --fix                     # and the repairs it can make, asking before each one
 aether1 say "systems nominal"            # speak, in the configured persona voice
 aether1 toggle                           # summon/dismiss the HUD of a running instance
 aether1 face                             # avatar fullscreen on a spare screen (Esc closes it)
@@ -976,6 +978,15 @@ aether1 code ask "why won't this compile"  # ask the coding model, from a termin
 aether1 code conventions > AGENTS.md     # house rules for a local coding model to follow
 aether1 --help
 ```
+
+`status` describes the computer; `doctor` describes AETHER1. It checks fourteen things --
+the database, the window, the tray, the model endpoint, the configured model, both halves of
+the voice, the hotkey, disk room and the rest -- and says what is wrong in sentences rather
+than status codes. With `--fix` it offers the repairs it knows how to make and asks before
+each one; a repair needing root is never run for you, it is handed over as the command, because
+AETHER1 does not ask for your password. Settings -> 🩺 Is it working? is the same list in the
+HUD. `aether1 doctor --report` writes the findings and what they were read from to a file you
+can check before sending it anywhere, and it sends nothing itself.
 
 The HUD is also bound to a global hotkey — `Super+Shift+A` by default, changeable under
 Settings (empty disables it). On Wayland, where no application is allowed to grab keys

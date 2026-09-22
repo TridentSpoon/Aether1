@@ -1542,6 +1542,40 @@
                 </div>
             </details>
 
+            <!-- ======================= DIAGNOSTICS ======================= -->
+            <!-- Step 47. The same list `aether1 doctor` prints, in the place the person most
+                 likely to need it already is: someone who cannot get a sentence out of the
+                 companion is not going to open a terminal to find out why. Nothing here runs
+                 until a button is pressed, and a repair that needs root is shown as a command
+                 to run rather than offered as a button, because AETHER1 never asks for a
+                 password. -->
+            <details id="settings-group-doctor" class="settings-group">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">🩺 Is it working?</span>
+                    <span class="settings-group-hint">every part of AETHER1, and what to do about the broken ones</span>
+                </summary>
+                <div class="settings-group-body">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <span id="doctor-headline" class="text-xs font-mono text-slate-300">Press Diagnose to check every part of AETHER1.</span>
+                        <button id="btn-doctor-run" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                            🩺 Diagnose
+                        </button>
+                    </div>
+
+                    <div id="doctor-checks" class="space-y-2"></div>
+
+                    <p id="doctor-status" class="hidden text-[11px] font-mono"></p>
+
+                    <p class="text-[10px] font-mono text-slate-500 leading-snug">
+                        Nothing here is changed without you pressing the button for it, and each
+                        repair is re-checked afterwards so you can see whether it worked. The
+                        same list is <span class="text-cyan-300">aether1 doctor</span> in a
+                        terminal, and <span class="text-cyan-300">aether1 doctor --report</span>
+                        writes it to a file you can read before sending it anywhere.
+                    </p>
+                </div>
+            </details>
+
             <!-- ======================= THE APP ITSELF ======================= -->
             <details id="settings-group-app" class="settings-group">
                 <summary class="settings-group-summary">
@@ -1621,7 +1655,7 @@
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
-    <script src="js/app.js?v=53"></script>
+    <script src="js/app.js?v=54"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

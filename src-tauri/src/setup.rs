@@ -15,7 +15,7 @@
 //! The presentation lives in the HUD. What lives here is the part worth testing: which
 //! stage the machine is in, and which models it has the memory to run.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model_scanner::ScanResult;
 
@@ -59,12 +59,24 @@ impl Stage {
 /// Which family of instructions to show. Decided here rather than in JavaScript so the
 /// steps match the machine Aether1 is actually running on, not the machine whose browser
 /// happens to be pointed at it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// `Deserialize` as well as `Serialize` because a recorded observation carries the OS it was
+/// taken on (see doctor.rs): a fault observed on Windows has to be readable on the Linux
+/// runner that judges it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Os {
     Windows,
     Mac,
     Linux,
+}
+
+/// The machine asking, for a record that does not say which machine it came from. Only a
+/// hand-written or truncated observation reaches this -- every one AETHER1 records names its
+/// own OS -- and guessing at the local one is the reading least likely to mislead.
+impl Default for Os {
+    fn default() -> Os {
+        Os::current()
+    }
 }
 
 impl Os {

@@ -760,6 +760,50 @@ pub fn synthesize_speech(
 
 /// Where the voice stands: what can speak, what can listen, and what to do about either.
 /// Settings are read here so both transports get the same answer from the same source.
+/// Whether AETHER1 itself is working, for the HUD's Diagnostics panel and for the HTTP route
+/// behind it. `facts` carries what only the caller knows -- the desktop process fills it in,
+/// a browser-served HUD passes what it can and the report says which rows nobody could answer.
+pub fn doctor_report(engine: &LlmEngine, facts: crate::doctor::Facts) -> Value {
+    let (observation, health) = crate::doctor::report(engine, &facts);
+    serde_json::json!({ "health": health, "observation": observation })
+}
+
+/// Makes one repair, having been asked to by a person pressing the button for it.
+///
+/// The names arrive as the strings the report handed out, and an unknown one is refused rather
+/// than guessed at: this function's whole job is acting on the machine, and there is no shape
+/// of "near enough" worth having here.
+pub fn doctor_repair(
+    engine: &LlmEngine,
+    check: &str,
+    repair: &str,
+    in_app: Option<crate::doctor::InAppRepair>,
+) -> Result<Value, String> {
+    let check_id = crate::doctor::CheckId::from_key(check)
+        .ok_or_else(|| format!("there is no check called {check:?}"))?;
+    let repair_id: crate::doctor::RepairId = serde_json::from_value(serde_json::json!(repair))
+        .map_err(|_| format!("there is no repair called {repair:?}"))?;
+
+    // The repair the report offered for this check, recomputed from a fresh probe: a button
+    // pressed ten minutes after the panel was drawn must not act on what was true then.
+    let (observation, _) = crate::doctor::report(engine, &crate::doctor::Facts::default());
+    let offered = crate::doctor::repair_for(check_id, &observation);
+    match offered {
+        Some(offered) if offered.id == repair_id => {}
+        Some(_) | None => {
+            return Err(format!(
+                "{} is not what AETHER1 would repair about {} now -- press Diagnose again and \
+                 read what it says.",
+                repair,
+                check_id.title()
+            ))
+        }
+    }
+
+    let outcome = crate::doctor::apply_with(engine, check_id, repair_id, in_app)?;
+    serde_json::to_value(outcome).map_err(|e| e.to_string())
+}
+
 pub fn voice_advice(engine: &LlmEngine) -> crate::voice_setup::VoiceAdvice {
     let db = engine.db();
     let local_only = crate::local_only::enabled(db);
