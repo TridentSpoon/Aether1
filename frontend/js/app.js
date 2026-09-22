@@ -2871,6 +2871,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const codeModelsWrap = document.getElementById('code-models-wrap');
     const codeModels = document.getElementById('code-models');
     const codeShowAll = document.getElementById('code-show-all');
+    const codeOwnModel = document.getElementById('code-own-model');
     const codeAgents = document.getElementById('code-agents');
     const codeConventionsWrap = document.getElementById('code-conventions-wrap');
     const codeConventions = document.getElementById('code-conventions');
@@ -2931,6 +2932,15 @@ document.addEventListener('DOMContentLoaded', () => {
         meta.className = 'text-[10px] font-mono text-slate-500';
         meta.textContent = `${model.name} — ${model.download}` + (model.fits ? '' : ' — more memory than this computer has');
         left.appendChild(meta);
+
+        // The second job, on the row rather than in a footnote, because it is the
+        // difference between one download and two.
+        if (model.runs_aether1) {
+            const both = document.createElement('div');
+            both.className = 'text-[10px] font-mono text-green-400/80';
+            both.textContent = '✔ big enough to run Aether1 itself as well';
+            left.appendChild(both);
+        }
 
         row.appendChild(left);
 
@@ -3021,6 +3031,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         renderCodeModels(advice);
+
+        // What Aether1 is running on now, when that is a model on this machine. Shown only
+        // when it is a fact the reader can act on: the panel is about code, and a line
+        // about the brain earns its place by saying the brain cannot do the other half.
+        if (codeOwnModel) {
+            const current = advice.aether1_model;
+            codeOwnModel.classList.toggle('hidden', !current);
+            if (current) {
+                codeOwnModel.textContent = advice.aether1_model_too_small
+                    ? `Aether1 itself is running on ${current}, which is too small to troubleshoot or to drive an agent offline.`
+                    : `Aether1 itself is running on ${current}.`;
+                codeOwnModel.classList.toggle('text-amber-300', !!advice.aether1_model_too_small);
+                codeOwnModel.classList.toggle('text-slate-400', !advice.aether1_model_too_small);
+            }
+        }
 
         if (codeAgents) {
             codeAgents.innerHTML = '';
