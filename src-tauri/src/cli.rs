@@ -534,8 +534,15 @@ fn run_code(conventions: bool) -> String {
         out.push_str("\nMODELS FOR THIS MACHINE (the marked one is the recommendation):\n");
         for model in advice.models.iter().filter(|m| m.fits) {
             let mark = if model.recommended { "->" } else { "  " };
+            // The second job these can do, said on the row rather than in a footnote: it is
+            // the difference between one download and two.
+            let both = if model.runs_aether1 {
+                "  [also runs AETHER1 itself]"
+            } else {
+                ""
+            };
             out.push_str(&format!(
-                "  {mark} {:<22} {:<14} {}\n",
+                "  {mark} {:<22} {:<14} {}{both}\n",
                 model.name, model.download, model.label
             ));
         }
@@ -551,6 +558,17 @@ fn run_code(conventions: bool) -> String {
             " (not downloaded yet)"
         }
     ));
+
+    if let Some(current) = &advice.aether1_model {
+        out.push_str(&format!(
+            "AETHER1 ITSELF IS ON: {current}{}\n",
+            if advice.aether1_model_too_small {
+                " -- too small to troubleshoot or to drive an agent"
+            } else {
+                ""
+            }
+        ));
+    }
 
     for agent in &advice.agents {
         let state = if agent.installed {

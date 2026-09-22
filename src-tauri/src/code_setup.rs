@@ -94,6 +94,16 @@ pub struct CodingModel {
     pub recommended: bool,
     /// Whether the server already has it, so the HUD offers Use rather than Download.
     pub installed: bool,
+    /// Whether this is also big enough to be the model AETHER1 itself runs on.
+    ///
+    /// Not a second opinion about code. Offline, `Provider::supports_native_tools` is false
+    /// for both local providers, so every tool call, every repair and every agent hand-off
+    /// goes through the text protocol in the system prompt -- and a model too small to hold
+    /// that protocol does not refuse, it answers in prose that parses as nothing. The line
+    /// is drawn at 7B because that is where following a format through a long conversation
+    /// starts working; below it the protocol breaks in a way that reads as AETHER1 being
+    /// broken.
+    pub runs_aether1: bool,
 }
 
 /// Every model the coding wizard offers, ordered by the memory a machine needs for it.
@@ -111,7 +121,7 @@ pub struct CodingModel {
 /// The memory figures are generous for the reason `setup.rs` gives -- a model that loads in
 /// its theoretical minimum and then swaps for forty seconds per edit is, to the person who
 /// followed this wizard, a broken program.
-const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
+const CATALOGUE: &[(&str, &str, &str, &str, f64, bool)] = &[
     (
         "qwen2.5-coder:1.5b",
         "Qwen 2.5 Coder (tiny)",
@@ -119,6 +129,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
          across several files, but it runs on almost anything.",
         "about 1 GB",
         4.0,
+        false,
     ),
     (
         "qwen2.5-coder:3b",
@@ -127,6 +138,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
          function at a time.",
         "about 1.9 GB",
         5.0,
+        false,
     ),
     (
         "qwen2.5-coder:7b",
@@ -135,6 +147,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
          to it. A sensible floor for real work.",
         "about 4.7 GB",
         10.0,
+        true,
     ),
     (
         "qwen2.5-coder:14b",
@@ -143,6 +156,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
          the best pick for an ordinary 32 GB machine.",
         "about 9 GB",
         18.0,
+        true,
     ),
     (
         "devstral",
@@ -151,6 +165,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
          Every parameter works on every word, so it is accurate and it is slow.",
         "about 14 GB",
         26.0,
+        true,
     ),
     (
         "qwen3-coder:30b",
@@ -160,6 +175,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
          all. Reads a very long file without losing the thread.",
         "about 19 GB",
         30.0,
+        true,
     ),
     (
         "qwen3-coder-next",
@@ -168,6 +184,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
          memory to do it. Same trick as the 30B: big on disk, small per word.",
         "about 46 GB",
         56.0,
+        true,
     ),
 ];
 
@@ -185,16 +202,19 @@ pub fn models_for(ram_total_gb: f64, installed: &[String]) -> Vec<CodingModel> {
 
     let mut choices: Vec<CodingModel> = CATALOGUE
         .iter()
-        .map(|(name, label, blurb, download, needs_gb)| CodingModel {
-            installed: has_model(installed, name),
-            name: name.to_string(),
-            label: label.to_string(),
-            blurb: blurb.to_string(),
-            download: download.to_string(),
-            needs_gb: *needs_gb,
-            fits: *needs_gb <= usable,
-            recommended: false,
-        })
+        .map(
+            |(name, label, blurb, download, needs_gb, runs_aether1)| CodingModel {
+                installed: has_model(installed, name),
+                name: name.to_string(),
+                label: label.to_string(),
+                blurb: blurb.to_string(),
+                download: download.to_string(),
+                needs_gb: *needs_gb,
+                fits: *needs_gb <= usable,
+                recommended: false,
+                runs_aether1: *runs_aether1,
+            },
+        )
         .collect();
 
     // The largest that fits, or the smallest on the list if nothing does. A machine under
@@ -286,6 +306,25 @@ pub fn context_tokens(ram_total_gb: f64) -> u32 {
     } else {
         8192
     }
+}
+
+/// The size, in billions, below which a model cannot hold AETHER1's text tool protocol
+/// through a conversation. See `CodingModel::runs_aether1` for why the line is here.
+const TOOL_PROTOCOL_FLOOR_TENTHS: u32 = 70;
+
+/// Whether a model AETHER1 is configured to run on is too small to troubleshoot or to drive
+/// an agent hand-off.
+///
+/// Judged from the size in the tag, through `routing::parameter_billions`, so there is one
+/// definition of "how big is this model" rather than a second one here that disagrees with
+/// the routing table about `:32b-instruct-q4`.
+///
+/// **An unlabelled name is never called too small.** `parameter_billions` returns `u32::MAX`
+/// for a name that claims no size, and a model that did not say is not thereby small --
+/// telling somebody their model cannot do this, on a guess, is worse than saying nothing.
+fn too_small_for_tools(model: &str) -> bool {
+    let tenths = crate::llm::routing::parameter_billions(model);
+    tenths != u32::MAX && tenths < TOOL_PROTOCOL_FLOOR_TENTHS
 }
 
 /// Which agent commands are on this machine.
@@ -553,6 +592,18 @@ pub struct CodingAdvice {
     pub model_installed: bool,
     /// The context window the connect steps ask for.
     pub context_tokens: u32,
+    /// The model AETHER1 itself is configured to run on, when that is a model on this
+    /// machine. `None` for a cloud provider, where none of this applies, and for a fresh
+    /// install that has not chosen one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aether1_model: Option<String>,
+    /// Whether that model is too small to troubleshoot or to drive an agent hand-off. The
+    /// reason this panel says anything about AETHER1's own model at all: the wizard's
+    /// smallest tier is a 1B, and a 1B cannot hold the tool protocol.
+    pub aether1_model_too_small: bool,
+    /// Whether the model these commands are built around would also be a better model for
+    /// AETHER1 itself than the one it is on now -- so one download covers both jobs.
+    pub covers_aether1_too: bool,
     /// Whether local-only mode is on, which stops both the download and the agent install.
     pub local_only: bool,
     pub needs_attention: bool,
@@ -568,6 +619,7 @@ pub fn advise(
     ram_total_gb: f64,
     local_only: bool,
     found: AgentsFound,
+    aether1_model: Option<&str>,
 ) -> CodingAdvice {
     let os = Os::current();
 
@@ -598,6 +650,20 @@ pub fn advise(
     let model_installed = chosen.installed;
 
     let has_coding_model = installed.iter().any(|name| is_coding_model(name));
+
+    // What AETHER1 itself is running on, and whether that is enough for the jobs that are
+    // not chatting. Offline these all go through the text tool protocol, so the model the
+    // brain wizard points a small machine at -- a 1B -- can hold a conversation and cannot
+    // hold the protocol.
+    let aether1_model = aether1_model
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
+    let aether1_model_too_small = aether1_model.as_deref().is_some_and(too_small_for_tools);
+    // Worth saying only when it is actually an improvement: the model in hand is up to the
+    // job and the one AETHER1 is on is not, or is not set at all.
+    let covers_aether1_too =
+        chosen.runs_aether1 && (aether1_model_too_small || aether1_model.is_none());
 
     let num_ctx = context_tokens(ram_total_gb);
 
@@ -664,6 +730,31 @@ pub fn advise(
         )),
     }
 
+    // Said after the stage's own step, because it is a second thing to do rather than the
+    // next one, and only when it changes something.
+    if covers_aether1_too {
+        let detail = match aether1_model.as_deref() {
+            Some(current) => format!(
+                "AETHER1 is running on {current}, which is fine for talking and too small for \
+                 the rest. Offline it has no built-in way to call a tool, so troubleshooting, \
+                 repairs and handing work to an agent all go through a written format in the \
+                 prompt, and a model that size loses it. {model} holds it. Once it is \
+                 downloaded you can point AETHER1 at it under Settings, then The Brain, and \
+                 one download covers both jobs."
+            ),
+            None => format!(
+                "AETHER1 has no model of its own chosen yet. {model} is big enough to be that \
+                 too -- offline, troubleshooting and handing work to an agent go through a \
+                 written format in the prompt that a small model loses, and this one holds \
+                 it. Pick it under Settings, then The Brain, once it is downloaded."
+            ),
+        };
+        steps.push(Step::say(
+            "This one can run AETHER1 itself as well",
+            &detail,
+        ));
+    }
+
     CodingAdvice {
         os,
         stage,
@@ -675,6 +766,9 @@ pub fn advise(
         model,
         model_installed,
         context_tokens: num_ctx,
+        aether1_model,
+        aether1_model_too_small,
+        covers_aether1_too,
         local_only,
         needs_attention: stage.needs_attention(),
     }
@@ -742,7 +836,7 @@ mod tests {
     #[test]
     fn catalogue_is_ordered_by_memory() {
         let mut previous = 0.0;
-        for (name, _, _, _, needs_gb) in CATALOGUE {
+        for (name, _, _, _, needs_gb, _) in CATALOGUE {
             assert!(
                 *needs_gb >= previous,
                 "{name} needs less memory than the entry before it; the catalogue must not \
@@ -757,7 +851,7 @@ mod tests {
     /// wizard recommended can leave it still saying "download a model built for code".
     #[test]
     fn every_catalogue_entry_reads_as_a_coding_model() {
-        for (name, _, _, _, _) in CATALOGUE {
+        for (name, _, _, _, _, _) in CATALOGUE {
             assert!(
                 is_coding_model(name),
                 "{name} is not matched by is_coding_model"
@@ -781,6 +875,97 @@ mod tests {
         let models = models_for(64.0, &installed);
         let devstral = models.iter().find(|m| m.name == "devstral").unwrap();
         assert!(devstral.installed);
+    }
+
+    /// The flag and the rule have to agree. The table says which entries can be AETHER1's
+    /// own model; `too_small_for_tools` decides the same thing for a model somebody has
+    /// already configured. If those two ever disagree, the panel marks a model as covering
+    /// both jobs and then, once it is selected, calls it too small for one of them.
+    #[test]
+    fn the_table_and_the_size_rule_agree_on_every_entry() {
+        for (name, _, _, _, _, runs_aether1) in CATALOGUE {
+            assert_eq!(
+                *runs_aether1,
+                !too_small_for_tools(name),
+                "{name} is marked runs_aether1 = {runs_aether1}, which the size rule contradicts"
+            );
+        }
+    }
+
+    /// A bigger model is never worse at holding a format than a smaller one, so the flag
+    /// only ever turns on going down the list. A gap would mean a machine gets offered a
+    /// larger model that claims to do less.
+    #[test]
+    fn the_catalogue_never_stops_running_aether1_once_it_starts() {
+        let mut started = false;
+        for (name, _, _, _, _, runs_aether1) in CATALOGUE {
+            if *runs_aether1 {
+                started = true;
+            } else {
+                assert!(
+                    !started,
+                    "{name} is smaller-capable than an entry before it"
+                );
+            }
+        }
+    }
+
+    /// `parameter_billions` returns u32::MAX for a name that claims no size, and a model
+    /// that did not say is not thereby small. Telling somebody their model cannot do this,
+    /// on a guess, is worse than saying nothing.
+    #[test]
+    fn an_unlabelled_model_is_never_called_too_small() {
+        assert!(too_small_for_tools("llama3.2:1b"));
+        assert!(too_small_for_tools("qwen2.5-coder:3b"));
+        assert!(!too_small_for_tools("qwen2.5-coder:7b"));
+        assert!(!too_small_for_tools("some-local-build:latest"));
+        assert!(!too_small_for_tools("devstral"));
+    }
+
+    /// The whole reason the panel says anything about AETHER1's own model: the brain wizard
+    /// points a small machine at a 1B, and a 1B holds a conversation but not the tool
+    /// protocol the local providers fall back to.
+    #[test]
+    fn a_1b_brain_is_told_the_coding_model_covers_both() {
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b"]),
+            32.0,
+            false,
+            NO_AGENTS,
+            Some("llama3.2:1b"),
+        );
+        assert!(advice.aether1_model_too_small);
+        assert!(advice.covers_aether1_too);
+        assert!(advice
+            .steps
+            .iter()
+            .any(|step| step.title.contains("run AETHER1 itself")));
+    }
+
+    /// Nothing to improve, so nothing said. A panel that offers the same advice whatever
+    /// the machine is doing is a panel nobody reads twice.
+    #[test]
+    fn a_brain_already_big_enough_is_left_alone() {
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b"]),
+            32.0,
+            false,
+            NO_AGENTS,
+            Some("qwen2.5-coder:14b"),
+        );
+        assert!(!advice.aether1_model_too_small);
+        assert!(!advice.covers_aether1_too);
+    }
+
+    /// A machine whose only coding model is below the floor cannot cover both, and saying
+    /// it does would be the panel promising something the download will not deliver.
+    #[test]
+    fn a_model_below_the_floor_does_not_claim_to_cover_both() {
+        let advice = advise(&scan_with(&[]), 6.0, false, NO_AGENTS, Some("llama3.2:1b"));
+        let pick = advice.models.iter().find(|m| m.recommended).unwrap();
+        assert!(!pick.runs_aether1);
+        assert!(advice.aether1_model_too_small);
+        assert!(!advice.covers_aether1_too);
     }
 
     /// The other half of the tag rule: one size being here says nothing about another.
@@ -835,7 +1020,7 @@ mod tests {
 
     #[test]
     fn nothing_running_points_back_at_the_brain() {
-        let advice = advise(&empty_scan(), 32.0, false, NO_AGENTS);
+        let advice = advise(&empty_scan(), 32.0, false, NO_AGENTS, None);
         assert_eq!(advice.stage, Stage::NoServer);
         assert!(advice.needs_attention);
         assert!(advice.endpoint.is_none());
@@ -843,7 +1028,7 @@ mod tests {
 
     #[test]
     fn a_server_of_chat_models_is_told_to_get_a_coding_one() {
-        let advice = advise(&scan_with(&["llama3.2:3b"]), 32.0, false, NO_AGENTS);
+        let advice = advise(&scan_with(&["llama3.2:3b"]), 32.0, false, NO_AGENTS, None);
         assert_eq!(advice.stage, Stage::NoCodingModel);
         assert!(!advice.model_installed);
         assert_eq!(advice.endpoint.as_deref(), Some("http://localhost:11434"));
@@ -851,7 +1036,13 @@ mod tests {
 
     #[test]
     fn a_coding_model_with_no_agent_is_told_to_install_one() {
-        let advice = advise(&scan_with(&["qwen2.5-coder:7b"]), 32.0, false, NO_AGENTS);
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b"]),
+            32.0,
+            false,
+            NO_AGENTS,
+            None,
+        );
         assert_eq!(advice.stage, Stage::NoAgent);
         assert!(advice.model_installed);
         assert_eq!(advice.model, "qwen2.5-coder:7b");
@@ -863,7 +1054,7 @@ mod tests {
             opencode: true,
             aider: false,
         };
-        let advice = advise(&scan_with(&["qwen2.5-coder:7b"]), 32.0, false, found);
+        let advice = advise(&scan_with(&["qwen2.5-coder:7b"]), 32.0, false, found, None);
         assert_eq!(advice.stage, Stage::Ready);
         assert!(!advice.needs_attention);
     }
@@ -872,7 +1063,13 @@ mod tests {
     /// and model. A template with `<your model here>` in it is a link to documentation.
     #[test]
     fn the_connect_commands_name_this_machine_and_this_model() {
-        let advice = advise(&scan_with(&["qwen2.5-coder:14b"]), 32.0, false, NO_AGENTS);
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:14b"]),
+            32.0,
+            false,
+            NO_AGENTS,
+            None,
+        );
         let aider = advice.agents.iter().find(|a| a.key == "aider").unwrap();
         let commands: String = aider
             .connect
@@ -908,7 +1105,7 @@ mod tests {
             models: vec!["qwen2.5-coder:7b".to_string()],
             label: "OpenAI-compatible server".to_string(),
         }];
-        let advice = advise(&scan, 32.0, false, NO_AGENTS);
+        let advice = advise(&scan, 32.0, false, NO_AGENTS, None);
 
         let commands = |key: &str| -> String {
             advice
@@ -937,7 +1134,13 @@ mod tests {
     /// it some other way, and this fails if one ever comes back.
     #[test]
     fn no_command_needs_to_start_at_the_left_margin() {
-        let advice = advise(&scan_with(&["qwen2.5-coder:7b"]), 32.0, false, NO_AGENTS);
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b"]),
+            32.0,
+            false,
+            NO_AGENTS,
+            None,
+        );
         let every = advice
             .agents
             .iter()
@@ -957,7 +1160,7 @@ mod tests {
     fn a_server_on_another_port_is_carried_into_the_commands() {
         let mut scan = empty_scan();
         scan.local_servers = vec![server(1234, &["qwen2.5-coder:7b"])];
-        let advice = advise(&scan, 32.0, false, NO_AGENTS);
+        let advice = advise(&scan, 32.0, false, NO_AGENTS, None);
         let opencode = advice.agents.iter().find(|a| a.key == "opencode").unwrap();
         let config: String = opencode
             .connect
@@ -971,7 +1174,13 @@ mod tests {
     /// could run -- the operator asked to write code, not to wait for 19 GB.
     #[test]
     fn a_downloaded_model_beats_a_better_undownloaded_one() {
-        let advice = advise(&scan_with(&["qwen2.5-coder:7b"]), 64.0, false, NO_AGENTS);
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b"]),
+            64.0,
+            false,
+            NO_AGENTS,
+            None,
+        );
         assert_eq!(advice.model, "qwen2.5-coder:7b");
         assert!(advice.model_installed);
         // The recommendation for the machine is still the bigger one; they are different
@@ -982,7 +1191,7 @@ mod tests {
 
     #[test]
     fn local_only_is_said_before_anything_that_needs_the_network() {
-        let advice = advise(&scan_with(&["llama3.2:3b"]), 32.0, true, NO_AGENTS);
+        let advice = advise(&scan_with(&["llama3.2:3b"]), 32.0, true, NO_AGENTS, None);
         assert!(advice.local_only);
         assert!(advice.steps[0].title.contains("Local-only"));
     }
@@ -995,7 +1204,7 @@ mod tests {
             opencode: true,
             aider: true,
         };
-        let advice = advise(&scan_with(&["qwen3-coder:30b"]), 64.0, true, found);
+        let advice = advise(&scan_with(&["qwen3-coder:30b"]), 64.0, true, found, None);
         assert_eq!(advice.stage, Stage::Ready);
         assert!(!advice.steps[0].title.contains("Local-only"));
     }

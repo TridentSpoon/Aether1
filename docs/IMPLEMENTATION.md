@@ -2792,9 +2792,24 @@ drive Ollama's streaming pull and already refuses in local-only mode. `aether1 c
 the same advice, because somebody setting this up because their subscription lapsed is quite
 likely doing it from a terminal already.
 
+**The second job these models can do.** Offline, `Provider::supports_native_tools` is false
+for both local providers, so every tool call, every repair and every agent hand-off goes
+through the written protocol in the system prompt -- and there is no separate model for any
+of it, only whatever `llm_model` names. The brain wizard points a small machine at a 1B,
+which holds a conversation and does not hold that protocol: it answers in prose that parses
+as nothing, and what the operator sees is AETHER1 being broken. So each catalogue entry
+carries whether it is also big enough to *be* AETHER1's model, the panel marks the rows that
+are, and when the one in hand would be an improvement on what AETHER1 is running now it says
+so -- one download instead of two. The line is 7B, and it is drawn once: the flag on the
+table and `too_small_for_tools`, which judges a model somebody has already configured, are
+cross-checked against each other for every entry, so the panel cannot mark a model as
+covering both jobs and then call that same model too small for one of them. A name that
+claims no size is never called too small; `parameter_billions` returns `u32::MAX` for it,
+and a model that did not say is not thereby small.
+
 **Not verifiable in a container:** the panel as drawn, and the two agents actually starting
-against a real Ollama. The advice, the catalogue ordering, the tag rule and the commands'
-contents are covered by tests.
+against a real Ollama. The advice, the catalogue ordering, the tag rule, the size rule and
+the commands' contents are covered by tests.
 
 ---
 

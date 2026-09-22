@@ -783,11 +783,20 @@ pub fn voice_advice(engine: &LlmEngine) -> crate::voice_setup::VoiceAdvice {
 pub fn code_advice(engine: &LlmEngine) -> crate::code_setup::CodingAdvice {
     let scan = model_scanner::scan_all();
     let ram_total_gb = llm::Telemetry::snapshot().ram_total_gb;
+    // What AETHER1 itself runs on, but only when that is a model on this machine: on a
+    // cloud provider none of what the panel says about the tool protocol applies, and
+    // naming a cloud model there would be advice about the wrong thing.
+    let db = engine.db();
+    let provider = db.get_setting_string("llm_provider", "offline");
+    let own_model = db.get_setting_string("llm_model", "");
+    let own_model = matches!(provider.as_str(), "ollama" | "lmstudio").then_some(own_model);
+
     crate::code_setup::advise(
         &scan,
         ram_total_gb,
-        crate::local_only::enabled(engine.db()),
+        crate::local_only::enabled(db),
         crate::code_setup::AgentsFound::probe(),
+        own_model.as_deref(),
     )
 }
 

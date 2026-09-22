@@ -190,7 +190,7 @@ pub fn suggestion(
 /// the tag almost always does -- `:7b`, `:32b-instruct-q4`, `-7B-Instruct-GGUF`. A name
 /// that claims nothing sorts last: an unlabelled model is not thereby small, and guessing
 /// it is would be how a 70B ends up suggested on a laptop.
-fn parameter_billions(model: &str) -> u32 {
+pub(crate) fn parameter_billions(model: &str) -> u32 {
     let lower = model.to_ascii_lowercase();
     // The tag after the colon where there is one; Ollama puts the size there, and the part
     // before it often carries an unrelated version number (`qwen2.5`, `llama3.2`).
