@@ -18,7 +18,10 @@ pub mod tts;
 use std::sync::Mutex;
 use std::time::Instant;
 
-pub use db::{ActionRecord, ActionStatus, MemoryDb, Message, ModelBenchmark, SessionSummary};
+pub use db::{
+    ActionRecord, ActionStatus, DayCount, MemoryDb, Message, ModelBenchmark, SessionSummary,
+    UsageTotals,
+};
 pub use genesis::Identity;
 // The voices behind a persona, re-exported because speech resolves them per persona at the
 // moment it speaks -- see commands::synthesize_speech.
@@ -223,6 +226,15 @@ struct StreamFailure {
 
 struct Config {
     agent_name: String,
+    /// How to name the box this is running on: its nickname and kind from the Profile pane,
+    /// always with the hostname in it. Resolved once per turn so every mention in a reply
+    /// names the same machine, and so a rename mid-generation cannot split a single answer
+    /// between two names.
+    machine: String,
+    /// What to call the operator, from the Profile pane. Empty when they have not said,
+    /// which is every install before that field existed -- and then the prompt says nothing
+    /// about who is on the other side rather than inventing a name for them.
+    operator_name: String,
     provider: Provider,
     model_name: String,
     api_key: String,
@@ -419,6 +431,8 @@ impl LlmEngine {
             .get_setting_string("llm_endpoint", "http://localhost:11434");
         let persona_key = self.db.get_setting_string("persona_type", "default");
         let custom_directive = self.db.get_setting_string("custom_directive", "");
+        let operator_name = self.db.get_setting_string("operator_name", "");
+        let machine = crate::profile::machine_description(&self.db);
 
         if agent_name == "HALCY" {
             agent_name = match persona_key.as_str() {
@@ -462,6 +476,8 @@ impl LlmEngine {
 
         Config {
             agent_name,
+            machine,
+            operator_name,
             provider,
             model_name,
             api_key,
@@ -504,17 +520,27 @@ impl LlmEngine {
             "{base_persona}\
              [LIVE HOST TELEMETRY]\n\
              - Identity: {agent_name}\n\
+             - Machine: {machine}\n\
+             {operator_line}\
              - OS: {os_name} ({architecture})\n\
              - CPU Load: {cpu_percent:.1}% | RAM: {ram_used:.2}GB / {ram_total:.2}GB ({ram_percent:.1}%)\n\
              - Uptime: {uptime}\n\
              - System Health: {status}\n\
              {memory_context}\n\n\
              Instructions:\n\
-             1. Refer to live telemetry if asked about the system or device health.\n\
+             1. Refer to live telemetry if asked about the system or device health. Name this \
+             machine as it is named on the Machine line rather than calling it \"this machine\": \
+             the operator may be running AETHER1 on several.\n\
              2. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly \
              useful answer over staying in character.\n\
              3. Refer to yourself as {agent_name}.",
             agent_name = config.agent_name,
+            machine = config.machine,
+            operator_line = if config.operator_name.is_empty() {
+                String::new()
+            } else {
+                format!("- Operator: {}\n", config.operator_name)
+            },
             os_name = telem.os_name,
             architecture = telem.architecture,
             cpu_percent = telem.cpu_percent,
@@ -1636,6 +1662,8 @@ mod tests {
     fn the_panel_mode_follows_the_endpoint_not_just_the_provider() {
         let local = Config {
             agent_name: "A1".into(),
+            machine: "vm".into(),
+            operator_name: String::new(),
             provider: Provider::Ollama,
             model_name: "llama3".into(),
             api_key: String::new(),
@@ -1759,6 +1787,62 @@ mod tests {
         assert!(
             prompt.contains("The operator prefers helix."),
             "a fact written into the vault by hand must reach the prompt"
+        );
+    }
+
+    /// The Profile pane's one field with teeth: a name saved there is what the model is
+    /// told it is talking to, and an empty one says nothing at all rather than inventing
+    /// somebody.
+    #[test]
+    fn the_operators_name_reaches_the_prompt_only_once_they_have_given_one() {
+        let _guard = env_guard();
+        let engine = temp_engine("operator_name");
+
+        let config = engine.load_config();
+        let before = engine.system_prompt(&config, &Telemetry::snapshot());
+        assert!(
+            !before.contains("- Operator:"),
+            "an install with no name set must not claim one: {before}"
+        );
+
+        engine
+            .db()
+            .set_setting("operator_name", &serde_json::Value::String("Ada".into()))
+            .unwrap();
+        let config = engine.load_config();
+        let after = engine.system_prompt(&config, &Telemetry::snapshot());
+        assert!(after.contains("- Operator: Ada"), "{after}");
+    }
+
+    /// With several boxes running AETHER1, a reply that says "this machine" is a reply the
+    /// operator has to go and disambiguate. The prompt always carries a name for the box,
+    /// and carries the operator's own once they have given one.
+    #[test]
+    fn the_prompt_always_names_the_machine_it_is_running_on() {
+        let _guard = env_guard();
+        let engine = temp_engine("machine_name");
+
+        let config = engine.load_config();
+        let bare = engine.system_prompt(&config, &Telemetry::snapshot());
+        let host = sysinfo::System::host_name().unwrap_or_else(|| "this machine".to_string());
+        assert!(bare.contains(&format!("- Machine: {host}")), "{bare}");
+
+        engine
+            .db()
+            .set_setting(
+                "machine_nickname",
+                &serde_json::Value::String("Aegis".into()),
+            )
+            .unwrap();
+        engine
+            .db()
+            .set_setting("machine_kind", &serde_json::Value::String("homelab".into()))
+            .unwrap();
+        let config = engine.load_config();
+        let named = engine.system_prompt(&config, &Telemetry::snapshot());
+        assert!(
+            named.contains(&format!("- Machine: Aegis (hostname {host}), a homelab")),
+            "{named}"
         );
     }
 

@@ -159,6 +159,8 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/status", get(voice_status))
         .route("/api/personas", get(list_personas))
         .route("/api/flow", get(flow_mode).post(set_flow_mode))
+        .route("/api/profile", get(profile_report))
+        .route("/api/profile/revoke", post(revoke_device))
         .route("/api/doctor", get(doctor_report))
         .route("/api/doctor/repair", post(doctor_repair))
         .route("/api/audio/{filename}", get(get_audio))
@@ -578,6 +580,28 @@ async fn set_flow_mode(
 ) -> Result<StatusCode, (StatusCode, String)> {
     commands::set_flow_mode(&state.engine, req.enabled)
         .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+/// The Profile pane, for a browser HUD. Behind the same token as everything else under
+/// `--lan`: it lists the paired devices, which is a list a paired device may see and an
+/// unpaired one may not.
+async fn profile_report(State(state): State<AppState>) -> Json<Value> {
+    Json(crate::profile::report(&state.engine))
+}
+
+#[derive(Deserialize)]
+struct RevokeRequest {
+    id: String,
+}
+
+/// Revoking from a browser can cut off the browser doing the revoking -- that is the point
+/// of `revoke all`, and the frontend says so before it asks.
+async fn revoke_device(
+    Json(req): Json<RevokeRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::profile::revoke(&req.id)
+        .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 

@@ -100,6 +100,32 @@ pub struct ModelBenchmark {
     pub last_used: String,
 }
 
+/// The counted shape of everything ever said in this install, for the Profile pane.
+///
+/// Counted from the messages table each time it is asked for rather than kept as running
+/// totals: there is no separate bookkeeping to drift, and deleting a conversation takes its
+/// messages out of the numbers the same moment it takes them out of the history list.
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageTotals {
+    pub conversations: u32,
+    pub messages: u32,
+    /// Lines the operator typed (`sender` is "user"); the rest came back from the model.
+    pub sent: u32,
+    pub received: u32,
+    /// The local date of the first message, or None on an install nothing has been said in.
+    pub first_day: Option<String>,
+    /// The longest single conversation, in messages.
+    pub longest_chat: u32,
+}
+
+/// How many messages fell on one local day. Only days with something on them are returned.
+#[derive(Debug, Clone, Serialize)]
+pub struct DayCount {
+    /// `YYYY-MM-DD`, in local time -- the same day boundary the operator lived through.
+    pub day: String,
+    pub messages: u32,
+}
+
 /// One row of the action log.
 #[derive(Debug, Clone, Serialize)]
 pub struct ActionRecord {
@@ -644,6 +670,66 @@ impl MemoryDb {
         Ok(())
     }
 
+    /// Everything the Profile pane counts, in one pass over the messages table.
+    ///
+    /// Timestamps are stored as UTC (`CURRENT_TIMESTAMP`), so every date here is converted
+    /// with SQLite's `localtime` modifier: a conversation at eleven at night should count
+    /// towards that evening, not the next morning in Greenwich.
+    pub fn usage_totals(&self) -> rusqlite::Result<UsageTotals> {
+        let conn = self.connect()?;
+        let (conversations, messages, sent, first_day) = conn.query_row(
+            "SELECT COUNT(DISTINCT session_id), COUNT(*), \
+                    COALESCE(SUM(sender = 'user'), 0), \
+                    MIN(DATE(timestamp, 'localtime')) \
+             FROM messages",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )?;
+        let longest_chat = conn
+            .query_row(
+                "SELECT COUNT(*) AS n FROM messages GROUP BY session_id ORDER BY n DESC LIMIT 1",
+                [],
+                |row| row.get::<_, u32>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        Ok(UsageTotals {
+            conversations,
+            messages,
+            sent,
+            received: messages.saturating_sub(sent),
+            first_day,
+            longest_chat,
+        })
+    }
+
+    /// Messages per local day over the last `days` days, oldest first. Days with nothing on
+    /// them are left out rather than returned as zeroes -- the caller draws the empty ones.
+    pub fn daily_message_counts(&self, days: u32) -> rusqlite::Result<Vec<DayCount>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT DATE(timestamp, 'localtime') AS day, COUNT(*) \
+             FROM messages \
+             WHERE DATE(timestamp, 'localtime') >= DATE('now', 'localtime', ?1) \
+             GROUP BY day ORDER BY day",
+        )?;
+        let offset = format!("-{days} days");
+        let rows = stmt.query_map(params![offset], |row| {
+            Ok(DayCount {
+                day: row.get(0)?,
+                messages: row.get(1)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Every model this machine has measured, fastest first.
     ///
     /// Ordered by the token-weighted average rather than by the best or most recent
@@ -718,6 +804,48 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_test_{name}_{}_{n}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(path).expect("temp db should open")
+    }
+
+    #[test]
+    fn the_totals_count_both_sides_of_every_conversation() {
+        let db = temp_db("usage_totals");
+        db.add_message("default", "user", "hello there").unwrap();
+        db.add_message("default", "halcy", "hello yourself")
+            .unwrap();
+        db.add_message("default", "user", "still here").unwrap();
+        db.add_message("c9", "user", "second room").unwrap();
+
+        let totals = db.usage_totals().unwrap();
+        assert_eq!(totals.conversations, 2);
+        assert_eq!(totals.messages, 4);
+        assert_eq!(totals.sent, 3);
+        assert_eq!(totals.received, 1);
+        assert_eq!(totals.longest_chat, 3);
+        assert!(totals.first_day.is_some());
+    }
+
+    #[test]
+    fn an_install_nothing_was_said_in_counts_zero_rather_than_failing() {
+        let db = temp_db("usage_totals_empty");
+        let totals = db.usage_totals().unwrap();
+        assert_eq!((totals.conversations, totals.messages), (0, 0));
+        assert_eq!(totals.longest_chat, 0);
+        assert!(totals.first_day.is_none());
+        assert!(db.daily_message_counts(308).unwrap().is_empty());
+    }
+
+    /// Today's messages land on today, and the count is per day rather than per message --
+    /// the activity grid is drawn straight off these rows.
+    #[test]
+    fn the_daily_counts_put_todays_messages_on_todays_date() {
+        let db = temp_db("daily_counts");
+        db.add_message("default", "user", "one").unwrap();
+        db.add_message("default", "halcy", "two").unwrap();
+
+        let counts = db.daily_message_counts(308).unwrap();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].messages, 2);
+        assert_eq!(counts[0].day, db.local_now().0);
     }
 
     #[test]

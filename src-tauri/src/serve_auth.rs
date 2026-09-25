@@ -422,6 +422,51 @@ pub fn open_devices() -> Result<ServeAuth, String> {
     Ok(auth)
 }
 
+/// Whether a pairing phrase has ever been set up here, asked without setting one up.
+pub fn pairing_is_set_up() -> bool {
+    hash_path().exists()
+}
+
+/// The paired devices, read straight off disk.
+///
+/// Deliberately not `open_devices`: that one generates a phrase when none exists yet, which
+/// is right for `aether1 devices` (the operator asked about pairing) and wrong for the
+/// Profile pane, which lists devices merely because Settings was opened. Minting a
+/// credential should stay something somebody asked for.
+pub fn paired_devices() -> Vec<DeviceSummary> {
+    load_devices(&devices_path())
+        .into_iter()
+        .map(|device| DeviceSummary {
+            id: device.id,
+            label: device.label,
+            paired_at: device.paired_at,
+        })
+        .collect()
+}
+
+/// `aether1 revoke <id>`, done from the HUD. Works on the file rather than on a running
+/// server's copy of the list, exactly as the CLI does -- a `--serve --lan` process notices
+/// the file changed on its next request and stops honouring the token (see `Stamp`).
+pub fn revoke_paired_device(id: &str) -> Result<Option<String>, String> {
+    let path = devices_path();
+    let mut devices = load_devices(&path);
+    let Some(position) = devices.iter().position(|device| device.id == id) else {
+        return Ok(None);
+    };
+    let removed = devices.remove(position);
+    save_devices(&path, &devices)?;
+    Ok(Some(removed.label))
+}
+
+/// `aether1 revoke all`, done from the HUD. The phrase is left alone, so each machine can
+/// pair again with what the operator already has written down.
+pub fn revoke_all_paired_devices() -> Result<usize, String> {
+    let path = devices_path();
+    let count = load_devices(&path).len();
+    save_devices(&path, &[])?;
+    Ok(count)
+}
+
 /// Turns a phrase someone typed in (e.g. into the HUD's pairing prompt) into the same token
 /// `ServeAuth::accepts` would check -- this is what `/api/pair` calls to answer "does this
 /// phrase work," without ever exposing the stored hash itself to the network.

@@ -678,7 +678,11 @@ fn run_status(json: bool, events: bool) -> String {
     if json {
         return telemetry.to_wire_json().to_string();
     }
-    let report = telemetry.diagnostic_report();
+    // Which box this is, above the readings. On one machine it is the hostname and barely
+    // worth a line; with three of them, a report pasted into a message is otherwise anybody's
+    // guess. The JSON form is left alone -- it is a wire shape with consumers.
+    let machine = crate::profile::machine_description(crate::build_llm_engine().db());
+    let report = format!("Machine: {machine}\n{}", telemetry.diagnostic_report());
     if !events {
         return report;
     }
