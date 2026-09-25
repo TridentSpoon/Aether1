@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use ureq::ResponseExt;
-use urlencoding;
 
 use crate::code_perms::{self, Grant, Refusal};
 use crate::llm::MemoryDb;
@@ -302,7 +301,7 @@ fn fetch_url(db: &MemoryDb, args: &Value) -> Result<String, String> {
 /// Takes a required `query` parameter and optional `page` (1-indexed pagination).
 /// Returns up to 10 results with title, URL, and snippet. Each result is formatted
 /// as a numbered list item that the model can read and ask to fetch with fetch_url.
-fn search_web(db: &MemoryDb, args: &Value) -> Result<String, String> {
+fn search_web(_db: &MemoryDb, args: &Value) -> Result<String, String> {
     let query = args.get("query").and_then(Value::as_str).ok_or_else(|| {
         "search_web needs a query: {\"query\": \"your search terms\"}".to_string()
     })?;
