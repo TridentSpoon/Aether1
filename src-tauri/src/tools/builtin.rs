@@ -4,6 +4,7 @@
 
 use serde_json::{json, Value};
 use sysinfo::{ProcessesToUpdate, System};
+use ureq::ResponseExt;
 
 use super::fs_guard;
 use super::{Outcome, Tool, ToolContext};
@@ -321,6 +322,105 @@ impl Tool for SearchMemory {
     }
 }
 
+// ------------------------------------------------------------ search_web
+
+pub struct SearchWeb;
+
+impl Tool for SearchWeb {
+    fn name(&self) -> &'static str {
+        "search_web"
+    }
+
+    fn description(&self) -> &'static str {
+        "Search the web for recent information using DuckDuckGo. Returns top results with title and URL so you can fetch and read them with fetch_url."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search terms."
+                }
+            },
+            "required": ["query"]
+        })
+    }
+
+    fn mutating(&self) -> bool {
+        false
+    }
+
+    fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
+        let query = string_arg(args, "query")?;
+
+        if query.trim().is_empty() {
+            return Err("search query cannot be empty".to_string());
+        }
+
+        // DuckDuckGo's public API endpoint
+        let api_url = format!(
+            "https://api.duckduckgo.com/?q={}&format=json&no_html=1",
+            urlencoding::encode(query)
+        );
+
+        let response = ureq::get(&api_url)
+            .header("User-Agent", "AETHER1")
+            .call()
+            .map_err(|e| format!("cannot search the web: {e}"))?;
+
+        let body = response
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("cannot read search results: {e}"))?;
+
+        let json: Value = serde_json::from_str(&body)
+            .map_err(|e| format!("search API returned invalid JSON: {e}"))?;
+
+        let mut results = String::new();
+        results.push_str(&format!("Search results for: {}\n\n", query));
+
+        // Add abstract/featured result if available
+        if let Some(abstract_text) = json.get("AbstractText").and_then(Value::as_str) {
+            if !abstract_text.trim().is_empty() {
+                if let Some(abstract_url) = json.get("AbstractURL").and_then(Value::as_str) {
+                    results.push_str(&format!(
+                        "Featured: {}\n{}\n\n",
+                        abstract_text.trim(),
+                        abstract_url
+                    ));
+                }
+            }
+        }
+
+        // Add main results
+        if let Some(search_results) = json.get("Results").and_then(Value::as_array) {
+            if search_results.is_empty() {
+                results.push_str("No results found.");
+            } else {
+                results.push_str("Results:\n");
+                for (idx, result) in search_results.iter().take(10).enumerate() {
+                    let title = result
+                        .get("Text")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Untitled");
+                    let url = result.get("FirstURL").and_then(Value::as_str).unwrap_or("");
+
+                    if !url.is_empty() {
+                        results.push_str(&format!("{}. {}\n   {}\n", idx + 1, title, url));
+                    }
+                }
+            }
+        } else {
+            results.push_str("No results found.");
+        }
+
+        const MAX_PAGE_BYTES: usize = 32 * 1024;
+        Ok(Outcome::text(super::truncate(&results, MAX_PAGE_BYTES)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,6 +611,7 @@ mod tests {
             "list_processes",
             "telemetry_detail",
             "search_memory",
+            "search_web",
         ];
         for schema in super::super::registry().schemas() {
             if looking.contains(&schema.name) {
