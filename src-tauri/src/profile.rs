@@ -8,13 +8,18 @@
 //! than the frontend -- the messages table and the device list both live on this side, and
 //! a browser paired over the LAN should get the same answer as the native window.
 //!
+//! The machine's own identity is here too -- its hostname, plus a nickname and a kind the
+//! operator sets. With more than one box running AETHER1 those are what let it say "the
+//! homelab is out of disk" rather than "this machine is out of disk", which is the
+//! difference between a useful notice and one you have to go and work out.
+//!
 //! Devices are here because this is where the operator will look for them. Step 45 gave
 //! every paired machine a token of its own and `aether1 revoke <id>` to take one away; this
 //! is that list and that verb, in the window, for the operator who never opens a terminal.
 
 use serde_json::{json, Value};
 
-use crate::llm::{DayCount, LlmEngine, UsageTotals};
+use crate::llm::{DayCount, LlmEngine, MemoryDb, UsageTotals};
 use crate::serve_auth;
 
 /// How much history the activity grid shows. Forty-four weeks of seven days is what fits
@@ -65,8 +70,11 @@ pub fn report(engine: &LlmEngine) -> Value {
     json!({
         "operator": {
             "name": operator_name(engine),
+            "machine_nickname": db.get_setting_string("machine_nickname", ""),
+            "machine_kind": db.get_setting_string("machine_kind", ""),
             "agent_name": engine.agent_name(),
-            "machine": sysinfo::System::host_name().unwrap_or_else(|| "this machine".to_string()),
+            "machine": hostname(),
+            "machine_described": machine_description(db),
         },
         "stats": {
             "conversations": totals.as_ref().map(|t| t.conversations).unwrap_or(0),
@@ -99,6 +107,43 @@ pub fn report(engine: &LlmEngine) -> Value {
 /// behaviour every install had before this field existed.
 fn operator_name(engine: &LlmEngine) -> String {
     engine.db().get_setting_string("operator_name", "")
+}
+
+/// What this machine is called by the operating system. Not something AETHER1 sets or can
+/// change -- it is the name the rest of the network already knows the box by.
+fn hostname() -> String {
+    sysinfo::System::host_name().unwrap_or_else(|| "this machine".to_string())
+}
+
+/// How AETHER1 should name the box it is running on, in one phrase.
+///
+/// With one machine this hardly matters. With three -- a desktop, a laptop and a homelab,
+/// which is the setup the LAN half of this is for -- "this machine is out of disk" is a
+/// notice you have to go and investigate before you know which box it is about, and "Aegis
+/// (homelab) is out of disk" is one you can act on.
+pub fn machine_description(db: &MemoryDb) -> String {
+    describe_machine(
+        &db.get_setting_string("machine_nickname", ""),
+        &db.get_setting_string("machine_kind", ""),
+        &hostname(),
+    )
+}
+
+/// The hostname is always in the phrase, because it is the name that is true whatever the
+/// operator has or has not typed; a nickname leads, and the hostname follows in brackets so
+/// the two can still be matched up. Neither field is required.
+fn describe_machine(nickname: &str, kind: &str, host: &str) -> String {
+    let nickname = nickname.trim();
+    let kind = kind.trim();
+    let mut described = if nickname.is_empty() {
+        host.to_string()
+    } else {
+        format!("{nickname} (hostname {host})")
+    };
+    if !kind.is_empty() {
+        described = format!("{described}, a {kind}");
+    }
+    described
 }
 
 /// The paired devices, plus enough context to explain an empty list. Reading this never
@@ -198,6 +243,17 @@ mod tests {
             day: date.to_string(),
             messages,
         }
+    }
+
+    #[test]
+    fn a_machine_is_named_by_whatever_the_operator_has_filled_in() {
+        assert_eq!(describe_machine("", "", "vm"), "vm");
+        assert_eq!(describe_machine("", "laptop", "vm"), "vm, a laptop");
+        assert_eq!(describe_machine("Aegis", "", "vm"), "Aegis (hostname vm)");
+        assert_eq!(
+            describe_machine("  Aegis  ", " homelab ", "vm"),
+            "Aegis (hostname vm), a homelab"
+        );
     }
 
     #[test]

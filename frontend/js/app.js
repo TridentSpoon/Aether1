@@ -3815,6 +3815,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     operatorNameInput?.addEventListener('input', updateProfileMonogram);
 
+    /* The same phrase profile.rs::describe_machine builds, so the line under the fields
+       shows what the model will actually be told without a round trip. The two have to stay
+       in step; the backend's is the one that counts, and this is refreshed from its
+       `machine_described` whenever the pane is read. */
+    function updateMachineDescribed() {
+        const line = document.getElementById('profile-machine-described');
+        if (!line) return;
+        const host = document.getElementById('profile-hostname')?.textContent?.trim() || '';
+        const nickname = (document.getElementById('setting-machine-nickname')?.value || '').trim();
+        const kind = (document.getElementById('setting-machine-kind')?.value || '').trim();
+        if (!host || host === '\u2014') { line.textContent = '\u2014'; return; }
+        let described = nickname ? `${nickname} (hostname ${host})` : host;
+        if (kind) described = `${described}, a ${kind}`;
+        line.textContent = described;
+    }
+
+    document.getElementById('setting-machine-nickname')?.addEventListener('input', updateMachineDescribed);
+    document.getElementById('setting-machine-kind')?.addEventListener('change', updateMachineDescribed);
+
     function statTile(value, label) {
         const tile = document.createElement('div');
         tile.className = 'profile-stat';
@@ -4032,7 +4051,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const stats = report.stats || {};
         const operator = report.operator || {};
         document.getElementById('profile-agent-name').textContent = operator.agent_name || 'AETHER1';
-        document.getElementById('profile-machine').textContent = operator.machine || 'this machine';
+        // The short form up here — the nickname when there is one, the hostname otherwise.
+        // The full phrase, with both, is under the machine card where it is being edited.
+        document.getElementById('profile-machine').textContent =
+            operator.machine_nickname || operator.machine || 'this machine';
+        document.getElementById('profile-hostname').textContent = operator.machine || 'this machine';
+        // The backend's phrase, not the local one: it is what the model is actually told.
+        document.getElementById('profile-machine-described').textContent =
+            operator.machine_described || operator.machine || 'this machine';
         updateProfileMonogram();
 
         profileStatsEl.replaceChildren(
@@ -5631,7 +5657,10 @@ document.addEventListener('DOMContentLoaded', () => {
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
+            document.getElementById('setting-machine-nickname').value = s.machine_nickname || '';
+            document.getElementById('setting-machine-kind').value = s.machine_kind || '';
             updateProfileMonogram();
+            updateMachineDescribed();
             document.getElementById('setting-provider').value = s.llm_provider || 'offline';
             document.getElementById('setting-model').value = s.llm_model || 'halcy-core';
             document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
@@ -5775,6 +5804,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Saved empty when it is empty: an operator who clears their name is
                 // asking to go back to the model being told nothing about them.
                 operator_name: document.getElementById('setting-operator-name').value.trim(),
+                machine_nickname: document.getElementById('setting-machine-nickname').value.trim(),
+                machine_kind: document.getElementById('setting-machine-kind').value,
                 llm_provider: document.getElementById('setting-provider').value,
                 llm_model: document.getElementById('setting-model').value,
                 llm_endpoint: document.getElementById('setting-endpoint').value,

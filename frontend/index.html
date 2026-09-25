@@ -821,7 +821,7 @@
                         <input id="settings-search" type="search" placeholder="Search settings..." autocomplete="off">
                     </label>
                     <p id="settings-nav-empty" class="settings-nav-empty hidden">Nothing matches that.</p>
-                    <button type="button" id="settings-nav-profile" class="settings-nav-item" data-settings-section="profile" data-keywords="profile operator name devices paired lan revoke token stats streak activity usage" data-hint="you, your usage, and the devices that have paired" title="you, your usage, and the devices that have paired">
+                    <button type="button" id="settings-nav-profile" class="settings-nav-item" data-settings-section="profile" data-keywords="profile operator name devices paired lan revoke token stats streak activity usage machine hostname nickname system name type" data-hint="you, your usage, and the devices that have paired" title="you, your usage, and the devices that have paired">
                         <span class="settings-nav-icon">👤</span>
                         <span class="settings-nav-text">Profile</span>
                     </button>
@@ -910,6 +910,50 @@
                     </div>
                 </div>
 
+
+                <!-- This machine, by name. The hostname is the operating system's and is only
+                     shown; the nickname and the kind are the operator's, and both go into the
+                     prompt, so with several boxes running AETHER1 a notice can say which one
+                     it is about instead of "this machine". -->
+                <div class="profile-card">
+                    <div class="profile-card-head">
+                        <h4 class="profile-card-title">This machine</h4>
+                        <p class="profile-card-hint">
+                            What it calls the box it is running on. Useful once you have more
+                            than one: it names this one rather than saying &ldquo;this
+                            machine&rdquo;.
+                        </p>
+                    </div>
+                    <div class="profile-machine-fields">
+                        <div class="space-y-1">
+                            <label class="text-xs font-mono text-cyan-300 block">SYSTEM NAME</label>
+                            <p id="profile-hostname" class="profile-hostname">&mdash;</p>
+                            <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                The hostname, as the rest of your network knows this box.
+                                AETHER1 reads it and never changes it.
+                            </p>
+                        </div>
+                        <div class="space-y-1">
+                            <label for="setting-machine-nickname" class="text-xs font-mono text-cyan-300 block">NICKNAME</label>
+                            <input id="setting-machine-nickname" type="text" placeholder="e.g. Aegis, the big one" autocomplete="off" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        </div>
+                        <div class="space-y-1">
+                            <label for="setting-machine-kind" class="text-xs font-mono text-cyan-300 block">TYPE</label>
+                            <select id="setting-machine-kind" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <option value="">not said</option>
+                                <option value="desktop">desktop</option>
+                                <option value="laptop">laptop</option>
+                                <option value="homelab">homelab</option>
+                                <option value="server">server</option>
+                                <option value="virtual machine">virtual machine</option>
+                                <option value="handheld">handheld</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p class="profile-card-hint">
+                        It will call this machine <span id="profile-machine-described" class="text-cyan-300">&mdash;</span>.
+                    </p>
+                </div>
                 <div class="profile-section-head">
                     <h4 class="profile-section-title">Your stats</h4>
                     <p class="profile-section-hint">

@@ -1848,3 +1848,23 @@ body {
     line-height: 1.5;
     color: var(--text-dim);
 }
+
+/* Three across when there is room, stacked when there is not: the hostname is a fact and
+   the other two are fields, but they are one thought and read best on one line. */
+.profile-machine-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.75rem;
+}
+
+.profile-hostname {
+    margin: 0;
+    padding: 0.5rem;
+    border: 1px dashed var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel-hover);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+}
