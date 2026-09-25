@@ -35,6 +35,7 @@ mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod profile;
 mod releases;
 mod serve_auth;
 mod serve_tls;
@@ -434,6 +435,19 @@ fn github_sign_in_poll_rust(
 ///
 /// Keeping them in one panel is what makes the difference visible instead of leaving somebody to
 /// wonder why signing in did not give AETHER CODE a `gh`.
+/// Everything the Profile pane shows: who the operator is, what they have used AETHER1 for,
+/// and which devices have paired with this machine.
+#[tauri::command(async)]
+fn profile_report_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    profile::report(&engine)
+}
+
+/// `aether1 revoke <id>` from the window. `id` may be `all`.
+#[tauri::command(async)]
+fn revoke_device_rust(id: String) -> Result<serde_json::Value, String> {
+    profile::revoke(&id)
+}
+
 #[tauri::command(async)]
 fn connections_rust() -> serde_json::Value {
     let gh = which::which("gh").ok();
@@ -2183,6 +2197,8 @@ fn main() {
             keep_other_installs_rust,
             check_for_update_rust,
             apply_update_rust,
+            profile_report_rust,
+            revoke_device_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,

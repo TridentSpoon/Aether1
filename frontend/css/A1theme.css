@@ -1613,3 +1613,238 @@ body {
     height: 36px;
     pointer-events: none;
 }
+
+/* ======================= SETTINGS -> PROFILE =======================
+   The operator's own pane: who they are, what they have used AETHER1 for, and which
+   devices have paired with this machine. Everything is built from theme variables, so
+   the grid and the bars wear whatever colours the theme is wearing rather than a
+   hard-coded cyan that goes wrong the moment somebody picks Solar. */
+
+.profile-identity {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.875rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.5rem;
+    background: var(--bg-panel);
+}
+
+/* The initial of whatever the operator typed, which is as close to an avatar as this
+   gets: AETHER1 has no account to carry a picture, and inventing an upload for one
+   person's own machine would be ceremony for nothing. */
+.profile-monogram {
+    flex: 0 0 auto;
+    width: 4.5rem;
+    height: 4.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--border-neon-bright);
+    background: var(--bg-panel-hover);
+    color: var(--text-accent);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.9rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    box-shadow: var(--glow-cyan);
+}
+
+.profile-identity-fields {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.profile-identity-meta {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+}
+
+.profile-identity-meta strong {
+    color: var(--text-main);
+    font-weight: 600;
+}
+
+.profile-section-head { display: flex; flex-direction: column; gap: 0.15rem; }
+
+.profile-section-title {
+    margin: 0;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    color: var(--text-main);
+}
+
+.profile-section-hint,
+.profile-card-hint {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.45;
+    color: var(--text-dim);
+}
+
+/* auto-fit rather than a fixed five across: the shell is 1100px at most but Settings is
+   opened at whatever width the window has, and five tiles squeezed under 700px stop
+   being readable numbers. */
+.profile-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.5rem;
+    background: var(--bg-panel);
+}
+
+.profile-stat { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
+
+.profile-stat-value {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text-accent);
+    line-height: 1.1;
+}
+
+.profile-stat-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    text-align: center;
+}
+
+.profile-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.875rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.5rem;
+    background: var(--bg-panel);
+}
+
+.profile-card-head { display: flex; flex-direction: column; gap: 0.15rem; }
+
+.profile-card-head-row {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.profile-card-title {
+    margin: 0;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    color: var(--text-main);
+}
+
+/* Columns of seven days, filled top to bottom, laid left to right -- a week per column,
+   the shape every contribution grid uses. grid-auto-flow: column is what makes one flat
+   list of cells fall into weeks without the markup knowing anything about weeks. */
+.profile-activity-wrap { overflow-x: auto; padding-bottom: 0.15rem; }
+.profile-activity-inner { width: max-content; display: flex; flex-direction: column; gap: 0.3rem; }
+
+.profile-activity {
+    display: grid;
+    grid-template-rows: repeat(7, 0.55rem);
+    grid-auto-flow: column;
+    grid-auto-columns: 0.55rem;
+    gap: 2px;
+}
+
+.profile-activity-cell {
+    border-radius: 1px;
+    background: var(--bg-panel-hover);
+}
+
+/* Four steps rather than a continuous scale: with one machine's worth of history the
+   difference between 3 messages and 4 is noise, and four buckets read at a glance. */
+.profile-activity-cell.level-1 { background: color-mix(in srgb, var(--neon-green) 30%, transparent); }
+.profile-activity-cell.level-2 { background: color-mix(in srgb, var(--neon-green) 55%, transparent); }
+.profile-activity-cell.level-3 { background: color-mix(in srgb, var(--neon-green) 78%, transparent); }
+.profile-activity-cell.level-4 { background: var(--neon-green); }
+
+.profile-activity-months {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.55rem;
+    color: var(--text-dim);
+}
+
+.profile-two-up {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.875rem;
+}
+
+.profile-insights { margin: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+
+.profile-insight {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+}
+
+.profile-insight dd { margin: 0; color: var(--text-main); }
+
+.profile-models { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+
+.profile-model-row { display: flex; flex-direction: column; gap: 0.2rem; }
+
+.profile-model-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-main);
+}
+
+.profile-model-meta { color: var(--text-dim); font-size: 0.6rem; white-space: nowrap; }
+
+.profile-model-bar { height: 3px; border-radius: 2px; background: var(--bg-panel-hover); overflow: hidden; }
+.profile-model-bar span { display: block; height: 100%; background: var(--text-accent); }
+
+.profile-devices { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.profile-device {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel-hover);
+}
+
+.profile-device-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+}
+
+.profile-device-meta { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; color: var(--text-dim); }
+
+.profile-empty {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}

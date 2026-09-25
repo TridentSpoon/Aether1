@@ -121,6 +121,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
         try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
+        // A section that fills itself when it is chosen listens for this rather than being
+        // called from here: the panes are set up further down the file, and this runs
+        // before them when the remembered section is restored.
+        document.dispatchEvent(new CustomEvent('aether-settings-section', { detail: name }));
         return true;
     }
 
@@ -3751,6 +3755,326 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshDoctor();
     });
 
+    /* ========================== SETTINGS -> PROFILE ==========================
+     * The operator's own pane. Three things live here and they belong together: what to
+     * call whoever is typing, what they have actually done with AETHER1, and which
+     * machines have paired with this one over --lan.
+     *
+     * Every number is counted server-side out of this machine's database (profile.rs) --
+     * the browser is only allowed to draw it. Nothing here is estimated: tokens are what
+     * a provider reported generating, and a model server that reports nothing leaves the
+     * tile saying "not measured" rather than showing a confident zero.
+     *
+     * Built when the section is first opened rather than when Settings is, in the same
+     * spirit as the coding and doctor groups -- it reads the whole messages table and the
+     * device file, and most visits to Settings are not about this.
+     */
+
+    const profileStatsEl = document.getElementById('profile-stats');
+    const profileActivityEl = document.getElementById('profile-activity');
+    const profileActivityMonthsEl = document.getElementById('profile-activity-months');
+    const profileActivityCaption = document.getElementById('profile-activity-caption');
+    const profileInsightsEl = document.getElementById('profile-insights');
+    const profileModelsEl = document.getElementById('profile-models');
+    const profileDevicesEl = document.getElementById('profile-devices');
+    const profileMonogram = document.getElementById('profile-monogram');
+    const operatorNameInput = document.getElementById('setting-operator-name');
+    const btnRevokeAllDevices = document.getElementById('btn-revoke-all-devices');
+
+    async function fetchProfile() {
+        if (IS_TAURI) return tauriInvoke('profile_report_rust');
+        const resp = await apiFetch('/api/profile');
+        if (!resp.ok) throw new Error(`profile request failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function requestRevoke(id) {
+        if (IS_TAURI) return tauriInvoke('revoke_device_rust', { id });
+        const resp = await apiFetch('/api/profile/revoke', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        return resp.json();
+    }
+
+    /* The circle beside the name field. Follows the field as it is typed rather than
+       waiting for Save, because the whole point of it is to show what the name looks
+       like. An empty name gets a dash, not a stray letter from somewhere else. */
+    function updateProfileMonogram() {
+        // Both elements are looked up here rather than read from the consts above:
+        // loadSettings calls this during startup, which can run before this part of the
+        // file has been evaluated, and a const read early throws rather than being
+        // undefined. Same trap the avatar browser hit.
+        const circle = document.getElementById('profile-monogram');
+        if (!circle) return;
+        const name = (document.getElementById('setting-operator-name')?.value || '').trim();
+        circle.textContent = name ? Array.from(name)[0] : '—';
+    }
+
+    operatorNameInput?.addEventListener('input', updateProfileMonogram);
+
+    function statTile(value, label) {
+        const tile = document.createElement('div');
+        tile.className = 'profile-stat';
+        const number = document.createElement('div');
+        number.className = 'profile-stat-value';
+        number.textContent = value;
+        const caption = document.createElement('div');
+        caption.className = 'profile-stat-label';
+        caption.textContent = label;
+        tile.append(number, caption);
+        return tile;
+    }
+
+    function insightRow(label, value) {
+        const row = document.createElement('div');
+        row.className = 'profile-insight';
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const detail = document.createElement('dd');
+        detail.textContent = value;
+        row.append(term, detail);
+        return row;
+    }
+
+    /* 12345 -> "12.3k". Five stat tiles side by side have room for four characters and
+       no more, and an exact lifetime token count is not a number anybody reads digit by
+       digit anyway. */
+    function compactNumber(value) {
+        if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+        if (value >= 10_000) return `${Math.round(value / 1000)}k`;
+        if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+        return String(value);
+    }
+
+    function plural(count, word) {
+        return `${count} ${word}${count === 1 ? '' : 's'}`;
+    }
+
+    /* A YYYY-MM-DD from the backend, shown the way a person writes a date. Parsed by hand
+       rather than through Date(string): a bare date string is read as UTC, which in the
+       Americas renders as the day before the one it says. */
+    function formatDay(day) {
+        if (!day) return '—';
+        const [year, month, date] = day.split('-').map(Number);
+        if (!year || !month || !date) return day;
+        return new Date(year, month - 1, date).toLocaleDateString(undefined, {
+            year: 'numeric', month: 'short', day: 'numeric',
+        });
+    }
+
+    /* The contribution grid. The backend sends only the days something was said on, so
+       this walks every day in the window and looks each one up -- an empty day has to be
+       drawn as an empty cell, and a gap in a sparse list is exactly what a gap looks
+       like. The window starts on a Sunday so each column is one week. */
+    function renderActivity(activity) {
+        if (!profileActivityEl) return;
+        profileActivityEl.replaceChildren();
+        profileActivityMonthsEl?.replaceChildren();
+
+        const counts = new Map((activity.counts || []).map(row => [row.day, row.messages]));
+        const busiest = Math.max(1, ...counts.values());
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const start = new Date(today);
+        start.setDate(start.getDate() - (activity.days - 1));
+        start.setDate(start.getDate() - start.getDay());
+
+        const months = [];
+        let lastMonth = -1;
+        for (let day = new Date(start); day <= today; day.setDate(day.getDate() + 1)) {
+            const key = [
+                day.getFullYear(),
+                String(day.getMonth() + 1).padStart(2, '0'),
+                String(day.getDate()).padStart(2, '0'),
+            ].join('-');
+            const messages = counts.get(key) || 0;
+            const cell = document.createElement('div');
+            cell.className = 'profile-activity-cell';
+            if (messages > 0) {
+                // Quartered against the busiest day rather than against a fixed count: a
+                // machine that sees three messages a day and one that sees three hundred
+                // should both get a readable grid.
+                const level = Math.min(4, Math.ceil((messages / busiest) * 4));
+                cell.classList.add(`level-${level}`);
+            }
+            cell.title = `${formatDay(key)} — ${plural(messages, 'message')}`;
+            profileActivityEl.appendChild(cell);
+            if (day.getDay() === 0 && day.getMonth() !== lastMonth) {
+                lastMonth = day.getMonth();
+                months.push(day.toLocaleDateString(undefined, { month: 'short' }));
+            }
+        }
+
+        months.forEach(month => {
+            const label = document.createElement('span');
+            label.textContent = month;
+            profileActivityMonthsEl?.appendChild(label);
+        });
+    }
+
+    function renderModels(models) {
+        if (!profileModelsEl) return;
+        profileModelsEl.replaceChildren();
+        if (!models.length) {
+            const empty = document.createElement('li');
+            empty.className = 'profile-empty';
+            empty.textContent =
+                'Nothing measured yet. A model counts here once its server reports how many '
+                + 'tokens it generated — Ollama and the OpenAI-shaped APIs do; some local '
+                + 'servers report nothing at all, and those are never guessed at.';
+            profileModelsEl.appendChild(empty);
+            return;
+        }
+        const most = Math.max(...models.map(model => model.tokens), 1);
+        models.slice(0, 5).forEach(model => {
+            const row = document.createElement('li');
+            row.className = 'profile-model-row';
+            const line = document.createElement('div');
+            line.className = 'profile-model-line';
+            const name = document.createElement('span');
+            name.textContent = model.model;
+            const meta = document.createElement('span');
+            meta.className = 'profile-model-meta';
+            meta.textContent = `${compactNumber(model.tokens)} tokens · ${plural(model.samples, 'reply')}`;
+            line.append(name, meta);
+            const bar = document.createElement('div');
+            bar.className = 'profile-model-bar';
+            const fill = document.createElement('span');
+            fill.style.width = `${Math.max(2, (model.tokens / most) * 100)}%`;
+            bar.appendChild(fill);
+            row.append(line, bar);
+            profileModelsEl.appendChild(row);
+        });
+    }
+
+    function renderDevices(payload) {
+        if (!profileDevicesEl) return;
+        profileDevicesEl.replaceChildren();
+        const devices = payload.devices || [];
+        btnRevokeAllDevices?.classList.toggle('hidden', devices.length === 0);
+
+        if (!devices.length) {
+            const empty = document.createElement('p');
+            empty.className = 'profile-empty';
+            empty.textContent = payload.pairing_set_up
+                ? 'Nothing has paired yet. Run aether1 --serve --lan, then type the pairing '
+                  + 'phrase into a browser on another device on your network.'
+                : 'No pairing phrase has been made yet. One is generated the first time you run '
+                  + 'aether1 --serve --lan, and it is printed once — write it down then.';
+            profileDevicesEl.appendChild(empty);
+            return;
+        }
+
+        devices.forEach(device => {
+            const row = document.createElement('div');
+            row.className = 'profile-device';
+            const text = document.createElement('div');
+            const name = document.createElement('div');
+            name.className = 'profile-device-name';
+            name.textContent = device.label;
+            const meta = document.createElement('div');
+            meta.className = 'profile-device-meta';
+            const paired = new Date(device.paired_at * 1000);
+            meta.textContent = `${device.id} · paired ${paired.toLocaleString()}`;
+            text.append(name, meta);
+            const revoke = document.createElement('button');
+            revoke.type = 'button';
+            revoke.className = 'cyber-btn text-[10px] py-1 px-2 border-red-400 text-red-300 hover:bg-red-900/40';
+            revoke.textContent = 'Revoke';
+            revoke.addEventListener('click', async () => {
+                voiceEngine.playSFX('click');
+                if (!confirm(`Take "${device.label}" off this machine? It will have to pair again.`)) return;
+                revoke.disabled = true;
+                try {
+                    await requestRevoke(device.id);
+                    await refreshProfile();
+                } catch (e) {
+                    revoke.disabled = false;
+                    alert(`Could not revoke that device: ${e.message || e}`);
+                }
+            });
+            row.append(text, revoke);
+            profileDevicesEl.appendChild(row);
+        });
+    }
+
+    btnRevokeAllDevices?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        // Worth spelling out on this one: run from a browser over the LAN, "all" includes
+        // the browser doing the revoking, which will be logged out by its own click.
+        if (!confirm('Take every paired device off this machine, including this one if you are '
+            + 'on the LAN? The pairing phrase is unchanged, so each can pair again.')) return;
+        try {
+            await requestRevoke('all');
+            await refreshProfile();
+        } catch (e) {
+            alert(`Could not revoke: ${e.message || e}`);
+        }
+    });
+
+    async function refreshProfile() {
+        if (!profileStatsEl) return;
+        let report;
+        try {
+            report = await fetchProfile();
+        } catch (e) {
+            profileStatsEl.replaceChildren();
+            const failed = document.createElement('p');
+            failed.className = 'profile-empty';
+            failed.textContent = `Could not read your profile: ${e.message || e}`;
+            profileStatsEl.appendChild(failed);
+            return;
+        }
+
+        const stats = report.stats || {};
+        const operator = report.operator || {};
+        document.getElementById('profile-agent-name').textContent = operator.agent_name || 'AETHER1';
+        document.getElementById('profile-machine').textContent = operator.machine || 'this machine';
+        updateProfileMonogram();
+
+        profileStatsEl.replaceChildren(
+            statTile(compactNumber(stats.messages || 0), 'Messages'),
+            statTile(compactNumber(stats.conversations || 0), 'Conversations'),
+            // A dash rather than 0: no measured model means nobody counted, which is a
+            // different thing from having generated nothing.
+            statTile(stats.measured_models ? compactNumber(stats.tokens || 0) : '—', 'Tokens generated'),
+            statTile(plural(stats.current_streak || 0, 'day'), 'Current streak'),
+            statTile(plural(stats.longest_streak || 0, 'day'), 'Longest streak'),
+        );
+
+        const messages = stats.messages || 0;
+        if (profileActivityCaption) {
+            profileActivityCaption.textContent = messages
+                ? `${plural(messages, 'message')} since ${formatDay(stats.first_day)}`
+                : 'Nothing said yet.';
+        }
+        renderActivity(report.activity || { days: 308, counts: [] });
+
+        profileInsightsEl?.replaceChildren(
+            insightRow('Conversations', String(stats.conversations || 0)),
+            insightRow('You said', plural(stats.sent || 0, 'message')),
+            insightRow('It answered', plural(stats.received || 0, 'message')),
+            insightRow('Longest conversation', plural(stats.longest_chat || 0, 'message')),
+            insightRow('Busiest day', stats.busiest_day
+                ? `${formatDay(stats.busiest_day)} (${stats.busiest_day_messages})`
+                : '—'),
+            insightRow('First message', formatDay(stats.first_day)),
+        );
+
+        renderModels(report.models || []);
+        renderDevices(report.devices || { devices: [], pairing_set_up: false });
+    }
+
+    // Read when the section is opened, and read again on each visit after the first: the
+    // numbers move with every conversation, and a stats pane showing what was true when
+    // Settings was first opened is worse than one that takes a moment to fill.
+    document.addEventListener('aether-settings-section', event => {
+        if (event.detail === 'profile') refreshProfile();
+    });
+
     /* ====================== GIVE IT A VOICE =============================
      * The brain wizard's twin, for the half of the companion that talks and listens.
      *
@@ -5306,6 +5630,8 @@ document.addEventListener('DOMContentLoaded', () => {
             applyOsWording(data.os);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
+            document.getElementById('setting-operator-name').value = s.operator_name || '';
+            updateProfileMonogram();
             document.getElementById('setting-provider').value = s.llm_provider || 'offline';
             document.getElementById('setting-model').value = s.llm_model || 'halcy-core';
             document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
@@ -5446,6 +5772,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const payload = {
             settings: {
                 agent_name: document.getElementById('setting-agent-name').value.trim() || "HALCY",
+                // Saved empty when it is empty: an operator who clears their name is
+                // asking to go back to the model being told nothing about them.
+                operator_name: document.getElementById('setting-operator-name').value.trim(),
                 llm_provider: document.getElementById('setting-provider').value,
                 llm_model: document.getElementById('setting-model').value,
                 llm_endpoint: document.getElementById('setting-endpoint').value,

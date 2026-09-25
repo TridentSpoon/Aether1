@@ -821,6 +821,10 @@
                         <input id="settings-search" type="search" placeholder="Search settings..." autocomplete="off">
                     </label>
                     <p id="settings-nav-empty" class="settings-nav-empty hidden">Nothing matches that.</p>
+                    <button type="button" id="settings-nav-profile" class="settings-nav-item" data-settings-section="profile" data-keywords="profile operator name devices paired lan revoke token stats streak activity usage" data-hint="you, your usage, and the devices that have paired" title="you, your usage, and the devices that have paired">
+                        <span class="settings-nav-icon">👤</span>
+                        <span class="settings-nav-text">Profile</span>
+                    </button>
                     <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar theme colour colors persona speciality sprite hologram" data-hint="avatar, colours and which persona answers" title="avatar, colours and which persona answers">
                         <span class="settings-nav-icon">🎨</span>
                         <span class="settings-nav-text">Appearance</span>
@@ -873,6 +877,102 @@
 
 
                 <div id="settings-detail" class="settings-detail">
+
+            <!-- SECTION: PROFILE -- the operator, rather than the agent.
+                 Everything in it is counted out of this machine's own database and read off
+                 its own disk (see src-tauri/src/profile.rs): no number here is estimated, and
+                 a stat nothing has measured says so rather than showing a plausible zero.
+                 The devices half is step 45's per-device tokens -- `aether1 devices` and
+                 `aether1 revoke <id>` -- in the window, for an operator who never opens a
+                 terminal. -->
+            <section class="settings-pane" data-settings-section="profile">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">👤 Profile</h3>
+                    <p class="settings-pane-hint">you, your usage, and the devices that have paired</p>
+                </div>
+
+                <div class="profile-identity">
+                    <div id="profile-monogram" class="profile-monogram" aria-hidden="true">&mdash;</div>
+                    <div class="profile-identity-fields">
+                        <div class="space-y-1">
+                            <label for="setting-operator-name" class="text-xs font-mono text-cyan-300 block">WHAT SHOULD IT CALL YOU?</label>
+                            <input id="setting-operator-name" type="text" placeholder="e.g. Trident" autocomplete="off" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                Goes into the prompt alongside the live telemetry, so it knows who
+                                it is talking to. Leave it empty and it is told nothing about you
+                                &mdash; which is how every install worked before this field existed.
+                            </p>
+                        </div>
+                        <p class="profile-identity-meta">
+                            Answering as <strong id="profile-agent-name">&mdash;</strong>,
+                            on <strong id="profile-machine">&mdash;</strong>.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="profile-section-head">
+                    <h4 class="profile-section-title">Your stats</h4>
+                    <p class="profile-section-hint">
+                        Counted from your own history on this machine. Nothing is collected and
+                        nothing is sent anywhere.
+                    </p>
+                </div>
+
+                <div id="profile-stats" class="profile-stats"></div>
+
+                <div class="profile-card">
+                    <div class="profile-card-head">
+                        <h4 class="profile-card-title">Message activity</h4>
+                        <p id="profile-activity-caption" class="profile-card-hint">&mdash;</p>
+                    </div>
+                    <!-- The grid is as wide as its own columns, not as wide as the card, and
+                         the month labels sit in a strip of exactly that width -- otherwise
+                         they spread across the card and stop lining up with the weeks they
+                         name. The wrapper is what scrolls on a narrow window. -->
+                    <div class="profile-activity-wrap">
+                        <div class="profile-activity-inner">
+                            <div id="profile-activity" class="profile-activity" role="img" aria-label="Messages per day over the last 44 weeks"></div>
+                            <div id="profile-activity-months" class="profile-activity-months"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="profile-two-up">
+                    <div class="profile-card">
+                        <div class="profile-card-head">
+                            <h4 class="profile-card-title">Activity insights</h4>
+                        </div>
+                        <dl id="profile-insights" class="profile-insights"></dl>
+                    </div>
+                    <div class="profile-card">
+                        <div class="profile-card-head">
+                            <h4 class="profile-card-title">Most used models</h4>
+                            <p class="profile-card-hint">ranked by tokens generated</p>
+                        </div>
+                        <ol id="profile-models" class="profile-models"></ol>
+                    </div>
+                </div>
+
+                <div class="profile-card">
+                    <div class="profile-card-head profile-card-head-row">
+                        <div>
+                            <h4 class="profile-card-title">Paired devices</h4>
+                            <p class="profile-card-hint">what may reach this machine over the LAN</p>
+                        </div>
+                        <button type="button" id="btn-revoke-all-devices" class="cyber-btn text-[10px] py-1 px-2 border-red-400 text-red-300 hover:bg-red-900/40 hidden">
+                            Revoke all
+                        </button>
+                    </div>
+                    <p class="profile-card-hint">
+                        Every device that pairs over <span class="text-cyan-300">aether1 --serve --lan</span>
+                        gets a token of its own, so one can be cut off without disturbing the rest.
+                        Revoking takes effect on the next request &mdash; the server does not need
+                        restarting. The pairing phrase itself is unchanged, so a revoked machine can
+                        pair again.
+                    </p>
+                    <div id="profile-devices" class="profile-devices"></div>
+                </div>
+            </section>
 
             <!-- SECTION: CUSTOMISATION (Avatar, Theme, Persona -- each its own card) -->
             <section class="settings-pane" data-settings-section="appearance">
