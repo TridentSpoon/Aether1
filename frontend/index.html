@@ -842,7 +842,7 @@
                         <span class="settings-nav-icon">🖥️</span>
                         <span class="settings-nav-text">Desktop Sprite</span>
                     </button>
-                    <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model endpoint api key server ollama openai cloud local provider connections github coding opencode aider" data-hint="which AI does the thinking" title="which AI does the thinking">
+                    <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key server ollama openai cloud local provider connections github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
                         <span class="settings-nav-icon">🧠</span>
                         <span class="settings-nav-text">The Brain</span>
                     </button>
@@ -1178,9 +1178,38 @@
                 </summary>
                 <div class="settings-group-body">
 
+                    <!-- ------------------------- THE MODEL HUB -------------------------
+                         The whole point of the arrangement: one place to look at models,
+                         with the machine's own numbers along the top, instead of a settings
+                         form that assumed you already knew which model you wanted.
+
+                         Nothing here is fetched from a website. The two catalogues are
+                         compiled into the binary (setup.rs for models to talk to,
+                         code_setup.rs for models to write code with) and everything else is
+                         this computer: what a scan found answering on a local port, what
+                         that server says it has downloaded, and how much memory and video
+                         memory the machine has. That is a deliberate choice rather than a
+                         gap -- a hub that lists every model on a public index is a hub that
+                         mostly lists models this machine cannot run, and it stops working
+                         the moment the network does.
+
+                         The list and the detail panel are both drawn by renderModelHub in
+                         app.js from one probe of each catalogue. What is in the markup is
+                         the frame, the controls and the ids they fill. -->
+                    <div class="hub-head">
+                        <div class="min-w-0">
+                            <div class="hub-title">Model hub</div>
+                            <div class="hub-sub">Discover and download models, locally.</div>
+                        </div>
+                        <!-- What this machine has to spend, which is the number every other
+                             answer on this panel is measured against. Drawn from the
+                             telemetry this window already receives, so it costs no probe. -->
+                        <div id="hub-machine" class="hub-chips"></div>
+                    </div>
+
                     <!-- The way in for anyone who does not already know what any of the fields
                          below mean. Everything under it is the same settings by hand. -->
-                    <div class="bg-cyan-950/30 border border-cyan-500/40 p-3 rounded-md flex items-center justify-between gap-3">
+                    <div class="bg-cyan-950/30 border border-cyan-500/40 p-3 rounded-md flex items-center justify-between gap-3 flex-wrap">
                         <div class="min-w-0">
                             <div class="text-xs font-mono text-cyan-200">Not sure what to put here?</div>
                             <div class="text-[11px] font-mono text-slate-400 leading-snug">
@@ -1194,6 +1223,70 @@
                     <div id="brain-status" class="text-[11px] font-mono p-2 rounded border border-slate-600/40 bg-slate-900/60 text-slate-400">
                         Checking what is connected...
                     </div>
+
+                    <!-- Discover / On device is the one split that matters here, and it is
+                         not a filter: they answer different questions. Discover is "what
+                         could this computer run", which is the catalogue measured against
+                         the hardware. On device is "what is actually downloaded", which is
+                         whatever the server answering on this machine reports -- including
+                         models that are on no list in this program, because someone pulled
+                         them themselves. -->
+                    <div class="hub-controls">
+                        <div class="hub-tabs" role="tablist">
+                            <button type="button" id="hub-tab-discover" class="hub-tab is-active" data-hub-tab="discover" role="tab">Discover</button>
+                            <button type="button" id="hub-tab-device" class="hub-tab" data-hub-tab="device" role="tab">On device</button>
+                        </div>
+                        <div class="hub-search">
+                            <span class="hub-search-icon" aria-hidden="true">🔍</span>
+                            <input id="hub-search" type="search" placeholder="Search all models" autocomplete="off" aria-label="Search models">
+                        </div>
+                        <select id="hub-filter-purpose" class="hub-select" aria-label="What the model is for">
+                            <option value="all">Any purpose</option>
+                            <option value="chat">To talk to</option>
+                            <option value="code">To write code</option>
+                        </select>
+                        <select id="hub-filter-fit" class="hub-select" aria-label="Which models to show">
+                            <option value="fits">Fits this computer</option>
+                            <option value="all">Show everything</option>
+                        </select>
+                        <select id="hub-sort" class="hub-select" aria-label="Order">
+                            <option value="recommended">Recommended</option>
+                            <option value="smallest">Smallest first</option>
+                            <option value="largest">Largest first</option>
+                        </select>
+                    </div>
+
+                    <div class="hub-body">
+                        <div class="hub-list-col">
+                            <div class="hub-list-head">
+                                <span id="hub-list-title" class="hub-list-title">Models for this computer</span>
+                                <button type="button" id="hub-refresh" class="hub-icon-btn" title="Look at this computer again">&#8635;</button>
+                            </div>
+                            <div id="hub-list" class="hub-list" role="listbox" aria-label="Models"></div>
+                        </div>
+                        <!-- Everything about the selected model, including the button that
+                             downloads it. One model at a time, because the decision is one
+                             model at a time: a row of Download buttons down a list invites
+                             a second three-gigabyte download nobody meant to start. -->
+                        <div id="hub-detail" class="hub-detail"></div>
+                    </div>
+
+                    <div id="hub-downloads" class="hub-downloads"></div>
+                    <div id="hub-status" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-500/20"></div>
+
+                    <!-- ------------------- THE CONNECTION ITSELF -------------------
+                         The same fields as before, with the same ids, now behind a heading
+                         of their own: the hub above answers "which model", and this answers
+                         "where does it run and what does it need to get in". A cloud
+                         provider has no entry in any catalogue -- it is a name you already
+                         know and a key -- so this stays a form and is the only part of The
+                         Brain a cloud user touches. -->
+                    <details id="settings-group-connection" class="settings-group settings-group-nested" open>
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">&#128268; Connection</span>
+                            <span class="settings-group-hint">where the AI runs, and the key it needs</span>
+                        </summary>
+                        <div class="settings-group-body">
 
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div class="space-y-1">
@@ -1219,7 +1312,8 @@
                             <label for="setting-model-picker" class="text-xs font-mono text-cyan-300 block">WHICH MODEL</label>
                             <!-- The dropdown lists what a detected server says it can run; the box
                                  below stays typeable, because a cloud model is a name you know
-                                 and nothing local can enumerate it. -->
+                                 and nothing local can enumerate it. Pressing "Use this one" in
+                                 the hub above fills both in. -->
                             <select id="setting-model-picker" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                                 <option value="">-- models on the selected server --</option>
                             </select>
@@ -1264,7 +1358,12 @@
 
                     <!-- The scanner, kept with the fields it fills in rather than in a card of
                          its own at the top of the panel, where it read as a feature instead of
-                         as the way these boxes get filled. -->
+                         as the way these boxes get filled.
+
+                         It used to carry a second, shorter model list with a Download button of
+                         its own. That is the hub's job now, and it was always the worse of the
+                         two: it fired `ollama pull` and reported only that it had started,
+                         where the hub's download reports bytes as they arrive. -->
                     <details class="border border-slate-600/40 rounded p-3">
                         <summary class="text-xs font-mono text-slate-300 cursor-pointer">🔍 Search this computer for AI servers and keys</summary>
                         <div class="space-y-2 mt-2">
@@ -1282,26 +1381,13 @@
                                 <div>Press Scan to look for AI servers on this machine and API keys in the environment.</div>
                             </div>
 
-                            <div class="space-y-1.5 pt-1">
-                                <label for="select-local-model" class="text-xs font-mono text-slate-400 block">Download a small model through Ollama:</label>
-                                <div class="flex items-center justify-between gap-2">
-                                    <select id="select-local-model" class="flex-1 bg-slate-900 border border-cyan-500/40 rounded p-1.5 text-xs text-cyan-100 font-mono">
-                                        <option value="llama3.2:1b">Llama 3.2 (1B) -- fastest, smallest</option>
-                                        <option value="qwen2.5:1.5b">Qwen 2.5 (1.5B) -- fast, strong for its size</option>
-                                        <option value="gemma2:2b">Gemma 2 (2B) -- balanced</option>
-                                        <option value="llama3.2:3b">Llama 3.2 (3B) -- best all-rounder</option>
-                                        <option value="mistral">Mistral (7B) -- better answers, needs more RAM</option>
-                                    </select>
-                                    <button id="btn-pull-llama" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
-                                        📥 Download
-                                    </button>
-                                </div>
-                                <span class="text-[11px] font-mono text-slate-500 block">
-                                    Any local server works, not just Ollama: anything speaking the
-                                    OpenAI-compatible or Ollama-style API on a common port is found by
-                                    the scan, and anything else can be typed into the address box by hand.
-                                </span>
-                            </div>
+                            <span class="text-[11px] font-mono text-slate-500 block">
+                                Any local server works, not just Ollama: anything speaking the
+                                OpenAI-compatible or Ollama-style API on a common port is found by
+                                the scan, and anything else can be typed into the address box by hand.
+                            </span>
+                        </div>
+                    </details>
                         </div>
                     </details>
 
@@ -1395,15 +1481,6 @@
                             </div>
 
                             <ol id="code-steps" class="space-y-2"></ol>
-
-                            <div id="code-models-wrap" class="hidden space-y-1.5">
-                                <label class="text-xs font-mono text-cyan-300 block">MODELS BUILT FOR CODE</label>
-                                <div id="code-models" class="space-y-1.5"></div>
-                                <label class="flex items-center gap-2 text-[11px] font-mono text-slate-500">
-                                    <input id="code-show-all" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                                    Also show the ones too big for this computer's memory
-                                </label>
-                            </div>
 
                             <div id="code-own-model" class="hidden text-[11px] font-mono text-slate-400 p-2 rounded border border-slate-600/40 bg-slate-900/40"></div>
 
