@@ -285,6 +285,12 @@ document.addEventListener('DOMContentLoaded', () => {
        an attribute first. Up here for the same reason as the state above. */
     let personaRows = new Map();
     function personaRow(key) { return personaRows.get(key) || null; }
+    /* The two voice lists the avatar's own picker is built from, fetched once and kept:
+       they are a table in the binary plus a directory listing, and the pane is opened
+       and closed a dozen times while somebody is choosing. Up here with personaRows for
+       the same reason -- refreshAvatarBrowser runs before this file's later declarations
+       (see openAvatarDetail), and a `let` further down would be a TDZ error at startup. */
+    let voicePickerLists = null;
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
@@ -839,7 +845,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const voiceRow = document.getElementById('avatar-detail-voice-row');
         voiceRow.classList.toggle('hidden', !persona);
-        if (persona) document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+        if (persona) renderAvatarVoice(persona);
 
         const isCurrent = avatarId === currentAvatar;
         const useBtn = document.getElementById('btn-avatar-use');
@@ -898,6 +904,156 @@ document.addEventListener('DOMContentLoaded', () => {
         if (persona.local_voice) parts.push(`${persona.local_voice} (Piper)`);
         if (parts.length === 0) return 'Whatever voice you have chosen in Voice & Sound.';
         return parts.join('  ·  ');
+    }
+
+    /* ---- Giving one avatar a voice of your own choosing ---------------------
+       The identity table in genesis.rs is where an avatar's voices come from, and it is the
+       author's taste, not the operator's. This is where they disagree with it: two selects,
+       saved the moment one changes, and a reset that removes the choice rather than writing
+       today's default into it -- so an avatar put back to its own voice follows the table if
+       the table ever changes. Nothing here touches the settings form, so it is safe to save
+       on change even though the window has one Save Changes button. */
+    async function fetchVoicePickerLists() {
+        if (voicePickerLists) return voicePickerLists;
+        const data = IS_TAURI
+            ? await tauriInvoke('voice_pickers_rust')
+            : await (await apiFetch('/api/voice/pickers')).json();
+        voicePickerLists = data;
+        return voicePickerLists;
+    }
+
+    function renderAvatarVoice(persona) {
+        document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+
+        // What it would speak in if you changed nothing, shown only when you have: two
+        // identical lines, one labelled "default", is a pane telling you nothing twice.
+        const defaults = document.getElementById('avatar-detail-voice-default');
+        defaults.classList.toggle('hidden', !persona.voice_customised);
+        if (persona.voice_customised) {
+            const hasOwn = persona.default_voice || persona.default_local_voice;
+            defaults.textContent = hasOwn
+                ? `Its own voice: ${avatarVoiceLine({
+                    voice: persona.default_voice,
+                    local_voice: persona.default_local_voice,
+                })}`
+                : 'This one was written without a voice of its own: reset it and it speaks '
+                    + 'in whatever Voice & Sound says.';
+        }
+
+        const reset = document.getElementById('btn-avatar-voice-reset');
+        reset.classList.toggle('hidden', !persona.voice_customised);
+        reset.onclick = () => {
+            voiceEngine.playSFX('click');
+            saveAvatarVoice(persona.key, null);
+        };
+
+        const note = document.getElementById('avatar-voice-note');
+        const cloud = document.getElementById('avatar-voice-cloud');
+        const local = document.getElementById('avatar-voice-local');
+        note.textContent = '';
+
+        fetchVoicePickerLists().then((lists) => {
+            fillVoiceSelect(cloud, lists.cloud.map((v) => ({
+                value: v.name,
+                label: `${v.name} — ${v.label}`,
+            })), persona.default_voice, persona.voice);
+            fillVoiceSelect(local, lists.local.map((v) => ({
+                value: v.name,
+                // A voice that is not downloaded is still offered: it is a real choice that
+                // needs fetching first, and hiding it would make this picker disagree with
+                // the download list in Voice & Sound.
+                label: `${v.name} — ${v.label}${v.installed ? '' : ' (not downloaded)'}`,
+            })), persona.default_local_voice, persona.local_voice);
+        }).catch((e) => {
+            console.warn('Could not load the voice lists', e);
+            note.textContent = 'The voice lists could not be loaded, so this avatar keeps '
+                + 'the voice it was written with.';
+        });
+
+        cloud.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+        local.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+    }
+
+    /* The first option is always "leave it alone", and it says what leaving it alone sounds
+       like -- an avatar with no voice of its own in the identity table speaks in whatever
+       Voice & Sound says, and that is worth reading rather than inferring from a blank. */
+    function fillVoiceSelect(select, options, defaultValue, current) {
+        select.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = defaultValue
+            ? `Its own: ${defaultValue}`
+            : 'Whatever Voice & Sound says';
+        select.appendChild(first);
+        options.forEach((opt) => {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            select.appendChild(el);
+        });
+        // `current` is the voice it actually speaks in; it only counts as a *choice* when it
+        // is not simply the default, or the picker would show every avatar as customised.
+        select.value = current && current !== defaultValue ? current : '';
+        if (select.value !== '' && !options.some((o) => o.value === select.value)) {
+            select.value = '';
+        }
+    }
+
+    /* `choice` null resets this avatar; otherwise each half is a voice name or '' for "leave
+       that half at its default". The reply is the whole persona list, so the pane redraws
+       from what was stored rather than from what it hoped would be. */
+    async function saveAvatarVoice(personaKey, choice) {
+        const note = document.getElementById('avatar-voice-note');
+        try {
+            let personas;
+            if (choice === null) {
+                personas = IS_TAURI
+                    ? await tauriInvoke('clear_persona_voice_rust', { persona: personaKey })
+                    : await postJson('/api/personas/voice/reset', { persona: personaKey });
+            } else {
+                const body = {
+                    persona: personaKey,
+                    voice: choice.voice || null,
+                    localVoice: choice.local_voice || null,
+                };
+                personas = IS_TAURI
+                    ? await tauriInvoke('set_persona_voice_rust', body)
+                    : await postJson('/api/personas/voice', {
+                        persona: personaKey,
+                        voice: choice.voice || null,
+                        local_voice: choice.local_voice || null,
+                    });
+            }
+            if (Array.isArray(personas)) {
+                personaRows = new Map(personas.map((p) => [p.key, p]));
+            }
+            // Redrawn first, because redrawing clears the note -- and the note is the only
+            // thing on screen that says the choice reached the database.
+            const row = personaRow(personaKey);
+            if (row) renderAvatarVoice(row);
+            note.textContent = choice === null
+                ? 'Back to the voice it was written with.'
+                : 'Saved. It speaks in this from its next answer.';
+        } catch (e) {
+            console.warn('Could not save the avatar voice', e);
+            note.textContent = `That voice could not be saved: ${e.message || e}`;
+        }
+    }
+
+    async function postJson(path, body) {
+        const resp = await apiFetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await resp.text() || `${resp.status}`);
+        return resp.json();
     }
 
     // ---- The live preview ---------------------------------------------------

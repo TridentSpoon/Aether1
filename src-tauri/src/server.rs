@@ -158,6 +158,9 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/stt", post(stt))
         .route("/api/voice/status", get(voice_status))
         .route("/api/personas", get(list_personas))
+        .route("/api/personas/voice", post(set_persona_voice))
+        .route("/api/personas/voice/reset", post(clear_persona_voice))
+        .route("/api/voice/pickers", get(voice_pickers))
         .route("/api/flow", get(flow_mode).post(set_flow_mode))
         .route("/api/profile", get(profile_report))
         .route("/api/profile/revoke", post(revoke_device))
@@ -605,8 +608,48 @@ async fn revoke_device(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
-async fn list_personas() -> Json<Value> {
-    Json(commands::list_personas())
+async fn list_personas(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::list_personas(&state.engine))
+}
+
+/// The voices an avatar can be given, for the browser HUD's avatar pane.
+async fn voice_pickers() -> Json<Value> {
+    Json(commands::voice_pickers())
+}
+
+#[derive(Deserialize)]
+struct PersonaVoiceRequest {
+    persona: String,
+    #[serde(default)]
+    voice: Option<String>,
+    #[serde(default)]
+    local_voice: Option<String>,
+}
+
+/// Both halves of one avatar's voice choice. The reply is the whole persona list again, the
+/// same shape `/api/personas` returns, so the pane redraws from one answer rather than
+/// patching its own copy and hoping it matches what was stored.
+async fn set_persona_voice(
+    State(state): State<AppState>,
+    Json(req): Json<PersonaVoiceRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::set_persona_voice(&state.engine, req.persona, req.voice, req.local_voice)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize)]
+struct PersonaRequest {
+    persona: String,
+}
+
+async fn clear_persona_voice(
+    State(state): State<AppState>,
+    Json(req): Json<PersonaRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::clear_persona_voice(&state.engine, req.persona)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 async fn get_pending_actions(State(state): State<AppState>) -> Json<Vec<llm::ActionRecord>> {

@@ -1212,9 +1212,30 @@
                                 <span class="avatar-fact-label">What it reaches without asking</span>
                                 <p id="avatar-detail-access" class="avatar-fact-body"></p>
                             </div>
+                            <!-- The voice an avatar speaks in is the identity table's choice
+                                 until the operator makes their own here. Both halves are
+                                 offered because they are different questions: the cloud voice
+                                 and the Piper model on this machine. Changing one saves it on
+                                 the spot -- it writes its own settings row and never touches
+                                 the form the Save Changes button commits. -->
                             <div class="avatar-fact" id="avatar-detail-voice-row">
                                 <span class="avatar-fact-label">Voice</span>
                                 <p id="avatar-detail-voice" class="avatar-fact-body"></p>
+                                <p id="avatar-detail-voice-default" class="avatar-fact-sub hidden"></p>
+                                <div class="avatar-voice-picker">
+                                    <label class="avatar-voice-field">
+                                        <span class="avatar-voice-field-label">Cloud voice</span>
+                                        <select id="avatar-voice-cloud" class="avatar-voice-select"></select>
+                                    </label>
+                                    <label class="avatar-voice-field">
+                                        <span class="avatar-voice-field-label">Piper voice</span>
+                                        <select id="avatar-voice-local" class="avatar-voice-select"></select>
+                                    </label>
+                                </div>
+                                <div class="avatar-voice-foot">
+                                    <button type="button" id="btn-avatar-voice-reset" class="cyber-btn text-[10px] py-1 px-2 hidden">&#8634; Back to its own voice</button>
+                                    <span id="avatar-voice-note" class="avatar-voice-note"></span>
+                                </div>
                             </div>
 
                             <div class="avatar-detail-actions">
