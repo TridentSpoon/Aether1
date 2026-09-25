@@ -7,7 +7,7 @@ Built for Linux and Windows as peer platforms -- developed on Linux, installed o
 Intended features
 
 - **3D Holographic Avatar**: 5 inspired avatars with what will hopefully be familiar personas.
-- **Futuristic HUD & Live Telemetry**: Real-time monitoring of Hardware Telemetry.
+- **Futuristic HUD & Live Telemetry**: Real-time hardware telemetry — CPU, memory, storage, graphics, network and battery — along the chin bar.
 - **System Notification Bar Integration**:
   - Displays a dynamic glowing status icon in your system tray (Cyan = Active, Green = Listening, Purple = Processing, Amber = Alert/Offline).
   - Quick action menu on click to open the HUD, Trigger instant diagnostics, show the avatar or close out the program.

@@ -146,21 +146,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnInstallGh = document.getElementById('btn-install-gh');
     const btnApplyUpdate = document.getElementById('btn-apply-update');
 
-    // Hardware Telemetry Elements
-    const elCpuGauge = document.getElementById('cpu-gauge-fill');
-    const elCpuVal = document.getElementById('cpu-percent-val');
-    const elRamGauge = document.getElementById('ram-gauge-fill');
-    const elRamVal = document.getElementById('ram-percent-val');
-    const elDiskGauge = document.getElementById('disk-gauge-fill');
-    const elDiskVal = document.getElementById('disk-percent-val');
-    const elNetDown = document.getElementById('net-download-val');
-    const elNetUp = document.getElementById('net-upload-val');
-    const elGpuSection = document.getElementById('gpu-section');
-    const elGpuVal = document.getElementById('gpu-val');
-    const elBatterySection = document.getElementById('battery-section');
-    const elBatteryGauge = document.getElementById('battery-gauge-fill');
-    const elBatteryVal = document.getElementById('battery-percent-val');
-    const elBatteryWarning = document.getElementById('battery-warning');
+    // Hardware telemetry, which lives in the chin bar rather than in a panel of its own:
+    // one cell per reading, each a label, a value and (where the reading is a percentage of
+    // something) a hairline meter. Same payload it always read -- only where it is drawn
+    // changed. See #chin-telemetry in index.html.
+    const elCpuCell = document.getElementById('chin-stat-cpu');
+    const elCpuVal = document.getElementById('chin-cpu-val');
+    const elCpuMeter = document.getElementById('chin-cpu-meter');
+    const elRamCell = document.getElementById('chin-stat-ram');
+    const elRamVal = document.getElementById('chin-ram-val');
+    const elRamMeter = document.getElementById('chin-ram-meter');
+    const elDiskCell = document.getElementById('chin-stat-disk');
+    const elDiskVal = document.getElementById('chin-disk-val');
+    const elDiskMeter = document.getElementById('chin-disk-meter');
+    const elNetCell = document.getElementById('chin-stat-net');
+    const elNetVal = document.getElementById('chin-net-val');
+    const elGpuCell = document.getElementById('chin-stat-gpu');
+    const elGpuVal = document.getElementById('chin-gpu-val');
+    const elBatteryCell = document.getElementById('chin-stat-battery');
+    const elBatteryVal = document.getElementById('chin-battery-val');
+    const elBatteryMeter = document.getElementById('chin-battery-meter');
     const elDistroBadge = document.getElementById('distro-badge');
     const elStatusBadge = document.getElementById('status-badge');
     const elClock = document.getElementById('live-clock');
@@ -933,59 +938,84 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    let gpuRowDrawn = false;
+    let gpuCellDrawn = false;
+
+    /* One cell of the chin-bar strip: the number, the meter under it, and the colour both
+       wear. Warn and crit go on the cell rather than on the meter, so the value and the bar
+       always make the same claim -- a red bar under a cyan number reads as two readings. */
+    function setChinStat(cell, valueEl, meterEl, text, percent, level, detail) {
+        if (valueEl) valueEl.textContent = text;
+        if (meterEl && typeof percent === 'number') {
+            meterEl.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+        }
+        if (cell) {
+            cell.classList.toggle('warn', level === 'warn');
+            cell.classList.toggle('crit', level === 'crit');
+            // The detail the gauges used to spell out in full (6.5/16 GB, the card and its
+            // memory) has to go somewhere once the strip shows only the percentage.
+            if (detail) cell.title = detail;
+        }
+    }
+
+    function loadLevel(pct) {
+        if (pct > 85) return 'crit';
+        if (pct > 65) return 'warn';
+        return '';
+    }
 
     function updateHardwareTelemetry(data) {
         if (!data) return;
+
         const cpuPct = data.cpu ? data.cpu.total_percent : 0;
-        if (elCpuVal) elCpuVal.textContent = `${cpuPct}%`;
-        if (elCpuGauge) {
-            elCpuGauge.style.width = `${cpuPct}%`;
-            elCpuGauge.className = `gauge-bar-fill ${cpuPct > 85 ? 'crit' : (cpuPct > 65 ? 'warn' : '')}`;
-        }
+        setChinStat(elCpuCell, elCpuVal, elCpuMeter, `${cpuPct}%`, cpuPct, loadLevel(cpuPct),
+            `Processor load: ${cpuPct}%`);
 
         const ramPct = data.ram ? data.ram.percent : 0;
-        if (elRamVal) elRamVal.textContent = `${ramPct}% (${data.ram.used_gb}/${data.ram.total_gb} GB)`;
-        if (elRamGauge) {
-            elRamGauge.style.width = `${ramPct}%`;
-            elRamGauge.className = `gauge-bar-fill ${ramPct > 85 ? 'crit' : (ramPct > 65 ? 'warn' : '')}`;
-        }
+        setChinStat(elRamCell, elRamVal, elRamMeter, `${ramPct}%`, ramPct, loadLevel(ramPct),
+            data.ram ? `System memory: ${ramPct}% — ${data.ram.used_gb}/${data.ram.total_gb} GB`
+                     : 'System memory');
 
         const diskPct = data.disk ? data.disk.percent : 0;
-        if (elDiskVal) elDiskVal.textContent = `${diskPct}% (${data.disk.used_gb}/${data.disk.total_gb} GB)`;
-        if (elDiskGauge) elDiskGauge.style.width = `${diskPct}%`;
+        setChinStat(elDiskCell, elDiskVal, elDiskMeter, `${diskPct}%`, diskPct, loadLevel(diskPct),
+            data.disk ? `Storage on /: ${diskPct}% — ${data.disk.used_gb}/${data.disk.total_gb} GB`
+                      : 'Storage on /');
 
-        if (elNetDown) elNetDown.textContent = `${data.network ? data.network.download_kbps : 0} KB/s`;
-        if (elNetUp) elNetUp.textContent = `${data.network ? data.network.upload_kbps : 0} KB/s`;
+        const down = data.network ? data.network.download_kbps : 0;
+        const up = data.network ? data.network.upload_kbps : 0;
+        setChinStat(elNetCell, elNetVal, null, `↓${down} ↑${up} KB/s`, null, '',
+            `Network: ${down} KB/s down, ${up} KB/s up`);
 
         // The card AETHER1 would run a model on, which is the number the whole hardware
         // monitor was missing. Written once and then left alone: the adapters are read at
         // startup and never re-probed, so re-setting this every tick would be work for a
         // string that cannot have changed. An empty list means nothing answered -- a
-        // machine with no card, or a probe this platform does not have -- and the row stays
+        // machine with no card, or a probe this platform does not have -- and the cell stays
         // hidden rather than printing a zero that reads as a fault.
-        if (!gpuRowDrawn && Array.isArray(data.gpus) && data.gpus.length > 0) {
-            gpuRowDrawn = true;
-            if (elGpuVal) elGpuVal.textContent = data.gpus.map(gpu => gpu.summary).join(', ');
-            if (elGpuSection) elGpuSection.classList.remove('hidden');
+        if (!gpuCellDrawn && Array.isArray(data.gpus) && data.gpus.length > 0) {
+            gpuCellDrawn = true;
+            const summary = data.gpus.map(gpu => gpu.summary).join(', ');
+            // The strip has room for one card's worth of text. The whole list, however many
+            // there are, stays on the cell's tooltip.
+            setChinStat(elGpuCell, elGpuVal, null, data.gpus[0].summary, null, '',
+                `Graphics: ${summary}`);
+            if (elGpuCell) elGpuCell.classList.remove('hidden');
         }
 
-        // data.battery is null on a desktop (see Telemetry::to_wire_json) -- the section
-        // stays hidden for the life of the app in that case rather than showing a
-        // permanent, meaningless 0%. On a laptop it appears the first reading in and stays
-        // shown, since a battery doesn't unplug itself from the machine mid-session.
+        // data.battery is null on a desktop (see Telemetry::to_wire_json) -- the cell stays
+        // hidden for the life of the app in that case rather than showing a permanent,
+        // meaningless 0%. On a laptop it appears the first reading in and stays shown, since
+        // a battery doesn't unplug itself from the machine mid-session.
         if (data.battery) {
-            if (elBatterySection) elBatterySection.classList.remove('hidden');
+            if (elBatteryCell) elBatteryCell.classList.remove('hidden');
             const pct = Math.round(data.battery.percent);
-            if (elBatteryVal) elBatteryVal.textContent = `${pct}% (${data.battery.state})`;
-            if (elBatteryGauge) {
-                elBatteryGauge.style.width = `${pct}%`;
-                elBatteryGauge.className = `gauge-bar-fill ${data.battery.on_battery && pct < 25 ? 'crit' : (data.battery.on_battery ? 'warn' : '')}`;
-            }
+            const level = data.battery.on_battery && pct < 25 ? 'crit'
+                        : (data.battery.on_battery ? 'warn' : '');
+            setChinStat(elBatteryCell, elBatteryVal, elBatteryMeter, `${pct}%`, pct, level,
+                `Battery: ${pct}% (${data.battery.state})`);
             // on_battery (state === Discharging) rather than state !== 'charging': "full"
             // and "unknown" are both still plugged in, and a warning that never clears on
             // a battery that reports "unknown" while on AC would just be noise.
-            if (elBatteryWarning) elBatteryWarning.classList.toggle('hidden', !data.battery.on_battery);
+            if (elBatteryCell) elBatteryCell.classList.toggle('on-battery', data.battery.on_battery);
         }
     }
 
