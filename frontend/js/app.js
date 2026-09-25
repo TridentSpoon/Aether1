@@ -3982,7 +3982,7 @@ document.addEventListener('DOMContentLoaded', () => {
             text.append(name, meta);
             const revoke = document.createElement('button');
             revoke.type = 'button';
-            revoke.className = 'cyber-btn text-[10px] py-1 px-2 border-red-400 text-red-300 hover:bg-red-900/40';
+            revoke.className = 'cyber-btn text-[10px] py-1 px-2 border-red-400 text-red-400 hover:bg-red-900/40';
             revoke.textContent = 'Revoke';
             revoke.addEventListener('click', async () => {
                 voiceEngine.playSFX('click');
