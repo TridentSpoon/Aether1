@@ -303,10 +303,9 @@ fn fetch_url(db: &MemoryDb, args: &Value) -> Result<String, String> {
 /// Returns up to 10 results with title, URL, and snippet. Each result is formatted
 /// as a numbered list item that the model can read and ask to fetch with fetch_url.
 fn search_web(db: &MemoryDb, args: &Value) -> Result<String, String> {
-    let query = args
-        .get("query")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "search_web needs a query: {\"query\": \"your search terms\"}".to_string())?;
+    let query = args.get("query").and_then(Value::as_str).ok_or_else(|| {
+        "search_web needs a query: {\"query\": \"your search terms\"}".to_string()
+    })?;
 
     if query.trim().is_empty() {
         return Err("search query cannot be empty".to_string());
@@ -358,10 +357,7 @@ fn search_web(db: &MemoryDb, args: &Value) -> Result<String, String> {
                     .get("Text")
                     .and_then(Value::as_str)
                     .unwrap_or("Untitled");
-                let url = result
-                    .get("FirstURL")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let url = result.get("FirstURL").and_then(Value::as_str).unwrap_or("");
 
                 if !url.is_empty() {
                     results.push_str(&format!("{}. {}\n   {}\n", idx + 1, title, url));
