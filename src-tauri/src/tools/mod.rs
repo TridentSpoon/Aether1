@@ -251,6 +251,7 @@ pub fn registry() -> &'static Registry {
             Box::new(builtin::ListProcesses),
             Box::new(builtin::TelemetryDetail),
             Box::new(builtin::SearchMemory),
+            Box::new(builtin::SearchWeb),
             Box::new(eventlog::ReadEventLog),
             // Everything below changes something, so everything below goes through the
             // consent path -- proposed to the operator, never run from a conversation.
