@@ -82,28 +82,100 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnCloseSettings = document.getElementById('btn-close-settings');
     const btnSaveSettings = document.getElementById('btn-save-settings');
 
-    // Settings modal tabs -- Customisation (avatar/theme/persona/sprite) vs. Agent & System
-    // (connection, voice, memory, keys). Both panels always stay in the DOM; this only ever
-    // toggles which one is visible, so nothing that reads/writes settings fields needs to care.
-    const settingsTabButtons = document.querySelectorAll('.settings-tab-btn');
-    const settingsTabPanels = {
-        customisation: document.getElementById('settings-panel-customisation'),
-        system: document.getElementById('settings-panel-system')
-    };
-    function showSettingsTab(tabName) {
-        settingsTabButtons.forEach(btn => {
-            btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-settings-tab') === tabName);
+    /* ---- Settings: the section rail ------------------------------------------
+     * Headings on the left, the chosen section's detail on the right. Every pane
+     * stays in the DOM; this only ever moves the is-active class, so nothing that
+     * reads or writes a settings field by id needs to know the layout changed.
+     *
+     * Two of the panes are platform-dependent (Desktop Sprite, Startup &
+     * Performance) and start with their rail entry hidden -- revealSettingsSection
+     * is how initSpriteMode/initStartupPerformance turn them on. An entry that is
+     * hidden cannot be chosen, including out of the remembered choice below.
+     *
+     * A pane whose body is still a <details> is opened when it is chosen, which is
+     * what keeps the two groups that probe the machine on open (the coding group,
+     * the doctor) probing exactly when someone goes looking at them.
+     */
+    const SETTINGS_SECTION_KEY = 'aether_settings_section';
+    const settingsNav = document.getElementById('settings-nav');
+    const settingsNavEmpty = document.getElementById('settings-nav-empty');
+    const settingsSearch = document.getElementById('settings-search');
+    const settingsNavItems = () => Array.from(document.querySelectorAll('.settings-nav-item'));
+    const settingsPaneFor = (name) => document.querySelector(`.settings-pane[data-settings-section="${name}"]`);
+    const settingsNavFor = (name) => document.getElementById(`settings-nav-${name}`);
+
+    function showSettingsSection(name) {
+        const item = settingsNavFor(name);
+        if (!item || item.classList.contains('hidden')) return false;
+        settingsNavItems().forEach(btn => {
+            btn.classList.toggle('is-active', btn === item);
+            btn.setAttribute('aria-current', btn === item ? 'true' : 'false');
         });
-        Object.entries(settingsTabPanels).forEach(([name, panel]) => {
-            if (panel) panel.classList.toggle('hidden', name !== tabName);
+        document.querySelectorAll('.settings-pane').forEach(pane => {
+            pane.classList.toggle('is-active', pane.dataset.settingsSection === name);
         });
+        // Kept open rather than pressed: the rail is the heading now, so a group that
+        // probes on open (coding, doctor) gets its one probe when the section is chosen.
+        const group = settingsPaneFor(name)?.querySelector(':scope > .settings-group');
+        if (group) group.open = true;
+        const detail = document.getElementById('settings-detail');
+        if (detail) detail.scrollTop = 0;
+        try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
+        return true;
     }
-    settingsTabButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            voiceEngine.playSFX('click');
-            showSettingsTab(btn.getAttribute('data-settings-tab'));
-        });
+
+    // A section the platform can actually offer. Hidden in the markup, shown from
+    // initSpriteMode/initStartupPerformance once IS_TAURI is confirmed.
+    //
+    // The search box below marks and unmarks .hidden as you type, so it has to be
+    // able to tell "filtered out" from "this platform hasn't got one". That is what
+    // the available flag is for: it is set here and read there, and nowhere else.
+    function revealSettingsSection(name) {
+        const item = settingsNavFor(name);
+        if (!item) return;
+        item.dataset.available = 'true';
+        item.classList.remove('hidden');
+    }
+
+    settingsNav?.addEventListener('click', (event) => {
+        const item = event.target.closest('.settings-nav-item');
+        if (!item) return;
+        voiceEngine.playSFX('click');
+        showSettingsSection(item.dataset.settingsSection);
     });
+
+    // Filters the rail by heading, by the plain-words hint beside it, and by a list of
+    // words for what is actually inside the section -- so "voice" finds Voice & Sound
+    // and "model", "api key" or "ollama" all find The Brain, which is the search anyone
+    // arriving with a problem will type. Filtering never changes which section is
+    // showing, only which headings are offered.
+    settingsSearch?.addEventListener('input', () => {
+        const q = settingsSearch.value.trim().toLowerCase();
+        let shown = 0;
+        settingsNavItems().forEach(item => {
+            if (item.dataset.available === 'false') return;
+            const hay = `${item.textContent} ${item.dataset.hint || ''} ${item.dataset.keywords || ''}`.toLowerCase();
+            const match = !q || hay.includes(q);
+            item.classList.toggle('hidden', !match);
+            if (match) shown += 1;
+        });
+        settingsNavEmpty?.classList.toggle('hidden', shown > 0);
+    });
+
+    settingsNavItems().forEach(item => {
+        item.dataset.available = item.classList.contains('hidden') ? 'false' : 'true';
+    });
+
+    // The section you were last in, so coming back to change a second thing does not
+    // start from the top again. Falls through to the first heading in the rail if that
+    // section has since been hidden, or nothing was remembered.
+    function restoreSettingsSection() {
+        let remembered = null;
+        try { remembered = localStorage.getItem(SETTINGS_SECTION_KEY); } catch (e) { /* private mode */ }
+        if (remembered && showSettingsSection(remembered)) return;
+        const first = settingsNavItems().find(item => !item.classList.contains('hidden'));
+        if (first) showSettingsSection(first.dataset.settingsSection);
+    }
 
     // Agent Genesis & Theme Elements
     const btnForgeIdentity = document.getElementById('btn-forge-identity');
@@ -4808,9 +4880,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // running a second copy of the flow.
     function revealConnections() {
         voiceEngine.playSFX('click');
-        const brain = document.getElementById('settings-group-brain');
         const group = document.getElementById('settings-group-connections');
-        if (brain) brain.open = true;
+        showSettingsSection('brain');
         if (group) {
             group.open = true;
             group.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -4930,6 +5001,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!IS_TAURI) return;
         const section = document.getElementById('sprite-mode-section');
         if (section) section.classList.remove('hidden');
+        revealSettingsSection('sprite');
     }
 
     // Reflects Game Mode's current on/off state on its Quick Commands button -- called both
@@ -4950,6 +5022,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function initStartupPerformance() {
         if (!IS_TAURI) return;
         document.getElementById('settings-group-startup')?.classList.remove('hidden');
+        revealSettingsSection('startup');
 
         const gameModeBtn = document.getElementById('btn-game-mode');
         if (gameModeBtn) {
@@ -6281,7 +6354,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // the configured endpoint, and that field has to be filled in before it looks.
         loadSettings().then(handleScanSystem);
         refreshBrainStatus();
-        showSettingsTab('customisation');
+        // Chosen on open rather than at startup: the platform-dependent sections are
+        // revealed during init, and a remembered choice may be one of them.
+        restoreSettingsSection();
         settingsModal.classList.remove('hidden');
     });
 
