@@ -1274,3 +1274,113 @@ body {
     color: #04121a !important;
     box-shadow: var(--glow-green);
 }
+
+/* HARDWARE TELEMETRY IN THE CHIN BAR --------------------------------------------------
+   The readings used to be nine stacked gauges in a panel; they are one strip now, and a
+   strip has to be read at a glance or it is just noise along the bottom of the screen.
+
+   So the styling is deliberately quieter than the rest of the HUD: no glow on the numbers,
+   a hairline rule between cells rather than a border around each, labels dimmed and small
+   and the value the only bright thing in the cell. The cyberpunk stays in the accent -- the
+   cyan value, the meter's gradient, the amber and red it turns under load -- rather than in
+   the frame. That is the whole difference between a status bar and a control panel.
+
+   The strip never wraps: on a narrow window the cells that matter least drop out (see the
+   media queries at the end) rather than pushing the bar to two lines and stealing height
+   from the HUD, which is what this move was meant to give back. */
+.chin-telemetry {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.chin-stat {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0 0.6rem;
+    white-space: nowrap;
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    line-height: 1.1;
+    border-left: 1px solid rgba(0, 240, 255, 0.18);
+}
+
+/* The first cell needs no rule to its left -- the bar's own gap does that job. */
+.chin-stat:first-child {
+    border-left: none;
+}
+
+.chin-stat-label {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+}
+
+.chin-stat-value {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-accent);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Warn/crit are set on the cell rather than the meter so the number moves with the bar --
+   a red bar under a cyan number reads as two different claims. */
+.chin-stat.warn .chin-stat-value {
+    color: var(--neon-amber);
+}
+
+.chin-stat.crit .chin-stat-value {
+    color: var(--neon-red);
+}
+
+/* The meter. 28px of hairline, because it is there to say "about a third" at a glance and
+   anything longer starts competing with the number it is under. */
+.chin-stat-meter {
+    width: 28px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+    flex: none;
+}
+
+.chin-stat-meter > i {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--neon-blue), var(--neon-cyan));
+    transition: width 0.5s ease-out;
+}
+
+.chin-stat.warn .chin-stat-meter > i {
+    background: var(--neon-amber);
+}
+
+.chin-stat.crit .chin-stat-meter > i {
+    background: var(--neon-red);
+}
+
+/* Unplugged. The only reading in the strip that is a warning rather than a measurement, so
+   it is the only one that moves -- slowly, and only while actually discharging. */
+.chin-stat.on-battery .chin-stat-label::before {
+    content: '⚠ ';
+    color: var(--neon-amber);
+}
+
+/* Narrow windows drop cells from the least urgent inwards: the throughput first, then the
+   card (which cannot change while the app runs), then storage (which barely moves). CPU,
+   memory and battery survive to the narrowest window, because those are the three that say
+   whether a model is about to have a bad time. */
+@media (max-width: 1100px) {
+    #chin-stat-net { display: none; }
+}
+
+@media (max-width: 900px) {
+    #chin-stat-gpu { display: none; }
+}
+
+@media (max-width: 760px) {
+    #chin-stat-disk { display: none; }
+}

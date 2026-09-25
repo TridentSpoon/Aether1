@@ -1543,7 +1543,6 @@ fn start_window_drag_rust(window: tauri::WebviewWindow) -> Result<(), String> {
 /// title suffix, and a starting size sane for that panel's content.
 const PANEL_WINDOWS: &[(&str, &str, f64, f64)] = &[
     ("tokens", "Model Performance", 380.0, 560.0),
-    ("hardware", "Hardware Telemetry", 380.0, 560.0),
     ("commands", "Quick Commands", 340.0, 260.0),
     ("chat", "Neural Dialogue Stream", 480.0, 680.0),
     // Wider and shorter than the rest: 80 columns is what a terminal is for, and a shell

@@ -264,96 +264,8 @@
                 </div>
             </div>
 
-        <!-- Hardware Telemetry -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="hardware" data-panel-name="Hardware telemetry" data-grid-col="1" data-grid-row="12" data-grid-w="4" data-grid-h="9">
-            <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
-            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
-            <button type="button" class="panel-undock" data-undock="hardware" title="Open this panel in its own window" aria-label="Open Hardware Telemetry in its own window">⧉</button>
-                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
-                    <h2 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider flex items-center gap-1.5">
-                        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg>
-                        HARDWARE TELEMETRY
-                    </h2>
-                    <span class="text-[10px] font-mono text-cyan-500">LIVE</span>
-                </div>
-
-                <!-- CPU Gauge -->
-                <div class="space-y-1">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">CPU LOAD</span>
-                        <span id="cpu-percent-val" class="text-cyan-400 font-bold">0%</span>
-                    </div>
-                    <div class="gauge-bar-track">
-                        <div id="cpu-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
-                    </div>
-                </div>
-
-                <!-- RAM Gauge -->
-                <div class="space-y-1">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">SYSTEM MEMORY</span>
-                        <span id="ram-percent-val" class="text-cyan-400 font-bold">0%</span>
-                    </div>
-                    <div class="gauge-bar-track">
-                        <div id="ram-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
-                    </div>
-                </div>
-
-                <!-- Disk Gauge -->
-                <div class="space-y-1">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">STORAGE (/)</span>
-                        <span id="disk-percent-val" class="text-cyan-400 font-bold">0%</span>
-                    </div>
-                    <div class="gauge-bar-track">
-                        <div id="disk-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
-                    </div>
-                </div>
-
-                <!-- Graphics -- hidden when nothing here reported a card. Not a gauge: the
-                     adapters are read once at startup (gpu::cached) rather than on every
-                     tick, because two of the three probes start a process and the monitor
-                     must not spawn one a second. So this row is set once and then stands. -->
-                <div id="gpu-section" class="space-y-1 hidden">
-                    <div class="flex justify-between text-xs font-mono gap-2">
-                        <span class="text-slate-300">GRAPHICS</span>
-                        <span id="gpu-val" class="text-cyan-400 font-bold text-right">--</span>
-                    </div>
-                </div>
-
-                <!-- Battery -- hidden entirely on a desktop (no battery to report); see
-                     updateHardwareTelemetry, which un-hides this the first time telemetry
-                     carries a non-null battery reading. -->
-                <div id="battery-section" class="space-y-1 hidden">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">BATTERY</span>
-                        <span id="battery-percent-val" class="text-cyan-400 font-bold">-- (--)</span>
-                    </div>
-                    <div class="gauge-bar-track">
-                        <div id="battery-gauge-fill" class="gauge-bar-fill" style="width: 0%;"></div>
-                    </div>
-                    <!-- Only shown while actually running unplugged -- see the docstring on
-                         updateHardwareTelemetry for why this checks on_battery specifically. -->
-                    <div id="battery-warning" class="hidden text-[10px] font-mono text-amber-400 flex items-center gap-1">
-                        ⚠ RUNNING ON BATTERY POWER
-                    </div>
-                </div>
-
-                <!-- Network Speeds -->
-                <div class="grid grid-cols-2 gap-2 pt-1 border-t border-cyan-500/20 text-xs font-mono">
-                    <div class="bg-slate-900/60 p-2 rounded border border-cyan-500/20">
-                        <div class="text-[10px] text-slate-400">NET DOWN ↓</div>
-                        <div id="net-download-val" class="text-cyan-300 font-bold">0.0 KB/s</div>
-                    </div>
-                    <div class="bg-slate-900/60 p-2 rounded border border-cyan-500/20">
-                        <div class="text-[10px] text-slate-400">NET UP ↑</div>
-                        <div id="net-upload-val" class="text-cyan-300 font-bold">0.0 KB/s</div>
-                    </div>
-                </div>
-            </div>
-
         <!-- Tactical Commands -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands" data-panel-name="Quick commands" data-grid-col="1" data-grid-row="21" data-grid-w="4" data-grid-h="6">
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands" data-panel-name="Quick commands" data-grid-col="1" data-grid-row="12" data-grid-w="4" data-grid-h="6">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="commands" title="Open this panel in its own window" aria-label="Open Quick Commands in its own window">⧉</button>
@@ -398,7 +310,7 @@
              is written to the database, the vault or the action log, so there is no file
              the companion can be pointed at afterwards to read what you did.
              See src-tauri/src/terminal.rs and scripts/check_terminal_isolation.sh. -->
-        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="terminal" data-panel-name="Terminal" data-grid-col="1" data-grid-row="27" data-grid-w="4" data-grid-h="11">
+        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="terminal" data-panel-name="Terminal" data-grid-col="1" data-grid-row="18" data-grid-w="4" data-grid-h="11">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="terminal" title="Open this panel in its own window" aria-label="Open the terminal in its own window">⧉</button>
@@ -557,6 +469,53 @@
             IDLE
         </span>
 
+        <!-- HARDWARE TELEMETRY, live, in the bar rather than in a panel of its own.
+             It used to be nine rows of gauges taking a quarter of the left column, which is
+             a lot of room for numbers you glance at rather than read. Same readings, same
+             source (the `telemetry-update` event / /ws/telemetry, see updateHardwareTelemetry
+             in js/app.js), folded into one strip: a label, a value, and a hairline meter under
+             the ones that are a percentage of something. The cells that have nothing to say on
+             this machine -- no discrete card, no battery -- are not drawn at all rather than
+             printing a zero that reads as a fault.
+
+             Every cell carries a `title`, because the strip shows the percentage and the
+             detail behind it (6.5/16 GB, the card's name and its memory) has to live
+             somewhere once the panel is gone. -->
+        <div id="chin-telemetry" class="chin-telemetry ml-auto" aria-label="Hardware telemetry" title="Live hardware telemetry">
+            <div class="chin-stat" id="chin-stat-cpu" title="Processor load">
+                <span class="chin-stat-label">CPU</span>
+                <span class="chin-stat-value" id="chin-cpu-val">--</span>
+                <span class="chin-stat-meter"><i id="chin-cpu-meter"></i></span>
+            </div>
+            <div class="chin-stat" id="chin-stat-ram" title="System memory">
+                <span class="chin-stat-label">MEM</span>
+                <span class="chin-stat-value" id="chin-ram-val">--</span>
+                <span class="chin-stat-meter"><i id="chin-ram-meter"></i></span>
+            </div>
+            <!-- Read once at startup (gpu::cached) rather than every tick, so this is set the
+                 first reading that carries a card and then stands. -->
+            <div class="chin-stat hidden" id="chin-stat-gpu" title="Graphics">
+                <span class="chin-stat-label">GPU</span>
+                <span class="chin-stat-value" id="chin-gpu-val">--</span>
+            </div>
+            <div class="chin-stat" id="chin-stat-disk" title="Storage on /">
+                <span class="chin-stat-label">DISK</span>
+                <span class="chin-stat-value" id="chin-disk-val">--</span>
+                <span class="chin-stat-meter"><i id="chin-disk-meter"></i></span>
+            </div>
+            <div class="chin-stat" id="chin-stat-net" title="Network throughput">
+                <span class="chin-stat-label">NET</span>
+                <span class="chin-stat-value" id="chin-net-val">--</span>
+            </div>
+            <!-- Hidden for the life of the app on a desktop: telemetry sends a null battery
+                 there (see Telemetry::to_wire_json) and a permanent 0% would be a lie. -->
+            <div class="chin-stat hidden" id="chin-stat-battery" title="Battery">
+                <span class="chin-stat-label">BAT</span>
+                <span class="chin-stat-value" id="chin-battery-val">--</span>
+                <span class="chin-stat-meter"><i id="chin-battery-meter"></i></span>
+            </div>
+        </div>
+
         <!-- STATIC / FLOW. In STATIC the avatar you picked answers everything. In FLOW the
              question can move to the specialist inside that avatar's own line, announced by
              whoever is holding it first. It sits here rather than in Settings because it
@@ -564,7 +523,7 @@
              without opening a panel. Hidden when the current avatar belongs to no line,
              since there would be nothing to flow between. -->
         <button id="flow-toggle" type="button"
-                class="hidden ml-auto px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30 cursor-pointer hover:text-cyan-200">
+                class="hidden px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30 cursor-pointer hover:text-cyan-200">
             STATIC
         </button>
     </footer>

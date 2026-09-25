@@ -3020,6 +3020,48 @@ the Settings rows as drawn.
 
 ---
 
+### Hardware telemetry, moved into the chin bar
+
+CPU, memory, storage, graphics, network and battery were nine stacked gauges in a panel of
+their own, occupying roughly a quarter of the left column. They are numbers you glance at
+rather than read, and the column they were in is where the terminal and the quick commands
+live, so the panel was buying its space with the things the operator actually works in.
+
+They now live in the chin bar as one strip: a cell per reading, each a dim uppercase label,
+a bright value and -- where the reading is a percentage of something -- a 28px hairline meter
+under it. Nothing was dropped. The detail the gauges spelled out in full (`6.5/16 GB`, the
+card and its memory, the battery's charge state) moved to each cell's tooltip, which is where
+a figure you need twice a week belongs.
+
+**One display, one claim.** The warn and crit classes go on the *cell*, not on the meter, so
+the value and the bar change colour together; a red bar under a cyan number is two readings
+of the same thing. The thresholds are unchanged (amber past 65%, red past 85%; the battery's
+red is under 25% while actually discharging).
+
+**What is drawn is what answered.** The graphics cell stays hidden until a reading carries a
+card, and is then written once and left alone -- `gpu::cached` reads the adapters at startup
+and never re-probes, so re-setting that string every tick would be work for a value that
+cannot change. The battery cell stays hidden for the life of the app on a desktop, where
+telemetry sends a null battery. Neither prints a zero that would read as a fault.
+
+**It never wraps.** A strip that falls to two lines steals the height this move was meant to
+give back, so narrow windows drop cells from the least urgent inwards: throughput first, then
+the card (which cannot change while the app runs), then storage (which barely moves). CPU,
+memory and battery survive to the narrowest window, because those three are what say whether
+a model is about to have a bad time.
+
+The styling is deliberately quieter than the rest of the HUD -- hairline rules between cells
+rather than a border around each, no glow on the numbers, the cyan and the meter's gradient
+carrying the accent. That is the difference between a status bar and a control panel.
+
+`hardware` also leaves `PANEL_WINDOWS` in `main.rs`: there is no panel left to undock, and
+the module-switch list is built from the DOM, so it drops out of that on its own.
+
+**Not verifiable in a container:** the strip as drawn, and the battery and graphics cells
+appearing on a machine that has either.
+
+---
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
