@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=29">
+    <link rel="stylesheet" href="css/A1theme.css?v=30">
     <link rel="stylesheet" href="css/layout.css?v=3">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
@@ -799,36 +799,88 @@
 
     <!-- SETTINGS & IDENTITY MATRIX MODAL -->
     <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-5 max-h-[90vh] overflow-y-auto">
-            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
+        <!-- Two columns, headings on the left and the detail on the right, rather than one
+             long scroll of expanding groups. Every section is in the DOM at all times and
+             every field keeps the id it had: this only ever changes which section is
+             visible, so loadSettings/saveSettings and everything else that addresses a
+             field by id needed no change. The groups are still <details>, kept open by the
+             nav, which is what lets the two groups that probe on open (coding, doctor) keep
+             doing it. -->
+        <div class="hud-panel settings-shell w-full rounded-lg">
+            <div class="settings-shell-head">
                 <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
-                    ⚙️ COGNITIVE CORE & THEME MATRIX
+                    &#9881;&#65039; COGNITIVE CORE &amp; THEME MATRIX
                 </h2>
-                <button id="btn-close-settings" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
+                <button id="btn-close-settings" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">&#10005;</button>
             </div>
 
-            <!-- Settings tabs: Customisation (avatar/theme/persona/sprite -- cosmetic, changed
-                 often) kept separate from Agent & System (LLM connection, voice, memory, keys --
-                 configured once and rarely revisited) so the modal doesn't dump both onto the
-                 same long scroll. Both panels stay in the DOM either way; only the "hidden"
-                 class moves, so nothing else here (loadSettings/saveSettings et al.) needs to
-                 change to find its fields. -->
-            <div class="flex gap-2 border-b border-slate-700/50 pb-3">
-                <button id="settings-tab-btn-system" data-settings-tab="system" class="settings-tab-btn cyber-btn text-xs py-1.5 px-3">
-                    ⚙️ Agent & System
-                </button>
-                <button id="settings-tab-btn-customisation" data-settings-tab="customisation" class="settings-tab-btn cyber-btn cyber-btn-active text-xs py-1.5 px-3">
-                    🎨 Customisation
-                </button>
-            </div>
+            <div class="settings-body">
+                <nav id="settings-nav" class="settings-nav" aria-label="Settings sections">
+                    <label class="settings-search">
+                        <span aria-hidden="true">&#128269;</span>
+                        <input id="settings-search" type="search" placeholder="Search settings..." autocomplete="off">
+                    </label>
+                    <p id="settings-nav-empty" class="settings-nav-empty hidden">Nothing matches that.</p>
+                    <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar theme colour colors persona speciality sprite hologram" data-hint="avatar, colours and which persona answers" title="avatar, colours and which persona answers">
+                        <span class="settings-nav-icon">🎨</span>
+                        <span class="settings-nav-text">Appearance</span>
+                    </button>
+                    <button type="button" id="settings-nav-identity" class="settings-nav-item" data-settings-section="identity" data-keywords="name genesis forge agent name" data-hint="what it is called, and forging a name" title="what it is called, and forging a name">
+                        <span class="settings-nav-icon">⚡</span>
+                        <span class="settings-nav-text">Identity</span>
+                    </button>
+                    <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide" data-hint="where the panels sit, and which ones exist" title="where the panels sit, and which ones exist">
+                        <span class="settings-nav-icon">🧱</span>
+                        <span class="settings-nav-text">HUD Layout</span>
+                    </button>
+                    <button type="button" id="settings-nav-sprite" class="settings-nav-item hidden" data-settings-section="sprite" data-keywords="desktop sprite floating always on top" data-hint="float the avatar on your desktop" title="float the avatar on your desktop">
+                        <span class="settings-nav-icon">🖥️</span>
+                        <span class="settings-nav-text">Desktop Sprite</span>
+                    </button>
+                    <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model endpoint api key server ollama openai cloud local provider connections github coding opencode aider" data-hint="which AI does the thinking" title="which AI does the thinking">
+                        <span class="settings-nav-icon">🧠</span>
+                        <span class="settings-nav-text">The Brain</span>
+                    </button>
+                    <button type="button" id="settings-nav-voice" class="settings-nav-item" data-settings-section="voice" data-keywords="speech piper tts microphone sound beeps sfx mute volume" data-hint="how it speaks, and whether it beeps" title="how it speaks, and whether it beeps">
+                        <span class="settings-nav-icon">🗣</span>
+                        <span class="settings-nav-text">Voice &amp; Sound</span>
+                    </button>
+                    <button type="button" id="settings-nav-memory" class="settings-nav-item" data-settings-section="memory" data-keywords="notes database history remember forget storage" data-hint="what it remembers, and where that lives" title="what it remembers, and where that lives">
+                        <span class="settings-nav-icon">📓</span>
+                        <span class="settings-nav-text">Memory</span>
+                    </button>
+                    <button type="button" id="settings-nav-permissions" class="settings-nav-item" data-settings-section="permissions" data-keywords="commands allowlist approval files programs read run" data-hint="reading this machine, running programs" title="reading this machine, running programs">
+                        <span class="settings-nav-icon">🔐</span>
+                        <span class="settings-nav-text">What it may do</span>
+                    </button>
+                    <button type="button" id="settings-nav-network" class="settings-nav-item" data-settings-section="network" data-keywords="internet offline cloud lan proxy leave machine" data-hint="whether anything may leave this machine" title="whether anything may leave this machine">
+                        <span class="settings-nav-icon">🌐</span>
+                        <span class="settings-nav-text">Network</span>
+                    </button>
+                    <button type="button" id="settings-nav-startup" class="settings-nav-item hidden" data-settings-section="startup" data-keywords="autostart login game mode performance quiet" data-hint="what runs on login, and how to quiet it" title="what runs on login, and how to quiet it">
+                        <span class="settings-nav-icon">⚡</span>
+                        <span class="settings-nav-text">Startup &amp; Performance</span>
+                    </button>
+                    <button type="button" id="settings-nav-doctor" class="settings-nav-item" data-settings-section="doctor" data-keywords="diagnostics broken fix repair doctor not working" data-hint="every part of AETHER1, and the broken ones" title="every part of AETHER1, and the broken ones">
+                        <span class="settings-nav-icon">🩺</span>
+                        <span class="settings-nav-text">Is it working?</span>
+                    </button>
+                    <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="hotkey shortcut version update release" data-hint="hotkey, version, updates" title="hotkey, version, updates">
+                        <span class="settings-nav-icon">🖥</span>
+                        <span class="settings-nav-text">The app itself</span>
+                    </button>
+                </nav>
 
-            <div id="settings-panel-customisation" class="settings-tab-panel space-y-5">
+
+                <div id="settings-detail" class="settings-detail">
 
             <!-- SECTION: CUSTOMISATION (Avatar, Theme, Persona -- each its own card) -->
-            <div class="border border-slate-600/40 rounded-md p-4 space-y-3">
-                <h3 class="font-orbitron text-xs font-bold text-slate-300 tracking-wider flex items-center gap-1.5">
-                    🎨 CUSTOMISATION
-                </h3>
+            <section class="settings-pane" data-settings-section="appearance">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">🎨 Appearance</h3>
+                    <p class="settings-pane-hint">avatar, colours and which persona answers</p>
+                </div>
+                <div class="border border-slate-600/40 rounded-md p-4 space-y-3">
 
                 <!-- Avatar + Color Theme Selectors, condensed into one card: avatar row, theme row
                      below it. The main avatar row runs one column wider than the theme row below
@@ -958,13 +1010,16 @@
                         <textarea id="setting-custom-directive" rows="3" placeholder="e.g. 'You are {AGENT_NAME}, a dry-witted lab assistant who explains things through kitchen analogies.'" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono"></textarea>
                     </div>
                 </div>
-            </div>
+                </div>
+            </section>
 
             <!-- SECTION: HUD LAYOUT -->
-            <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
-                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
-                    🧱 HUD LAYOUT
-                </h3>
+            <section class="settings-pane" data-settings-section="layout">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">🧱 HUD Layout</h3>
+                    <p class="settings-pane-hint">where the panels sit, and which ones exist</p>
+                </div>
+                <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
                 <span class="text-[11px] font-mono text-slate-400 block">Drag a panel by the dotted strip along its top to move it anywhere on the grid, like rearranging home-screen widgets. Drag the corner handle to resize it. Both are remembered.</span>
                 <button id="btn-reset-layout" type="button" class="cyber-btn text-xs py-1.5 px-3">Reset panels to their default places</button>
 
@@ -981,29 +1036,34 @@
                         nothing hidden here is being kept up to date behind your back.
                     </p>
                 </div>
-            </div>
+                </div>
+            </section>
 
             <!-- SECTION: DESKTOP SPRITE MODE (native desktop app only -- see IS_TAURI below) -->
-            <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2">
-                <h3 class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider flex items-center gap-1.5">
-                    🖥️ DESKTOP SPRITE MODE
-                </h3>
+            <section class="settings-pane" data-settings-section="sprite">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">🖥️ Desktop Sprite</h3>
+                    <p class="settings-pane-hint">float the avatar on your desktop</p>
+                </div>
+                <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2">
                 <div class="flex items-center gap-2">
                     <input id="setting-sprite-mode" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
                     <label for="setting-sprite-mode" class="text-xs font-mono text-slate-300">Float the avatar on your desktop -- a live mirror of this HUD's hologram, drag it anywhere, click it to bring this window back</label>
                 </div>
                 <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. The hologram panel above goes quiet while it's out there. Toggle applies once you click Save Changes below.</span>
-            </div>
-
-            <!-- SECTION: AGENT IDENTITY & GENESIS (identity is as much "customisation" as the
-                 avatar/theme/persona above, so it lives in this tab rather than System) -->
-            <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
-                <div class="flex items-center justify-between">
-                    <h3 class="font-orbitron text-xs font-bold text-purple-300 tracking-wider flex items-center gap-1.5">
-                        ⚡ AGENT IDENTITY & GENESIS FORGE
-                    </h3>
-                    <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME</span>
                 </div>
+            </section>
+
+            <!-- SECTION: AGENT IDENTITY & GENESIS -->
+            <section class="settings-pane" data-settings-section="identity">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">⚡ Identity</h3>
+                    <p class="settings-pane-hint">what it is called, and forging a name</p>
+                </div>
+                <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
+                    <div class="flex items-center justify-end">
+                        <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME</span>
+                    </div>
 
                 <div class="space-y-1">
                     <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
@@ -1021,26 +1081,26 @@
                         </button>
                     </div>
                 </div>
-            </div>
+                </div>
+            </section>
 
-            </div><!-- /#settings-panel-customisation -->
 
-            <div id="settings-panel-system" class="settings-tab-panel hidden space-y-3">
 
-            <!-- Six groups, each a collapsed <details> with a heading anyone can match to
-                 what they came here to change: the brain, the voice, the memory, what it is
-                 allowed to do, the network, and the app itself. Before this, twelve unrelated
-                 controls shared one flat scroll -- a command allowlist sat under a speech
-                 engine, and finding the model box meant reading all of it.
+            <!-- One pane per heading in the rail: the brain, the voice, the memory, what it
+                 is allowed to do, the network, and the app itself. Before the rail these were
+                 collapsed <details> on one scroll, and before that twelve unrelated controls
+                 shared one flat scroll -- a command allowlist sat under a speech engine, and
+                 finding the model box meant reading all of it.
 
                  Every field keeps the id it had. loadSettings/saveSettings address these by
-                 id and know nothing about the grouping, which is what lets the arrangement
-                 change without the plumbing changing with it. <details> also means a closed
-                 group's fields are still in the DOM and still read and written normally --
-                 nothing here may be conditional on a group being open. -->
+                 id and know nothing about the arrangement, which is what lets the layout
+                 change without the plumbing changing with it. A pane that is not showing is
+                 still in the DOM and its fields are still read and written normally --
+                 nothing here may be conditional on a pane being visible. -->
 
             <!-- ======================= THE BRAIN ======================= -->
-            <details id="settings-group-brain" class="settings-group" open>
+            <section class="settings-pane" data-settings-section="brain">
+                <details id="settings-group-brain" class="settings-group" open>
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🧠 The Brain</span>
                     <span class="settings-group-hint">which AI does the thinking</span>
@@ -1296,10 +1356,12 @@
                         </div>
                     </details>
                 </div>
-            </details>
+                </details>
+            </section>
 
             <!-- ======================= VOICE & SOUND ======================= -->
-            <details id="settings-group-voice" class="settings-group">
+            <section class="settings-pane" data-settings-section="voice">
+                <details id="settings-group-voice" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🗣 Voice &amp; Sound</span>
                     <span class="settings-group-hint">how it speaks, and whether it beeps</span>
@@ -1401,10 +1463,12 @@
                         </div>
                     </details>
                 </div>
-            </details>
+                </details>
+            </section>
 
             <!-- ======================= MEMORY ======================= -->
-            <details id="settings-group-memory" class="settings-group">
+            <section class="settings-pane" data-settings-section="memory">
+                <details id="settings-group-memory" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">📓 Memory</span>
                     <span class="settings-group-hint">what it remembers, and where that lives</span>
@@ -1440,10 +1504,12 @@
                         </p>
                     </div>
                 </div>
-            </details>
+                </details>
+            </section>
 
             <!-- ======================= WHAT IT MAY DO ======================= -->
-            <details id="settings-group-permissions" class="settings-group">
+            <section class="settings-pane" data-settings-section="permissions">
+                <details id="settings-group-permissions" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🔐 What it may do</span>
                     <span class="settings-group-hint">reading this machine, running programs</span>
@@ -1522,10 +1588,12 @@
                         </p>
                     </div>
                 </div>
-            </details>
+                </details>
+            </section>
 
             <!-- ======================= NETWORK ======================= -->
-            <details id="settings-group-network" class="settings-group">
+            <section class="settings-pane" data-settings-section="network">
+                <details id="settings-group-network" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🌐 Network</span>
                     <span class="settings-group-hint">whether anything may leave this machine</span>
@@ -1550,14 +1618,16 @@
                         </p>
                     </div>
                 </div>
-            </details>
+                </details>
+            </section>
 
             <!-- ======================= STARTUP & PERFORMANCE ======================= -->
             <!-- Native desktop app only -- login autostart, spawning Ollama and hiding the
                  HUD window are all things a browser tab has no way to do. Hidden by default
                  (see initStartupPerformance, mirroring initSpriteMode/initVersionAndUpdates)
                  and shown once IS_TAURI is confirmed. -->
-            <details id="settings-group-startup" class="settings-group hidden">
+            <section class="settings-pane" data-settings-section="startup">
+                <details id="settings-group-startup" class="settings-group hidden">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">⚡ Startup &amp; Performance</span>
                     <span class="settings-group-hint">what runs on login, and how to quiet it back down</span>
@@ -1608,7 +1678,8 @@
                         opening Settings first. See 🎮 Game Mode in Tactical Quick Commands.
                     </p>
                 </div>
-            </details>
+                </details>
+            </section>
 
             <!-- ======================= DIAGNOSTICS ======================= -->
             <!-- Step 47. The same list `aether1 doctor` prints, in the place the person most
@@ -1617,7 +1688,8 @@
                  until a button is pressed, and a repair that needs root is shown as a command
                  to run rather than offered as a button, because AETHER1 never asks for a
                  password. -->
-            <details id="settings-group-doctor" class="settings-group">
+            <section class="settings-pane" data-settings-section="doctor">
+                <details id="settings-group-doctor" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🩺 Is it working?</span>
                     <span class="settings-group-hint">every part of AETHER1, and what to do about the broken ones</span>
@@ -1642,10 +1714,12 @@
                         writes it to a file you can read before sending it anywhere.
                     </p>
                 </div>
-            </details>
+                </details>
+            </section>
 
             <!-- ======================= THE APP ITSELF ======================= -->
-            <details id="settings-group-app" class="settings-group">
+            <section class="settings-pane" data-settings-section="app">
+                <details id="settings-group-app" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🖥 The app itself</span>
                     <span class="settings-group-hint">hotkey, version, updates</span>
@@ -1705,11 +1779,13 @@
                         </div>
                     </div>
                 </div>
-            </details>
+                </details>
+            </section>
 
-            </div><!-- /#settings-panel-system -->
+                </div><!-- /#settings-detail -->
+            </div><!-- /.settings-body -->
 
-            <div class="flex justify-end gap-3 pt-3 border-t border-cyan-500/30">
+            <div class="settings-shell-foot">
                 <button id="btn-save-settings" class="cyber-btn cyber-btn-active text-xs py-2 px-6">
                     Save Changes
                 </button>
@@ -1737,7 +1813,7 @@
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
-    <script src="js/app.js?v=54"></script>
+    <script src="js/app.js?v=55"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>
