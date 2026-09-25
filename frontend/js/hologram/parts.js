@@ -618,6 +618,188 @@
                 };
             },
         },
+
+        /* Adapted from VENATRIX: its faceted white shell with a lit lattice caged inside
+           it and a single optic sunk into the front. The avatar turns the shell and the
+           cage against each other; a core may not turn itself (see the note at the top of
+           this file), so here the cage breathes and brightens instead and the recipe's
+           spin setting is left to decide whether any of it moves. */
+        facetedShellOptic: {
+            label: 'Faceted shell and optic',
+            build(api, options) {
+                const OPTIC = 0xff0e8c;
+                const CAGE = 0xc02cff;
+                const group = new THREE.Group();
+
+                const cageMat = new THREE.MeshBasicMaterial({
+                    color: CAGE, wireframe: true, transparent: true, opacity: 0.7,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                group.add(new THREE.Mesh(new THREE.IcosahedronGeometry(options.size * 0.86, 2), cageMat));
+
+                const shellMat = new THREE.MeshPhongMaterial({
+                    color: 0xeef3fa, shininess: 150, specular: 0xffffff, flatShading: true,
+                    transparent: true, opacity: 0.82,
+                });
+                group.add(new THREE.Mesh(new THREE.IcosahedronGeometry(options.size, 2), shellMat));
+
+                // The optic stands proud of the shell: a subdivided icosahedron's faces
+                // sit inside its radius, so a lens at exactly the radius lands behind
+                // them. Dark socket first -- additive over a near-white shell is white.
+                const optic = new THREE.Group();
+                optic.position.z = options.size * 1.07;
+                group.add(optic);
+                const socketMat = new THREE.MeshBasicMaterial({ color: 0x0a0410, transparent: true, opacity: 0.92 });
+                optic.add(new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.29, 32), socketMat));
+                const irisMat = new THREE.MeshBasicMaterial({
+                    color: OPTIC, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                });
+                optic.add(new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.2, 32), irisMat));
+                const pupilMat = new THREE.MeshBasicMaterial({
+                    color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
+                });
+                const pupil = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.075, 24), pupilMat);
+                pupil.position.z = 0.6;
+                optic.add(pupil);
+
+                return {
+                    object: group,
+                    applyPalette() {},   // shell, cage and optic are fixed colours
+                    animate(ctx) {
+                        const heat = ctx.audio * 0.6 + ctx.click * 0.4;
+                        cageMat.opacity = 0.55 + heat * 0.4;
+                        shellMat.opacity = 0.86 - heat * 0.14;
+                        irisMat.opacity = 0.7 + heat * 0.3;
+                        pupil.scale.setScalar(0.85 + Math.sin(ctx.time * 4) * 0.15 + heat * 0.4);
+                    },
+                };
+            },
+        },
+
+        /* Adapted from Chrono-mAIstresse: the lit dial with hour marks and two hands.
+           The hands read the machine's own clock, which is not the self-rotation the note
+           at the top of this file rules out -- spin turns the dial, and a clock whose
+           hands stop when you set spin to zero is a picture of a clock rather than one. */
+        chronoDial: {
+            label: 'Chronometer dial',
+            build(api, options) {
+                const group = new THREE.Group();
+                const size = options.size;
+
+                const dialMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(new THREE.CircleGeometry(size, 64), dialMat));
+
+                const markMat = new THREE.LineBasicMaterial({ color: api.palette.hex3, transparent: true, opacity: 0.85 });
+                const marks = [];
+                for (let i = 0; i < 12; i++) {
+                    // Straight up is twelve, running clockwise, the same frame the hands use.
+                    const a = Math.PI / 2 - (i / 12) * Math.PI * 2;
+                    const inner = size * (i % 3 === 0 ? 0.82 : 0.88);
+                    marks.push(new THREE.Vector3(Math.cos(a) * inner, Math.sin(a) * inner, 0));
+                    marks.push(new THREE.Vector3(Math.cos(a) * size * 0.95, Math.sin(a) * size * 0.95, 0));
+                }
+                const ticks = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(marks), markMat);
+                ticks.position.z = 0.5;
+                group.add(ticks);
+
+                const handMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
+                });
+                function hand(length, width) {
+                    const pivot = new THREE.Group();
+                    const bar = new THREE.Mesh(new THREE.BoxGeometry(width, length, 1), handMat);
+                    bar.position.y = length / 2;      // drawn from its centre, so half of it
+                    pivot.add(bar);                   // is what puts the tail on the pivot
+                    pivot.position.z = 2;
+                    group.add(pivot);
+                    return pivot;
+                }
+                const hourHand = hand(size * 0.5, size * 0.06);
+                const minuteHand = hand(size * 0.72, size * 0.045);
+
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        dialMat.color.setHex(pal.hex);
+                        markMat.color.setHex(pal.hex3);
+                        handMat.color.setHex(pal.hex2);
+                    },
+                    animate(ctx) {
+                        const now = new Date();
+                        const seconds = now.getSeconds() + now.getMilliseconds() / 1000;
+                        const minutes = now.getMinutes() + seconds / 60;
+                        const hours = (now.getHours() % 12) + minutes / 60;
+                        // Clock hands run the opposite way to the maths convention.
+                        minuteHand.rotation.z = -(minutes / 60) * Math.PI * 2;
+                        hourHand.rotation.z = -(hours / 12) * Math.PI * 2;
+                        dialMat.opacity = 0.26 + ctx.audio * 0.24 + Math.sin(ctx.time * 30) * 0.03;
+                        handMat.opacity = 0.8 + ctx.audio * 0.2;
+                    },
+                };
+            },
+        },
+
+        /* Adapted from enXephalon: the shell of thought-points with the brighter
+           signatures scattered through it. The avatar wires its neighbours into a synapse
+           lattice as well; a core has to stand next to parts it never met, so this is the
+           cloud alone, which is the part that reads at any size. */
+        mindPointShell: {
+            label: 'Mind point shell',
+            build(api, options) {
+                const SIGNATURE = 0xff2fb0;
+                const COUNT = 420;
+                const positions = new Float32Array(COUNT * 3);
+                const colors = new Float32Array(COUNT * 3);
+                const points = [];
+                for (let i = 0; i < COUNT; i++) {
+                    // acos of a uniform value, not a uniform angle -- that one bunches
+                    // everything at the poles.
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos(2 * Math.random() - 1);
+                    const r = options.size * (0.94 + Math.random() * 0.12);
+                    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+                    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                    positions[i * 3 + 2] = r * Math.cos(phi);
+                    points.push({
+                        signature: Math.random() > 0.86,
+                        phase: Math.random() * Math.PI * 2,
+                        rate: 0.5 + Math.random() * 0.9,
+                    });
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                // Mapped, not bare: an unmapped point sprite is a hard square, and several
+                // hundred of them read as pixel noise rather than as nodes.
+                const mat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), size: options.size * 0.17, vertexColors: true,
+                    transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                const cloud = new THREE.Points(geom, mat);
+                const base = new THREE.Color(api.palette.hex);
+                const hot = new THREE.Color(SIGNATURE);
+                return {
+                    object: cloud,
+                    applyPalette(pal) { base.setHex(pal.hex); },
+                    animate(ctx) {
+                        for (let i = 0; i < points.length; i++) {
+                            const pt = points[i];
+                            const wave = Math.sin(ctx.time * pt.rate + pt.phase) * 0.5 + 0.5;
+                            const c = pt.signature ? hot : base;
+                            const b = Math.min(1.4, (pt.signature ? 0.85 + wave * 0.45 : 0.7 + wave * 0.3)
+                                + ctx.audio * 0.4 + ctx.click * 0.3);
+                            colors[i * 3] = c.r * b;
+                            colors[i * 3 + 1] = c.g * b;
+                            colors[i * 3 + 2] = c.b * b;
+                        }
+                        geom.attributes.color.needsUpdate = true;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -967,6 +1149,61 @@
                             wire.position.y = cube.position.y;
                         });
                         beamMat.opacity = 0.55 + ctx.audio * 0.35 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        /* Adapted from C.I.C.E.R.O.: the two chrome tape reels that turn where its eyes
+           would be. Spokes are what make a turning disc read as turning -- a plain disc
+           spinning about its own axis is indistinguishable from a still one -- and the
+           reels answer the voice, which is what they do on the avatar too. */
+        tapeReels: {
+            label: 'Tape reels',
+            build(api, options) {
+                const group = new THREE.Group();
+                const faceMat = new THREE.MeshPhongMaterial({ color: 0x8d9ab0, shininess: 110, specular: 0xdfe8f5 });
+                const spokeMat = new THREE.MeshBasicMaterial({ color: 0x1b2330 });
+                const hubMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
+                });
+                // Sized well under the ring radius: these flank whatever core is in the
+                // middle, and a reel as big as the core reads as two more cores.
+                const r = options.radius * 0.17;
+                const reels = [];
+                [-1, 1].forEach((side) => {
+                    const reel = new THREE.Group();
+                    reel.position.set(side * options.radius * 0.62, 0, options.radius * 0.3);
+                    const disc = new THREE.Mesh(new THREE.CylinderGeometry(r, r, r * 0.3, 20), faceMat);
+                    disc.rotation.x = Math.PI / 2;
+                    reel.add(disc);
+                    for (let i = 0; i < 3; i++) {
+                        // Each spoke in its own arm, offset along the arm's own y and the
+                        // arm then turned: rotating the mesh in place and solving for
+                        // where it should sit is the same picture by a longer road.
+                        const arm = new THREE.Group();
+                        arm.rotation.z = (i / 3) * Math.PI * 2;
+                        const spoke = new THREE.Mesh(new THREE.BoxGeometry(r * 0.2, r * 0.85, r * 0.09), spokeMat);
+                        spoke.position.set(0, r * 0.42, r * 0.19);
+                        arm.add(spoke);
+                        reel.add(arm);
+                    }
+                    const hub = new THREE.Mesh(new THREE.SphereGeometry(r * 0.42, 16, 12), hubMat);
+                    hub.position.z = r * 0.3;
+                    reel.add(hub);
+                    group.add(reel);
+                    reels.push({ reel, direction: side });
+                });
+                let spin = 0;
+                return {
+                    object: group,
+                    applyPalette(pal) { hubMat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        // Accumulated rather than set from ctx.time, so a change of speed
+                        // never snaps the reels to a new angle mid-turn.
+                        spin += (1.1 + ctx.audio * 9) * 0.016 + ctx.click * 0.25;
+                        reels.forEach(({ reel, direction }) => { reel.rotation.z = spin * direction; });
+                        hubMat.opacity = 0.75 + ctx.audio * 0.25;
                     },
                 };
             },
@@ -1464,6 +1701,63 @@
                 };
             },
         },
+
+        /* Adapted from VENATRIX and enXephalon, which both sweep what they are looking at
+           with rings on crossed tilts. Neither is edge-on: at exactly a quarter turn the
+           level camera sees a ring as a straight line drawn through the avatar rather
+           than as a ring around it. Four ticks in the picture plane turn the pair into a
+           sight -- a ring on its own is decoration, a ring with marks on it is an
+           instrument reading something. */
+        crossedTargetRings: {
+            label: 'Crossed target rings',
+            build(api, options) {
+                const HOT = 0xff0e8c;
+                const group = new THREE.Group();
+                const innerMat = new THREE.MeshBasicMaterial({
+                    color: HOT, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+                });
+                const inner = new THREE.Mesh(
+                    new THREE.TorusGeometry(options.radius, options.radius * 0.014, 8, 96), innerMat
+                );
+                inner.rotation.x = Math.PI / 2.55;
+                const outerMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending,
+                });
+                const outer = new THREE.Mesh(
+                    new THREE.TorusGeometry(options.radius * 1.22, options.radius * 0.01, 8, 96), outerMat
+                );
+                outer.rotation.x = -Math.PI / 2.9;
+                group.add(inner, outer);
+
+                const tickMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
+                });
+                const ticks = new THREE.Group();
+                ticks.position.z = options.radius * 0.9;
+                for (let i = 0; i < 4; i++) {
+                    ticks.add(new THREE.Mesh(
+                        new THREE.RingGeometry(options.radius * 0.6, options.radius * 0.8, 8, 1, i * Math.PI / 2 - 0.06, 0.12),
+                        tickMat
+                    ));
+                }
+                group.add(ticks);
+
+                return {
+                    object: group,
+                    applyPalette(pal) { outerMat.color.setHex(pal.hex); tickMat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        inner.rotation.z = -ctx.time * 0.6;
+                        outer.rotation.y = ctx.time * 0.3;
+                        ticks.rotation.z = ctx.time * 0.25;
+                        const tighten = 1 + Math.sin(ctx.time * 6) * 0.02 - ctx.click * 0.06;
+                        group.scale.setScalar(tighten);
+                        innerMat.opacity = 0.7 + ctx.audio * 0.3;
+                        outerMat.opacity = 0.45 + ctx.audio * 0.3;
+                        tickMat.opacity = 0.6 + ctx.audio * 0.3;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Effects: an ambient layer or background ------------------------------
@@ -1874,6 +2168,73 @@
                         }
                         points.geometry.attributes.position.needsUpdate = true;
                         mat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
+                    },
+                };
+            },
+        },
+
+        /* Adapted from PRAXIS: the lit floor the whole avatar stands on, running away
+           underneath and wrapping at one cell. Every vertex is dimmed by its own distance
+           from the centre, so the rows the seam passes through are already black by the
+           time it gets there and the wrap never shows. The vignette is baked into the
+           geometry's own vertex colours rather than drawn over the top, which is what
+           lets the theme reach it and what keeps it off whatever stands in the middle. */
+        hardLightFloor: {
+            label: 'Hard-light floor',
+            build(api, options) {
+                const HALF = options.radius * 2.6;
+                const CELL = HALF / 12;
+                const STEPS = 6;
+                const y = -options.radius * 1.4;
+                const positions = [];
+                const factors = [];
+                const push = (x1, z1, x2, z2) => {
+                    positions.push(x1, y, z1, x2, y, z2);
+                    [[x1, z1], [x2, z2]].forEach(([x, z]) => {
+                        // Falls away faster than distance does, so the far rows are gone
+                        // well before the rim rather than ending on a visible edge.
+                        const r = Math.sqrt(x * x + z * z) / HALF;
+                        factors.push(Math.pow(Math.max(0, 1 - r), 1.2));
+                    });
+                };
+                for (let n = -12; n <= 12; n++) {
+                    const fixed = n * CELL;
+                    for (let s = 0; s < STEPS * 2; s++) {
+                        const a = -HALF + (s / (STEPS * 2)) * HALF * 2;
+                        const b = -HALF + ((s + 1) / (STEPS * 2)) * HALF * 2;
+                        push(fixed, a, fixed, b);
+                        push(a, fixed, b, fixed);
+                    }
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                geom.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(factors.length * 3), 3));
+                const mat = new THREE.LineBasicMaterial({
+                    vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                });
+                const floor = new THREE.LineSegments(geom, mat);
+                const tint = new THREE.Color(api.palette.hex);
+                function paint() {
+                    const attr = geom.attributes.color;
+                    for (let i = 0; i < factors.length; i++) {
+                        attr.array[i * 3] = tint.r * factors[i];
+                        attr.array[i * 3 + 1] = tint.g * factors[i];
+                        attr.array[i * 3 + 2] = tint.b * factors[i];
+                    }
+                    attr.needsUpdate = true;
+                }
+                paint();
+                let scroll = 0;
+                return {
+                    object: floor,
+                    applyPalette(pal) { tint.setHex(pal.hex); paint(); },
+                    animate(ctx) {
+                        // Wrapping at one cell is what makes a finite grid look endless,
+                        // and accumulating the offset means a change of pace never jumps
+                        // the floor sideways.
+                        scroll = (scroll + (22 + ctx.audio * 30) * 0.016) % CELL;
+                        floor.position.z = scroll;
+                        mat.opacity = 0.8 + ctx.audio * 0.2 + ctx.click * 0.1;
                     },
                 };
             },
