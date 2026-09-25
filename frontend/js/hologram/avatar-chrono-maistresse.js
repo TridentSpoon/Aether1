@@ -103,17 +103,28 @@ HologramAvatar.registerAvatar({
         });
 
         /* The mouth is two pieces that do different jobs: a fixed arc that is the smile
-           line, and a filled shape behind it that grows when she speaks. Widening an arc
-           would mean rebuilding its geometry every frame; growing a shape behind a fixed
-           arc is a scale, and it reads the same. */
+           line, and a filled shape that grows inside it when she speaks. Widening an arc
+           would mean rebuilding its geometry every frame; growing a shape inside a fixed
+           arc is a scale, and it reads the same.
+
+           The filled part is a HALF disc hanging from the line between the smile's two
+           corners, and it is shut all the way at rest. A full disc centred on that line
+           left a dark sliver lying across the corners with the smile curving below it,
+           which read as a second mouth above the first -- the thing it is meant to be
+           filling is the space the smile encloses, so it only ever opens downward. */
         const mouth = new THREE.Group();
         mouth.position.set(0, -DIAL * 0.22, 2);
         face.add(mouth);
 
         const openMat = new THREE.MeshBasicMaterial({ color: INK, transparent: true, opacity: 0.92 });
-        const open = new THREE.Mesh(new THREE.CircleGeometry(DIAL * 0.22, 32), openMat);
+        // Theta from PI to 2PI is the lower half of the circle, so the shape's flat edge
+        // is its top and scaling y swings the curved side down away from it.
+        const open = new THREE.Mesh(
+            new THREE.CircleGeometry(DIAL * 0.29, 32, Math.PI, Math.PI),
+            openMat
+        );
         open.position.z = -0.4;
-        open.scale.set(1, 0.06, 1);
+        open.scale.set(1, 0, 1);
         mouth.add(open);
 
         // A ring arc across the bottom half: theta runs counter-clockwise from +x, so the
@@ -217,9 +228,10 @@ HologramAvatar.registerAvatar({
                 + (isThinking ? Math.sin(ctx.time * 1.6) * model.dialRadius * 0.04 : 0);
         });
 
-        // The mouth opens with the voice and settles back to the smile line otherwise.
-        const openness = isSpeaking ? 0.06 + ctx.audio * 1.1 : 0.06 + ctx.click * 0.5;
-        model.open.scale.set(1, Math.min(1.2, openness), 1);
+        // The mouth opens with the voice and shuts back to the bare smile line otherwise:
+        // at zero the filled part has no height at all, so what is left is the arc.
+        const openness = isSpeaking ? ctx.audio * 1.15 : ctx.click * 0.6;
+        model.open.scale.set(1, Math.min(1.15, openness), 1);
 
         // Dial brightness, and the CRT flutter that keeps it a projection rather than a
         // painted disc.
