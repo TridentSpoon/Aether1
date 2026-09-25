@@ -118,6 +118,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // probes on open (coding, doctor) gets its one probe when the section is chosen.
         const group = settingsPaneFor(name)?.querySelector(':scope > .settings-group');
         if (group) group.open = true;
+        // The avatar browser owns a WebGL context while its detail view is open, so
+        // leaving the section has to put it down -- a rail that only changes which pane is
+        // visible would otherwise leave a second hologram rendering behind the Network page.
+        if (name === 'avatars') openAvatarBrowser();
+        else if (typeof disposeAvatarPreview === 'function') disposeAvatarPreview();
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
         try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
@@ -258,6 +263,24 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoSpeak = true;
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
+
+    /* The avatar browser's state, declared up here with the avatar it follows rather than
+       down beside its own functions: the first applyAvatar of the session runs before that
+       point, and it asks the browser to redraw. A `let` further down would still be in its
+       temporal dead zone at that moment, which is an exception thrown during startup for
+       the sake of tidier grouping. */
+    const AVATAR_STAGES = ['groups', 'members', 'detail'];
+    let avatarBrowserGroup = null;      // which line stage 2 is showing
+    let avatarBrowserSelection = null;  // which avatar stage 3 is showing
+    let avatarPreviewEngine = null;
+    let avatarBrowserBuilt = false;
+
+    /* The persona catalogue's rows themselves, not just the <option>s built from them: the
+       avatar browser wants a persona's speciality, access and voice beside its avatar, and
+       reading them back off the dropdown's dataset would mean smuggling every field through
+       an attribute first. Up here for the same reason as the state above. */
+    let personaRows = new Map();
+    function personaRow(key) { return personaRows.get(key) || null; }
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
@@ -428,6 +451,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // the workbench has moved on from the one currently on screen.
         if (avatarName === 'custom') refreshCustomAvatarIfStale();
 
+        // Settings' avatar browser shows the current pick in three places at once, so
+        // it redraws rather than having a class toggled on one card here.
+        refreshAvatarBrowser();
+
         // Highlight active avatar pills/buttons
         document.querySelectorAll('.avatar-pill, .avatar-btn').forEach(btn => {
             const val = btn.getAttribute('data-avatar-val') || btn.getAttribute('data-avatar');
@@ -537,6 +564,9 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll(`.avatar-pill[data-avatar-val="${id}"], .avatar-btn[data-avatar="${id}"]`)
                 .forEach((btn) => btn.classList.toggle('hidden', !unlocked));
         });
+        // The browser builds its grids from the catalogue rather than from hidden markup,
+        // so it is filtered by avatarIsVisible and has to be asked again, not unhidden.
+        refreshAvatarBrowser();
     }
 
     // A few seconds to tens of seconds, matching "pops up" -- long enough to actually notice
@@ -590,6 +620,399 @@ document.addEventListener('DOMContentLoaded', () => {
     if (TRACE_PROTOCOL_AVATAR_IDS.includes(currentAvatar)) Aether1AvatarUnlocks.unlock(currentAvatar);
     refreshTraceProtocolVisibility();
     refreshEmptyAvatarGroups();
+
+    /* ---- THE AVATAR BROWSER (Settings -> Avatars) -------------------------------
+     *
+     * Three stages in one pane: the lines, one line's members, one avatar in full. The
+     * shape of it is Trident's: customisation leads to the group, the group leads to the
+     * avatar, and the avatar opens into who it is and what it does.
+     *
+     * Everything rendered here comes from js/avatar-catalogue.js (the descriptions) joined
+     * to the backend's persona catalogue (speciality, access and voice) on the avatar's
+     * persona key. Neither half is restated in markup, so an avatar added to the catalogue
+     * appears here with no change to this file, and a persona's speciality reworded in
+     * persona.rs reaches this pane without anyone remembering to copy it across.
+     *
+     * The detail view runs a second, live HologramAvatar rather than showing a still: half
+     * of what distinguishes one avatar from another is how it moves -- C.I.C.E.R.O.'s reels,
+     * Chrono-mAIstresse's hands, the Operator's stream -- and a frozen frame of those three
+     * is the same picture. It is built when a detail view opens and disposed the moment one
+     * closes, so the second WebGL context exists only while it is on screen.
+     */
+    const avatarCatalogue = () => window.Aether1Avatars || null;
+
+    /* An avatar the operator is allowed to see. The three Trace Protocols eggs stay out of
+       every list until their trigger has fired once (see refreshTraceProtocolVisibility),
+       and this is the one predicate that decides it for the whole browser -- the grid, the
+       member count on the line's card, and the "something is missing here" note. */
+    function avatarIsVisible(entry) {
+        if (!entry.unlockable) return true;
+        return Aether1AvatarUnlocks.isUnlocked(entry.id);
+    }
+
+    function visibleAvatarsIn(groupId) {
+        const cat = avatarCatalogue();
+        return cat ? cat.inGroup(groupId).filter(avatarIsVisible) : [];
+    }
+
+    function showAvatarStage(name) {
+        AVATAR_STAGES.forEach((stage) => {
+            document.querySelectorAll(`[data-avatar-stage="${stage}"]`).forEach((el) => {
+                el.classList.toggle('is-active', stage === name);
+            });
+        });
+        // The preview engine belongs to the detail stage and to nothing else. Leaving it
+        // running behind a stage nobody is looking at is a render loop and a WebGL context
+        // spent on an invisible element.
+        if (name !== 'detail') disposeAvatarPreview();
+        const detail = document.getElementById('settings-detail');
+        if (detail) detail.scrollTop = 0;
+    }
+
+    // ---- Stage 1: the lines -------------------------------------------------
+    function renderAvatarGroups() {
+        const cat = avatarCatalogue();
+        const grid = document.getElementById('avatar-group-grid');
+        if (!cat || !grid) return;
+        grid.innerHTML = '';
+        cat.groups.forEach((group) => {
+            const members = visibleAvatarsIn(group.id);
+            // A line with nothing showing yet is still worth a card: The eXcelsior Class
+            // stood empty for a while, and a line that simply is not there reads as a bug
+            // rather than as something not built yet. Only a line with no members at all in
+            // the catalogue is skipped.
+            if (cat.inGroup(group.id).length === 0) return;
+
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.className = 'avatar-group-card';
+            card.dataset.avatarGroup = group.id;
+
+            const faces = document.createElement('span');
+            faces.className = 'avatar-group-faces';
+            faces.setAttribute('aria-hidden', 'true');
+            faces.textContent = members.map((m) => m.emoji).join(' ');
+
+            const name = document.createElement('span');
+            name.className = 'avatar-group-name';
+            name.textContent = group.name;
+
+            const tagline = document.createElement('span');
+            tagline.className = 'avatar-group-tagline';
+            tagline.textContent = group.tagline;
+
+            const blurb = document.createElement('span');
+            blurb.className = 'avatar-group-blurb';
+            blurb.textContent = group.blurb;
+
+            const count = document.createElement('span');
+            count.className = 'avatar-group-count';
+            count.textContent = members.length === 1 ? '1 avatar' : `${members.length} avatars`;
+            if (members.some((m) => m.id === currentAvatar)) {
+                count.textContent += ' · wearing one of these';
+                card.classList.add('is-current');
+            }
+
+            card.append(faces, name, tagline, blurb, count);
+            card.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                openAvatarGroup(group.id);
+            });
+            grid.appendChild(card);
+        });
+    }
+
+    // ---- Stage 2: one line's members ----------------------------------------
+    function openAvatarGroup(groupId) {
+        const cat = avatarCatalogue();
+        const group = cat && cat.group(groupId);
+        if (!group) return;
+        avatarBrowserGroup = groupId;
+
+        document.getElementById('avatar-members-title').textContent = group.name;
+        document.getElementById('avatar-members-blurb').textContent = group.blurb;
+
+        const grid = document.getElementById('avatar-member-grid');
+        grid.innerHTML = '';
+        visibleAvatarsIn(groupId).forEach((entry) => {
+            grid.appendChild(buildAvatarCard(entry));
+        });
+
+        /* How many of this line are still undiscovered, said plainly. The alternative -- a
+           line that silently shows one of its four members -- is the version that reads as
+           the list being wrong. It says the count and not which ones, which is the whole
+           point of an egg. */
+        const hidden = cat.inGroup(groupId).filter((a) => !avatarIsVisible(a)).length;
+        const note = document.getElementById('avatar-members-locked');
+        note.classList.toggle('hidden', hidden === 0);
+        if (hidden > 0) {
+            note.textContent = hidden === 1
+                ? 'One more member of this line has not turned up yet.'
+                : `${hidden} more members of this line have not turned up yet.`;
+        }
+
+        showAvatarStage('members');
+    }
+
+    function buildAvatarCard(entry) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'avatar-card';
+        card.dataset.avatar = entry.id;
+        if (entry.id === currentAvatar) card.classList.add('is-current');
+
+        const face = document.createElement('span');
+        face.className = 'avatar-card-face';
+        face.setAttribute('aria-hidden', 'true');
+        face.textContent = entry.emoji;
+
+        const name = document.createElement('span');
+        name.className = 'avatar-card-name';
+        name.textContent = entry.label;
+
+        const role = document.createElement('span');
+        role.className = 'avatar-card-role';
+        role.textContent = avatarRoleLine(entry);
+
+        card.append(face, name, role);
+        if (entry.id === currentAvatar) {
+            const worn = document.createElement('span');
+            worn.className = 'avatar-card-worn';
+            worn.textContent = 'WEARING';
+            card.appendChild(worn);
+        }
+        card.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            openAvatarDetail(entry.id);
+        });
+        return card;
+    }
+
+    /* The one line under an avatar's name in the grid. The persona's own short_name is the
+       truest version of it -- it is what the backend calls that job -- so it wins whenever
+       the avatar has a persona, and the catalogue's structure line stands in when it has
+       none. */
+    function avatarRoleLine(entry) {
+        const persona = entry.persona ? personaRow(entry.persona) : null;
+        if (persona && persona.short_name) return persona.short_name;
+        return entry.structure;
+    }
+
+    // ---- Stage 3: one avatar, in full ---------------------------------------
+    function openAvatarDetail(avatarId) {
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(avatarId);
+        if (!entry) return;
+        avatarBrowserSelection = avatarId;
+        avatarBrowserGroup = entry.group;
+
+        const group = cat.group(entry.group);
+        document.getElementById('avatar-detail-line').textContent = group ? group.name : '';
+        document.getElementById('avatar-back-group').textContent = group ? group.name : 'Back';
+        document.getElementById('avatar-detail-name').textContent = `${entry.emoji} ${entry.label}`;
+        document.getElementById('avatar-detail-form').textContent = entry.form;
+        document.getElementById('avatar-detail-who').textContent = entry.who;
+        document.getElementById('avatar-detail-does').textContent = entry.does;
+        document.getElementById('avatar-preview-structure').textContent = `STRUCTURE: ${entry.structure}`;
+
+        const persona = entry.persona ? personaRow(entry.persona) : null;
+
+        // The persona's own one-liner, under the catalogue's. Two sentences about the same
+        // job from two sources, which is worth it: one is what this avatar is for and the
+        // other is the directive the model actually receives.
+        const speciality = document.getElementById('avatar-detail-speciality');
+        speciality.classList.toggle('hidden', !persona);
+        if (persona) speciality.textContent = `Directive: ${persona.speciality}`;
+
+        // Access and voice are facts about a persona, so an avatar without one has neither
+        // to show. Showing the rows empty would suggest it reaches nothing and speaks in
+        // nothing, when what is true is that it inherits both from whoever is selected.
+        const accessRow = document.getElementById('avatar-detail-access-row');
+        accessRow.classList.toggle('hidden', !persona || !persona.field);
+        if (persona && persona.field) {
+            document.getElementById('avatar-detail-access').textContent = persona.field;
+        }
+
+        const voiceRow = document.getElementById('avatar-detail-voice-row');
+        voiceRow.classList.toggle('hidden', !persona);
+        if (persona) document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+
+        const isCurrent = avatarId === currentAvatar;
+        const useBtn = document.getElementById('btn-avatar-use');
+        useBtn.textContent = isCurrent ? 'Already wearing it' : 'Wear this avatar';
+        useBtn.disabled = isCurrent;
+        useBtn.onclick = () => {
+            voiceEngine.playSFX('click');
+            applyAvatar(avatarId, true);
+            openAvatarDetail(avatarId);
+        };
+        document.getElementById('avatar-detail-current').classList.toggle('hidden', !isCurrent);
+
+        // Every A.R.X. avatar, and five others, have a colour preset carrying their own id;
+        // A1ter_nul's is Night. An avatar with no preset of its own simply does not offer
+        // the button rather than offering one that would repaint the HUD in someone else's
+        // colours.
+        const presetId = avatarThemePreset(entry);
+        const themeBtn = document.getElementById('btn-avatar-theme');
+        themeBtn.classList.toggle('hidden', !presetId);
+        if (presetId) {
+            themeBtn.onclick = () => {
+                voiceEngine.playSFX('click');
+                applyThemePreset(presetId);
+            };
+        }
+
+        // The workbench button belongs to the avatar you design and to nothing else.
+        const labBtn = document.getElementById('btn-open-avatar-lab');
+        if (labBtn) labBtn.classList.toggle('hidden', !entry.custom);
+
+        const note = document.getElementById('avatar-preview-note');
+        note.classList.toggle('hidden', Boolean(persona));
+        if (!persona) {
+            note.textContent = 'This one is a shape, not a persona: wearing it changes the '
+                + 'hologram and leaves whoever is answering exactly as they are.';
+        }
+
+        showAvatarStage('detail');
+        buildAvatarPreview(avatarId);
+    }
+
+    function avatarThemePreset(entry) {
+        const byId = window.THEME_PRESETS_BY_ID || {};
+        if (byId[entry.id]) return entry.id;
+        if (entry.id === 'alt') return 'night-city';
+        return null;
+    }
+
+    /* Both voices, named, because they are two different answers to "what does it sound
+       like": the cloud voice and the Piper model on this machine. Which of the two actually
+       speaks is decided at the moment of speech (see commands::synthesize_speech), and an
+       operator running local-only wants to read the second one. */
+    function avatarVoiceLine(persona) {
+        const parts = [];
+        if (persona.voice) parts.push(persona.voice);
+        if (persona.local_voice) parts.push(`${persona.local_voice} (Piper)`);
+        if (parts.length === 0) return 'Whatever voice you have chosen in Voice & Sound.';
+        return parts.join('  ·  ');
+    }
+
+    // ---- The live preview ---------------------------------------------------
+    function buildAvatarPreview(avatarId) {
+        const viewport = document.getElementById('avatar-preview-viewport');
+        if (!viewport || typeof HologramAvatar === 'undefined') return;
+        disposeAvatarPreview();
+        try {
+            avatarPreviewEngine = new HologramAvatar('avatar-preview-viewport');
+            avatarPreviewEngine.setAvatar(avatarId);
+            avatarPreviewEngine.setColorPalette(Aether1Theme.paletteFor(Aether1Theme.current().colours));
+            avatarPreviewEngine.setState('IDLE');
+        } catch (e) {
+            // A browser out of WebGL contexts is a bad preview, not a broken settings pane.
+            console.warn('Could not build the avatar preview', e);
+            avatarPreviewEngine = null;
+        }
+    }
+
+    function disposeAvatarPreview() {
+        if (!avatarPreviewEngine) return;
+        try { avatarPreviewEngine.dispose(); } catch (e) { /* already gone */ }
+        avatarPreviewEngine = null;
+    }
+
+    // ---- The card in Appearance that leads here -----------------------------
+    function refreshAvatarEntryCard() {
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(currentAvatar);
+        const face = document.getElementById('avatar-entry-face');
+        const name = document.getElementById('avatar-entry-name');
+        const meta = document.getElementById('avatar-entry-meta');
+        if (!face || !name || !meta) return;
+        if (!entry) {
+            face.textContent = '✨';
+            name.textContent = currentAvatar;
+            meta.textContent = '';
+            return;
+        }
+        const group = cat.group(entry.group);
+        face.textContent = entry.emoji;
+        name.textContent = entry.label;
+        meta.textContent = `${group ? group.name : ''} · ${avatarRoleLine(entry)}`;
+    }
+
+    /* Called whenever the pick changes or an egg is unlocked. Re-rendering rather than
+       toggling a class on one card: the current avatar shows up in three places here (the
+       line's card, the grid card's badge, the detail view's button) and one of them going
+       stale is exactly the kind of thing nobody notices until it is wrong. */
+    function refreshAvatarBrowser() {
+        if (!avatarBrowserBuilt) return;
+        refreshAvatarEntryCard();
+        renderAvatarGroups();
+        if (avatarBrowserGroup) {
+            const active = document.querySelector('[data-avatar-stage="members"].is-active')
+                || document.querySelector('[data-avatar-stage="detail"].is-active');
+            const grid = document.getElementById('avatar-member-grid');
+            if (grid) {
+                grid.innerHTML = '';
+                visibleAvatarsIn(avatarBrowserGroup).forEach((e) => grid.appendChild(buildAvatarCard(e)));
+            }
+            if (active && active.dataset.avatarStage === 'detail' && avatarBrowserSelection) {
+                // Re-opening would rebuild the preview engine mid-view; only the button
+                // state and the badge need saying again.
+                const isCurrent = avatarBrowserSelection === currentAvatar;
+                const useBtn = document.getElementById('btn-avatar-use');
+                if (useBtn) {
+                    useBtn.textContent = isCurrent ? 'Already wearing it' : 'Wear this avatar';
+                    useBtn.disabled = isCurrent;
+                }
+                const line = document.getElementById('avatar-detail-current');
+                if (line) line.classList.toggle('hidden', !isCurrent);
+            }
+        }
+    }
+
+    /* Built once, the first time the section is opened. The catalogue is static and the
+       persona rows are fetched once for the whole window, so there is nothing here worth
+       redoing on every visit -- but there is a WebGL context worth not creating until
+       somebody actually asks to look at an avatar. */
+    function initAvatarBrowser() {
+        if (avatarBrowserBuilt) return;
+        if (!avatarCatalogue()) {
+            console.warn('js/avatar-catalogue.js did not load; the avatar browser is empty');
+            return;
+        }
+        avatarBrowserBuilt = true;
+        document.querySelectorAll('[data-avatar-back]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                const target = btn.dataset.avatarBack;
+                if (target === 'members' && avatarBrowserGroup) openAvatarGroup(avatarBrowserGroup);
+                else showAvatarStage('groups');
+            });
+        });
+        renderAvatarGroups();
+        refreshAvatarEntryCard();
+        showAvatarStage('groups');
+    }
+
+    /* Opening the section. It lands on the lines rather than wherever it was left: the
+       stack behind you is only meaningful while you are in it, and coming back to a detail
+       view of an avatar you were reading about yesterday is not where anyone means to start.
+       The one exception is the avatar you are wearing -- see the entry card in Appearance,
+       which opens straight onto it. */
+    function openAvatarBrowser(avatarId) {
+        initAvatarBrowser();
+        if (!avatarBrowserBuilt) return;
+        if (avatarId && avatarCatalogue().get(avatarId)) openAvatarDetail(avatarId);
+        else showAvatarStage('groups');
+    }
+
+    const avatarEntryCard = document.getElementById('avatar-entry-card');
+    if (avatarEntryCard) {
+        avatarEntryCard.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            if (showSettingsSection('avatars')) openAvatarBrowser(currentAvatar);
+        });
+    }
 
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
@@ -5624,6 +6047,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* Fetched once and reused: the catalogue depends on nothing but the build, so re-fetching
        it every time Settings opens would be a round trip to learn the same nine rows. */
+    /* The catalogue rows themselves, not just the <option>s built from them. Settings'
+       avatar browser needs a persona's speciality, access and voice beside its avatar, and
+       re-reading them off the dropdown's dataset would mean every field the browser wants
+       has to be smuggled through an attribute first. */
     let personaCataloguePromise = null;
     function ensurePersonaCatalogue() {
         if (!personaCataloguePromise) personaCataloguePromise = loadPersonaCatalogue();
@@ -5781,6 +6208,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (!Array.isArray(personas) || personas.length === 0) return;
+        personaRows = new Map(personas.map((p) => [p.key, p]));
+        refreshAvatarBrowser();
 
         const chosen = select.value;
         select.innerHTML = '';

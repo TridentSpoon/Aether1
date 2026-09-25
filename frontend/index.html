@@ -31,6 +31,7 @@
     <script src="js/hologram/palettes.js?v=19"></script>
     <script src="js/theme.js?v=5"></script>
     <script src="js/avatar-unlocks.js?v=1"></script>
+    <script src="js/avatar-catalogue.js?v=1"></script>
     <script>Aether1Theme.apply(document);</script>
     <script src="vendor/three.min.js?v=1"></script>
     <link rel="stylesheet" href="vendor/xterm/xterm.css?v=1">
@@ -825,6 +826,10 @@
                         <span class="settings-nav-icon">🎨</span>
                         <span class="settings-nav-text">Appearance</span>
                     </button>
+                    <button type="button" id="settings-nav-avatars" class="settings-nav-item" data-settings-section="avatars" data-keywords="avatar hologram face group class umbrals excelsior trace protocols singular ascended persona voice who" data-hint="every avatar, who it is and what it does" title="every avatar, who it is and what it does">
+                        <span class="settings-nav-icon">🎭</span>
+                        <span class="settings-nav-text">Avatars</span>
+                    </button>
                     <button type="button" id="settings-nav-identity" class="settings-nav-item" data-settings-section="identity" data-keywords="name genesis forge agent name" data-hint="what it is called, and forging a name" title="what it is called, and forging a name">
                         <span class="settings-nav-icon">⚡</span>
                         <span class="settings-nav-text">Identity</span>
@@ -882,44 +887,26 @@
                 </div>
                 <div class="border border-slate-600/40 rounded-md p-4 space-y-3">
 
-                <!-- Avatar + Color Theme Selectors, condensed into one card: avatar row, theme row
-                     below it. The main avatar row runs one column wider than the theme row below
-                     it (7 presets vs. 6 themes) since A1 -- the default placeholder shown before
-                     an operator has picked a persona/avatar -- has no matching theme of its own.
-                     Senti, White Rabbit and Operator sit in a second row below rather than
-                     stretching the grid past 7 columns. -->
+                <!-- The avatar used to be a flat grid of ten buttons here, which was both
+                     wrong and incomplete: wrong because the avatar is the feature this app is
+                     built around and a row of ten-pixel pills says the opposite, incomplete
+                     because there are twenty-two of them and this grid only ever showed ten.
+                     Choosing one now happens in its own section (see data-settings-section
+                     "avatars"), which goes line -> avatar -> who it is. This card is the way
+                     in, and it is also the only thing here that says which one you are
+                     currently wearing. -->
+                <button type="button" id="avatar-entry-card" class="avatar-entry-card">
+                    <span class="avatar-entry-face" id="avatar-entry-face" aria-hidden="true">&#127344;&#65039;</span>
+                    <span class="avatar-entry-body">
+                        <span class="avatar-entry-label">&#127917; CURRENT AVATAR</span>
+                        <span class="avatar-entry-name" id="avatar-entry-name">A1</span>
+                        <span class="avatar-entry-meta" id="avatar-entry-meta">Unaligned</span>
+                    </span>
+                    <span class="avatar-entry-go" aria-hidden="true">Browse all &rsaquo;</span>
+                </button>
+
+                <!-- Theme: a mode, a set of colours, and the two tone sliders. -->
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-3 rounded-md space-y-1.5">
-                    <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🎭 AVATAR</label>
-                    <div class="grid grid-cols-7 gap-1">
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-300 border-slate-400" data-avatar="a1">🅰️ A1</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-avatar="halcy">🔷 hAlcy</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-green-400 border-green-400" data-avatar="nexus">🟢 Nexus</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-amber-400 border-amber-400" data-avatar="arx-limes">🔶 LIMES</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-pink-400 border-pink-400" data-avatar="arx-logos">🟣 LOGOS</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-red-400 border-red-400" data-avatar="red">🔴 R.E.D.</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-yellow-300 border-yellow-300" data-avatar="alt">⚠️ A1ter</button>
-                    </div>
-
-                    <!-- Senti, White Rabbit and Operator get their own row rather than an eighth
-                         through tenth column -- the grid above is fixed at 7 wide, and these three
-                         read theme-tinted with no fixed accent colour of their own (see
-                         js/hologram/avatar-senti.js, avatar-white-rabbit.js, avatar-operator.js),
-                         same as hAlcy above. Trace Protocols: hidden until discovered -- see the
-                         matching buttons and comment in #avatar-menu above. -->
-                    <div class="grid grid-cols-3 gap-1">
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center hidden" data-avatar="senti">🛸 Nexus Sent</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center hidden" data-avatar="white-rabbit">🐇 White Rabbit</button>
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center hidden" data-avatar="operator">📟 Operator</button>
-                    </div>
-
-                    <!-- The avatar you design yourself sits on its own row rather than as another
-                         column -- it's a different kind of thing anyway, and comes with the button
-                         that opens the workbench. -->
-                    <div class="grid grid-cols-2 gap-1">
-                        <button class="avatar-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-200" data-avatar="custom">✨ Your own</button>
-                        <button id="btn-open-avatar-lab" type="button" class="cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-cyan-300">🛠️ Design your own</button>
-                    </div>
-
                     <!-- A theme is a mode plus three colours. The mode decides the chrome:
                          Solar and Eclipse are flat window shells, Cyberpunk keeps the
                          scanlines, brackets and neon. -->
@@ -1010,6 +997,90 @@
                         <textarea id="setting-custom-directive" rows="3" placeholder="e.g. 'You are {AGENT_NAME}, a dry-witted lab assistant who explains things through kitchen analogies.'" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono"></textarea>
                     </div>
                 </div>
+                </div>
+            </section>
+
+            <!-- SECTION: AVATARS.
+                 Three stages in one pane, one visible at a time: the lines, then that line's
+                 members, then one avatar in full. It is a drill-down rather than three panes
+                 in the rail because the rail is a flat list of settings and this is a single
+                 subject you go deeper into -- and because the back link only makes sense if
+                 the thing behind you is where you actually came from.
+
+                 Everything inside the three stages is built by js/app.js from
+                 js/avatar-catalogue.js (who each avatar is) and the backend's persona
+                 catalogue (speciality, access and voice). Nothing about a specific avatar is
+                 written here: a grid of twenty-two hand-written cards is exactly what drifted
+                 from the real list last time. -->
+            <section class="settings-pane" data-settings-section="avatars">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">&#127917; Avatars</h3>
+                    <p class="settings-pane-hint">every avatar, who it is and what it does</p>
+                </div>
+
+                <!-- STAGE 1: the lines. -->
+                <div class="avatar-stage is-active" data-avatar-stage="groups">
+                    <p class="avatar-stage-lede">
+                        The hologram is the thing AETHER1 has that nothing else does. Pick the
+                        line first -- each one is a cast with its own idea of how the work gets
+                        covered.
+                    </p>
+                    <div id="avatar-group-grid" class="avatar-group-grid"></div>
+                </div>
+
+                <!-- STAGE 2: one line's members. -->
+                <div class="avatar-stage" data-avatar-stage="members">
+                    <button type="button" class="avatar-back" data-avatar-back="groups">&lsaquo; All lines</button>
+                    <h4 id="avatar-members-title" class="avatar-stage-title"></h4>
+                    <p id="avatar-members-blurb" class="avatar-stage-lede"></p>
+                    <div id="avatar-member-grid" class="avatar-member-grid"></div>
+                    <p id="avatar-members-locked" class="avatar-locked-note hidden"></p>
+                </div>
+
+                <!-- STAGE 3: one avatar, in full. The viewport holds a second, live
+                     HologramAvatar engine -- the avatar itself rather than a picture of it,
+                     built on the way in and disposed on the way out (see initAvatarBrowser in
+                     js/app.js), because a still of an avatar whose whole character is how it
+                     moves is not a preview of it. -->
+                <div class="avatar-stage" data-avatar-stage="detail">
+                    <button type="button" class="avatar-back" data-avatar-back="members">&lsaquo; <span id="avatar-back-group">Back</span></button>
+                    <div class="avatar-detail">
+                        <div class="avatar-detail-stage">
+                            <div id="avatar-preview-viewport" class="avatar-preview-viewport"></div>
+                            <p id="avatar-preview-structure" class="avatar-preview-structure"></p>
+                            <p id="avatar-preview-note" class="avatar-preview-note hidden"></p>
+                        </div>
+                        <div class="avatar-detail-body">
+                            <p id="avatar-detail-line" class="avatar-detail-line"></p>
+                            <h4 id="avatar-detail-name" class="avatar-detail-name"></h4>
+                            <p id="avatar-detail-form" class="avatar-detail-form"></p>
+
+                            <div class="avatar-fact">
+                                <span class="avatar-fact-label">Who it is</span>
+                                <p id="avatar-detail-who" class="avatar-fact-body"></p>
+                            </div>
+                            <div class="avatar-fact">
+                                <span class="avatar-fact-label">What it does</span>
+                                <p id="avatar-detail-does" class="avatar-fact-body"></p>
+                                <p id="avatar-detail-speciality" class="avatar-fact-sub hidden"></p>
+                            </div>
+                            <div class="avatar-fact" id="avatar-detail-access-row">
+                                <span class="avatar-fact-label">What it reaches without asking</span>
+                                <p id="avatar-detail-access" class="avatar-fact-body"></p>
+                            </div>
+                            <div class="avatar-fact" id="avatar-detail-voice-row">
+                                <span class="avatar-fact-label">Voice</span>
+                                <p id="avatar-detail-voice" class="avatar-fact-body"></p>
+                            </div>
+
+                            <div class="avatar-detail-actions">
+                                <button type="button" id="btn-avatar-use" class="cyber-btn text-xs py-2 px-3 justify-center">Wear this avatar</button>
+                                <button type="button" id="btn-avatar-theme" class="cyber-btn text-xs py-2 px-3 justify-center hidden" title="Repaint the HUD in this avatar's colours">&#127912; Match the theme to it</button>
+                                <button type="button" id="btn-open-avatar-lab" class="cyber-btn text-xs py-2 px-3 justify-center hidden text-cyan-300">&#128736;&#65039; Design your own</button>
+                            </div>
+                            <p id="avatar-detail-current" class="avatar-detail-current hidden">This is the avatar you are wearing.</p>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -1890,7 +1961,7 @@
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
-    <script src="js/app.js?v=55"></script>
+    <script src="js/app.js?v=56"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

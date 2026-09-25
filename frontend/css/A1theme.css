@@ -1201,6 +1201,340 @@ body {
     }
 }
 
+/* ---- The avatar browser (Settings -> Avatars) -------------------------------
+   Three stages in the one pane, one shown at a time. The whole section is built to
+   read as the app's headline feature rather than as a row of radio buttons: cards
+   with room for a sentence, a live hologram in the detail view, and nothing at the
+   ten-pixel size the old avatar grid used. */
+
+.avatar-stage { display: none; flex-direction: column; gap: 0.875rem; }
+.avatar-stage.is-active { display: flex; }
+
+.avatar-stage-lede {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+.avatar-stage-title {
+    margin: 0;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-highlight);
+}
+
+/* The way back. Deliberately a link rather than a button: it is the stage you came
+   from, not an action. */
+.avatar-back {
+    align-self: flex-start;
+    background: none;
+    border: 0;
+    padding: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+.avatar-back:hover { color: var(--neon-cyan); }
+
+/* ---- Stage 1: the lines ---- */
+.avatar-group-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 0.75rem;
+}
+
+.avatar-group-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.3rem;
+    text-align: left;
+    padding: 0.85rem 0.9rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.avatar-group-card:hover {
+    border-color: var(--border-neon-bright);
+    background: var(--bg-panel-hover);
+}
+.avatar-group-card.is-current { border-color: var(--neon-cyan); }
+
+.avatar-group-faces { font-size: 1.1rem; line-height: 1.3; letter-spacing: 0.1em; }
+
+.avatar-group-name {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--neon-cyan);
+}
+
+.avatar-group-tagline {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-highlight);
+}
+
+.avatar-group-blurb {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+.avatar-group-count {
+    /* Pushed to the bottom so the counts line up across cards of different blurb
+       lengths -- the grid stretches every card to the tallest in its row. */
+    margin-top: auto;
+    padding-top: 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-accent);
+}
+
+/* ---- Stage 2: one line's members ---- */
+.avatar-member-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 0.6rem;
+}
+
+.avatar-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    text-align: center;
+    padding: 0.85rem 0.6rem 0.7rem 0.6rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.avatar-card:hover {
+    border-color: var(--border-neon-bright);
+    background: var(--bg-panel-hover);
+}
+.avatar-card.is-current { border-color: var(--neon-cyan); background: var(--tint-main); }
+
+.avatar-card-face { font-size: 1.6rem; line-height: 1.1; }
+
+.avatar-card-name {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-main);
+}
+
+.avatar-card-role {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    line-height: 1.4;
+    color: var(--text-dim);
+}
+
+.avatar-card-worn {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.5rem;
+    letter-spacing: 0.12em;
+    color: var(--neon-cyan);
+}
+
+.avatar-locked-note {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+/* ---- Stage 3: one avatar ---- */
+.avatar-detail {
+    display: grid;
+    grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+.avatar-detail-stage { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* The live engine's container. A fixed height because the engine sizes itself to its
+   box, and a box that starts at zero height gets a canvas that never recovers. */
+.avatar-preview-viewport {
+    position: relative;
+    height: 15rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--viewport-bg);
+    overflow: hidden;
+}
+
+.avatar-preview-structure {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    color: var(--text-accent);
+}
+
+.avatar-preview-note {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+.avatar-detail-body { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.avatar-detail-line {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-accent);
+}
+
+.avatar-detail-name {
+    margin: 0;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--neon-cyan);
+}
+
+.avatar-detail-form {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    line-height: 1.55;
+    color: var(--text-main);
+}
+
+/* One labelled fact. The label is what makes the three questions -- who, what, what it
+   reaches -- read as three answers rather than one paragraph. */
+.avatar-fact {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.5rem 0.6rem;
+    border-left: 2px solid var(--border-neon);
+    background: var(--tint-main);
+    border-radius: 0 0.25rem 0.25rem 0;
+}
+
+.avatar-fact-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.58rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-accent);
+}
+
+.avatar-fact-body {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    line-height: 1.55;
+    color: var(--text-main);
+}
+
+.avatar-fact-sub {
+    margin: 0.2rem 0 0 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+.avatar-detail-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.2rem; }
+
+.avatar-detail-current {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--neon-cyan);
+}
+
+/* ---- The card in Appearance that leads here ---- */
+.avatar-entry-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.avatar-entry-card:hover {
+    border-color: var(--border-neon-bright);
+    background: var(--bg-panel-hover);
+}
+
+.avatar-entry-face { font-size: 1.8rem; line-height: 1; }
+.avatar-entry-body { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+
+.avatar-entry-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.58rem;
+    letter-spacing: 0.12em;
+    color: var(--text-accent);
+}
+
+.avatar-entry-name {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.avatar-entry-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.64rem;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.avatar-entry-go {
+    margin-left: auto;
+    flex: 0 0 auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.06em;
+    color: var(--neon-cyan);
+}
+
+/* Narrow: the hologram stops sitting beside the text and goes above it. */
+@media (max-width: 760px) {
+    .avatar-detail { grid-template-columns: minmax(0, 1fr); }
+    .avatar-preview-viewport { height: 12rem; }
+}
+
 /* ---- The setup wizard ----------------------------------------------------- */
 
 /* One step: what to do, why, and -- at most -- one thing to press. */
