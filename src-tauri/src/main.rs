@@ -215,10 +215,6 @@ struct UpdateStatus {
     needs_sign_in: bool,
     /// The sign-in was offered once and turned down, and that answer is being kept.
     declined: bool,
-    /// Which store the token is actually in. Reported rather than assumed: on a machine with
-    /// no Secret Service running the token is in a 0600 file, and a file is not a keychain
-    /// however convenient it would be to call it one.
-    token_storage: github_auth::Storage,
 }
 
 /// Whether this install is in local-only mode. Read through the managed engine so the
@@ -265,7 +261,6 @@ fn base_status() -> UpdateStatus {
         sign_in_available: github_auth::configured(),
         needs_sign_in: false,
         declined: false,
-        token_storage: github_auth::storage_kind(),
     }
 }
 
@@ -425,6 +420,34 @@ fn github_sign_in_poll_rust(
         }
         None => Ok(serde_json::json!({ "signed_in": false })),
     }
+}
+
+/// Everything AETHER1 holds an account or a credential for, in one answer, so Settings can draw
+/// it in one place. Two facts about GitHub that are easy to conflate and are not the same thing:
+///
+/// - the **account** this copy is signed in to, which exists so an installed copy can read the
+///   project's releases (see github_auth.rs), and
+/// - the **`gh` CLI**, which is a program on this machine that AETHER CODE runs read-only
+///   commands through (see code_tools.rs). Installing it is still worth suggesting and has
+///   nothing to do with updates -- the sign-in replaced it as the update credential, not as the
+///   thing AETHER CODE talks to.
+///
+/// Keeping them in one panel is what makes the difference visible instead of leaving somebody to
+/// wonder why signing in did not give AETHER CODE a `gh`.
+#[tauri::command(async)]
+fn connections_rust() -> serde_json::Value {
+    let gh = which::which("gh").ok();
+    serde_json::json!({
+        "github": {
+            "signed_in": github_auth::signed_in(),
+            "sign_in_available": github_auth::configured(),
+            "storage": github_auth::storage_kind(),
+        },
+        "gh_cli": {
+            "installed": gh.is_some(),
+            "path": gh.map(|p| p.to_string_lossy().to_string()),
+        },
+    })
 }
 
 /// Forget the token. Both stores, so signing out means the token is gone rather than gone
@@ -2161,6 +2184,7 @@ fn main() {
             keep_other_installs_rust,
             check_for_update_rust,
             apply_update_rust,
+            connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,
             github_sign_out_rust,

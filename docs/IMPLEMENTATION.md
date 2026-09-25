@@ -2438,6 +2438,17 @@ from either the tray or the HUD. Item 7 is the `github_signin_declined` setting 
 stop asking* is remembered, the check stops running, the tray says so, and `doctor` reads it as
 Ok rather than as degraded.
 
+The sign-in is drawn in **Settings -> The Brain -> Connections**, not under VERSION & UPDATES:
+the model provider above it is already a connection with a credential behind it, and "what does
+this thing log into" is one question, while a version number is a different one. That panel also
+shows whether the `gh` CLI is installed, because the two are constantly conflated and are not the
+same thing -- one is an account this copy holds a token for, the other is a program AETHER CODE
+runs read-only commands through. Signing in does not install `gh`, `gh` is not needed for updates,
+and suggesting its install for AETHER CODE's sake is still right (`code_tools.rs` points at
+cli.github.com, unchanged). The update panel's Sign in button opens Connections rather than
+keeping a second copy of the flow: two panels that can each claim you are signed in are two
+panels that can disagree.
+
 `aether1 signin`, `signout`, `update`, `update download` and `verify <file>` are the terminal
 half; `verify` is for a bundle that arrived by hand, which is the case the signature exists for
 and authentication cannot help with. The `gh auth token` path is kept as a silent convenience

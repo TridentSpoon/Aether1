@@ -1199,6 +1199,62 @@
 
                          Almost everything in here is drawn by renderCodeAdvice from one
                          probe. What is in the markup is the frame and the ids it fills. -->
+                    <!-- Nested in The Brain for the same reason as the coding group below: the
+                         model provider above already is a connection with a credential behind it,
+                         and "what does this thing log into" is one question. The GitHub sign-in
+                         used to live only at the bottom of the app under VERSION & UPDATES, which
+                         is where you look for a version number and not for an account.
+
+                         The two rows are deliberately different things. The first is an account,
+                         and it exists so an installed copy can read the project's releases. The
+                         second is a program on this machine that AETHER CODE runs read-only
+                         commands through -- signing in does not install it, and installing it is
+                         still worth suggesting. Drawn by renderConnections in app.js. -->
+                    <details id="settings-group-connections" class="settings-group settings-group-nested">
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">&#128279; Connections</span>
+                            <span class="settings-group-hint">what it signs in to</span>
+                        </summary>
+                        <div class="settings-group-body space-y-2">
+
+                            <div class="p-2.5 rounded border border-cyan-500/20 bg-slate-900/60 space-y-1.5">
+                                <div class="flex items-center justify-between gap-2 flex-wrap">
+                                    <div class="min-w-0">
+                                        <div class="text-xs font-mono text-cyan-200">GitHub account</div>
+                                        <div id="conn-github-state" class="text-[11px] font-mono text-slate-400 leading-snug">Checking...</div>
+                                    </div>
+                                    <div class="flex gap-2 flex-wrap">
+                                        <button id="conn-github-signin" type="button" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">&#128273; Sign in</button>
+                                        <button id="conn-github-signout" type="button" class="hidden cyber-btn text-xs py-1 px-3 text-slate-400 whitespace-nowrap">Sign out</button>
+                                    </div>
+                                </div>
+                                <div class="text-[11px] font-mono text-slate-500 leading-snug">
+                                    Lets this copy see new releases, which live on a private repository.
+                                    A short code typed in at github.com; Aether1 never sees a password, and
+                                    the access it gets is read-only. Declining leaves everything else working.
+                                </div>
+                                <!-- The device code, shown here as well as in the update panel: whichever
+                                     one started the sign-in is the one drawing it. -->
+                                <div id="conn-github-code-box" class="hidden text-xs font-mono bg-slate-950/80 p-2 rounded border border-cyan-400/40 space-y-1">
+                                    <div class="text-cyan-300">Open <a id="conn-github-link" href="#" target="_blank" rel="noreferrer" class="underline text-cyan-200">github.com/login/device</a> and enter:</div>
+                                    <div id="conn-github-code" class="text-base tracking-[0.3em] text-green-400 select-all">----</div>
+                                    <div id="conn-github-hint" class="text-[11px] text-slate-500">Waiting for you to approve it.</div>
+                                </div>
+                            </div>
+
+                            <div class="p-2.5 rounded border border-cyan-500/20 bg-slate-900/60 space-y-1.5">
+                                <div class="text-xs font-mono text-cyan-200">GitHub CLI (<span class="text-slate-400">gh</span>)</div>
+                                <div id="conn-gh-state" class="text-[11px] font-mono text-slate-400 leading-snug">Checking...</div>
+                                <div class="text-[11px] font-mono text-slate-500 leading-snug">
+                                    A separate thing from the account above: this is a program on this
+                                    computer, and it is what AETHER CODE runs read-only commands through
+                                    (<span class="text-slate-400">gh pr view</span>, <span class="text-slate-400">gh run list</span>).
+                                    Signing in above does not install it, and it is not needed for updates.
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
                     <details id="settings-group-coding" class="settings-group settings-group-nested">
                         <summary class="settings-group-summary">
                             <span class="settings-group-title">&#9000; Writing code</span>
@@ -1632,16 +1688,6 @@
                             <div>Press Check for Updates to compare this copy against what has been released.</div>
                         </div>
 
-                        <!-- The device flow, drawn where it happens. The code is typed in at
-                             github.com and nowhere else: AETHER1 never asks for a password, and an
-                             app that did would be asking for the wrong thing. Shown only while a
-                             sign-in is in progress -- see handleSignIn() in app.js. -->
-                        <div id="github-signin-box" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-400/40 space-y-2">
-                            <div class="text-cyan-300">Open <a id="github-signin-link" href="#" target="_blank" rel="noreferrer" class="underline text-cyan-200">github.com/login/device</a> and enter this code:</div>
-                            <div id="github-signin-code" class="text-lg tracking-[0.3em] text-green-400 select-all">----&#8209;----</div>
-                            <div id="github-signin-hint" class="text-[11px] text-slate-500">Waiting for you to approve it. This window can stay open.</div>
-                        </div>
-
                         <div class="flex items-center justify-between gap-2 flex-wrap">
                             <span id="update-mode-note" class="text-[11px] font-mono text-slate-500">Checks GitHub directly -- a real comparison, not a cached guess.</span>
                             <div class="flex gap-2 flex-wrap">
@@ -1650,7 +1696,10 @@
                                 </button>
                                 <!-- Shown when the check needs a signed-in GitHub account and there
                                      isn't one. AETHER1's releases are on a private repository, so
-                                     the person asking has to be somebody the owner let in. -->
+                                     the person asking has to be somebody the owner let in. The
+                                     sign-in itself is owned by The Brain -> Connections; this opens
+                                     it rather than keeping a second copy of the same buttons, so
+                                     there is one place that says whether you are signed in. -->
                                 <button id="btn-github-signin" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">
                                     🔑 Sign in to GitHub
                                 </button>
@@ -1658,9 +1707,6 @@
                                      companion, and is remembered so nothing asks again. -->
                                 <button id="btn-github-decline" class="hidden cyber-btn text-xs py-1 px-3 text-slate-400 whitespace-nowrap">
                                     Not now, and stop asking
-                                </button>
-                                <button id="btn-github-signout" class="hidden cyber-btn text-xs py-1 px-3 text-slate-400 whitespace-nowrap">
-                                    Sign out
                                 </button>
                                 <!-- Installed copies download a signed bundle; a git checkout pulls
                                      and rebuilds. Two buttons rather than one, because they are not

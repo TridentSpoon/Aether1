@@ -1031,8 +1031,8 @@ That is what the tray's **Check for Updates** does, and there is nothing to sign
 A copy **installed** from a bundle has no checkout and no toolchain, so its update is a new
 bundle from this project's releases -- and the repository is private, which means the releases
 are too. Rather than hide a credential inside the app, where anyone could read it back out,
-AETHER1 asks you to sign in as yourself: Settings -> **VERSION & UPDATES** -> **Sign in to
-GitHub**, or `aether1 signin`. It shows a short code, you type it in at
+AETHER1 asks you to sign in as yourself: Settings -> **The Brain** -> **Connections** ->
+**Sign in**, or `aether1 signin`. It shows a short code, you type it in at
 `github.com/login/device`, and that is the whole of it. AETHER1 never sees a password, and the
 token it receives can do exactly one thing -- read the contents of repositories the app is
 installed on.
@@ -1042,6 +1042,12 @@ repository can see the releases, and whoever is removed cannot. Your token is ke
 operating system's keychain (Credential Manager, Keychain, libsecret or kwallet). On a machine
 with no keychain service running -- a headless box, usually -- it goes in a file only you can
 read instead, and the app says so rather than pretending otherwise.
+
+Connections is also where you can see whether the **GitHub CLI** (`gh`) is on this computer,
+which is a different thing entirely: that is the program AETHER CODE runs read-only commands
+through (`gh pr view`, `gh run list`). Signing in above does not install it, it is not needed for
+updates, and installing it from [cli.github.com](https://cli.github.com) is still worth doing if
+you want AETHER CODE to be able to look at a repository.
 
 **Declining costs you nothing but the update notice.** Press *Not now, and stop asking* and
 AETHER1 remembers; the check stops running and nothing else changes. Signing in later is the

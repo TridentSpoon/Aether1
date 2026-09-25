@@ -145,7 +145,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnCheckUpdate = document.getElementById('btn-check-update');
     const btnGithubSignIn = document.getElementById('btn-github-signin');
     const btnGithubDecline = document.getElementById('btn-github-decline');
-    const btnGithubSignOut = document.getElementById('btn-github-signout');
     const btnDownloadUpdate = document.getElementById('btn-download-update');
     const btnApplyUpdate = document.getElementById('btn-apply-update');
 
@@ -4573,7 +4572,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // previous check cannot offer something the current one does not support -- the shape of bug
     // that leaves a Download button on a copy with nothing to download.
     function resetUpdateButtons() {
-        [btnApplyUpdate, btnDownloadUpdate, btnGithubSignIn, btnGithubDecline, btnGithubSignOut]
+        [btnApplyUpdate, btnDownloadUpdate, btnGithubSignIn, btnGithubDecline]
             .forEach((btn) => btn && btn.classList.add('hidden'));
     }
 
@@ -4595,19 +4594,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? 'This is a git checkout: its update is a pull and a rebuild.'
                     : 'Installed copy: its update is a signed bundle from the project’s releases.';
             }
-            if (status.signed_in && btnGithubSignOut) btnGithubSignOut.classList.remove('hidden');
-            // A token in a file rather than the keychain is worth knowing about, not glossing
-            // over -- it happens on a machine with no keychain service running.
-            const storageNote = status.signed_in && status.token_storage === 'File'
-                ? '<div class="text-[11px] text-slate-500">This machine has no keychain service running, so the sign-in is kept in a file only you can read.</div>'
-                : '';
 
             if (!status.checked) {
                 if (updateStatusBox) {
                     // Declining is not a failure, so it is not drawn as one.
                     updateStatusBox.innerHTML = status.declined
                         ? `<div class="text-slate-400">${status.error || 'Updates are not being checked for.'}</div>`
-                        : `<div class="text-yellow-400">⚠ ${status.error || 'Could not check for updates.'}</div>${storageNote}`;
+                        : `<div class="text-yellow-400">⚠ ${status.error || 'Could not check for updates.'}</div>`;
                 }
                 if (versionBadge) versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
                 if (status.needs_sign_in && status.sign_in_available) {
@@ -4627,7 +4620,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? `up to date with ${status.latest_tag}`
                     : `up to date (build ${status.built_commit_short})`;
                 if (updateStatusBox) {
-                    updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${status.version} -- ${against}</div>${storageNote}`;
+                    updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${status.version} -- ${against}</div>`;
                 }
                 if (versionBadge) {
                     versionBadge.classList.remove('border-yellow-500/50', 'text-yellow-400');
@@ -4651,7 +4644,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     lines.push(`<div class="text-[11px] text-slate-500">Downloading ${status.asset_name}${size} checks its signature and stops there. Installing it is your own last step.</div>`);
                     if (btnDownloadUpdate) btnDownloadUpdate.classList.remove('hidden');
                 }
-                if (updateStatusBox) updateStatusBox.innerHTML = lines.join('') + storageNote;
+                if (updateStatusBox) updateStatusBox.innerHTML = lines.join('');
                 if (versionBadge) {
                     versionBadge.classList.remove('border-green-500/50', 'text-green-400');
                     versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
@@ -4659,7 +4652,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const latestShort = status.latest_commit ? status.latest_commit.slice(0, 7) : 'unknown';
                 if (updateStatusBox) {
-                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>${storageNote}`;
+                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>`;
                 }
                 if (versionBadge) {
                     versionBadge.classList.remove('border-green-500/50', 'text-green-400');
@@ -4679,14 +4672,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // The device flow, from this side: ask for a code, show it, and poll. The polling happens
     // here rather than in a Rust call that blocks for the fifteen minutes a code stays valid --
     // a window that cannot be closed while somebody is deciding is worse than a timer.
+    //
+    // Drawn in The Brain -> Connections, which owns the sign-in. The update panel points at it
+    // rather than keeping a second set of the same buttons: two places that can each say whether
+    // you are signed in is two places that can disagree.
     async function handleSignIn() {
         voiceEngine.playSFX('click');
         stopSignInPoll();
-        const box = document.getElementById('github-signin-box');
-        const codeEl = document.getElementById('github-signin-code');
-        const linkEl = document.getElementById('github-signin-link');
-        const hintEl = document.getElementById('github-signin-hint');
-        if (btnGithubSignIn) btnGithubSignIn.disabled = true;
+        const box = document.getElementById('conn-github-code-box');
+        const codeEl = document.getElementById('conn-github-code');
+        const linkEl = document.getElementById('conn-github-link');
+        const hintEl = document.getElementById('conn-github-hint');
+        const btn = document.getElementById('conn-github-signin');
+        if (btn) btn.disabled = true;
 
         try {
             const code = await tauriInvoke('github_sign_in_start_rust');
@@ -4702,8 +4700,8 @@ document.addEventListener('DOMContentLoaded', () => {
             githubSignInPoll = setInterval(async () => {
                 if (Date.now() > deadline) {
                     stopSignInPoll();
-                    if (hintEl) hintEl.textContent = 'That code expired. Press Sign in to GitHub again for a new one.';
-                    if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+                    if (hintEl) hintEl.textContent = 'That code expired. Press Sign in again for a new one.';
+                    if (btn) btn.disabled = false;
                     return;
                 }
                 try {
@@ -4711,29 +4709,88 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!result.signed_in) return;
                     stopSignInPoll();
                     if (box) box.classList.add('hidden');
-                    if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+                    if (btn) btn.disabled = false;
+                    renderConnections();
                     // Straight into the check that was blocked on this, rather than making the
                     // operator press the button they already pressed.
                     handleCheckForUpdate();
                 } catch (e) {
                     stopSignInPoll();
                     if (hintEl) hintEl.textContent = `${e.message || e}`;
-                    if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+                    if (btn) btn.disabled = false;
                 }
             }, Math.max(code.interval, 1) * 1000);
         } catch (e) {
             if (box) box.classList.add('hidden');
-            if (updateStatusBox) {
-                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ ${e.message || e}</div>`;
-            }
-            if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+            if (hintEl) hintEl.textContent = `${e.message || e}`;
+            if (btn) btn.disabled = false;
         }
+    }
+
+    // Both rows of The Brain -> Connections, from one probe. They answer two questions that are
+    // easy to conflate: which GitHub account this copy is signed in to (so it can read releases),
+    // and whether the `gh` program is on this machine (which is what AETHER CODE runs commands
+    // through). Signing in does not install gh, and gh is not needed for updates.
+    async function renderConnections() {
+        if (!IS_TAURI) return;
+        const stateEl = document.getElementById('conn-github-state');
+        const ghEl = document.getElementById('conn-gh-state');
+        const signIn = document.getElementById('conn-github-signin');
+        const signOut = document.getElementById('conn-github-signout');
+        try {
+            const conn = await tauriInvoke('connections_rust');
+            const gh = conn.github || {};
+            if (stateEl) {
+                if (gh.signed_in) {
+                    stateEl.textContent = gh.storage === 'File'
+                        ? 'Signed in. This machine has no keychain service running, so the sign-in is kept in a file only you can read.'
+                        : 'Signed in. The sign-in is in this machine’s keychain.';
+                    stateEl.className = 'text-[11px] font-mono text-green-400 leading-snug';
+                } else if (!gh.sign_in_available) {
+                    // A build made without the GitHub App's client ID. Says so rather than
+                    // offering a button that cannot work.
+                    stateEl.textContent = 'This build has no GitHub sign-in compiled into it, so there is nothing to sign in to.';
+                    stateEl.className = 'text-[11px] font-mono text-slate-500 leading-snug';
+                } else {
+                    stateEl.textContent = 'Not signed in.';
+                    stateEl.className = 'text-[11px] font-mono text-slate-400 leading-snug';
+                }
+            }
+            if (signIn) signIn.classList.toggle('hidden', !gh.sign_in_available || gh.signed_in);
+            if (signOut) signOut.classList.toggle('hidden', !gh.signed_in);
+
+            const cli = conn.gh_cli || {};
+            if (ghEl) {
+                ghEl.textContent = cli.installed
+                    ? `Installed at ${cli.path}.`
+                    : 'Not on this computer. AETHER CODE will say so instead of running one; install it from cli.github.com if you want it.';
+                ghEl.className = cli.installed
+                    ? 'text-[11px] font-mono text-green-400 leading-snug'
+                    : 'text-[11px] font-mono text-slate-400 leading-snug';
+            }
+        } catch (e) {
+            if (stateEl) stateEl.textContent = `Could not check: ${e.message || e}`;
+        }
+    }
+
+    // The update panel's Sign in button opens the one place that owns the sign-in, rather than
+    // running a second copy of the flow.
+    function revealConnections() {
+        voiceEngine.playSFX('click');
+        const brain = document.getElementById('settings-group-brain');
+        const group = document.getElementById('settings-group-connections');
+        if (brain) brain.open = true;
+        if (group) {
+            group.open = true;
+            group.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        renderConnections();
     }
 
     async function handleDeclineUpdates() {
         voiceEngine.playSFX('click');
         stopSignInPoll();
-        document.getElementById('github-signin-box')?.classList.add('hidden');
+        document.getElementById('conn-github-code-box')?.classList.add('hidden');
         try {
             await tauriInvoke('github_decline_updates_rust', { declined: true });
         } catch (e) {
@@ -4750,6 +4807,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.warn('[AETHER1] Sign out failed:', e);
         }
+        renderConnections();
         handleCheckForUpdate();
     }
 
@@ -4829,6 +4887,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (updateSection) updateSection.classList.remove('hidden');
         loadVersionInfo();
         handleCheckForUpdate();
+        // Connections is Tauri-only for the same reason the rest of this section is: a browser tab
+        // has no keychain of this machine's and no `gh` on it.
+        document.getElementById('settings-group-connections')?.classList.remove('hidden');
+        renderConnections();
     }
 
     // Desktop Sprite Mode is a transparent/always-on-top native window -- meaningless in the
@@ -6276,13 +6338,12 @@ document.addEventListener('DOMContentLoaded', () => {
         btnCheckUpdate.addEventListener('click', () => handleCheckForUpdate());
     }
     if (btnGithubSignIn) {
-        btnGithubSignIn.addEventListener('click', () => handleSignIn());
+        btnGithubSignIn.addEventListener('click', () => revealConnections());
     }
+    document.getElementById('conn-github-signin')?.addEventListener('click', () => handleSignIn());
+    document.getElementById('conn-github-signout')?.addEventListener('click', () => handleSignOut());
     if (btnGithubDecline) {
         btnGithubDecline.addEventListener('click', () => handleDeclineUpdates());
-    }
-    if (btnGithubSignOut) {
-        btnGithubSignOut.addEventListener('click', () => handleSignOut());
     }
     if (btnDownloadUpdate) {
         btnDownloadUpdate.addEventListener('click', () => handleDownloadUpdate());
