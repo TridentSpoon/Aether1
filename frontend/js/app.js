@@ -118,6 +118,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // probes on open (coding, doctor) gets its one probe when the section is chosen.
         const group = settingsPaneFor(name)?.querySelector(':scope > .settings-group');
         if (group) group.open = true;
+        // The avatar browser owns a WebGL context while its detail view is open, so
+        // leaving the section has to put it down -- a rail that only changes which pane is
+        // visible would otherwise leave a second hologram rendering behind the Network page.
+        if (name === 'avatars') openAvatarBrowser();
+        else if (typeof disposeAvatarPreview === 'function') disposeAvatarPreview();
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
         try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
@@ -205,8 +210,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Model Scanner Elements
     const btnScanSystem = document.getElementById('btn-scan-system');
-    const btnPullLlama = document.getElementById('btn-pull-llama');
-    const selectLocalModel = document.getElementById('select-local-model');
     const scannerResultsBox = document.getElementById('scanner-results-box');
 
     // LLM Test Connection Elements
@@ -264,6 +267,24 @@ document.addEventListener('DOMContentLoaded', () => {
     let autoSpeak = true;
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
+
+    /* The avatar browser's state, declared up here with the avatar it follows rather than
+       down beside its own functions: the first applyAvatar of the session runs before that
+       point, and it asks the browser to redraw. A `let` further down would still be in its
+       temporal dead zone at that moment, which is an exception thrown during startup for
+       the sake of tidier grouping. */
+    const AVATAR_STAGES = ['groups', 'members', 'detail'];
+    let avatarBrowserGroup = null;      // which line stage 2 is showing
+    let avatarBrowserSelection = null;  // which avatar stage 3 is showing
+    let avatarPreviewEngine = null;
+    let avatarBrowserBuilt = false;
+
+    /* The persona catalogue's rows themselves, not just the <option>s built from them: the
+       avatar browser wants a persona's speciality, access and voice beside its avatar, and
+       reading them back off the dropdown's dataset would mean smuggling every field through
+       an attribute first. Up here for the same reason as the state above. */
+    let personaRows = new Map();
+    function personaRow(key) { return personaRows.get(key) || null; }
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
@@ -434,6 +455,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // the workbench has moved on from the one currently on screen.
         if (avatarName === 'custom') refreshCustomAvatarIfStale();
 
+        // Settings' avatar browser shows the current pick in three places at once, so
+        // it redraws rather than having a class toggled on one card here.
+        refreshAvatarBrowser();
+
         // Highlight active avatar pills/buttons
         document.querySelectorAll('.avatar-pill, .avatar-btn').forEach(btn => {
             const val = btn.getAttribute('data-avatar-val') || btn.getAttribute('data-avatar');
@@ -543,6 +568,9 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll(`.avatar-pill[data-avatar-val="${id}"], .avatar-btn[data-avatar="${id}"]`)
                 .forEach((btn) => btn.classList.toggle('hidden', !unlocked));
         });
+        // The browser builds its grids from the catalogue rather than from hidden markup,
+        // so it is filtered by avatarIsVisible and has to be asked again, not unhidden.
+        refreshAvatarBrowser();
     }
 
     // A few seconds to tens of seconds, matching "pops up" -- long enough to actually notice
@@ -596,6 +624,399 @@ document.addEventListener('DOMContentLoaded', () => {
     if (TRACE_PROTOCOL_AVATAR_IDS.includes(currentAvatar)) Aether1AvatarUnlocks.unlock(currentAvatar);
     refreshTraceProtocolVisibility();
     refreshEmptyAvatarGroups();
+
+    /* ---- THE AVATAR BROWSER (Settings -> Avatars) -------------------------------
+     *
+     * Three stages in one pane: the lines, one line's members, one avatar in full. The
+     * shape of it is Trident's: customisation leads to the group, the group leads to the
+     * avatar, and the avatar opens into who it is and what it does.
+     *
+     * Everything rendered here comes from js/avatar-catalogue.js (the descriptions) joined
+     * to the backend's persona catalogue (speciality, access and voice) on the avatar's
+     * persona key. Neither half is restated in markup, so an avatar added to the catalogue
+     * appears here with no change to this file, and a persona's speciality reworded in
+     * persona.rs reaches this pane without anyone remembering to copy it across.
+     *
+     * The detail view runs a second, live HologramAvatar rather than showing a still: half
+     * of what distinguishes one avatar from another is how it moves -- C.I.C.E.R.O.'s reels,
+     * Chrono-mAIstresse's hands, the Operator's stream -- and a frozen frame of those three
+     * is the same picture. It is built when a detail view opens and disposed the moment one
+     * closes, so the second WebGL context exists only while it is on screen.
+     */
+    const avatarCatalogue = () => window.Aether1Avatars || null;
+
+    /* An avatar the operator is allowed to see. The three Trace Protocols eggs stay out of
+       every list until their trigger has fired once (see refreshTraceProtocolVisibility),
+       and this is the one predicate that decides it for the whole browser -- the grid, the
+       member count on the line's card, and the "something is missing here" note. */
+    function avatarIsVisible(entry) {
+        if (!entry.unlockable) return true;
+        return Aether1AvatarUnlocks.isUnlocked(entry.id);
+    }
+
+    function visibleAvatarsIn(groupId) {
+        const cat = avatarCatalogue();
+        return cat ? cat.inGroup(groupId).filter(avatarIsVisible) : [];
+    }
+
+    function showAvatarStage(name) {
+        AVATAR_STAGES.forEach((stage) => {
+            document.querySelectorAll(`[data-avatar-stage="${stage}"]`).forEach((el) => {
+                el.classList.toggle('is-active', stage === name);
+            });
+        });
+        // The preview engine belongs to the detail stage and to nothing else. Leaving it
+        // running behind a stage nobody is looking at is a render loop and a WebGL context
+        // spent on an invisible element.
+        if (name !== 'detail') disposeAvatarPreview();
+        const detail = document.getElementById('settings-detail');
+        if (detail) detail.scrollTop = 0;
+    }
+
+    // ---- Stage 1: the lines -------------------------------------------------
+    function renderAvatarGroups() {
+        const cat = avatarCatalogue();
+        const grid = document.getElementById('avatar-group-grid');
+        if (!cat || !grid) return;
+        grid.innerHTML = '';
+        cat.groups.forEach((group) => {
+            const members = visibleAvatarsIn(group.id);
+            // A line with nothing showing yet is still worth a card: The eXcelsior Class
+            // stood empty for a while, and a line that simply is not there reads as a bug
+            // rather than as something not built yet. Only a line with no members at all in
+            // the catalogue is skipped.
+            if (cat.inGroup(group.id).length === 0) return;
+
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.className = 'avatar-group-card';
+            card.dataset.avatarGroup = group.id;
+
+            const faces = document.createElement('span');
+            faces.className = 'avatar-group-faces';
+            faces.setAttribute('aria-hidden', 'true');
+            faces.textContent = members.map((m) => m.emoji).join(' ');
+
+            const name = document.createElement('span');
+            name.className = 'avatar-group-name';
+            name.textContent = group.name;
+
+            const tagline = document.createElement('span');
+            tagline.className = 'avatar-group-tagline';
+            tagline.textContent = group.tagline;
+
+            const blurb = document.createElement('span');
+            blurb.className = 'avatar-group-blurb';
+            blurb.textContent = group.blurb;
+
+            const count = document.createElement('span');
+            count.className = 'avatar-group-count';
+            count.textContent = members.length === 1 ? '1 avatar' : `${members.length} avatars`;
+            if (members.some((m) => m.id === currentAvatar)) {
+                count.textContent += ' · wearing one of these';
+                card.classList.add('is-current');
+            }
+
+            card.append(faces, name, tagline, blurb, count);
+            card.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                openAvatarGroup(group.id);
+            });
+            grid.appendChild(card);
+        });
+    }
+
+    // ---- Stage 2: one line's members ----------------------------------------
+    function openAvatarGroup(groupId) {
+        const cat = avatarCatalogue();
+        const group = cat && cat.group(groupId);
+        if (!group) return;
+        avatarBrowserGroup = groupId;
+
+        document.getElementById('avatar-members-title').textContent = group.name;
+        document.getElementById('avatar-members-blurb').textContent = group.blurb;
+
+        const grid = document.getElementById('avatar-member-grid');
+        grid.innerHTML = '';
+        visibleAvatarsIn(groupId).forEach((entry) => {
+            grid.appendChild(buildAvatarCard(entry));
+        });
+
+        /* How many of this line are still undiscovered, said plainly. The alternative -- a
+           line that silently shows one of its four members -- is the version that reads as
+           the list being wrong. It says the count and not which ones, which is the whole
+           point of an egg. */
+        const hidden = cat.inGroup(groupId).filter((a) => !avatarIsVisible(a)).length;
+        const note = document.getElementById('avatar-members-locked');
+        note.classList.toggle('hidden', hidden === 0);
+        if (hidden > 0) {
+            note.textContent = hidden === 1
+                ? 'One more member of this line has not turned up yet.'
+                : `${hidden} more members of this line have not turned up yet.`;
+        }
+
+        showAvatarStage('members');
+    }
+
+    function buildAvatarCard(entry) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'avatar-card';
+        card.dataset.avatar = entry.id;
+        if (entry.id === currentAvatar) card.classList.add('is-current');
+
+        const face = document.createElement('span');
+        face.className = 'avatar-card-face';
+        face.setAttribute('aria-hidden', 'true');
+        face.textContent = entry.emoji;
+
+        const name = document.createElement('span');
+        name.className = 'avatar-card-name';
+        name.textContent = entry.label;
+
+        const role = document.createElement('span');
+        role.className = 'avatar-card-role';
+        role.textContent = avatarRoleLine(entry);
+
+        card.append(face, name, role);
+        if (entry.id === currentAvatar) {
+            const worn = document.createElement('span');
+            worn.className = 'avatar-card-worn';
+            worn.textContent = 'WEARING';
+            card.appendChild(worn);
+        }
+        card.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            openAvatarDetail(entry.id);
+        });
+        return card;
+    }
+
+    /* The one line under an avatar's name in the grid. The persona's own short_name is the
+       truest version of it -- it is what the backend calls that job -- so it wins whenever
+       the avatar has a persona, and the catalogue's structure line stands in when it has
+       none. */
+    function avatarRoleLine(entry) {
+        const persona = entry.persona ? personaRow(entry.persona) : null;
+        if (persona && persona.short_name) return persona.short_name;
+        return entry.structure;
+    }
+
+    // ---- Stage 3: one avatar, in full ---------------------------------------
+    function openAvatarDetail(avatarId) {
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(avatarId);
+        if (!entry) return;
+        avatarBrowserSelection = avatarId;
+        avatarBrowserGroup = entry.group;
+
+        const group = cat.group(entry.group);
+        document.getElementById('avatar-detail-line').textContent = group ? group.name : '';
+        document.getElementById('avatar-back-group').textContent = group ? group.name : 'Back';
+        document.getElementById('avatar-detail-name').textContent = `${entry.emoji} ${entry.label}`;
+        document.getElementById('avatar-detail-form').textContent = entry.form;
+        document.getElementById('avatar-detail-who').textContent = entry.who;
+        document.getElementById('avatar-detail-does').textContent = entry.does;
+        document.getElementById('avatar-preview-structure').textContent = `STRUCTURE: ${entry.structure}`;
+
+        const persona = entry.persona ? personaRow(entry.persona) : null;
+
+        // The persona's own one-liner, under the catalogue's. Two sentences about the same
+        // job from two sources, which is worth it: one is what this avatar is for and the
+        // other is the directive the model actually receives.
+        const speciality = document.getElementById('avatar-detail-speciality');
+        speciality.classList.toggle('hidden', !persona);
+        if (persona) speciality.textContent = `Directive: ${persona.speciality}`;
+
+        // Access and voice are facts about a persona, so an avatar without one has neither
+        // to show. Showing the rows empty would suggest it reaches nothing and speaks in
+        // nothing, when what is true is that it inherits both from whoever is selected.
+        const accessRow = document.getElementById('avatar-detail-access-row');
+        accessRow.classList.toggle('hidden', !persona || !persona.field);
+        if (persona && persona.field) {
+            document.getElementById('avatar-detail-access').textContent = persona.field;
+        }
+
+        const voiceRow = document.getElementById('avatar-detail-voice-row');
+        voiceRow.classList.toggle('hidden', !persona);
+        if (persona) document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+
+        const isCurrent = avatarId === currentAvatar;
+        const useBtn = document.getElementById('btn-avatar-use');
+        useBtn.textContent = isCurrent ? 'Already wearing it' : 'Wear this avatar';
+        useBtn.disabled = isCurrent;
+        useBtn.onclick = () => {
+            voiceEngine.playSFX('click');
+            applyAvatar(avatarId, true);
+            openAvatarDetail(avatarId);
+        };
+        document.getElementById('avatar-detail-current').classList.toggle('hidden', !isCurrent);
+
+        // Every A.R.X. avatar, and five others, have a colour preset carrying their own id;
+        // A1ter_nul's is Night. An avatar with no preset of its own simply does not offer
+        // the button rather than offering one that would repaint the HUD in someone else's
+        // colours.
+        const presetId = avatarThemePreset(entry);
+        const themeBtn = document.getElementById('btn-avatar-theme');
+        themeBtn.classList.toggle('hidden', !presetId);
+        if (presetId) {
+            themeBtn.onclick = () => {
+                voiceEngine.playSFX('click');
+                applyThemePreset(presetId);
+            };
+        }
+
+        // The workbench button belongs to the avatar you design and to nothing else.
+        const labBtn = document.getElementById('btn-open-avatar-lab');
+        if (labBtn) labBtn.classList.toggle('hidden', !entry.custom);
+
+        const note = document.getElementById('avatar-preview-note');
+        note.classList.toggle('hidden', Boolean(persona));
+        if (!persona) {
+            note.textContent = 'This one is a shape, not a persona: wearing it changes the '
+                + 'hologram and leaves whoever is answering exactly as they are.';
+        }
+
+        showAvatarStage('detail');
+        buildAvatarPreview(avatarId);
+    }
+
+    function avatarThemePreset(entry) {
+        const byId = window.THEME_PRESETS_BY_ID || {};
+        if (byId[entry.id]) return entry.id;
+        if (entry.id === 'alt') return 'night-city';
+        return null;
+    }
+
+    /* Both voices, named, because they are two different answers to "what does it sound
+       like": the cloud voice and the Piper model on this machine. Which of the two actually
+       speaks is decided at the moment of speech (see commands::synthesize_speech), and an
+       operator running local-only wants to read the second one. */
+    function avatarVoiceLine(persona) {
+        const parts = [];
+        if (persona.voice) parts.push(persona.voice);
+        if (persona.local_voice) parts.push(`${persona.local_voice} (Piper)`);
+        if (parts.length === 0) return 'Whatever voice you have chosen in Voice & Sound.';
+        return parts.join('  ·  ');
+    }
+
+    // ---- The live preview ---------------------------------------------------
+    function buildAvatarPreview(avatarId) {
+        const viewport = document.getElementById('avatar-preview-viewport');
+        if (!viewport || typeof HologramAvatar === 'undefined') return;
+        disposeAvatarPreview();
+        try {
+            avatarPreviewEngine = new HologramAvatar('avatar-preview-viewport');
+            avatarPreviewEngine.setAvatar(avatarId);
+            avatarPreviewEngine.setColorPalette(Aether1Theme.paletteFor(Aether1Theme.current().colours));
+            avatarPreviewEngine.setState('IDLE');
+        } catch (e) {
+            // A browser out of WebGL contexts is a bad preview, not a broken settings pane.
+            console.warn('Could not build the avatar preview', e);
+            avatarPreviewEngine = null;
+        }
+    }
+
+    function disposeAvatarPreview() {
+        if (!avatarPreviewEngine) return;
+        try { avatarPreviewEngine.dispose(); } catch (e) { /* already gone */ }
+        avatarPreviewEngine = null;
+    }
+
+    // ---- The card in Appearance that leads here -----------------------------
+    function refreshAvatarEntryCard() {
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(currentAvatar);
+        const face = document.getElementById('avatar-entry-face');
+        const name = document.getElementById('avatar-entry-name');
+        const meta = document.getElementById('avatar-entry-meta');
+        if (!face || !name || !meta) return;
+        if (!entry) {
+            face.textContent = '✨';
+            name.textContent = currentAvatar;
+            meta.textContent = '';
+            return;
+        }
+        const group = cat.group(entry.group);
+        face.textContent = entry.emoji;
+        name.textContent = entry.label;
+        meta.textContent = `${group ? group.name : ''} · ${avatarRoleLine(entry)}`;
+    }
+
+    /* Called whenever the pick changes or an egg is unlocked. Re-rendering rather than
+       toggling a class on one card: the current avatar shows up in three places here (the
+       line's card, the grid card's badge, the detail view's button) and one of them going
+       stale is exactly the kind of thing nobody notices until it is wrong. */
+    function refreshAvatarBrowser() {
+        if (!avatarBrowserBuilt) return;
+        refreshAvatarEntryCard();
+        renderAvatarGroups();
+        if (avatarBrowserGroup) {
+            const active = document.querySelector('[data-avatar-stage="members"].is-active')
+                || document.querySelector('[data-avatar-stage="detail"].is-active');
+            const grid = document.getElementById('avatar-member-grid');
+            if (grid) {
+                grid.innerHTML = '';
+                visibleAvatarsIn(avatarBrowserGroup).forEach((e) => grid.appendChild(buildAvatarCard(e)));
+            }
+            if (active && active.dataset.avatarStage === 'detail' && avatarBrowserSelection) {
+                // Re-opening would rebuild the preview engine mid-view; only the button
+                // state and the badge need saying again.
+                const isCurrent = avatarBrowserSelection === currentAvatar;
+                const useBtn = document.getElementById('btn-avatar-use');
+                if (useBtn) {
+                    useBtn.textContent = isCurrent ? 'Already wearing it' : 'Wear this avatar';
+                    useBtn.disabled = isCurrent;
+                }
+                const line = document.getElementById('avatar-detail-current');
+                if (line) line.classList.toggle('hidden', !isCurrent);
+            }
+        }
+    }
+
+    /* Built once, the first time the section is opened. The catalogue is static and the
+       persona rows are fetched once for the whole window, so there is nothing here worth
+       redoing on every visit -- but there is a WebGL context worth not creating until
+       somebody actually asks to look at an avatar. */
+    function initAvatarBrowser() {
+        if (avatarBrowserBuilt) return;
+        if (!avatarCatalogue()) {
+            console.warn('js/avatar-catalogue.js did not load; the avatar browser is empty');
+            return;
+        }
+        avatarBrowserBuilt = true;
+        document.querySelectorAll('[data-avatar-back]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                const target = btn.dataset.avatarBack;
+                if (target === 'members' && avatarBrowserGroup) openAvatarGroup(avatarBrowserGroup);
+                else showAvatarStage('groups');
+            });
+        });
+        renderAvatarGroups();
+        refreshAvatarEntryCard();
+        showAvatarStage('groups');
+    }
+
+    /* Opening the section. It lands on the lines rather than wherever it was left: the
+       stack behind you is only meaningful while you are in it, and coming back to a detail
+       view of an avatar you were reading about yesterday is not where anyone means to start.
+       The one exception is the avatar you are wearing -- see the entry card in Appearance,
+       which opens straight onto it. */
+    function openAvatarBrowser(avatarId) {
+        initAvatarBrowser();
+        if (!avatarBrowserBuilt) return;
+        if (avatarId && avatarCatalogue().get(avatarId)) openAvatarDetail(avatarId);
+        else showAvatarStage('groups');
+    }
+
+    const avatarEntryCard = document.getElementById('avatar-entry-card');
+    if (avatarEntryCard) {
+        avatarEntryCard.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            if (showSettingsSection('avatars')) openAvatarBrowser(currentAvatar);
+        });
+    }
 
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
@@ -1044,6 +1465,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateHardwareTelemetry(data) {
         if (!data) return;
+        // The hub's chips report the machine from this same reading rather than probing
+        // for it. Redrawn only once the hub has something to draw beside them.
+        lastTelemetry = data;
+        if (hub.loaded) renderHubChips();
 
         const cpuPct = data.cpu ? data.cpu.total_percent : 0;
         setChinStat(elCpuCell, elCpuVal, elCpuMeter, `${cpuPct}%`, cpuPct, loadLevel(cpuPct),
@@ -2993,9 +3418,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const codeHeadline = document.getElementById('code-headline');
     const codeSteps = document.getElementById('code-steps');
-    const codeModelsWrap = document.getElementById('code-models-wrap');
-    const codeModels = document.getElementById('code-models');
-    const codeShowAll = document.getElementById('code-show-all');
     const codeOwnModel = document.getElementById('code-own-model');
     const codeAgents = document.getElementById('code-agents');
     const codeConventionsWrap = document.getElementById('code-conventions-wrap');
@@ -3004,10 +3426,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnCodeRecheck = document.getElementById('btn-code-recheck');
 
     let codeAdvice = null;
-    // The models this panel started downloading, so its own progress line reports on those
-    // rather than on every pull happening anywhere in the app.
-    const codeDownloading = new Set();
-    let codePollTimer = null;
 
     function setCodeStatus(text, tone = 'info') {
         if (!codeStatus) return;
@@ -3033,100 +3451,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return resp.text();
     }
 
-    /* One model. Built as nodes rather than markup for the same reason the brain wizard's
-       cards are: a model name is whatever the server said it was. */
-    function codeModelRow(model) {
-        const row = document.createElement('div');
-        row.className = 'flex items-start justify-between gap-2 p-2 rounded border ' +
-            (model.recommended ? 'border-cyan-500/50 bg-cyan-950/20' : 'border-slate-600/40 bg-slate-900/40');
-
-        const left = document.createElement('div');
-        left.className = 'min-w-0 space-y-0.5';
-
-        const title = document.createElement('div');
-        title.className = 'text-xs font-mono text-cyan-200';
-        title.textContent = model.label + (model.recommended ? ' — best fit for this computer' : '');
-        left.appendChild(title);
-
-        const blurb = document.createElement('div');
-        blurb.className = 'text-[11px] font-mono text-slate-400 leading-snug';
-        blurb.textContent = model.blurb;
-        left.appendChild(blurb);
-
-        const meta = document.createElement('div');
-        meta.className = 'text-[10px] font-mono text-slate-500';
-        meta.textContent = `${model.name} — ${model.download}` + (model.fits ? '' : ' — more memory than this computer has');
-        left.appendChild(meta);
-
-        // Which side of the graphics card's line this one falls on, said on the row that
-        // offers it. It is the difference between an answer that arrives while you are
-        // reading the question and one you wait through, and without it the row above the
-        // recommendation looks like an equally good pick the panel simply overlooked.
-        if (model.fits && model.fits_on_gpu) {
-            const fast = document.createElement('div');
-            fast.className = 'text-[10px] font-mono text-cyan-400/80';
-            fast.textContent = '⚡ fits on the graphics card';
-            left.appendChild(fast);
-        }
-
-        // The second job, on the row rather than in a footnote, because it is the
-        // difference between one download and two.
-        if (model.runs_aether1) {
-            const both = document.createElement('div');
-            both.className = 'text-[10px] font-mono text-green-400/80';
-            both.textContent = '✔ big enough to run Aether1 itself as well';
-            left.appendChild(both);
-        }
-
-        row.appendChild(left);
-
-        const action = document.createElement('div');
-        action.className = 'shrink-0';
-        if (model.installed) {
-            const here = document.createElement('span');
-            here.className = 'text-[11px] font-mono text-green-400 whitespace-nowrap';
-            here.textContent = '✔ downloaded';
-            action.appendChild(here);
-        } else {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'cyber-btn text-[11px] py-1 px-2.5 whitespace-nowrap';
-            button.textContent = '📥 Download';
-            button.addEventListener('click', () => handleCodeDownload(model.name, button));
-            action.appendChild(button);
-        }
-        row.appendChild(action);
-        return row;
-    }
-
-    function renderCodeModels(advice) {
-        if (!codeModels || !codeModelsWrap) return;
-        codeModels.innerHTML = '';
-
-        // The ones that do not fit are still offered -- somebody who knows their graphics
-        // card better than a memory heuristic does gets to pick past it -- but behind a
-        // tick, because a list where most entries are unusable is its own kind of unhelpful.
-        const all = advice.models || [];
-        const showAll = !!codeShowAll?.checked;
-        let list = all.filter(model => showAll || model.fits || model.installed);
-        // A machine under the floor has nothing that fits, and the tick that would reveal
-        // the rest lives inside this block -- so an empty filter shows everything instead
-        // of hiding the only way to get it back.
-        if (list.length === 0) list = all;
-        for (const model of list) codeModels.appendChild(codeModelRow(model));
-
-        // What the recommendation was measured against. Worth a line because on exactly the
-        // machines where the two rules disagree -- plenty of memory, a modest card -- being
-        // offered a small model reads as the panel having failed to notice the memory.
-        if (advice.sized_against) {
-            const note = document.createElement('div');
-            note.className = 'text-[10px] font-mono text-slate-500 leading-snug pt-1';
-            note.textContent = advice.sized_against;
-            codeModels.appendChild(note);
-        }
-
-        codeModelsWrap.classList.toggle('hidden', all.length === 0);
-    }
+    /* The coding catalogue no longer draws a list of its own here. It is in the model
+       hub at the top of The Brain, beside the models to talk to, because they are the
+       same decision about the same machine -- and because only one list can say "this
+       one is big enough to do both", which is the answer that saves a second download. */
 
     /* One coding program, with the half of its instructions that applies: how to get it
        when it is missing, how to point it at this machine when it is here. Showing both at
@@ -3177,7 +3505,6 @@ document.addEventListener('DOMContentLoaded', () => {
             (advice.steps || []).forEach((step, index) => codeSteps.appendChild(renderSetupStep(step, index)));
         }
 
-        renderCodeModels(advice);
 
         // What Aether1 is running on now, when that is a model on this machine. Shown only
         // when it is a fact the reader can act on: the panel is about code, and a line
@@ -3219,67 +3546,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function stopCodePoll() {
-        if (codePollTimer) { clearInterval(codePollTimer); codePollTimer = null; }
-    }
-
-    /* The download goes through the same backend the brain wizard uses -- one place that
-       knows how to drive Ollama's streaming pull, and one place that refuses in local-only
-       mode. All this adds is a line saying where it has got to, because a 19 GB download
-       with no feedback is indistinguishable from a hung button. */
-    async function pollCodeDownloads() {
-        const data = await fetchDownloadStatus().catch(() => null);
-        const mine = ((data && data.downloads) || []).filter(d => codeDownloading.has(d.model));
-        if (mine.length === 0) { stopCodePoll(); return; }
-
-        const running = mine.filter(d => d.phase !== 'done' && d.phase !== 'failed');
-        if (running.length > 0) {
-            setCodeStatus(running.map(d => `${d.model}: ${downloadCaption(d)}`).join('  ·  '), 'busy');
-            return;
-        }
-
-        stopCodePoll();
-        const failed = mine.find(d => d.phase === 'failed');
-        if (failed) {
-            setCodeStatus(`⚠ ${failed.model}: ${failed.error || 'the download failed'}`, 'bad');
-        } else {
-            setCodeStatus(`✔ ${mine.map(d => d.model).join(', ')} ready.`, 'good');
-            voiceEngine.playSFX('incoming');
-        }
-        codeDownloading.clear();
-        await refreshCodeAdvice({ quiet: true });
-    }
-
-    async function handleCodeDownload(modelName, button) {
-        voiceEngine.playSFX('click');
-        if (button) button.disabled = true;
-        setCodeStatus(`Starting the download of ${modelName}...`, 'busy');
-        try {
-            const endpoint = codeAdvice?.endpoint || '';
-            const data = IS_TAURI
-                ? await tauriInvoke('start_download_rust', { modelName, endpoint })
-                : await (await apiFetch(
-                    `/api/setup/download?model_name=${encodeURIComponent(modelName)}&endpoint=${encodeURIComponent(endpoint)}`,
-                    { method: 'POST' }
-                )).json();
-
-            if (!data.ok) {
-                setCodeStatus(`⚠ ${data.message}`, 'bad');
-                if (button) button.disabled = false;
-                return;
-            }
-            codeDownloading.add(modelName);
-            stopCodePoll();
-            codePollTimer = setInterval(() => { pollCodeDownloads(); }, 1000);
-            pollCodeDownloads();
-        } catch (e) {
-            setCodeStatus(`⚠ ${e.message || e}`, 'bad');
-            if (button) button.disabled = false;
-        }
-    }
-
     btnCodeRecheck?.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshCodeAdvice(); });
-    codeShowAll?.addEventListener('change', () => { if (codeAdvice) renderCodeModels(codeAdvice); });
 
     // Probed when the group is opened rather than when Settings is, because the probe
     // touches the network and most visits to Settings are not about this.
@@ -4555,6 +4822,573 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+
+    /* --- The model hub ---------------------------------------------------------------
+       One list of models with one detail panel beside it, in place of the two separate
+       lists The Brain used to carry (models to talk to, in the wizard; models to write
+       code with, further down the panel). They were always the same kind of decision
+       made against the same machine, and splitting them meant neither list could say
+       "this one does both" -- which is the answer that saves a second download.
+
+       Nothing here is fetched from a model index on the web. Both catalogues are compiled
+       into the binary and the rest is this computer: the scan's endpoint, that server's
+       own list of what it has, and the machine's memory and video memory. A hub that
+       listed a public index would mostly be listing models this machine cannot run, and
+       it would go blank the moment the network did. */
+
+    const hub = {
+        tab: 'discover',
+        search: '',
+        purpose: 'all',
+        fit: 'fits',
+        sort: 'recommended',
+        // The model name the detail panel is showing. Kept across a refresh, so a probe
+        // that lands while somebody is reading does not throw them back to the top.
+        selected: null,
+        models: [],
+        installed: [],
+        endpoint: '',
+        provider: '',
+        canInstall: false,
+        sizedAgainst: '',
+        loading: false,
+        loaded: false,
+        pollTimer: null,
+    };
+
+    // The last telemetry reading, kept so the hub's chips can say what the machine has
+    // without probing for it: this window is already receiving it every tick.
+    let lastTelemetry = null;
+
+    /* Does this server already have that model?
+       Mirrors code_setup::has_model, and for the same reason: a tag names a size, so
+       `qwen2.5:7b` is only satisfied by `qwen2.5:7b`, while a bare `mistral` is satisfied
+       by whatever tag of mistral is there. Matching on the family in both directions would
+       mark the 14b installed when only the 7b is. */
+    function hubHasModel(installed, name) {
+        const wanted = name.toLowerCase();
+        return installed.some(have => {
+            const got = have.toLowerCase();
+            if (got === wanted) return true;
+            if (wanted.includes(':')) return got === wanted;
+            return got.split(':')[0] === wanted;
+        });
+    }
+
+    function hubGb(value) {
+        if (typeof value !== 'number' || value <= 0) return null;
+        return Number.isInteger(value) ? `${value} GB` : `${value.toFixed(1)} GB`;
+    }
+
+    /* The two catalogues as one list. A model that appears in both -- a coding model big
+       enough to be the companion as well -- is one entry that says so, not two rows with
+       the same name and different buttons. */
+    function hubMergeCatalogues(setup, code) {
+        const installed = (setup && setup.installed_models) || [];
+        const rows = [];
+        const byName = new Map();
+
+        const add = (entry) => {
+            const existing = byName.get(entry.name);
+            if (existing) {
+                existing.purposes = Array.from(new Set(existing.purposes.concat(entry.purposes)));
+                existing.recommended = existing.recommended || entry.recommended;
+                existing.runs_aether1 = existing.runs_aether1 || entry.runs_aether1;
+                return;
+            }
+            byName.set(entry.name, entry);
+            rows.push(entry);
+        };
+
+        for (const model of (setup && setup.models) || []) {
+            add({
+                name: model.name,
+                label: model.label,
+                blurb: model.blurb,
+                download: model.download,
+                needs_gb: model.needs_gb,
+                needs_vram_gb: model.needs_vram_gb,
+                fits: !!model.fits,
+                fits_on_gpu: !!model.fits_on_gpu,
+                recommended: !!model.recommended,
+                installed: hubHasModel(installed, model.name),
+                purposes: ['chat'],
+                // Everything in the chat catalogue is by definition something Aether1 can
+                // run on; the flag only means something on the coding list, where a model
+                // can be too small to hold the written tool protocol.
+                runs_aether1: true,
+            });
+        }
+
+        for (const model of (code && code.models) || []) {
+            add({
+                name: model.name,
+                label: model.label,
+                blurb: model.blurb,
+                download: model.download,
+                needs_gb: model.needs_gb,
+                needs_vram_gb: null,
+                fits: !!model.fits,
+                fits_on_gpu: !!model.fits_on_gpu,
+                recommended: false,
+                installed: !!model.installed,
+                purposes: ['code'],
+                runs_aether1: !!model.runs_aether1,
+                // The coding list's own recommendation, which is a separate decision from
+                // the chat one -- they are different jobs and frequently different models.
+                best_for_code: !!model.recommended,
+            });
+        }
+
+        return rows;
+    }
+
+    /* What is actually on the machine. Anything the server reports that neither catalogue
+       knows about is still listed, as itself: somebody who pulled a model by hand has it
+       installed, and a hub that only admits to models it recommended is lying about the
+       computer. */
+    function hubDeviceRows() {
+        const known = new Map(hub.models.map(model => [model.name, model]));
+        return hub.installed.map(name => known.get(name) || {
+            name,
+            label: name,
+            blurb: 'Downloaded on this computer, and not one of the models Aether1 suggests '
+                + '-- so there is nothing here about what it needs or what it is good at.',
+            download: '',
+            needs_gb: 0,
+            fits: true,
+            fits_on_gpu: false,
+            recommended: false,
+            installed: true,
+            purposes: [],
+            runs_aether1: false,
+            unknown: true,
+        });
+    }
+
+    function hubVisibleRows() {
+        let rows = hub.tab === 'device' ? hubDeviceRows() : hub.models.slice();
+
+        const term = hub.search.trim().toLowerCase();
+        if (term) {
+            rows = rows.filter(model =>
+                model.name.toLowerCase().includes(term)
+                || (model.label || '').toLowerCase().includes(term)
+                || (model.blurb || '').toLowerCase().includes(term));
+        }
+        if (hub.purpose !== 'all') {
+            rows = rows.filter(model => (model.purposes || []).includes(hub.purpose));
+        }
+        // The fit filter never hides something already downloaded: it is on the disk
+        // whatever a memory heuristic thinks of it, and hiding it is how you get a hub
+        // that cannot show you the model you are running.
+        if (hub.fit === 'fits' && hub.tab !== 'device') {
+            const fitting = rows.filter(model => model.fits || model.installed);
+            // A machine under the floor fits nothing, and the control that would bring the
+            // rest back is a dropdown two rows up -- so an empty result shows everything
+            // rather than an empty list with no way out of it.
+            if (fitting.length) rows = fitting;
+        }
+
+        if (hub.sort === 'smallest') rows.sort((a, b) => a.needs_gb - b.needs_gb);
+        else if (hub.sort === 'largest') rows.sort((a, b) => b.needs_gb - a.needs_gb);
+        else {
+            // Recommended: the pick for this machine first, then what is downloaded, then
+            // the rest by size -- the order somebody deciding actually reads in.
+            rows.sort((a, b) => {
+                const score = (m) => (m.recommended ? 0 : 0) + (m.recommended ? -4 : 0)
+                    + (m.best_for_code ? -3 : 0) + (m.installed ? -2 : 0) + (m.fits ? -1 : 0);
+                return score(a) - score(b) || a.needs_gb - b.needs_gb;
+            });
+        }
+        return rows;
+    }
+
+    /* The machine's own numbers, along the top. These are what every other answer on this
+       panel is measured against, so they are stated rather than implied. */
+    function renderHubChips() {
+        const box = document.getElementById('hub-machine');
+        if (!box) return;
+        box.innerHTML = '';
+
+        const chip = (value, label, state) => {
+            const el = document.createElement('span');
+            el.className = 'hub-chip';
+            if (state) el.dataset.state = state;
+            const v = document.createElement('span');
+            v.className = 'hub-chip-value';
+            v.textContent = value;
+            const l = document.createElement('span');
+            l.className = 'hub-chip-label';
+            l.textContent = label;
+            el.append(v, l);
+            box.appendChild(el);
+        };
+
+        const connected = hub.provider && hub.provider !== 'offline';
+        chip(connected ? 'Connected' : 'Not set up', connected ? '' : '', connected ? 'good' : 'warn');
+        chip(String(hub.installed.length), 'LOCAL');
+
+        // The card, when there is one with its own memory. An integrated one is left out
+        // on purpose: its memory is the system memory already in the next chip, and two
+        // chips adding up to more than the machine has is a lie about the hardware.
+        const card = (lastTelemetry?.gpus || []).find(gpu => !gpu.integrated && gpu.vram_gb);
+        if (card) chip(hubGb(card.vram_gb), 'VRAM');
+        if (lastTelemetry?.ram?.total_gb) chip(hubGb(lastTelemetry.ram.total_gb), 'RAM');
+        if (lastTelemetry?.cpu?.cores) chip(String(lastTelemetry.cpu.cores), 'CPU');
+    }
+
+    function hubRow(model) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'hub-row';
+        row.setAttribute('role', 'option');
+        if (model.name === hub.selected) row.classList.add('is-selected');
+        if (!model.fits && !model.installed) row.classList.add('is-unfit');
+        row.setAttribute('aria-selected', model.name === hub.selected ? 'true' : 'false');
+
+        const glyph = document.createElement('span');
+        glyph.className = 'hub-row-glyph';
+        glyph.textContent = model.installed ? '◉' : '○';
+        row.appendChild(glyph);
+
+        const body = document.createElement('span');
+        body.className = 'hub-row-body';
+
+        const name = document.createElement('span');
+        name.className = 'hub-row-name';
+        name.textContent = model.label || model.name;
+        body.appendChild(name);
+
+        const meta = document.createElement('span');
+        meta.className = 'hub-row-meta';
+        const size = document.createElement('span');
+        size.textContent = model.download || model.name;
+        meta.appendChild(size);
+        if (model.installed) {
+            const here = document.createElement('span');
+            here.style.color = 'var(--neon-green)';
+            here.textContent = 'downloaded';
+            meta.appendChild(here);
+        } else if (model.recommended) {
+            const pick = document.createElement('span');
+            pick.style.color = 'var(--text-accent)';
+            pick.textContent = 'best fit';
+            meta.appendChild(pick);
+        } else if (model.best_for_code) {
+            const pick = document.createElement('span');
+            pick.style.color = 'var(--text-accent)';
+            pick.textContent = 'best for code';
+            meta.appendChild(pick);
+        }
+        body.appendChild(meta);
+        row.appendChild(body);
+
+        row.addEventListener('click', () => {
+            hub.selected = model.name;
+            renderHubList();
+            renderHubDetail();
+        });
+        return row;
+    }
+
+    function renderHubList() {
+        const list = document.getElementById('hub-list');
+        const title = document.getElementById('hub-list-title');
+        if (!list) return;
+        const rows = hubVisibleRows();
+
+        if (title) {
+            title.textContent = hub.tab === 'device'
+                ? `${rows.length} downloaded on this computer`
+                : `${rows.length} models for this computer`;
+        }
+
+        list.innerHTML = '';
+        if (!rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'hub-empty';
+            empty.textContent = hub.tab === 'device'
+                ? 'Nothing is downloaded yet, or no model server answered on this computer. '
+                  + 'Pick one under Discover and press Download.'
+                : 'Nothing matches that search.';
+            list.appendChild(empty);
+            return;
+        }
+        // Keep a selection that is still on screen; otherwise take the top row, which the
+        // sort has already made the best answer for this machine.
+        if (!rows.some(model => model.name === hub.selected)) hub.selected = rows[0].name;
+        for (const model of rows) list.appendChild(hubRow(model));
+    }
+
+    function hubFact(label, value) {
+        const box = document.createElement('div');
+        box.className = 'hub-fact';
+        const l = document.createElement('div');
+        l.className = 'hub-fact-label';
+        l.textContent = label;
+        const v = document.createElement('div');
+        v.className = 'hub-fact-value';
+        v.textContent = value;
+        box.append(l, v);
+        return box;
+    }
+
+    function hubTag(text, tone) {
+        const tag = document.createElement('span');
+        tag.className = 'hub-tag';
+        if (tone) tag.dataset.tone = tone;
+        tag.textContent = text;
+        return tag;
+    }
+
+    function renderHubDetail() {
+        const panel = document.getElementById('hub-detail');
+        if (!panel) return;
+        panel.innerHTML = '';
+
+        const model = hubVisibleRows().find(entry => entry.name === hub.selected);
+        if (!model) {
+            const empty = document.createElement('div');
+            empty.className = 'hub-empty';
+            empty.textContent = hub.loading
+                ? 'Looking at this computer...'
+                : 'Pick a model on the left to see what it needs.';
+            panel.appendChild(empty);
+            return;
+        }
+
+        const name = document.createElement('div');
+        name.className = 'hub-detail-name';
+        name.textContent = model.label || model.name;
+        panel.appendChild(name);
+
+        const sub = document.createElement('div');
+        sub.className = 'hub-detail-sub';
+        sub.textContent = model.name;
+        panel.appendChild(sub);
+
+        const tags = document.createElement('div');
+        tags.className = 'hub-tags';
+        if ((model.purposes || []).includes('chat')) tags.appendChild(hubTag('To talk to'));
+        if ((model.purposes || []).includes('code')) tags.appendChild(hubTag('To write code'));
+        if (model.recommended) tags.appendChild(hubTag('Best fit for this computer', 'pick'));
+        if (model.best_for_code) tags.appendChild(hubTag('Best coding model here', 'pick'));
+        if (model.installed) tags.appendChild(hubTag('✔ Downloaded', 'on'));
+        if (!model.fits && !model.unknown) tags.appendChild(hubTag('More memory than this computer has', 'off'));
+        if (tags.childElementCount) panel.appendChild(tags);
+
+        // The row that spends somebody's bandwidth, with the size on it rather than in a
+        // footnote: three gigabytes over a home connection is the whole decision.
+        const action = document.createElement('div');
+        action.className = 'hub-action';
+        const size = document.createElement('span');
+        size.className = 'hub-action-size';
+        size.textContent = model.installed
+            ? 'On this computer already'
+            : (model.download ? `Download is ${model.download.replace(/^about /, '')}` : 'Not in either list');
+        action.appendChild(size);
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex gap-2 flex-wrap';
+
+        // "Use this one" fills the connection form below rather than saving by itself:
+        // this window has one Save Changes button and a panel that saves behind it would
+        // also commit whatever else is half-typed on another pane.
+        if (model.installed && (model.unknown || (model.purposes || []).includes('chat') || model.runs_aether1)) {
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'cyber-btn cyber-btn-active text-xs py-1.5 px-3 whitespace-nowrap';
+            use.textContent = '✔ Use this one';
+            use.addEventListener('click', () => hubUseModel(model));
+            buttons.appendChild(use);
+        }
+
+        if (!model.installed) {
+            const download = document.createElement('button');
+            download.type = 'button';
+            download.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+            download.textContent = '⬇ Download';
+            // Ollama's own port is what the in-app download drives. Where that is not the
+            // server in play the button would lie, so it says what to do instead.
+            download.disabled = !hub.canInstall;
+            download.title = hub.canInstall
+                ? ''
+                : 'Downloading from here needs Ollama on this computer. Any other server '
+                  + 'loads its models its own way.';
+            download.addEventListener('click', () => hubDownload(model, download));
+            buttons.appendChild(download);
+        }
+        action.appendChild(buttons);
+        panel.appendChild(action);
+
+        const blurb = document.createElement('div');
+        blurb.className = 'hub-blurb';
+        blurb.textContent = model.blurb;
+        panel.appendChild(blurb);
+
+        const facts = document.createElement('div');
+        facts.className = 'hub-facts';
+        if (model.needs_gb) facts.appendChild(hubFact('MEMORY IT WANTS', hubGb(model.needs_gb)));
+        if (model.needs_vram_gb) facts.appendChild(hubFact('ON A CARD', hubGb(model.needs_vram_gb)));
+        facts.appendChild(hubFact('GRAPHICS CARD', model.fits_on_gpu
+            ? '⚡ Whole model fits'
+            : 'Partly on the processor'));
+        if (!model.unknown) {
+            facts.appendChild(hubFact('RUNS AETHER1 ITSELF', model.runs_aether1 ? 'Yes' : 'Too small'));
+        }
+        if (facts.childElementCount) panel.appendChild(facts);
+
+        // What the recommendation was measured against. Worth saying on exactly the
+        // machines where the two rules disagree -- plenty of memory, a modest card --
+        // where a small recommendation otherwise reads as a panel that failed to notice.
+        if (hub.sizedAgainst) {
+            const note = document.createElement('div');
+            note.className = 'text-[10px] font-mono text-slate-500 leading-snug';
+            note.textContent = hub.sizedAgainst;
+            panel.appendChild(note);
+        }
+    }
+
+    function setHubStatus(message, tone) {
+        const box = document.getElementById('hub-status');
+        if (!box) return;
+        box.classList.remove('hidden');
+        box.className = 'text-xs font-mono p-2.5 rounded border '
+            + (tone === 'bad' ? 'border-red-500/40 bg-red-950/20 text-red-400'
+                : tone === 'good' ? 'border-green-500/40 bg-green-950/20 text-green-400'
+                : 'border-cyan-500/20 bg-slate-900/80 text-cyan-200');
+        box.textContent = message;
+    }
+
+    /* Fills the connection form with this model and the server it is on. Deliberately
+       stops short of saving -- see the comment on the button. */
+    function hubUseModel(model) {
+        voiceEngine.playSFX('click');
+        const modelBox = document.getElementById('setting-model');
+        const providerBox = document.getElementById('setting-provider');
+        const endpointBox = document.getElementById('setting-endpoint');
+        if (modelBox) modelBox.value = model.name;
+        if (providerBox && hub.provider) providerBox.value = hub.provider;
+        if (endpointBox && hub.endpoint) endpointBox.value = hub.endpoint;
+        const picker = document.getElementById('setting-model-picker');
+        if (picker && Array.from(picker.options).some(option => option.value === model.name)) {
+            picker.value = model.name;
+        }
+        document.getElementById('settings-group-connection')?.setAttribute('open', 'open');
+        setHubStatus(`${model.name} is filled in below. Press Save Changes to start thinking with it.`, 'good');
+    }
+
+    async function hubRefreshDownloads() {
+        const box = document.getElementById('hub-downloads');
+        if (!box) return [];
+        const data = await fetchDownloadStatus().catch(() => null);
+        const list = (data && data.downloads) || [];
+        box.innerHTML = '';
+        for (const download of list) box.appendChild(renderDownloadRow(download, null));
+
+        const running = list.filter(d => d.phase !== 'done' && d.phase !== 'failed');
+        if (!running.length && hub.pollTimer) {
+            clearInterval(hub.pollTimer);
+            hub.pollTimer = null;
+            // Something landed, so what is installed has changed -- which is the one thing
+            // on this panel a download can change.
+            if (list.some(d => d.phase === 'done')) refreshModelHub({ quiet: true });
+        }
+        return list;
+    }
+
+    async function hubDownload(model, button) {
+        voiceEngine.playSFX('click');
+        button.disabled = true;
+        setHubStatus(`Starting the download of ${model.name}...`, 'busy');
+        try {
+            const endpoint = hub.endpoint || '';
+            const modelName = model.name;
+            const data = IS_TAURI
+                ? await tauriInvoke('start_download_rust', { modelName, endpoint })
+                : await (await apiFetch(
+                    `/api/setup/download?model_name=${encodeURIComponent(modelName)}&endpoint=${encodeURIComponent(endpoint)}`,
+                    { method: 'POST' }
+                )).json();
+            if (!data.ok) {
+                setHubStatus(`⚠ ${data.message}`, 'bad');
+                button.disabled = false;
+                return;
+            }
+            setHubStatus(`Downloading ${modelName}. You can leave this open — the bar below is live, `
+                + 'and the download carries on either way.', 'busy');
+            await hubRefreshDownloads();
+            if (!hub.pollTimer) hub.pollTimer = setInterval(() => { hubRefreshDownloads(); }, 1000);
+        } catch (e) {
+            setHubStatus(`⚠ ${e.message || e}`, 'bad');
+            button.disabled = false;
+        }
+    }
+
+    /* One probe of each catalogue, drawn into the whole panel. Both are cheap and both
+       scan the machine, so they go together rather than one per tab. */
+    async function refreshModelHub(options = {}) {
+        if (!document.getElementById('hub-list') || hub.loading) return;
+        hub.loading = true;
+        if (!options.quiet) renderHubDetail();
+        try {
+            const [setup, code] = await Promise.all([
+                fetchSetupAdvice().catch(() => null),
+                fetchCodeAdvice().catch(() => null),
+            ]);
+            hub.models = hubMergeCatalogues(setup, code);
+            hub.installed = (setup && setup.installed_models) || [];
+            hub.endpoint = (setup && setup.endpoint) || '';
+            hub.provider = (setup && setup.provider) || '';
+            hub.canInstall = !!(setup && setup.can_install_from_here);
+            hub.sizedAgainst = (code && code.sized_against) || '';
+            hub.loaded = true;
+        } finally {
+            hub.loading = false;
+        }
+        renderHubChips();
+        renderHubList();
+        renderHubDetail();
+        hubRefreshDownloads();
+    }
+
+    function initModelHub() {
+        const search = document.getElementById('hub-search');
+        if (!search) return;
+        search.addEventListener('input', () => {
+            hub.search = search.value;
+            renderHubList();
+            renderHubDetail();
+        });
+        for (const tab of document.querySelectorAll('[data-hub-tab]')) {
+            tab.addEventListener('click', () => {
+                hub.tab = tab.dataset.hubTab;
+                document.querySelectorAll('[data-hub-tab]').forEach(other => {
+                    other.classList.toggle('is-active', other === tab);
+                });
+                hub.selected = null;
+                renderHubList();
+                renderHubDetail();
+            });
+        }
+        const bind = (id, key) => {
+            const el = document.getElementById(id);
+            el?.addEventListener('change', () => {
+                hub[key] = el.value;
+                renderHubList();
+                renderHubDetail();
+            });
+        };
+        bind('hub-filter-purpose', 'purpose');
+        bind('hub-filter-fit', 'fit');
+        bind('hub-sort', 'sort');
+        document.getElementById('hub-refresh')?.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            refreshModelHub();
+        });
+    }
+
     /* The missing-brain notice. Deliberately the loudest thing on the page: an app with
        no model behind it is not "mostly working", and a quiet grey line saying so is the
        reason someone spends an evening wondering why the answers are so bad. */
@@ -4804,29 +5638,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function handlePullLlama() {
-        const modelName = selectLocalModel ? selectLocalModel.value : 'llama3.2:1b';
-        const modelLabel = selectLocalModel ? selectLocalModel.options[selectLocalModel.selectedIndex].text : modelName;
-        if (!confirm(`Install ${modelLabel} via Ollama? (Requires Ollama running)`)) return;
-        voiceEngine.playSFX('click');
-        if (scannerResultsBox) {
-            scannerResultsBox.innerHTML = `<div class="text-cyan-300 animate-pulse">Requesting Ollama to pull ${modelName}...</div>`;
-        }
-
-        try {
-            const data = IS_TAURI
-                ? await tauriInvoke('pull_model_rust', { modelName })
-                : await (async () => {
-                    const resp = await apiFetch(`/api/scanner/pull-model?model_name=${encodeURIComponent(modelName)}`, { method: 'POST' });
-                    return resp.json();
-                })();
-            if (scannerResultsBox) {
-                scannerResultsBox.innerHTML = `<div class="${data.status === 'error' ? 'text-red-400' : 'text-green-400'}">${data.message}</div>`;
-            }
-        } catch (e) {
-            alert(`Install error: ${e.message || e}`);
-        }
-    }
 
     // Version & Updates -- mirrors the taskbar tray icon's "Check for Updates" /
     // "Update Available" flow, but in the HUD itself. Real self-updating (git pull +
@@ -5586,6 +6397,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /* Fetched once and reused: the catalogue depends on nothing but the build, so re-fetching
        it every time Settings opens would be a round trip to learn the same nine rows. */
+    /* The catalogue rows themselves, not just the <option>s built from them. Settings'
+       avatar browser needs a persona's speciality, access and voice beside its avatar, and
+       re-reading them off the dropdown's dataset would mean every field the browser wants
+       has to be smuggled through an attribute first. */
     let personaCataloguePromise = null;
     function ensurePersonaCatalogue() {
         if (!personaCataloguePromise) personaCataloguePromise = loadPersonaCatalogue();
@@ -5748,6 +6563,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (!Array.isArray(personas) || personas.length === 0) return;
+        personaRows = new Map(personas.map((p) => [p.key, p]));
+        refreshAvatarBrowser();
 
         const chosen = select.value;
         select.innerHTML = '';
@@ -6714,6 +7531,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // the configured endpoint, and that field has to be filled in before it looks.
         loadSettings().then(handleScanSystem);
         refreshBrainStatus();
+        refreshModelHub();
         // Chosen on open rather than at startup: the platform-dependent sections are
         // revealed during init, and a remembered choice may be one of them.
         restoreSettingsSection();
@@ -6792,10 +7610,6 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-model').value = e.target.value;
         });
     }
-
-    btnPullLlama.addEventListener('click', () => {
-        handlePullLlama();
-    });
 
     if (versionBadge) {
         versionBadge.addEventListener('click', () => handleCheckForUpdate());
@@ -6955,6 +7769,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadChatHistory().then(refreshPendingApprovals).then(announceIfNoBrain);
     connectTelemetry();
     initVersionAndUpdates();
+    initModelHub();
     initSpriteMode();
     initStartupPerformance();
     initSoloPanel();

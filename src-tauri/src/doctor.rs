@@ -577,7 +577,7 @@ fn wanted_downloads(
         if !have {
             // The wizard's own catalogue knows this one's size; a model from outside it gets
             // the middle of the range rather than a number invented per call.
-            let size = crate::setup::models_for(ram_total_gb)
+            let size = crate::setup::models_for(ram_total_gb, None)
                 .iter()
                 .find(|choice| choice.name.split(':').next() == model.split(':').next())
                 .and_then(|choice| parse_gb(&choice.download))

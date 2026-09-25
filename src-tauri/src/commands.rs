@@ -134,8 +134,13 @@ pub fn setup_advice(engine: &LlmEngine) -> Value {
     let model = engine.db().get_setting_string("llm_model", "");
     let configured = provider != "offline" && !model.trim().is_empty();
 
-    serde_json::to_value(crate::setup::advise(&scan, ram_total_gb, configured))
-        .unwrap_or_else(|_| serde_json::json!({}))
+    serde_json::to_value(crate::setup::advise(
+        &scan,
+        ram_total_gb,
+        crate::gpu::cached(),
+        configured,
+    ))
+    .unwrap_or_else(|_| serde_json::json!({}))
 }
 
 /// Starts a model download and returns immediately with its first state.

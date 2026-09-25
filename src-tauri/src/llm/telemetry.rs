@@ -197,7 +197,13 @@ impl Telemetry {
     /// from the same place, so they cannot disagree.
     pub fn to_wire_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "cpu": { "total_percent": round_to(self.cpu_percent as f64, 1) },
+            // The core count is a constant, sent every tick with the load because the hub
+            // prints it as part of "what this machine has" and a second probe for a number
+            // that cannot change would be a process spawned to learn nothing.
+            "cpu": {
+                "total_percent": round_to(self.cpu_percent as f64, 1),
+                "cores": self.cpu_cores_logical,
+            },
             "ram": {
                 "percent": round_to(self.ram_percent as f64, 1),
                 "used_gb": round_to(self.ram_used_gb, 2),
