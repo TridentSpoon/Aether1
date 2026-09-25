@@ -459,9 +459,9 @@ pub fn observe(engine: &LlmEngine, facts: &Facts) -> Observation {
             wanted,
         },
         update: UpdateProbe {
-            implemented: false,
-            signed_in: None,
-            declined: false,
+            implemented: true,
+            signed_in: Some(crate::github_auth::signed_in()),
+            declined: db.get_setting_bool(crate::github_auth::DECLINED_SETTING, false),
         },
     }
 }

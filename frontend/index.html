@@ -1629,20 +1629,44 @@
                         </div>
 
                         <div id="update-status-box" class="text-xs font-mono text-slate-300 bg-slate-900/80 p-2.5 rounded border border-cyan-500/20 space-y-1">
-                            <div>Press Check for Updates to compare this build against the latest commit on GitHub.</div>
+                            <div>Press Check for Updates to compare this copy against what has been released.</div>
+                        </div>
+
+                        <!-- The device flow, drawn where it happens. The code is typed in at
+                             github.com and nowhere else: AETHER1 never asks for a password, and an
+                             app that did would be asking for the wrong thing. Shown only while a
+                             sign-in is in progress -- see handleSignIn() in app.js. -->
+                        <div id="github-signin-box" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-400/40 space-y-2">
+                            <div class="text-cyan-300">Open <a id="github-signin-link" href="#" target="_blank" rel="noreferrer" class="underline text-cyan-200">github.com/login/device</a> and enter this code:</div>
+                            <div id="github-signin-code" class="text-lg tracking-[0.3em] text-green-400 select-all">----&#8209;----</div>
+                            <div id="github-signin-hint" class="text-[11px] text-slate-500">Waiting for you to approve it. This window can stay open.</div>
                         </div>
 
                         <div class="flex items-center justify-between gap-2 flex-wrap">
-                            <span class="text-[11px] font-mono text-slate-500">Checks GitHub directly -- a real comparison, not a cached guess.</span>
+                            <span id="update-mode-note" class="text-[11px] font-mono text-slate-500">Checks GitHub directly -- a real comparison, not a cached guess.</span>
                             <div class="flex gap-2 flex-wrap">
                                 <button id="btn-check-update" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
                                     🔄 Check for Updates
                                 </button>
-                                <!-- Shown only on Windows, only when the update check fails for lack of
-                                     `gh` credentials -- see needs_gh_auth in main.rs and
-                                     handleCheckForUpdate() in app.js. -->
-                                <button id="btn-install-gh" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">
-                                    📦 Install gh via winget
+                                <!-- Shown when the check needs a signed-in GitHub account and there
+                                     isn't one. AETHER1's releases are on a private repository, so
+                                     the person asking has to be somebody the owner let in. -->
+                                <button id="btn-github-signin" class="hidden cyber-btn text-xs py-1 px-3 text-cyan-300 border-cyan-400 whitespace-nowrap">
+                                    🔑 Sign in to GitHub
+                                </button>
+                                <!-- Beside it, and equally weighted: declining leaves a working
+                                     companion, and is remembered so nothing asks again. -->
+                                <button id="btn-github-decline" class="hidden cyber-btn text-xs py-1 px-3 text-slate-400 whitespace-nowrap">
+                                    Not now, and stop asking
+                                </button>
+                                <button id="btn-github-signout" class="hidden cyber-btn text-xs py-1 px-3 text-slate-400 whitespace-nowrap">
+                                    Sign out
+                                </button>
+                                <!-- Installed copies download a signed bundle; a git checkout pulls
+                                     and rebuilds. Two buttons rather than one, because they are not
+                                     the same act and only one of them ends with the app restarting. -->
+                                <button id="btn-download-update" class="hidden cyber-btn text-xs py-1 px-3 text-green-400 border-green-400 whitespace-nowrap">
+                                    ⬇ Download It
                                 </button>
                                 <button id="btn-apply-update" class="hidden cyber-btn text-xs py-1 px-3 text-green-400 border-green-400 whitespace-nowrap">
                                     ⬆ Update Now

@@ -143,7 +143,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const settingsVersionLabel = document.getElementById('settings-version-label');
     const updateStatusBox = document.getElementById('update-status-box');
     const btnCheckUpdate = document.getElementById('btn-check-update');
-    const btnInstallGh = document.getElementById('btn-install-gh');
+    const btnGithubSignIn = document.getElementById('btn-github-signin');
+    const btnGithubDecline = document.getElementById('btn-github-decline');
+    const btnGithubSignOut = document.getElementById('btn-github-signout');
+    const btnDownloadUpdate = document.getElementById('btn-download-update');
     const btnApplyUpdate = document.getElementById('btn-apply-update');
 
     // Hardware Telemetry Elements
@@ -4555,46 +4558,108 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Win32/Win64/WinCE cover every real Windows UA; navigator.platform is deprecated but
-    // still present in the WebView2 shell this app actually runs in, and this only decides
-    // whether to show a button, not anything security-relevant.
-    function isWindows() {
-        return /^Win/.test(navigator.platform || '') || /Windows/.test(navigator.userAgent || '');
+    // The polling loop for a sign-in in progress, so a second click cannot start a second one
+    // and closing the panel does not leave one running forever.
+    let githubSignInPoll = null;
+
+    function stopSignInPoll() {
+        if (githubSignInPoll) {
+            clearInterval(githubSignInPoll);
+            githubSignInPoll = null;
+        }
+    }
+
+    // Every button in this section is hidden before each render, so a state left over from the
+    // previous check cannot offer something the current one does not support -- the shape of bug
+    // that leaves a Download button on a copy with nothing to download.
+    function resetUpdateButtons() {
+        [btnApplyUpdate, btnDownloadUpdate, btnGithubSignIn, btnGithubDecline, btnGithubSignOut]
+            .forEach((btn) => btn && btn.classList.add('hidden'));
     }
 
     async function handleCheckForUpdate() {
         if (versionBadge) versionBadge.classList.add('animate-pulse');
         if (updateStatusBox) {
-            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Checking GitHub for the latest commit on main...</div>';
+            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Checking GitHub...</div>';
         }
-        if (btnApplyUpdate) btnApplyUpdate.classList.add('hidden');
-        if (btnInstallGh) btnInstallGh.classList.add('hidden');
+        resetUpdateButtons();
 
         try {
             const status = await tauriInvoke('check_for_update_rust');
             if (settingsVersionLabel) settingsVersionLabel.textContent = `${status.version} (${status.built_commit_short})`;
+            // Which of the two update mechanisms this copy is on, said rather than left to be
+            // inferred from which buttons appeared.
+            const modeNote = document.getElementById('update-mode-note');
+            if (modeNote) {
+                modeNote.textContent = status.mode === 'Checkout'
+                    ? 'This is a git checkout: its update is a pull and a rebuild.'
+                    : 'Installed copy: its update is a signed bundle from the project’s releases.';
+            }
+            if (status.signed_in && btnGithubSignOut) btnGithubSignOut.classList.remove('hidden');
+            // A token in a file rather than the keychain is worth knowing about, not glossing
+            // over -- it happens on a machine with no keychain service running.
+            const storageNote = status.signed_in && status.token_storage === 'File'
+                ? '<div class="text-[11px] text-slate-500">This machine has no keychain service running, so the sign-in is kept in a file only you can read.</div>'
+                : '';
 
             if (!status.checked) {
                 if (updateStatusBox) {
-                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⚠ Could not check for updates: ${status.error || 'unknown error'}</div>`;
+                    // Declining is not a failure, so it is not drawn as one.
+                    updateStatusBox.innerHTML = status.declined
+                        ? `<div class="text-slate-400">${status.error || 'Updates are not being checked for.'}</div>`
+                        : `<div class="text-yellow-400">⚠ ${status.error || 'Could not check for updates.'}</div>${storageNote}`;
                 }
                 if (versionBadge) versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
-                if (btnInstallGh) btnInstallGh.classList.toggle('hidden', !(status.needs_gh_auth && isWindows()));
+                if (status.needs_sign_in && status.sign_in_available) {
+                    if (btnGithubSignIn) btnGithubSignIn.classList.remove('hidden');
+                    if (btnGithubDecline) btnGithubDecline.classList.remove('hidden');
+                }
+                // Somebody who declined and came back to this panel gets the offer again -- the
+                // answer is remembered so nothing nags, not so it can never be changed.
+                if (status.declined && status.sign_in_available && btnGithubSignIn) {
+                    btnGithubSignIn.classList.remove('hidden');
+                }
                 return;
             }
 
             if (status.up_to_date) {
+                const against = status.latest_tag
+                    ? `up to date with ${status.latest_tag}`
+                    : `up to date (build ${status.built_commit_short})`;
                 if (updateStatusBox) {
-                    updateStatusBox.innerHTML = `<div class="text-green-400">✔ Up to date -- ${status.version} (build ${status.built_commit_short})</div>`;
+                    updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${status.version} -- ${against}</div>${storageNote}`;
                 }
                 if (versionBadge) {
                     versionBadge.classList.remove('border-yellow-500/50', 'text-yellow-400');
                     versionBadge.classList.add('border-green-500/50', 'text-green-400');
                 }
+            } else if (status.latest_tag) {
+                const size = status.asset_size
+                    ? ` (${(status.asset_size / 1e9).toFixed(1)} GB)`
+                    : '';
+                const lines = [`<div class="text-yellow-400">⬆ ${status.latest_tag} is out; you are running ${status.version}.</div>`];
+                if (status.release_url) {
+                    lines.push(`<div class="text-[11px]"><a href="${status.release_url}" target="_blank" rel="noreferrer" class="underline text-cyan-300">What changed</a></div>`);
+                }
+                if (!status.asset_name) {
+                    lines.push('<div class="text-[11px] text-slate-500">That release has no bundle for this platform attached to it.</div>');
+                } else if (!status.asset_signed) {
+                    // Refused up front rather than at the end of a half-gigabyte download: a
+                    // bundle nothing can check is not offered at all.
+                    lines.push('<div class="text-[11px] text-yellow-400">It has no signature attached, so there is no way to tell it is the one the project built. Not offering it.</div>');
+                } else {
+                    lines.push(`<div class="text-[11px] text-slate-500">Downloading ${status.asset_name}${size} checks its signature and stops there. Installing it is your own last step.</div>`);
+                    if (btnDownloadUpdate) btnDownloadUpdate.classList.remove('hidden');
+                }
+                if (updateStatusBox) updateStatusBox.innerHTML = lines.join('') + storageNote;
+                if (versionBadge) {
+                    versionBadge.classList.remove('border-green-500/50', 'text-green-400');
+                    versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
+                }
             } else {
                 const latestShort = status.latest_commit ? status.latest_commit.slice(0, 7) : 'unknown';
                 if (updateStatusBox) {
-                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>`;
+                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>${storageNote}`;
                 }
                 if (versionBadge) {
                     versionBadge.classList.remove('border-green-500/50', 'text-green-400');
@@ -4611,26 +4676,124 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function handleInstallGh() {
+    // The device flow, from this side: ask for a code, show it, and poll. The polling happens
+    // here rather than in a Rust call that blocks for the fifteen minutes a code stays valid --
+    // a window that cannot be closed while somebody is deciding is worse than a timer.
+    async function handleSignIn() {
         voiceEngine.playSFX('click');
-        if (btnInstallGh) btnInstallGh.disabled = true;
-        if (btnCheckUpdate) btnCheckUpdate.disabled = true;
-        if (updateStatusBox) {
-            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Installing gh via winget -- this can take a minute...</div>';
-        }
+        stopSignInPoll();
+        const box = document.getElementById('github-signin-box');
+        const codeEl = document.getElementById('github-signin-code');
+        const linkEl = document.getElementById('github-signin-link');
+        const hintEl = document.getElementById('github-signin-hint');
+        if (btnGithubSignIn) btnGithubSignIn.disabled = true;
 
         try {
-            const message = await tauriInvoke('install_gh_via_winget_rust');
-            if (updateStatusBox) {
-                updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${message}</div>`;
+            const code = await tauriInvoke('github_sign_in_start_rust');
+            if (codeEl) codeEl.textContent = code.user_code;
+            if (linkEl) {
+                linkEl.href = code.verification_uri;
+                linkEl.textContent = code.verification_uri.replace(/^https?:\/\//, '');
             }
-            if (btnInstallGh) btnInstallGh.classList.add('hidden');
+            if (hintEl) hintEl.textContent = 'Waiting for you to approve it. This window can stay open.';
+            if (box) box.classList.remove('hidden');
+
+            const deadline = Date.now() + code.expires_in * 1000;
+            githubSignInPoll = setInterval(async () => {
+                if (Date.now() > deadline) {
+                    stopSignInPoll();
+                    if (hintEl) hintEl.textContent = 'That code expired. Press Sign in to GitHub again for a new one.';
+                    if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+                    return;
+                }
+                try {
+                    const result = await tauriInvoke('github_sign_in_poll_rust', { deviceCode: code.device_code });
+                    if (!result.signed_in) return;
+                    stopSignInPoll();
+                    if (box) box.classList.add('hidden');
+                    if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+                    // Straight into the check that was blocked on this, rather than making the
+                    // operator press the button they already pressed.
+                    handleCheckForUpdate();
+                } catch (e) {
+                    stopSignInPoll();
+                    if (hintEl) hintEl.textContent = `${e.message || e}`;
+                    if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+                }
+            }, Math.max(code.interval, 1) * 1000);
+        } catch (e) {
+            if (box) box.classList.add('hidden');
+            if (updateStatusBox) {
+                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ ${e.message || e}</div>`;
+            }
+            if (btnGithubSignIn) btnGithubSignIn.disabled = false;
+        }
+    }
+
+    async function handleDeclineUpdates() {
+        voiceEngine.playSFX('click');
+        stopSignInPoll();
+        document.getElementById('github-signin-box')?.classList.add('hidden');
+        try {
+            await tauriInvoke('github_decline_updates_rust', { declined: true });
+        } catch (e) {
+            console.warn('[AETHER1] Could not remember that answer:', e);
+        }
+        handleCheckForUpdate();
+    }
+
+    async function handleSignOut() {
+        voiceEngine.playSFX('click');
+        stopSignInPoll();
+        try {
+            await tauriInvoke('github_sign_out_rust');
+        } catch (e) {
+            console.warn('[AETHER1] Sign out failed:', e);
+        }
+        handleCheckForUpdate();
+    }
+
+    // Downloads and verifies; installs nothing. The progress bar is the point of doing it here
+    // rather than telling somebody to run a command: half a gigabyte with no visible progress is
+    // indistinguishable from a hang.
+    async function handleDownloadUpdate() {
+        voiceEngine.playSFX('click');
+        if (btnDownloadUpdate) btnDownloadUpdate.disabled = true;
+        if (btnCheckUpdate) btnCheckUpdate.disabled = true;
+        const render = (text) => {
+            if (updateStatusBox) updateStatusBox.innerHTML = `<div class="text-cyan-300">${text}</div>`;
+        };
+        render('Starting the download...');
+
+        let unlisten = null;
+        try {
+            if (window.__TAURI__?.event?.listen) {
+                unlisten = await window.__TAURI__.event.listen('update-download-progress', (event) => {
+                    const { done = 0, total = 0 } = event.payload || {};
+                    const pct = total ? Math.floor((done / total) * 100) : 0;
+                    render(`Downloading -- ${pct}% of ${(total / 1e9).toFixed(1)} GB`);
+                });
+            }
+            const result = await tauriInvoke('download_update_rust');
+            if (updateStatusBox) {
+                updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${result.tag} downloaded, and its signature checks out.</div>`
+                    + `<div class="text-[11px] text-slate-400 select-all">${result.path}</div>`
+                    + '<div class="text-[11px] text-slate-500">Run it when you are ready -- AETHER1 does not install it for you.</div>';
+            }
+            // The folder, not the path: a location read off a panel is a location typed out by
+            // hand.
+            try {
+                await tauriInvoke('reveal_update_download_rust');
+            } catch (e) {
+                console.warn('[AETHER1] Could not open the downloads folder:', e);
+            }
         } catch (e) {
             if (updateStatusBox) {
-                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ Could not install gh: ${e.message || e}</div>`;
+                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ ${e.message || e}</div>`;
             }
         } finally {
-            if (btnInstallGh) btnInstallGh.disabled = false;
+            if (unlisten) unlisten();
+            if (btnDownloadUpdate) btnDownloadUpdate.disabled = false;
             if (btnCheckUpdate) btnCheckUpdate.disabled = false;
         }
     }
@@ -6112,8 +6275,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnCheckUpdate) {
         btnCheckUpdate.addEventListener('click', () => handleCheckForUpdate());
     }
-    if (btnInstallGh) {
-        btnInstallGh.addEventListener('click', () => handleInstallGh());
+    if (btnGithubSignIn) {
+        btnGithubSignIn.addEventListener('click', () => handleSignIn());
+    }
+    if (btnGithubDecline) {
+        btnGithubDecline.addEventListener('click', () => handleDeclineUpdates());
+    }
+    if (btnGithubSignOut) {
+        btnGithubSignOut.addEventListener('click', () => handleSignOut());
+    }
+    if (btnDownloadUpdate) {
+        btnDownloadUpdate.addEventListener('click', () => handleDownloadUpdate());
     }
     if (btnApplyUpdate) {
         btnApplyUpdate.addEventListener('click', () => handleApplyUpdate());

@@ -2296,7 +2296,7 @@ recoverable -- TLS and rate limiting stop a stranger getting in, and per-device 
 how you get a device *out* once it is lost. Item 4 is the one that can still wait: it is
 rigour on a path that is no longer broken.
 
-### Step 46: updating a copy that was installed rather than cloned
+### Step 46: updating a copy that was installed rather than cloned -- **shipped**
 
 **The updater that exists today only works for the developer.** `main.rs` asks
 `api.github.com` for the latest commit on `main`, and `perform_update_core` runs
@@ -2411,6 +2411,40 @@ Signing still matters and is still item 2. Authentication proves who may downloa
 signature proves what was downloaded. A token that is stolen, a release asset replaced, or a
 copy passed hand to hand on a USB stick are all cases where the second question is the one
 that counts.
+
+**What shipped.** All seven items, as described.
+`src-tauri/src/github_auth.rs` is the device flow: `github.com/login/device/code`, then the
+token endpoint polled until the person approves, with `authorization_pending`, `slow_down`,
+`expired_token`, `access_denied` and `device_flow_disabled` each translated into something
+actionable rather than passed through. The client ID and the minisign public key are compiled
+in by `build.rs` from `AETHER1_GITHUB_CLIENT_ID` and `AETHER1_MINISIGN_PUBLIC_KEY`, both
+repository *variables* rather than secrets because neither authorises anything and a masked
+value is harder to notice being wrong; a build without them runs and says plainly that it
+cannot check. The token goes to the OS keychain via `keyring`, falling back to a 0600 file on a
+machine with no Secret Service -- and saying which, because a file is not a keychain.
+
+`src-tauri/src/releases.rs` is the other half: `releases::mode()` reports `Checkout` or
+`Release` from the presence of `.git`, which is item 4 and is shown in the HUD rather than
+inferred; `/repos/{o}/{r}/releases/latest` with the signed-in token is item 3; the asset is
+fetched from `/releases/assets/{id}` with `Accept: application/octet-stream`, because a private
+repository's `browser_download_url` redirects somewhere the token cannot follow. Item 2 is
+minisign: `publish-release` in `release.yml` signs all three bundles with `-H` (prehashed, which
+is required -- the client verifies while streaming the download to disk rather than reading half
+a gigabyte back) and attaches the `.minisig` files, then verifies them against the same public
+key that is compiled into the binaries. A bundle with no signature is never offered; one whose
+signature fails is deleted rather than left where somebody would find it and run it. Item 5 is
+held to: the download ends at a verified file and opens the folder, and nothing installs itself
+from either the tray or the HUD. Item 7 is the `github_signin_declined` setting -- *Not now, and
+stop asking* is remembered, the check stops running, the tray says so, and `doctor` reads it as
+Ok rather than as degraded.
+
+`aether1 signin`, `signout`, `update`, `update download` and `verify <file>` are the terminal
+half; `verify` is for a bundle that arrived by hand, which is the case the signature exists for
+and authentication cannot help with. The `gh auth token` path is kept as a silent convenience
+on a machine that has it, no longer as the mechanism -- nothing tells anyone to install `gh`
+any more, and the winget button that used to offer it is gone.
+
+**Still unbuilt: `tauri-plugin-updater`, deliberately, for the reason given above.**
 
 ### Step 47: diagnostics that fixes things, and a fix that has to prove itself -- **shipped, rungs 0 and 1**
 

@@ -45,6 +45,8 @@ base64 = "0.22"
 rcgen = { version = "0.14.10", default-features = false, features = ["pem", "ring"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 getrandom = "0.3"
+minisign-verify = "0.3"
+keyring = "4"
 
 [profile.release]
 panic = "abort"

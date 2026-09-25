@@ -27,6 +27,7 @@ mod commands;
 mod discovery;
 mod doctor;
 mod downloads;
+mod github_auth;
 mod gpu;
 mod hotkey;
 mod installs;
@@ -34,6 +35,7 @@ mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod releases;
 mod serve_auth;
 mod serve_tls;
 mod server;
@@ -65,6 +67,11 @@ use tauri::{Emitter, Manager};
 use llm::{LlmEngine, MemoryDb};
 
 const UPDATE_REPO: &str = "TridentSpoon/Aether1";
+
+/// What AETHER1 calls itself to GitHub. Required on every request: the API rejects a call
+/// with no User-Agent outright, which reads as a network failure rather than as a missing
+/// header.
+const USER_AGENT: &str = "AETHER1-desktop-app";
 const TRAY_ID: &str = "main-tray";
 const MAIN_LABEL: &str = "main";
 const SPRITE_LABEL: &str = "sprite";
@@ -125,64 +132,25 @@ fn short_hash(hash: &str) -> &str {
     &hash[..hash.len().min(7)]
 }
 
-/// AETHER1's GitHub repo is private, so an unauthenticated request 404s. Shell out to the
-/// `gh` CLI for a token if it's installed and already logged in (as it is on a dev machine
-/// that can push to this repo at all) -- there's no bundled/embedded credential. Returns
-/// None (not an error) if `gh` is missing or not authenticated; the caller just skips auth
-/// and lets the request fail normally.
-///
-/// This -- and perform_update's `git pull`, which relies the same way on whatever
-/// credentials this machine's `git` is already configured with (an SSH key with push
-/// access to this repo, in practice) -- is a private-repo-only interim measure. If this
-/// project ever goes public, both need replacing with a real public update mechanism (e.g.
-/// Tauri's signed-updater plugin against public release artifacts) that doesn't assume the
-/// end user has any credentials for this repo at all.
+/// The credential the update check uses. Was `gh auth token` and nothing else, which is a
+/// developer workflow rather than a product: it needs the GitHub CLI installed and logged in,
+/// and someone who installed a bundle has neither. Now it is whatever the operator signed in
+/// as (see github_auth), with `gh` kept only as a silent convenience on a machine that
+/// happens to have it. Nothing tells anyone to install `gh` any more.
 fn github_token() -> Option<String> {
-    let output = Command::new("gh").args(["auth", "token"]).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token)
-    }
+    github_auth::token_for_requests()
 }
 
-/// Distinguishes "no `gh` credentials" from every other way the update check can fail, so
-/// the frontend can offer a fix for this one specifically (an Install via winget button on
-/// Windows) instead of only ever displaying prose. Kept as its own type rather than matching
-/// on the rendered message string, which would silently break the moment either wording
-/// changed.
-enum UpdateCheckError {
-    NoGithubAuth,
-    Other(String),
-}
-
-impl UpdateCheckError {
-    fn message(&self) -> String {
-        match self {
-            UpdateCheckError::NoGithubAuth => {
-                "this repo is private and no GitHub credentials were found on this machine -- \
-                 install the `gh` CLI and run `gh auth login`, then try again"
-                    .to_string()
-            }
-            UpdateCheckError::Other(e) => e.clone(),
-        }
-    }
-}
-
-/// Blocking GET against GitHub's REST API for the latest commit on `main`. Always call
-/// this off the main thread -- it can take up to the timeout below if the network is slow
-/// or absent, and must never hold up the tray or the window.
-fn fetch_latest_main_sha() -> Result<String, UpdateCheckError> {
+/// Blocking GET against GitHub's REST API for the latest commit on `main` -- the developer
+/// path's comparison, used only where a `.git` directory is present (see releases::Mode).
+/// Always call this off the main thread.
+fn fetch_latest_main_sha() -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/commits/main");
     let mut request = ureq::get(&url)
         .config()
         .timeout_global(Some(Duration::from_secs(8)))
         .build()
-        .header("User-Agent", "AETHER1-desktop-app")
+        .header("User-Agent", USER_AGENT)
         .header("Accept", "application/vnd.github+json");
 
     let token = github_token();
@@ -193,14 +161,12 @@ fn fetch_latest_main_sha() -> Result<String, UpdateCheckError> {
 
     let response = request.call().map_err(|e| {
         // A private repo 404s on an unauthenticated request -- indistinguishable from a
-        // genuinely missing repo, but far more likely given how this project is set up
-        // (see github_token's docs), and "http status: 404" on its own reads as a bug
-        // report waiting to happen rather than the expected result of not being logged
-        // into `gh` on this machine.
+        // genuinely missing repo, and "http status: 404" on its own reads as a bug report
+        // waiting to happen rather than as the expected result of not being signed in.
         if !have_token && matches!(e, ureq::Error::StatusCode(404)) {
-            UpdateCheckError::NoGithubAuth
+            releases::ReleaseError::NotSignedIn.message()
         } else {
-            UpdateCheckError::Other(e.to_string())
+            e.to_string()
         }
     })?;
 
@@ -208,13 +174,16 @@ fn fetch_latest_main_sha() -> Result<String, UpdateCheckError> {
         .into_body()
         .read_json::<GhCommit>()
         .map(|c| c.sha)
-        .map_err(|e| UpdateCheckError::Other(e.to_string()))
+        .map_err(|e| e.to_string())
 }
 
-/// Result of comparing this build against the latest commit on `main` -- the shared shape
-/// returned to the frontend (see check_for_update_rust) and used internally by the tray's
-/// run_update_check to decide what to show. `checked` is false when the comparison itself
-/// couldn't complete (see `error`); `up_to_date` is only meaningful when `checked` is true.
+/// Result of comparing this build against whatever it should be compared against -- the tip
+/// of `main` in a checkout, the latest published release in an installed copy. The shared
+/// shape returned to the frontend (see check_for_update_rust) and used internally by the
+/// tray's run_update_check.
+///
+/// `checked` is false when the comparison itself couldn't complete (see `error`);
+/// `up_to_date` is only meaningful when `checked` is true.
 #[derive(serde::Serialize)]
 struct UpdateStatus {
     checked: bool,
@@ -224,9 +193,32 @@ struct UpdateStatus {
     built_commit_short: String,
     latest_commit: Option<String>,
     error: Option<String>,
-    /// True only for the specific "no `gh` credentials" failure -- the frontend uses this,
-    /// not the error text, to decide whether to offer the Windows winget install button.
-    needs_gh_auth: bool,
+    /// Which of the two update mechanisms this copy is on. Shown rather than inferred: the
+    /// two fail in completely different ways, and "the update failed" is not a bug report
+    /// until you know which one was running.
+    mode: releases::Mode,
+    /// Release mode: the tag of the latest published release, and where to read about it.
+    latest_tag: Option<String>,
+    release_url: Option<String>,
+    /// Release mode: the bundle for this platform, its size in bytes, and whether a signature
+    /// was attached to it. An unsigned bundle is never offered for download.
+    asset_name: Option<String>,
+    asset_size: Option<u64>,
+    asset_signed: bool,
+    /// Whether a token is held at all -- the sign-in, or `gh` standing in for it.
+    signed_in: bool,
+    /// False in a build with no GitHub App compiled into it, where offering a Sign in button
+    /// would be offering something that cannot work.
+    sign_in_available: bool,
+    /// The one failure with an obvious next step, which is why the HUD reads this rather than
+    /// the error text.
+    needs_sign_in: bool,
+    /// The sign-in was offered once and turned down, and that answer is being kept.
+    declined: bool,
+    /// Which store the token is actually in. Reported rather than assumed: on a machine with
+    /// no Secret Service running the token is in a 0600 file, and a file is not a keychain
+    /// however convenient it would be to call it one.
+    token_storage: github_auth::Storage,
 }
 
 /// Whether this install is in local-only mode. Read through the managed engine so the
@@ -242,28 +234,20 @@ fn local_only_enabled<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
             .unwrap_or(false)
 }
 
-/// Does the actual comparison: this build's baked-in commit (BUILT_COMMIT / build.rs)
-/// against the latest commit on `main` via the GitHub API. Safe to call from any thread;
-/// never panics or blocks the caller beyond the network timeout in fetch_latest_main_sha.
-fn compute_update_status(local_only: bool) -> UpdateStatus {
-    // The update check was the last thing in Aether1 that reached the internet on its own,
-    // every single launch, whatever the operator had configured. It is a GitHub API call,
-    // so with local-only mode on it does not happen -- and says so, rather than reporting
-    // "up to date" from a comparison it never made.
-    if local_only {
-        return UpdateStatus {
-            checked: false,
-            up_to_date: false,
-            version: APP_VERSION.to_string(),
-            built_commit: BUILT_COMMIT.to_string(),
-            built_commit_short: short_hash(BUILT_COMMIT).to_string(),
-            latest_commit: None,
-            error: Some(local_only::refusal("GitHub was not contacted")),
-            needs_gh_auth: false,
-        };
-    }
+/// Whether the operator has already said no to signing in. Stored rather than inferred from
+/// "no token": a decision the next launch has forgotten is a prompt that never goes away.
+fn sign_in_declined<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    app.try_state::<LlmEngine>()
+        .map(|engine| {
+            engine
+                .db()
+                .get_setting_bool(github_auth::DECLINED_SETTING, false)
+        })
+        .unwrap_or(false)
+}
 
-    let base = UpdateStatus {
+fn base_status() -> UpdateStatus {
+    UpdateStatus {
         checked: false,
         up_to_date: false,
         version: APP_VERSION.to_string(),
@@ -271,13 +255,62 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
         built_commit_short: short_hash(BUILT_COMMIT).to_string(),
         latest_commit: None,
         error: None,
-        needs_gh_auth: false,
-    };
+        mode: releases::mode(),
+        latest_tag: None,
+        release_url: None,
+        asset_name: None,
+        asset_size: None,
+        asset_signed: false,
+        signed_in: github_auth::signed_in(),
+        sign_in_available: github_auth::configured(),
+        needs_sign_in: false,
+        declined: false,
+        token_storage: github_auth::storage_kind(),
+    }
+}
 
+/// Does the actual comparison. Safe to call from any thread; never panics or blocks the
+/// caller beyond the network timeouts in the two fetches it can make.
+fn compute_update_status(local_only: bool, declined: bool) -> UpdateStatus {
+    // The update check was the last thing in Aether1 that reached the internet on its own,
+    // every single launch, whatever the operator had configured. It is a GitHub API call,
+    // so with local-only mode on it does not happen -- and says so, rather than reporting
+    // "up to date" from a comparison it never made.
+    if local_only {
+        return UpdateStatus {
+            error: Some(local_only::refusal("GitHub was not contacted")),
+            ..base_status()
+        };
+    }
+
+    // Declining is not an error and it is not a degraded app. It is said once and then the
+    // check simply does not run, rather than nagging or failing every launch.
+    if declined {
+        return UpdateStatus {
+            declined: true,
+            error: Some(
+                "you chose not to sign in to GitHub, so new versions are not checked for -- \
+                 signing in from Settings is the only thing that changes that"
+                    .to_string(),
+            ),
+            ..base_status()
+        };
+    }
+
+    match releases::mode() {
+        releases::Mode::Checkout => compute_checkout_status(),
+        releases::Mode::Release => compute_release_status(),
+    }
+}
+
+/// The developer path: this build's baked-in commit against the tip of `main`. Unchanged in
+/// substance -- in a checkout, pull-and-rebuild is a better update than downloading half a
+/// gigabyte of your own work.
+fn compute_checkout_status() -> UpdateStatus {
     if BUILT_COMMIT == "unknown" {
         return UpdateStatus {
             error: Some("not built from a git checkout -- nothing to compare against".to_string()),
-            ..base
+            ..base_status()
         };
     }
 
@@ -286,12 +319,51 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
             checked: true,
             up_to_date: latest == BUILT_COMMIT,
             latest_commit: Some(latest),
-            ..base
+            ..base_status()
         },
         Err(e) => UpdateStatus {
-            needs_gh_auth: matches!(e, UpdateCheckError::NoGithubAuth),
+            needs_sign_in: !github_auth::signed_in(),
+            error: Some(e),
+            ..base_status()
+        },
+    }
+}
+
+/// The installed path: this build's version against the latest published release. A commit on
+/// `main` is not a release, and telling someone they are "behind" because a README was fixed
+/// is noise.
+fn compute_release_status() -> UpdateStatus {
+    match releases::latest(UPDATE_REPO, USER_AGENT) {
+        Ok(release) => {
+            let newer = releases::is_newer(APP_VERSION, &release.tag);
+            UpdateStatus {
+                // A tag that is not a version cannot be compared, so the check did not
+                // conclude -- shown as the tag itself rather than as a claim in either
+                // direction.
+                checked: newer.is_some(),
+                up_to_date: newer == Some(false),
+                error: newer.is_none().then(|| {
+                    format!(
+                        "the latest release is tagged {} , which is not a version this can \
+                         compare itself against",
+                        release.tag
+                    )
+                }),
+                latest_tag: Some(release.tag),
+                release_url: Some(release.html_url),
+                asset_name: release.asset.as_ref().map(|a| a.name.clone()),
+                asset_size: release.asset.as_ref().map(|a| a.size),
+                asset_signed: release
+                    .asset
+                    .as_ref()
+                    .is_some_and(|a| a.signature_id.is_some()),
+                ..base_status()
+            }
+        }
+        Err(e) => UpdateStatus {
+            needs_sign_in: matches!(e, releases::ReleaseError::NotSignedIn),
             error: Some(e.message()),
-            ..base
+            ..base_status()
         },
     }
 }
@@ -302,49 +374,131 @@ fn compute_update_status(local_only: bool) -> UpdateStatus {
 /// tray-only state (see run_update_check).
 #[tauri::command(async)]
 fn check_for_update_rust(app: tauri::AppHandle) -> UpdateStatus {
-    compute_update_status(local_only_enabled(&app))
+    compute_update_status(local_only_enabled(&app), sign_in_declined(&app))
 }
 
-/// Runs `winget install --id GitHub.cli` for the operator who hit `needs_gh_auth` above and
-/// clicked the resulting "Install via winget" button, so getting past that error doesn't
-/// require leaving the app to find a terminal. winget itself still needs the operator to
-/// have accepted its Store agreement at least once (Windows' own one-time step, not
-/// something this can do for them) -- a failure here says so via winget's own stderr rather
-/// than trying to paper over it.
+/// Step one of signing in: ask GitHub for a code and hand it straight back for the HUD to
+/// show. The person types it in at github.com, not here -- AETHER1 never sees a password, and
+/// it is not a thing an app should be asking for.
 #[tauri::command(async)]
-fn install_gh_via_winget_rust() -> Result<String, String> {
-    if !cfg!(target_os = "windows") {
-        return Err("winget is only available on Windows".to_string());
+fn github_sign_in_start_rust(app: tauri::AppHandle) -> Result<github_auth::DeviceCode, String> {
+    // Signing in is a network call to github.com like any other, so local-only mode stops it
+    // here rather than only hiding the button that starts it.
+    if local_only_enabled(&app) {
+        return Err(local_only::refusal("GitHub was not contacted"));
     }
-    let mut cmd = Command::new("winget");
-    cmd.args([
-        "install",
-        "--id",
-        "GitHub.cli",
-        "-e",
-        "--source",
-        "winget",
-        "--accept-package-agreements",
-        "--accept-source-agreements",
-    ]);
-    paths::suppress_console_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("could not run winget: {e}"))?;
-    if output.status.success() {
-        Ok(
-            "gh installed via winget. Run `gh auth login` in a terminal, then Check for \
-            Updates again."
-                .to_string(),
+    github_auth::start(USER_AGENT).map_err(|e| e.message())
+}
+
+/// Step two: one poll. The HUD drives the loop itself -- handing a thread over for the
+/// fifteen minutes a code stays valid would mean a window that cannot be closed while
+/// somebody is deciding.
+///
+/// `signed_in` false with no error is the normal answer for as long as the browser tab is
+/// open and nobody has pressed the button yet.
+#[tauri::command(async)]
+fn github_sign_in_poll_rust(
+    app: tauri::AppHandle,
+    device_code: String,
+) -> Result<serde_json::Value, String> {
+    if local_only_enabled(&app) {
+        return Err(local_only::refusal("GitHub was not contacted"));
+    }
+    match github_auth::poll_once(&device_code, USER_AGENT).map_err(|e| e.message())? {
+        Some(token) => {
+            let storage = github_auth::store_token(&token)?;
+            // Signing in answers the question the decline setting was remembering, so the
+            // "no" is cleared rather than left to suppress the checks of somebody who has
+            // since changed their mind.
+            if let Some(engine) = app.try_state::<LlmEngine>() {
+                let _ = engine
+                    .db()
+                    .set_setting(github_auth::DECLINED_SETTING, &serde_json::json!(false));
+            }
+            Ok(serde_json::json!({
+                "signed_in": true,
+                // Said out loud rather than assumed: on a machine with no Secret Service
+                // running -- a headless box, which is a real case here -- the token lands in
+                // a 0600 file instead, and that is worth knowing rather than glossing over.
+                "storage": storage,
+            }))
+        }
+        None => Ok(serde_json::json!({ "signed_in": false })),
+    }
+}
+
+/// Forget the token. Both stores, so signing out means the token is gone rather than gone
+/// from whichever one was asked about first.
+#[tauri::command(async)]
+fn github_sign_out_rust() -> bool {
+    github_auth::clear_token()
+}
+
+/// Remember that the sign-in was turned down. Not an error and not a degraded app: the check
+/// says so once, stops running, and nothing asks again unless the operator comes back to it.
+#[tauri::command(async)]
+fn github_decline_updates_rust(app: tauri::AppHandle, declined: bool) -> Result<(), String> {
+    let engine = app
+        .try_state::<LlmEngine>()
+        .ok_or_else(|| "settings are not open yet".to_string())?;
+    engine
+        .db()
+        .set_setting(github_auth::DECLINED_SETTING, &serde_json::json!(declined))
+        .map_err(|e| format!("could not remember that answer: {e}"))
+}
+
+/// The body of the download, shared by the tray's click and the HUD's command so the two cannot
+/// drift into disagreeing about what an update is. Blocking, for as long as half a gigabyte
+/// takes; returns the verified file and the tag it came from.
+fn download_update_to_disk<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(PathBuf, String), String> {
+    if local_only_enabled(app) {
+        return Err(local_only::refusal("nothing was downloaded"));
+    }
+    let release = releases::latest(UPDATE_REPO, USER_AGENT).map_err(|e| e.message())?;
+    let asset = release.asset.ok_or_else(|| {
+        format!(
+            "release {} has no bundle for this platform attached to it",
+            release.tag
         )
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Err(format!(
-            "winget install failed: {}",
-            if stderr.is_empty() { stdout } else { stderr }
-        ))
+    })?;
+    let total = asset.size;
+    let emitter = app.clone();
+    let path = releases::download_and_verify(UPDATE_REPO, &asset, USER_AGENT, move |done, _| {
+        let _ = emitter.emit(
+            "update-download-progress",
+            serde_json::json!({ "done": done, "total": total }),
+        );
+    })
+    .map_err(|e| e.message())?;
+    Ok((path, release.tag))
+}
+
+/// Download the latest release's bundle for this platform and verify its signature, emitting
+/// `update-download-progress` as it goes for the progress bar the HUD already draws (step 31).
+///
+/// Nothing is installed. The bundle is half a gigabyte and it replaces the app the operator is
+/// looking at, so this ends with a verified file and its path, and the last step is theirs.
+#[tauri::command(async)]
+fn download_update_rust(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let (path, tag) = download_update_to_disk(&app)?;
+    Ok(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "name": path.file_name().map(|n| n.to_string_lossy().to_string()),
+        "tag": tag,
+    }))
+}
+
+/// Open the folder a verified download landed in, so the operator can run the installer from
+/// somewhere they can see rather than from a path read off a message.
+#[tauri::command(async)]
+fn reveal_update_download_rust() -> Result<(), String> {
+    let dir = releases::download_dir();
+    if !dir.exists() {
+        return Err("nothing has been downloaded yet".to_string());
     }
+    paths::open_in_file_manager(&dir)
 }
 
 /// Rust-native equivalent for the frontend of get_version_info -- current version string
@@ -369,6 +523,7 @@ fn run_update_check<R: tauri::Runtime>(
     update_item: &MenuItem<R>,
     update_available: &AtomicBool,
     local_only: bool,
+    declined: bool,
 ) {
     // Said plainly in the tray rather than left as a check that quietly never runs: a
     // switched-off update check should look switched off, not broken.
@@ -379,7 +534,15 @@ fn run_update_check<R: tauri::Runtime>(
         return;
     }
 
-    let status = compute_update_status(local_only);
+    // Turned down rather than broken, and the tray says which. Nothing here nags: the label is
+    // a statement, and clicking it checks again for somebody who has changed their mind.
+    if declined {
+        let _ = update_item.set_text("\u{1f512} Updates not checked (not signed in)");
+        update_available.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    let status = compute_update_status(local_only, declined);
 
     if !status.checked {
         if let Some(e) = &status.error {
@@ -402,11 +565,25 @@ fn run_update_check<R: tauri::Runtime>(
             APP_VERSION,
             short_hash(BUILT_COMMIT)
         );
-        let _ = tray.set_tooltip(Some(format!(
-            "{APP_VERSION} -- running (build {}, up to date)",
-            short_hash(BUILT_COMMIT)
-        )));
+        let _ = tray.set_tooltip(Some(match status.latest_tag.as_deref() {
+            // An installed copy has no commit to show and no use for one: the release tag is
+            // the thing it was compared against.
+            Some(tag) => format!("{APP_VERSION} -- running, up to date with {tag}"),
+            None => format!(
+                "{APP_VERSION} -- running (build {}, up to date)",
+                short_hash(BUILT_COMMIT)
+            ),
+        }));
         let _ = update_item.set_text("✅ Up to Date");
+    } else if let Some(tag) = status.latest_tag.clone() {
+        // Release mode: a version number, not a commit hash. "Download" rather than "install",
+        // because that is all the click does -- see perform_update_core.
+        println!("[AETHER1] Update check: {tag} is published (running {APP_VERSION})");
+        let _ = tray.set_tooltip(Some(format!(
+            "{APP_VERSION} -- {tag} is available -- click \"Update Available\" in the tray menu \
+             to download and check it"
+        )));
+        let _ = update_item.set_text("\u{2b06} Update Available (click to download)");
     } else {
         let latest = status.latest_commit.as_deref().unwrap_or("unknown");
         println!(
@@ -452,6 +629,20 @@ fn perform_update_core<R: tauri::Runtime>(
         return Err((
             UpdateStage::Pull,
             local_only::refusal("no update was pulled"),
+        ));
+    }
+
+    // An installed copy has no checkout to pull and no toolchain to rebuild with, so this is
+    // not its update path at all: it downloads the signed bundle instead (see releases.rs, and
+    // download_update_rust for the HUD's route to the same thing). Refused here rather than
+    // attempted, because `git pull` in a directory that is not a repository fails with git's
+    // words rather than with anything an operator can act on.
+    if releases::mode() == releases::Mode::Release {
+        return Err((
+            UpdateStage::Pull,
+            "this copy was installed rather than cloned, so there is nothing to pull -- the \
+             update is a signed bundle, downloaded from Settings or with `aether1 update`"
+                .to_string(),
         ));
     }
 
@@ -554,6 +745,36 @@ fn perform_update<R: tauri::Runtime>(
     tray: &TrayIcon<R>,
     update_item: &MenuItem<R>,
 ) {
+    // An installed copy's "update" is a download, and it stops at a verified file. Handing the
+    // last step to the operator is the point rather than a shortcoming: this is half a gigabyte
+    // replacing the app they are looking at, and an app that swaps itself out from under
+    // somebody while they are using it is the behaviour nobody asks for and everybody
+    // remembers.
+    if releases::mode() == releases::Mode::Release {
+        let _ = tray.set_tooltip(Some("AETHER1 -- downloading the update...".to_string()));
+        let _ = update_item.set_text("\u{23f3} Downloading...");
+        match download_update_to_disk(app) {
+            Ok((path, tag)) => {
+                let _ = tray.set_tooltip(Some(format!(
+                    "AETHER1 -- {tag} downloaded, signature checked: {}",
+                    path.display()
+                )));
+                let _ = update_item.set_text("\u{1f4e6} Downloaded (click to open the folder)");
+                // Opened rather than described: a path read off a tooltip is a path typed out by
+                // hand.
+                if let Some(dir) = path.parent() {
+                    let _ = paths::open_in_file_manager(dir);
+                }
+            }
+            Err(e) => {
+                eprintln!("[AETHER1] Update download failed: {e}");
+                let _ = tray.set_tooltip(Some(format!("AETHER1 -- update download failed: {e}")));
+                let _ = update_item.set_text("\u{26a0} Download Failed (see logs)");
+            }
+        }
+        return;
+    }
+
     let _ = tray.set_tooltip(Some("AETHER1 -- updating (git pull)...".to_string()));
     let _ = update_item.set_text("⏳ Updating...");
 
@@ -1940,7 +2161,12 @@ fn main() {
             keep_other_installs_rust,
             check_for_update_rust,
             apply_update_rust,
-            install_gh_via_winget_rust,
+            github_sign_in_start_rust,
+            github_sign_in_poll_rust,
+            github_sign_out_rust,
+            github_decline_updates_rust,
+            download_update_rust,
+            reveal_update_download_rust,
             toggle_sprite_window_rust,
             toggle_face_window_rust,
             open_avatar_lab_rust,
@@ -2131,6 +2357,7 @@ fn main() {
                                                 &update_item,
                                                 &update_available,
                                                 local_only_enabled(&app),
+                                                sign_in_declined(&app),
                                             );
                                         }
                                         // Unreached if perform_update succeeded (it calls
@@ -2162,9 +2389,16 @@ fn main() {
             {
                 let tray = tray.clone();
                 let launch_local_only = local_only_enabled(&app.handle().clone());
+                let launch_declined = sign_in_declined(&app.handle().clone());
                 update_in_progress.store(true, Ordering::Relaxed);
                 std::thread::spawn(move || {
-                    run_update_check(&tray, &update_item, &update_available, launch_local_only);
+                    run_update_check(
+                        &tray,
+                        &update_item,
+                        &update_available,
+                        launch_local_only,
+                        launch_declined,
+                    );
                     update_in_progress.store(false, Ordering::Relaxed);
                 });
             }
