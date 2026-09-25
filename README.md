@@ -389,12 +389,16 @@ that answer appear under **AI SERVERS FOUND ON THIS COMPUTER**, inside the
 **🧠 The Brain** group; picking one fills in the provider, the address and the list
 of models it can run, so there is nothing to look up.
 
-The **Agent & System** tab is grouped by the question you came in with rather than by
-which module implements it: **🧠 The Brain**, **🗣 Voice & Sound**,
-**📓 Memory**, **🛡 What it may do**, **🌐 Network** and
-**⚙ The app itself**. Each group is collapsed until you open it, and the things
-almost nobody needs — the Piper voice file, the Whisper model file — are nested one level
-further inside the group they belong to.
+Settings is a list of headings on the left and one section at a time on the right, named
+by the question you came in with rather than by which module implements it: **👤 Profile**,
+**🎨 Appearance**, **🎭 Avatars**, **⚡ Identity**, **🧱 HUD Layout**, **🧠 The Brain**,
+**🗣 Voice & Sound** and **📓 Memory**. Folded under **🛠 Advanced** at the bottom are the
+ones you set once or go looking for only when something is wrong: **🔐 What it may do**,
+**🌐 Network**, **⚡ Startup & Performance**, **🩺 Is it working?** and
+**🖥 The app itself**. The things almost nobody needs — the Piper voice file, the Whisper
+model file — are nested one level further inside the section they belong to, and the search
+box at the top of the list finds a section by what is in it, so "api key" or "ollama"
+both reach The Brain.
 
 The scan probes the loopback ports these tools tend to use and identifies them by the API
 they speak, not by which program they are — so it finds the popular runners, most of the
