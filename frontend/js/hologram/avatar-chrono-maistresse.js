@@ -102,35 +102,50 @@ HologramAvatar.registerAvatar({
             return { eye, ball, catchlight };
         });
 
-        /* The mouth is two pieces that do different jobs: a fixed arc that is the smile
-           line, and a filled shape that grows inside it when she speaks. Widening an arc
-           would mean rebuilding its geometry every frame; growing a shape inside a fixed
-           arc is a scale, and it reads the same.
+        /* The mouth is the smile arc, and the smile arc getting thicker. That is the whole
+           of it, and it is the third shape this mouth has had -- both earlier ones were
+           reported as TWO mouths, so the reason this one has no top edge at all is worth
+           writing down.
 
-           The filled part is a HALF disc hanging from the line between the smile's two
-           corners, and it is shut all the way at rest. A full disc centred on that line
-           left a dark sliver lying across the corners with the smile curving below it,
-           which read as a second mouth above the first -- the thing it is meant to be
-           filling is the space the smile encloses, so it only ever opens downward. */
+           The opening used to be a separate filled shape growing inside the arc, scaled in
+           y so no geometry had to be rebuilt. A scale is cheap, but a half disc scaled in y
+           keeps its flat chord across the top and pulls its curved edge UP away from the
+           smile, so at anything short of fully open you get a dark bar with a lit gap under
+           it and the smile below that: two dark curves, which is exactly what it looks
+           like. Shutting the disc fully at rest only hid it while she was silent.
+
+           So the opening is a ring sector sharing the smile's own inner radius. Its top
+           edge IS the smile, there is no chord anywhere in it, and it deepens by growing
+           outward -- a mouth opening, rather than a second shape appearing inside one. The
+           depths are pre-built as a handful of meshes that take turns being visible, so
+           nothing is rebuilt or allocated per frame; they are children of the mouth, so the
+           engine's teardown disposes every one of them rather than only the visible one. */
         const mouth = new THREE.Group();
         mouth.position.set(0, -DIAL * 0.22, 2);
         face.add(mouth);
 
-        const openMat = new THREE.MeshBasicMaterial({ color: INK, transparent: true, opacity: 0.92 });
-        // Theta from PI to 2PI is the lower half of the circle, so the shape's flat edge
-        // is its top and scaling y swings the curved side down away from it.
-        const open = new THREE.Mesh(
-            new THREE.CircleGeometry(DIAL * 0.29, 32, Math.PI, Math.PI),
-            openMat
-        );
-        open.position.z = -0.4;
-        open.scale.set(1, 0, 1);
-        mouth.add(open);
+        const MOUTH_INNER = DIAL * 0.28;
+        const MOUTH_DEEPEST = DIAL * 0.62;
+        // Theta runs counter-clockwise from +x, so the lower semicircle, inset at both
+        // ends, is a smile. Every piece of the mouth is cut from this same arc.
+        const MOUTH_ARC = [Math.PI + 0.35, Math.PI - 0.7];
 
-        // A ring arc across the bottom half: theta runs counter-clockwise from +x, so the
-        // lower semicircle, inset at both ends, is a smile.
+        const openMat = new THREE.MeshBasicMaterial({ color: INK, transparent: true, opacity: 0.92 });
+        const openSteps = [];
+        for (let i = 1; i <= 8; i += 1) {
+            const depth = MOUTH_INNER + (MOUTH_DEEPEST - MOUTH_INNER) * (i / 8);
+            const step = new THREE.Mesh(
+                new THREE.RingGeometry(MOUTH_INNER, depth, 40, 1, MOUTH_ARC[0], MOUTH_ARC[1]),
+                openMat
+            );
+            step.position.z = -0.4;
+            step.visible = false;
+            mouth.add(step);
+            openSteps.push(step);
+        }
+
         const smile = new THREE.Mesh(
-            new THREE.RingGeometry(DIAL * 0.28, DIAL * 0.34, 40, 1, Math.PI + 0.35, Math.PI - 0.7),
+            new THREE.RingGeometry(MOUTH_INNER, DIAL * 0.34, 40, 1, MOUTH_ARC[0], MOUTH_ARC[1]),
             inkMat
         );
         mouth.add(smile);
@@ -171,7 +186,7 @@ HologramAvatar.registerAvatar({
 
         return {
             group, face, glow, glowMat, dial, dialMat, rimMat, tickMat, eyes, mouth,
-            open, openMat, smile, inkMat, catchMat, hourHand, minuteHand, handMat,
+            openSteps, openMat, smile, inkMat, catchMat, hourHand, minuteHand, handMat,
             cap, capMat, halo, haloMat,
             dialRadius: DIAL,
             blinkUntil: 0,
@@ -228,10 +243,12 @@ HologramAvatar.registerAvatar({
                 + (isThinking ? Math.sin(ctx.time * 1.6) * model.dialRadius * 0.04 : 0);
         });
 
-        // The mouth opens with the voice and shuts back to the bare smile line otherwise:
-        // at zero the filled part has no height at all, so what is left is the arc.
-        const openness = isSpeaking ? ctx.audio * 1.15 : ctx.click * 0.6;
-        model.open.scale.set(1, Math.min(1.15, openness), 1);
+        // The mouth opens with the voice and shuts back to the bare smile line otherwise.
+        // Shut is none of the steps showing, so what is left is the arc and nothing else --
+        // and every step it can show is that same arc, thicker.
+        const openness = Math.max(0, Math.min(1, isSpeaking ? ctx.audio * 1.15 : ctx.click * 0.6));
+        const depth = Math.round(openness * model.openSteps.length);
+        model.openSteps.forEach((step, i) => { step.visible = i === depth - 1; });
 
         // Dial brightness, and the CRT flutter that keeps it a projection rather than a
         // painted disc.

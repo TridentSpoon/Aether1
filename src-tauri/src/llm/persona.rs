@@ -278,6 +278,15 @@ impl Persona {
                         // picking a persona is now picking a level of access, and that
                         // should not be something you find out by watching it ask.
                         "field": p.domain().field(),
+                        // The line this persona belongs to, and the two voices it speaks
+                        // in -- the cloud one and the Piper model. Settings' avatar browser
+                        // shows them beside the avatar, and the voice an avatar speaks in is
+                        // resolved from the persona at the moment of speech (see
+                        // commands::synthesize_speech), so reading it from anywhere else
+                        // would be a second answer free to disagree with the first.
+                        "group": p.group(),
+                        "voice": super::persona_voice(p.key()),
+                        "local_voice": super::persona_local_voice(p.key()),
                     })
                 })
                 .collect(),
