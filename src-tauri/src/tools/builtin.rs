@@ -4,7 +4,6 @@
 
 use serde_json::{json, Value};
 use sysinfo::{ProcessesToUpdate, System};
-use ureq::ResponseExt;
 
 use super::fs_guard;
 use super::{Outcome, Tool, ToolContext};
