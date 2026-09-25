@@ -927,6 +927,19 @@ can't any more: history files are on the same permanent deny list as your SSH ke
 setting, persona or approval of yours can lift. That was true before there was a terminal
 here; building one made it urgent, because Aether1 would now be writing that file itself.
 
+## Choosing an avatar
+
+The hologram is the thing Aether1 has that nothing else does, so choosing one is its own
+section of Settings rather than a row of buttons in with the colours. **Settings -> Avatars**
+goes in three steps: the *lines* (Singular Ascended Class, Trace Protocols, The Umbrals, The
+eXcelsior Class, and the two that belong to no line), then that line's members, then one
+avatar in full -- the hologram itself, running, beside who it is, what it does, what it
+reaches on this machine without asking, and the two voices it speaks in. **Appearance** keeps
+a card showing the one you are wearing, which opens straight onto it.
+
+Three of the Trace Protocols are not listed until you have met them. The line says how many
+are still missing, and nothing about which.
+
 ## Making your own avatar
 
 The avatar is a module of its own -- everything that draws it lives in
@@ -934,8 +947,8 @@ The avatar is a module of its own -- everything that draws it lives in
 `frontend/js/hologram/README.md` is the guide; the short version:
 
 **Build one without writing code.** In the HUD, pick **Your own** in the avatar row and
-press **Customise** beside it -- or open Settings and use *Design your own avatar*. Either
-opens the avatar workbench. Pick a core, a body and a voice equaliser, set the sizes and
+press **Customise** beside it -- or open **Settings -> Avatars**, choose *Unaligned* and then
+*Your own*, and press **Design your own**. Either opens the avatar workbench. Pick a core, a body and a voice equaliser, set the sizes and
 the motion, and press *Use this in Aether1*; the HUD updates as soon as you save, with no
 reload. What gets saved is a *recipe*: a few lines of settings you can paste to someone
 else safely, because settings cannot run.
