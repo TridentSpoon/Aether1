@@ -57,6 +57,12 @@ USAGE:
     aether1 flow                   Show whether the avatar follows the question (STATIC or
                                    FLOW), and which line it can move within
     aether1 flow on|off            Turn that on or off
+    aether1 signin                 Sign in to GitHub, so this copy can see new releases.
+                                   Shows a code to type in at github.com; nothing else
+    aether1 signout                Forget that sign-in
+    aether1 update                 What version is out, and download it when one is
+    aether1 verify <FILE>          Check a bundle's signature against the key built into
+                                   this copy -- for one that arrived by hand
     aether1 installs               List every copy of AETHER1 this machine has on it
     aether1 installs remove <ID>   Remove one of them, by the id the list prints
     aether1 installs remove old    Remove every copy older than the one you are running
@@ -169,6 +175,24 @@ pub enum Invocation {
     /// mistake and a wrong one is not.
     Flow {
         state: Option<String>,
+    },
+    /// `signin`: the GitHub device flow, in a terminal. Prints the code, waits for it to be
+    /// approved in a browser, and keeps the token in the OS keychain. See github_auth.rs for
+    /// why the app signs the operator in rather than carrying a credential of its own.
+    SignIn,
+    /// `signout`: forget the token, both places it could be.
+    SignOut,
+    /// `update`: what is published against what is running, and -- with `download` -- fetching
+    /// the signed bundle. Never installs it: see releases.rs.
+    Update {
+        download: bool,
+    },
+    /// `verify <file>`: a bundle that arrived some other way -- a USB stick, a mirror, a
+    /// download that was resumed by hand -- checked against the compiled-in public key. The
+    /// second question releases.rs exists to ask: authentication proves who may download, a
+    /// signature proves what was downloaded.
+    Verify {
+        path: String,
     },
     /// `installs`: every copy of AETHER1 on this machine, and taking the stale ones away.
     /// `remove` is None for a plain listing, or the id of one copy -- or the word `old`,
@@ -463,6 +487,30 @@ pub fn parse(argv: &[String]) -> Invocation {
             }),
             _ => Err("flow takes either nothing, or `on` or `off`".to_string()),
         },
+        "signin" => free_text(rest).and_then(|extra| match extra {
+            None => Ok(Invocation::SignIn),
+            Some(extra) => Err(format!("signin takes no arguments (got {extra:?})")),
+        }),
+        "signout" => free_text(rest).and_then(|extra| match extra {
+            None => Ok(Invocation::SignOut),
+            Some(extra) => Err(format!("signout takes no arguments (got {extra:?})")),
+        }),
+        "update" => free_text(rest).and_then(|extra| match extra {
+            None => Ok(Invocation::Update { download: false }),
+            Some(extra) => match extra.trim() {
+                // Downloading half a gigabyte is a verb of its own rather than what a bare
+                // `update` does: the plain form answers the question, and nothing is fetched
+                // by asking it.
+                "download" => Ok(Invocation::Update { download: true }),
+                _ => Err(format!(
+                    "update takes nothing, or the word `download` (got {extra:?})"
+                )),
+            },
+        }),
+        "verify" => free_text(rest).and_then(|extra| match extra {
+            Some(path) => Ok(Invocation::Verify { path }),
+            None => Err("verify needs the file to check".to_string()),
+        }),
         "installs" => free_text(rest).and_then(|extra| match extra {
             None => Ok(Invocation::Installs { remove: None }),
             Some(extra) => match extra.split_whitespace().collect::<Vec<_>>().as_slice() {
@@ -1379,6 +1427,164 @@ fn render_install(
         install.describe()
     )
 }
+/// `aether1 signin`: the device flow with a terminal in front of it. Prints the code, opens
+/// nothing, and waits.
+///
+/// The browser is the operator's to open. A CLI that launches one is a CLI that cannot be run
+/// over ssh, which is exactly the machine most likely to be updated from a terminal.
+fn run_sign_in() -> Result<String, String> {
+    if !crate::github_auth::configured() {
+        return Err(crate::github_auth::SignInError::NotConfigured.message());
+    }
+    if crate::github_auth::signed_in() {
+        return Ok(
+            "Already signed in. `aether1 signout` first if you want to sign in as somebody else."
+                .to_string(),
+        );
+    }
+    let code = crate::github_auth::start(crate::USER_AGENT).map_err(|e| e.message())?;
+    // Printed and flushed before the wait begins, not after: the whole point of this output is
+    // that it is read while the polling happens.
+    println!(
+        "Open {} and enter this code:\n\n    {}\n\nWaiting for it to be approved (Ctrl-C to stop)...",
+        code.verification_uri, code.user_code
+    );
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+
+    let token =
+        crate::github_auth::wait_for_token(&code, crate::USER_AGENT).map_err(|e| e.message())?;
+    let storage = crate::github_auth::store_token(&token)?;
+    // Where the token went is said out loud rather than assumed. On a box with no Secret
+    // Service running -- a headless one, which is a real case here -- it lands in a 0600 file
+    // instead, and a file is not a keychain however much it would be convenient to call it one.
+    Ok(match storage {
+        crate::github_auth::Storage::Keychain => {
+            "Signed in. The token is in this machine's keychain.".to_string()
+        }
+        crate::github_auth::Storage::File => format!(
+            "Signed in. This machine has no keychain service running, so the token is in a \
+             file only you can read: {}",
+            crate::project_root()
+                .join("backend")
+                .join("github_token")
+                .display()
+        ),
+        crate::github_auth::Storage::None => "Signed in.".to_string(),
+    })
+}
+
+fn run_sign_out() -> String {
+    if crate::github_auth::clear_token() {
+        "Signed out. New versions will not be checked for until you sign in again.".to_string()
+    } else {
+        "Nothing to sign out of.".to_string()
+    }
+}
+
+/// `aether1 verify <file>`: the signature check on its own, for a bundle that did not come
+/// through the download. The `.minisig` is expected beside it, which is how the release
+/// attaches it and how anyone copying one would carry it.
+fn run_verify(path: &str) -> Result<String, String> {
+    let file = crate::paths::expand_home(path);
+    if !file.exists() {
+        return Err(format!("there is no file at {}", file.display()));
+    }
+    let signature = std::path::PathBuf::from(format!("{}.minisig", file.display()));
+    if !signature.exists() {
+        return Err(format!(
+            "no signature beside it -- {} has to be there too, and it is attached to the \
+             release next to the bundle",
+            signature.display()
+        ));
+    }
+    crate::releases::verify_file(&file, &signature)
+        .map(|()| {
+            format!(
+                "{} is signed by the key built into this copy of AETHER1.",
+                file.display()
+            )
+        })
+        .map_err(|e| e.message())
+}
+
+/// `aether1 update`: the comparison, and with `download`, the fetch. Never the install -- see
+/// releases.rs for why half a gigabyte replacing the running app is the operator's own last
+/// step.
+fn run_update(download: bool) -> Result<String, String> {
+    let mode = crate::releases::mode();
+    if mode == crate::releases::Mode::Checkout {
+        return Ok(
+            "This is a git checkout, so its update is `git pull` and a rebuild -- which is a \
+             better update than downloading a bundle of your own work. The tray's Check for \
+             Updates does both."
+                .to_string(),
+        );
+    }
+    let release =
+        crate::releases::latest(crate::UPDATE_REPO, crate::USER_AGENT).map_err(|e| e.message())?;
+    let running = crate::APP_VERSION;
+    let newer = crate::releases::is_newer(running, &release.tag);
+
+    if newer == Some(false) {
+        return Ok(format!(
+            "Up to date: running {running}, and {} is the latest release.",
+            release.tag
+        ));
+    }
+    if newer.is_none() {
+        return Ok(format!(
+            "The latest release is tagged {}, which is not a version this can compare {running} \
+             against. {}",
+            release.tag, release.html_url
+        ));
+    }
+
+    let asset = release.asset.as_ref();
+    if !download {
+        let size = asset
+            .map(|a| format!(" ({:.1} GB)", a.size as f64 / 1_000_000_000.0))
+            .unwrap_or_default();
+        return Ok(format!(
+            "{} is out; you are running {running}.\n{}\n\nRun `aether1 update download` to fetch \
+             it{size}. Nothing installs itself: you get a file whose signature has been \
+             checked.",
+            release.tag, release.html_url
+        ));
+    }
+
+    let asset = asset.ok_or_else(|| {
+        format!(
+            "release {} has no bundle for this platform attached to it",
+            release.tag
+        )
+    })?;
+    // A progress line rather than a bar: this is stdout, possibly a log file, and a redrawn
+    // bar in a log file is a thousand lines of nothing.
+    let mut last_decile = 0;
+    let path = crate::releases::download_and_verify(
+        crate::UPDATE_REPO,
+        asset,
+        crate::USER_AGENT,
+        |done, total| {
+            if total == 0 {
+                return;
+            }
+            let decile = done * 10 / total;
+            if decile > last_decile {
+                last_decile = decile;
+                println!("  {}%", decile * 10);
+            }
+        },
+    )
+    .map_err(|e| e.message())?;
+
+    Ok(format!(
+        "Downloaded and its signature checked:\n\n    {}\n\nRun it when you are ready. AETHER1 \
+         does not install it for you.",
+        path.display()
+    ))
+}
 
 fn run_installs(target: Option<&str>) -> Result<String, String> {
     use crate::installs::Machine as _;
@@ -1496,6 +1702,10 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state } => run_flow(state.as_deref()),
+        Invocation::SignIn => run_sign_in(),
+        Invocation::SignOut => Ok(run_sign_out()),
+        Invocation::Update { download } => run_update(download),
+        Invocation::Verify { path } => run_verify(&path),
         Invocation::Installs { remove } => run_installs(remove.as_deref()),
         Invocation::Say { text, voice, play } => run_say(text, voice, play),
         Invocation::Discover { timeout_secs } => run_discover(timeout_secs),

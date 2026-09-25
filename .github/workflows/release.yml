@@ -19,6 +19,17 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Step 46's two compiled-in public values, read by src-tauri/build.rs. Neither is a secret
+  # and neither can be: the client ID names the GitHub App to GitHub and authorises nothing on
+  # its own, and a public key is public. They are here so every bundle in a release carries
+  # them -- a build without them can still run, but it cannot offer a sign-in or check a
+  # download's signature, and says so in plain words rather than failing obscurely.
+  #
+  # AETHER1_GITHUB_CLIENT_ID is a repository *variable* rather than a secret for the same
+  # reason: a secret would be masked in the logs, which makes a wrong one much harder to spot,
+  # and it protects nothing.
+  AETHER1_GITHUB_CLIENT_ID: ${{ vars.AETHER1_GITHUB_CLIENT_ID }}
+  AETHER1_MINISIGN_PUBLIC_KEY: ${{ vars.AETHER1_MINISIGN_PUBLIC_KEY }}
 
 jobs:
   linux-offline-bundle:
@@ -261,10 +272,88 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Signing every asset, in one place, after all three builders have handed theirs over.
+      # Doing it here rather than on each runner is what makes one keypair cover Windows and
+      # Linux uniformly: the Windows installer is already Authenticode-signed for Windows' own
+      # sake, and this is the signature AETHER1 itself checks.
+      #
+      # Why signatures at all, when the download already needs a signed-in GitHub account:
+      # authentication proves who may download, a signature proves what was downloaded. A
+      # stolen token, a replaced asset and a bundle passed hand to hand on a USB stick are all
+      # cases where only the second question helps. See src-tauri/src/releases.rs.
+      - name: Decide whether the assets can be signed
+        id: minisign
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUB: ${{ vars.AETHER1_MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MINISIGN_KEY:-}" ] && [ -n "${MINISIGN_PUB:-}" ]; then
+            echo "Assets will be signed with minisign."
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "${MINISIGN_KEY:-}" ] && [ -z "${MINISIGN_PUB:-}" ]; then
+            # Not a build failure -- a fork, or this repo before the keypair exists, should
+            # still produce a working release. It is a loud warning because the updater refuses
+            # to install anything it cannot verify, so an unsigned release is one nobody's app
+            # will offer them.
+            echo "::warning::No minisign keypair configured -- shipping an UNSIGNED release. Installed copies will not offer this update, because they cannot check it."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            # Half-configured is not "ship it unsigned": a private key with no matching public
+            # key compiled into the binaries produces signatures nothing can check, and a public
+            # key with no private key produces apps that reject every release.
+            echo "::error::minisign is half-configured. Set both the MINISIGN_SECRET_KEY secret and the AETHER1_MINISIGN_PUBLIC_KEY variable, or neither."
+            exit 1
+          fi
+
+      - name: Sign the assets
+        if: steps.minisign.outputs.configured == 'true'
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUB: ${{ vars.AETHER1_MINISIGN_PUBLIC_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+
+          # The key has to be passwordless (`minisign -G -W`): there is nobody here to type a
+          # passphrase, and a passphrase held in a second secret beside the key protects
+          # nothing anyway.
+          printf '%s' "$MINISIGN_KEY" > minisign.key
+          chmod 600 minisign.key
+
+          for file in dist/aether1-offline-linux-x86_64.tar.gz \
+                      dist/aether1-slim-linux-x86_64.tar.gz \
+                      dist/Aether1-Setup.exe; do
+            # -H prehashes. Not optional: the client verifies while it streams the download to
+            # disk rather than reading half a gigabyte back afterwards, and a streaming verifier
+            # can only check a prehashed signature.
+            minisign -S -H -s minisign.key -m "$file" -t "AETHER1 $TAG"
+          done
+          rm -f minisign.key
+
+          # The check that catches the failure this whole step exists to prevent: signing
+          # reported success and the release goes out with a signature that does not verify,
+          # which is found by whoever downloads it rather than here. Verified against the same
+          # public key that is compiled into the binaries, not against the private key's own
+          # idea of itself.
+          printf '%s' "$MINISIGN_PUB" > minisign.pub.b64
+          for file in dist/*.minisig; do
+            target="${file%.minisig}"
+            minisign -V -P "$(cat minisign.pub.b64)" -m "$target"
+          done
+          rm -f minisign.pub.b64
+
       - uses: softprops/action-gh-release@v2
         with:
+          # The `.minisig` files are attached beside the bundles they sign, which is where
+          # releases.rs looks for them and where anyone copying a bundle by hand would carry
+          # one. `dist/*.minisig` rather than three names: a release with no keypair configured
+          # has none of them, and a missing glob is not an error the way a missing name is.
           files: |
             dist/aether1-offline-linux-x86_64.tar.gz
             dist/aether1-slim-linux-x86_64.tar.gz
             dist/Aether1-Setup.exe
+            dist/*.minisig
           generate_release_notes: true

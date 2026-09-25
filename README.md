@@ -978,6 +978,11 @@ aether1 code ask "why won't this compile"  # ask the coding model, from a termin
 aether1 code conventions > AGENTS.md     # house rules for a local coding model to follow
 aether1 code perms                       # what AETHER CODE may look at (all of it read-only)
 aether1 code perms github off            # ...and the switch for one of the three
+aether1 signin                           # sign in to GitHub, so this copy can see new releases
+aether1 signout                          # forget that sign-in
+aether1 update                           # what version is out, against what you are running
+aether1 update download                  # fetch it, signature checked; installs nothing
+aether1 verify <file>                    # check a bundle that arrived some other way
 aether1 --help
 ```
 
@@ -1017,6 +1022,67 @@ rights needed, and it takes effect in new terminals):
 
 `prompt` shares one conversation history and one memory store with the HUD, so anything
 you tell it from a script is there next time you open the window.
+
+## Updates, and why it asks you to sign in to GitHub
+
+A copy built from a checkout updates itself the way you would: `git pull`, rebuild, relaunch.
+That is what the tray's **Check for Updates** does, and there is nothing to sign in to.
+
+A copy **installed** from a bundle has no checkout and no toolchain, so its update is a new
+bundle from this project's releases -- and the repository is private, which means the releases
+are too. Rather than hide a credential inside the app, where anyone could read it back out,
+AETHER1 asks you to sign in as yourself: Settings -> **The Brain** -> **Connections** ->
+**Sign in**, or `aether1 signin`. It shows a short code, you type it in at
+`github.com/login/device`, and that is the whole of it. AETHER1 never sees a password, and the
+token it receives can do exactly one thing -- read the contents of repositories the app is
+installed on.
+
+That makes access a real list rather than a guess: whoever the owner has added to the
+repository can see the releases, and whoever is removed cannot. Your token is kept in your
+operating system's keychain (Credential Manager, Keychain, libsecret or kwallet). On a machine
+with no keychain service running -- a headless box, usually -- it goes in a file only you can
+read instead, and the app says so rather than pretending otherwise.
+
+Connections is also where you can see whether the **GitHub CLI** (`gh`) is on this computer,
+which is a different thing entirely: that is the program AETHER CODE runs read-only commands
+through (`gh pr view`, `gh run list`). Signing in above does not install it, it is not needed for
+updates, and installing it from [cli.github.com](https://cli.github.com) is still worth doing if
+you want AETHER CODE to be able to look at a repository.
+
+**Declining costs you nothing but the update notice.** Press *Not now, and stop asking* and
+AETHER1 remembers; the check stops running and nothing else changes. Signing in later is the
+only thing that undoes it.
+
+**Nothing installs itself.** The offline bundles are around half a gigabyte and they replace
+the app you are looking at, so *Download It* gets you a file whose signature has been checked
+and stops there. Running it is yours.
+
+Every release asset is signed with [minisign](https://jedisct1.github.io/minisign/), and the
+matching public key is compiled into the app. That is a separate question from signing in:
+being signed in proves you are allowed to download, a signature proves the file is the one this
+project built. AETHER1 refuses to hand you a bundle whose signature does not verify, wherever
+it came from -- including one copied onto a USB stick, which is what `aether1 verify` is for.
+
+### Setting it up on the repository (for the owner)
+
+Both compiled-in values are public and neither is set by default, so a build made without them
+runs perfectly and simply says it cannot check for updates.
+
+1. **A GitHub App**, not an OAuth App -- an OAuth App could only ask for the `repo` scope,
+   which is read *and write* to everything you can reach. Give the App `contents: read` and
+   nothing else, turn on **Enable Device Flow** in its settings (it is off by default), install
+   it on this repository, and put its **Client ID** in a repository *variable* named
+   `AETHER1_GITHUB_CLIENT_ID`. A variable rather than a secret on purpose: it authorises
+   nothing, and a masked value is much harder to notice being wrong.
+2. **A minisign keypair**, generated without a passphrase because CI has nobody to type one:
+   `minisign -G -W -p minisign.pub -s minisign.key`. Put the contents of `minisign.key` in a
+   repository **secret** named `MINISIGN_SECRET_KEY`, and the bare base64 line from
+   `minisign.pub` (the second line, not the comment) in a repository *variable* named
+   `AETHER1_MINISIGN_PUBLIC_KEY`. Keep `minisign.key` somewhere safe and off the repository:
+   losing it means every copy already out there stops accepting new releases.
+
+Set both or neither -- the release workflow fails on half a keypair rather than shipping
+signatures nothing can check, or apps that reject every release.
 
 ### Serving the HUD to a browser
 

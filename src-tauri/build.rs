@@ -77,6 +77,26 @@ fn main() {
     let minor = std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_else(|_| "0".to_string());
     println!("cargo:rustc-env=AETHER1_VERSION=Ver {major}.{minor}.{pr_rev}");
 
+    // Step 46's two compiled-in public values. Neither is a secret and neither can be:
+    // the client ID names the GitHub App to GitHub and authorises nothing on its own, and a
+    // public key is public. That is the whole reason a distributed binary can carry them --
+    // an app that cannot keep a secret must not be given one.
+    //
+    // Absent in a fork's build, or in this repo's own build before the App and the keypair
+    // exist. They are passed through as empty strings rather than defaulted to a guess, and
+    // github_auth/releases both refuse in plain words when they are empty instead of sending
+    // a request that comes back as an opaque 401.
+    for name in ["AETHER1_GITHUB_CLIENT_ID", "AETHER1_MINISIGN_PUBLIC_KEY"] {
+        // Trimmed because both of these are pasted into an Actions secret or an environment
+        // by hand, and a trailing newline in a client ID is a 401 with nothing to see.
+        let value = std::env::var(name).unwrap_or_default().trim().to_string();
+        println!("cargo:rustc-env={name}={value}");
+        // Without this, a build with the value set and a build without it are the same
+        // fingerprint to cargo, so setting the secret for the first time changes nothing
+        // until something else forces a rebuild.
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+
     // Re-run this build script (and thus refresh the embedded commit/PR rev) whenever the
     // repo's HEAD moves -- a branch switch changes .git/HEAD itself, while a same-branch
     // commit or `git pull` only moves the ref file under .git/refs/heads.
