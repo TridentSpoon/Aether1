@@ -1,11 +1,12 @@
-/* Avatar: VENATRIX -- The eXcelsior Class's fifth, and the line's hunter. A faceted white
- * shell with a lit lattice caged inside it, a single optic burning at the front, and two
- * targeting rings sweeping it on crossed tilts.
+/* Avatar: m.A.I.r.a.d. -- Mutative Autonomous Intrusion Response and Defense, the
+ * eXcelsior Class's fifth. A faceted white shell with a lit lattice caged inside it, one
+ * optic burning at the front, and two targeting rings sweeping it on crossed tilts.
  *
- * The idea it is built around is adaptation. The shell and the lattice inside it turn
- * against each other and never settle into the same relationship twice; the rings tighten
- * and quicken with the work; the optic answers the voice. Nothing about it is a face, and
- * that is deliberate -- the rest of this line has eyes, and this one has a lens.
+ * Mutative is the word the whole thing is built around. The shell and the lattice inside
+ * it turn against each other and never settle into the same relationship twice; the rings
+ * tighten and quicken with the work; the optic answers the voice. Nothing about it is a
+ * face, and that is deliberate -- the rest of this line has eyes, and this one has a lens
+ * watching the door.
  *
  * Three things about how it is put together.
  *
@@ -17,16 +18,16 @@
  * is thinking.
  *
  * The optic and the inner ring keep a fixed hot colour through a theme change, the same
- * convention R.E.D. 9000's lens and enXephalon's signature points follow: a hunter's
- * optics are its own. The outer ring and the ticks are where the theme reaches it.
+ * convention R.E.D. 9000's lens and enXephalon's signature points follow: what a thing
+ * watches with is its own. The outer ring and the ticks are where the theme reaches it.
  *
  * Registered through the same HologramAvatar.registerAvatar() contract any avatar file
  * uses -- see js/hologram/README.md and avatar-template.js.
  */
 
 HologramAvatar.registerAvatar({
-    id: 'venatrix',
-    label: 'VENATRIX',
+    id: 'mairad',
+    label: 'm.A.I.r.a.d.',
     // The eXcelsior Class -- see registerAvatar's optional def.group in
     // js/hologram/README.md and index.html's avatar-menu, which groups the same way.
     group: 'The eXcelsior Class',
@@ -120,7 +121,7 @@ HologramAvatar.registerAvatar({
 
         /* The targeting rings, each fixed on its own tilt and turning within it. The inner
            one keeps the optic's hot colour; the outer one is the theme's, so a change of
-           HUD colour reaches the avatar without touching what makes it a hunter. */
+           HUD colour reaches the avatar without touching what it watches with. */
         const ringInnerMat = new THREE.MeshBasicMaterial({
             color: OPTIC, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
         });

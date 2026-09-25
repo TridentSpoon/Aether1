@@ -619,7 +619,7 @@
             },
         },
 
-        /* Adapted from VENATRIX: its faceted white shell with a lit lattice caged inside
+        /* Adapted from m.A.I.r.a.d.: its faceted white shell with a lit lattice caged inside
            it and a single optic sunk into the front. The avatar turns the shell and the
            cage against each other; a core may not turn itself (see the note at the top of
            this file), so here the cage breathes and brightens instead and the recipe's
@@ -1702,7 +1702,7 @@
             },
         },
 
-        /* Adapted from VENATRIX and enXephalon, which both sweep what they are looking at
+        /* Adapted from m.A.I.r.a.d. and enXephalon, which both sweep what they are looking at
            with rings on crossed tilts. Neither is edge-on: at exactly a quarter turn the
            level camera sees a ring as a straight line drawn through the avatar rather
            than as a ring around it. Four ticks in the picture plane turn the pair into a
