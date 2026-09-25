@@ -367,25 +367,39 @@
                 <span class="hologram-floating-notice-sub">Click to bring it back into this window.</span>
             </button>
 
-            <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent">
-                <!-- Step 19. Which local model this speciality runs on. Beside the avatar
-                     rather than buried in settings because the avatar IS the speciality:
-                     the row answers "who am I talking to, and on what" in one glance, and
-                     changing persona changes what this offers. Hidden entirely when the
-                     model server has not answered -- an empty dropdown is worse than none. -->
-                <div id="avatar-model-row" class="flex items-center gap-2 mb-1.5 hidden" title="Which local model this speciality runs on">
-                    <span class="viewport-label text-[9px] font-mono tracking-wider">MODEL</span>
-                    <select id="avatar-model" class="cyber-select flex-1 text-[10px] font-mono" aria-label="Local model for this speciality"></select>
-                </div>
-                <div class="flex items-center gap-2 mb-1.5" title="Manual zoom -- how big the avatar reads on screen">
-                    <!-- viewport-label, not the page's own dim ink: these two sit on the
-                         dark projection bay, and --text-dim is mixed for the page behind it.
-                         On Solar that put a mid grey meant for white on a near-black bay. -->
-                    <span class="viewport-label text-[9px] font-mono tracking-wider">ZOOM</span>
+            <!-- THE HOLOGRAM'S CHIN. Three sliders and nothing else: how big the avatar
+                 reads (ZOOM), how far it tips toward or away from you (PITCH), and how far
+                 it leans to one side (TILT). Everything that used to share this strip has
+                 moved rather than gone -- the speciality's model is in Settings under BASE
+                 PERSONA, where the rest of the persona lives, and the voice waveform is now
+                 drawn over the bottom edge of the projection itself. The three that stayed
+                 are the ones that change what you are looking at, so the strip is one thing
+                 rather than three unrelated ones.
+
+                 viewport-label, not the page's own dim ink: these sit on the dark
+                 projection bay, and --text-dim is mixed for the page behind it. On Solar
+                 that put a mid grey meant for white on a near-black bay. -->
+            <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent space-y-1 relative">
+                <!-- The voice waveform, drawn over the bottom edge of the projection rather
+                     than on the strip: it is something the avatar is doing, not something
+                     you can set, so it sits with the hologram and leaves the chin to the
+                     three controls. Sized by .hologram-waveform in A1theme.css. -->
+                <canvas id="audio-waveform" width="360" height="36" class="hologram-waveform"></canvas>
+                <div class="flex items-center gap-2" title="How big the avatar reads on screen">
+                    <span class="viewport-label text-[9px] font-mono tracking-wider w-8 shrink-0">ZOOM</span>
                     <input id="avatar-zoom" type="range" min="50" max="250" value="100" class="cyber-range flex-1" aria-label="Avatar zoom">
                     <span id="avatar-zoom-readout" class="viewport-label text-[9px] font-mono w-9 text-right">100%</span>
                 </div>
-                <canvas id="audio-waveform" width="360" height="36" class="w-full"></canvas>
+                <div class="flex items-center gap-2" title="Tip the avatar toward you or away from you">
+                    <span class="viewport-label text-[9px] font-mono tracking-wider w-8 shrink-0">PITCH</span>
+                    <input id="avatar-pitch" type="range" min="-45" max="45" value="0" class="cyber-range flex-1" aria-label="Avatar pitch">
+                    <span id="avatar-pitch-readout" class="viewport-label text-[9px] font-mono w-9 text-right">0&deg;</span>
+                </div>
+                <div class="flex items-center gap-2" title="Lean the avatar to one side">
+                    <span class="viewport-label text-[9px] font-mono tracking-wider w-8 shrink-0">TILT</span>
+                    <input id="avatar-tilt" type="range" min="-45" max="45" value="0" class="cyber-range flex-1" aria-label="Avatar tilt">
+                    <span id="avatar-tilt-readout" class="viewport-label text-[9px] font-mono w-9 text-right">0&deg;</span>
+                </div>
             </div>
         </div>
 
@@ -929,6 +943,16 @@
                     </select>
                     <p id="persona-speciality" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
                     <p id="persona-field" class="text-[10px] font-mono text-cyan-400/70 leading-snug mt-1"></p>
+                    <!-- Step 19. Which local model this speciality runs on. It used to sit
+                         under the avatar; it lives here now, with the persona it belongs to,
+                         so the hologram's chin carries only the three view controls. Still
+                         the speciality that is active right now rather than a table of all
+                         sixteen, and still hidden entirely when the model server has not
+                         answered -- an empty dropdown is worse than none. -->
+                    <div id="avatar-model-row" class="hidden space-y-1 pt-1" title="Which local model this speciality runs on">
+                        <label for="avatar-model" class="text-xs font-mono text-cyan-300 block">MODEL FOR THIS SPECIALITY</label>
+                        <select id="avatar-model" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono" aria-label="Local model for this speciality"></select>
+                    </div>
                     <div id="custom-persona-wrap" class="hidden space-y-1 pt-1">
                         <label class="text-xs font-mono text-cyan-300 block">CUSTOM PERSONA DIRECTIVE</label>
                         <textarea id="setting-custom-directive" rows="3" placeholder="e.g. 'You are {AGENT_NAME}, a dry-witted lab assistant who explains things through kitchen analogies.'" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono"></textarea>

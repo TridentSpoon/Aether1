@@ -6454,9 +6454,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Manual avatar zoom -- picked by hand, independent of the engine's own auto-fit.
-    // Lives next to the voice waveform since that's the other "how it looks while
-    // running" control in this panel.
+    // The hologram's chin: zoom, pitch, tilt, and nothing else. Three ways of saying
+    // "show me it like this" -- how big it reads, how far it tips toward you, how far it
+    // leans -- so they are one strip rather than three unrelated controls. All three are
+    // kept in localStorage: an angle you set by hand is a preference, and having to set it
+    // again every launch would make it not worth setting.
     const avatarZoomSlider = document.getElementById('avatar-zoom');
     const avatarZoomReadout = document.getElementById('avatar-zoom-readout');
     if (avatarZoomSlider) {
@@ -6469,6 +6471,31 @@ document.addEventListener('DOMContentLoaded', () => {
             if (avatarZoomReadout) avatarZoomReadout.textContent = `${avatarZoomSlider.value}%`;
         });
     }
+
+    /* Pitch and tilt are the same control twice over, so they are wired once. The engine
+       clamps the angle itself; this only has to keep the slider, the readout and the
+       stored value agreeing with each other. */
+    function initAvatarAngleSlider(id, storageKey, apply) {
+        const slider = document.getElementById(id);
+        const readout = document.getElementById(`${id}-readout`);
+        if (!slider) return;
+        const stored = parseFloat(localStorage.getItem(storageKey));
+        const start = Number.isFinite(stored) ? Math.min(45, Math.max(-45, stored)) : 0;
+        slider.value = String(Math.round(start));
+        const paint = () => {
+            const degrees = Number(slider.value) || 0;
+            if (readout) readout.textContent = `${degrees}\u00b0`;
+            apply(degrees);
+        };
+        paint();
+        slider.addEventListener('input', () => {
+            localStorage.setItem(storageKey, slider.value);
+            paint();
+        });
+    }
+
+    initAvatarAngleSlider('avatar-pitch', 'aether_avatar_pitch', (d) => hologram.setViewPitch(d));
+    initAvatarAngleSlider('avatar-tilt', 'aether_avatar_tilt', (d) => hologram.setViewTilt(d));
 
     // Initial Startup
     applyAvatar(currentAvatar, false);
