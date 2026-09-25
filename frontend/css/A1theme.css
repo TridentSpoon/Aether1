@@ -1384,3 +1384,19 @@ body {
 @media (max-width: 760px) {
     #chin-stat-disk { display: none; }
 }
+
+/* THE VOICE WAVEFORM, over the bottom edge of the projection.
+   It used to sit on the hologram's chin under the zoom slider; the chin now carries only
+   zoom, pitch and tilt, so the waveform moved up onto the projection bay itself. bottom:
+   100% of the chin means it always sits directly above whatever height those three rows
+   come to, rather than being nailed to a pixel figure that a theme could move. It is not
+   a control and never takes the pointer -- a drag over it still spins the avatar. */
+.hologram-waveform {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    width: 100%;
+    height: 36px;
+    pointer-events: none;
+}

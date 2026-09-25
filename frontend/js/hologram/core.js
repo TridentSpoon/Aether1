@@ -216,6 +216,10 @@ class HologramAvatar {
         // that layer is excluded on purpose, see avatar-custom.js.
         this.zoomScale = 1;
         this.avatarZoomGroup = null;
+        // Hand-set view angles in degrees (see setViewPitch/setViewTilt). Zero is the
+        // front-facing rest pose every avatar is designed and auto-fitted at.
+        this.viewPitch = 0;
+        this.viewTilt = 0;
         // The ceiling on setZoom. 2.5 is as far as the HUD's zoom slider goes; the fullscreen
         // face raises it (see setFillFraction), because a monitor is not a panel.
         this.maxZoom = 2.5;
@@ -302,6 +306,10 @@ class HologramAvatar {
            thrown away and replaced by whatever id was last named. */
         this.setAvatar(this.currentAvatar);
         this.applyColorPalette();
+        // Angles set before the scene existed (the HUD restores them from localStorage at
+        // startup) are held as numbers until here, then applied for real.
+        this.setViewPitch(this.viewPitch);
+        this.setViewTilt(this.viewTilt);
 
         // Avatars sit front-facing and static at rest; a click wakes them up with a reaction
         // pulse, and a drag spins the whole hologram on its Y axis (with inertia -- see
@@ -490,6 +498,32 @@ class HologramAvatar {
     setZoom(scale) {
         this.zoomScale = Math.min(this.maxZoom, Math.max(0.5, Number(scale) || 1));
         if (this.avatarZoomGroup) this.avatarZoomGroup.scale.setScalar(this.zoomScale);
+    }
+
+    /* Manual pitch and tilt -- the two angles a drag cannot reach. Drag owns yaw
+       (scene.rotation.y, see the pointer handlers above) and keeps it, inertia and all;
+       these own the other two axes of the same scene rotation, so the three compose
+       without any of them having to know about the others. Degrees in, radians on the
+       scene, clamped to +/-45: past that an avatar built to be seen from the front starts
+       showing an underside or a back it does not have.
+
+       Kept on the scene rather than the camera on purpose -- the camera is what auto-fit
+       and the fullscreen face both measure and move, and a hand-set angle should survive
+       every one of those. */
+    setViewPitch(degrees) {
+        this.viewPitch = HologramAvatar.clampViewAngle(degrees);
+        if (this.scene) this.scene.rotation.x = this.viewPitch * Math.PI / 180;
+    }
+
+    setViewTilt(degrees) {
+        this.viewTilt = HologramAvatar.clampViewAngle(degrees);
+        if (this.scene) this.scene.rotation.z = this.viewTilt * Math.PI / 180;
+    }
+
+    static clampViewAngle(degrees) {
+        const value = Number(degrees);
+        if (!Number.isFinite(value)) return 0;
+        return Math.min(45, Math.max(-45, value));
     }
 
     // Widens the camera's (vertical) field of view just far enough that the active avatar's
