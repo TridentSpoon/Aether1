@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use ureq::ResponseExt;
+use urlencoding;
 
 use crate::code_perms::{self, Grant, Refusal};
 use crate::llm::MemoryDb;
