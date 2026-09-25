@@ -85,8 +85,9 @@ pub struct CodingModel {
     pub blurb: String,
     /// Roughly how much disk the download takes.
     pub download: String,
-    /// Memory this wants, in gigabytes. Never shown; used to filter the list.
-    #[serde(skip)]
+    /// Memory this wants, in gigabytes. On the wire because the hub prints it on a
+    /// model's detail panel -- a download size is not a memory need, so it cannot be
+    /// re-derived from `download` -- and because the sort by size reads it.
     pub needs_gb: f64,
     /// Whether this machine has the memory to run it comfortably.
     pub fits: bool,

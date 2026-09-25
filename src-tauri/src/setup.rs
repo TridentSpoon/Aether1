@@ -146,8 +146,10 @@ pub struct ModelChoice {
     pub blurb: String,
     /// Roughly how much disk the download takes, for the "will this finish today?" question.
     pub download: String,
-    /// Free RAM this wants, in gigabytes. Never shown; used to filter the list.
-    #[serde(skip)]
+    /// Free RAM this wants, in gigabytes. Also what the hub prints as the memory figure
+    /// on a model's detail panel, which is why it is on the wire rather than skipped: the
+    /// list used to only need it to decide `fits`, and a browser that shows the figure
+    /// cannot re-derive it from "about 4.7 GB" (a download size is not a memory need).
     pub needs_gb: f64,
     /// Whether this machine has the memory to run it comfortably.
     ///
@@ -156,6 +158,20 @@ pub struct ModelChoice {
     /// bigger ones" line. They are still offered -- someone who knows their hardware
     /// better than a heuristic does gets to pick past it -- just not shouted.
     pub fits: bool,
+    /// Video memory this wants for the whole model to sit on the card, in gigabytes.
+    pub needs_vram_gb: f64,
+    /// Whether a dedicated graphics card on this machine has room for the whole thing.
+    ///
+    /// Separate from `fits`, and deliberately not part of what gets recommended: a model
+    /// over the card's line still runs -- the layers that do not fit are worked out by the
+    /// processor -- it is just slower. The recommendation stays a memory decision; this is
+    /// the extra fact the hub shows beside it, the same one the coding list already showed.
+    ///
+    /// Unlike the coding catalogue, the figures here are each model's own and do not climb
+    /// monotonically down the list: nothing picks by them, so an entry that is smaller than
+    /// the one above it says so rather than being rounded up to keep an ordering nothing
+    /// reads.
+    pub fits_on_gpu: bool,
     /// The one pre-selected for this machine.
     pub recommended: bool,
 }
@@ -175,7 +191,7 @@ pub struct ModelChoice {
 /// theoretical minimum and then swaps for forty seconds per sentence is, to the person
 /// who followed this wizard, a broken program -- and they will blame Aether1, correctly.
 /// Better to recommend something small that answers immediately.
-const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
+const CATALOGUE: &[(&str, &str, &str, &str, f64, f64)] = &[
     // Runs on almost anything, including an old laptop or a mini PC.
     (
         "qwen2.5:0.5b",
@@ -183,6 +199,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "The smallest thing here that still holds a conversation. For machines with very little memory.",
         "about 400 MB",
         2.0,
+        1.0,
     ),
     (
         "gemma3:1b",
@@ -190,6 +207,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Google's small one. Writes more naturally than its size suggests.",
         "about 815 MB",
         2.0,
+        1.5,
     ),
     (
         "qwen2.5:1.5b",
@@ -197,6 +215,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Fast, and noticeably better at following instructions than most models this size.",
         "about 1 GB",
         2.0,
+        1.8,
     ),
     (
         "deepseek-r1:1.5b",
@@ -204,6 +223,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Thinks a problem through before answering, so it is slower but better at puzzles and maths.",
         "about 1.1 GB",
         2.0,
+        1.8,
     ),
     (
         "llama3.2:1b",
@@ -211,6 +231,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Quick and light. Good for chatting and simple questions; it will get hard facts wrong sometimes.",
         "about 1.3 GB",
         2.0,
+        1.8,
     ),
     // The ordinary 8 GB desktop or laptop.
     (
@@ -219,6 +240,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "A step up in writing quality for a small step up in size.",
         "about 1.6 GB",
         5.0,
+        2.5,
     ),
     (
         "qwen2.5:3b",
@@ -226,6 +248,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Careful with instructions and good at code for something this small.",
         "about 1.9 GB",
         5.0,
+        3.0,
     ),
     (
         "phi4-mini",
@@ -233,6 +256,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Microsoft's small one. Strong at reasoning and maths for its size.",
         "about 2.5 GB",
         5.0,
+        3.5,
     ),
     (
         "gemma3:4b",
@@ -240,6 +264,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "The best writing of the medium models, and a little slower for it.",
         "about 3.3 GB",
         5.0,
+        4.5,
     ),
     (
         "llama3.2:3b",
@@ -247,6 +272,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Handles longer conversations and keeps track of what was said. The best all-rounder at this size.",
         "about 2 GB",
         5.0,
+        3.0,
     ),
     // A 16 GB machine.
     (
@@ -255,6 +281,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Clearly better answers, and slower. Worth it if this machine has the memory.",
         "about 4.1 GB",
         10.0,
+        5.5,
     ),
     (
         "qwen2.5:7b",
@@ -262,6 +289,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Very good at code and at doing exactly what it was asked.",
         "about 4.7 GB",
         10.0,
+        6.0,
     ),
     (
         "deepseek-r1:8b",
@@ -269,6 +297,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Works through its reasoning before answering. Slow, and hard to beat on tricky questions.",
         "about 5.2 GB",
         10.0,
+        6.5,
     ),
     (
         "llama3.1:8b",
@@ -276,6 +305,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "The most widely used model on this list, and a dependable all-rounder. The best pick for an ordinary gaming PC.",
         "about 4.9 GB",
         10.0,
+        6.5,
     ),
     // A 32 GB workstation.
     (
@@ -284,6 +314,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Writes about as well as anything you can run at home. Needs a serious machine.",
         "about 8.1 GB",
         20.0,
+        10.0,
     ),
     (
         "deepseek-r1:14b",
@@ -291,6 +322,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "The reasoning one, at a size where the reasoning really shows. Takes its time.",
         "about 9 GB",
         20.0,
+        11.0,
     ),
     (
         "qwen2.5:14b",
@@ -298,6 +330,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "The best all-round answers you can get without a workstation-class machine.",
         "about 9 GB",
         20.0,
+        11.0,
     ),
     // 64 GB and up, or a machine with a lot of video memory.
     (
@@ -306,6 +339,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "Splits the work between several smaller experts, so it answers faster than its size suggests.",
         "about 26 GB",
         48.0,
+        30.0,
     ),
     (
         "llama3.3:70b",
@@ -313,6 +347,7 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
         "As close to a commercial cloud assistant as a home machine gets. Only for very large amounts of memory.",
         "about 43 GB",
         48.0,
+        44.0,
     ),
 ];
 
@@ -322,24 +357,32 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64)] = &[
 /// machine better than a heuristic does is worse than letting them pick it -- but only
 /// models that comfortably fit are marked `recommended`, and the best fitting one is the
 /// single pre-selection.
-pub fn models_for(ram_total_gb: f64) -> Vec<ModelChoice> {
+pub fn models_for(ram_total_gb: f64, vram_gb: Option<f64>) -> Vec<ModelChoice> {
     // The OS, the browser and the HUD are already resident, and the figure is total rather
     // than free. Seventy percent is what is realistically spendable on a model -- and the
     // thresholds it is measured against are themselves generous, so this is not the only
     // margin protecting a machine from being promised something that swaps.
     let usable = ram_total_gb * 0.7;
+    // The same tenth `code_setup::models_for` holds back, for the same reason: a card is not
+    // also running the desktop and the webview, but it is holding the compositor's
+    // framebuffers and the HUD's own three.js scene.
+    let usable_vram = vram_gb.map(|gb| gb * 0.9);
 
     let mut choices: Vec<ModelChoice> = CATALOGUE
         .iter()
-        .map(|(name, label, blurb, download, needs_gb)| ModelChoice {
-            name: name.to_string(),
-            label: label.to_string(),
-            blurb: blurb.to_string(),
-            download: download.to_string(),
-            needs_gb: *needs_gb,
-            fits: *needs_gb <= usable,
-            recommended: false,
-        })
+        .map(
+            |(name, label, blurb, download, needs_gb, needs_vram_gb)| ModelChoice {
+                name: name.to_string(),
+                label: label.to_string(),
+                blurb: blurb.to_string(),
+                download: download.to_string(),
+                needs_gb: *needs_gb,
+                fits: *needs_gb <= usable,
+                needs_vram_gb: *needs_vram_gb,
+                fits_on_gpu: usable_vram.is_some_and(|room| *needs_vram_gb <= room),
+                recommended: false,
+            },
+        )
         .collect();
 
     // The largest that fits, or the smallest on the list if nothing does -- a machine below
@@ -388,7 +431,12 @@ pub struct Advice {
 /// `configured` is whether the settings already name a non-offline provider *and* a model;
 /// it is passed in rather than read here so this stays a pure function of the scan and the
 /// two facts, which is what makes the table of cases below testable.
-pub fn advise(scan: &ScanResult, ram_total_gb: f64, configured: bool) -> Advice {
+pub fn advise(
+    scan: &ScanResult,
+    ram_total_gb: f64,
+    gpus: &[crate::gpu::Gpu],
+    configured: bool,
+) -> Advice {
     let os = Os::current();
 
     // Any server that answered, preferring one that actually has models: a running server
@@ -439,7 +487,10 @@ pub fn advise(scan: &ScanResult, ram_total_gb: f64, configured: bool) -> Advice 
         headline: stage.headline().to_string(),
         os,
         steps,
-        models: models_for(ram_total_gb),
+        models: models_for(
+            ram_total_gb,
+            crate::gpu::dedicated(gpus).and_then(|gpu| gpu.vram_gb),
+        ),
         endpoint,
         provider,
         installed_models,
@@ -595,7 +646,7 @@ mod tests {
 
     #[test]
     fn a_bare_machine_is_told_to_install_something() {
-        let advice = advise(&empty_scan(), 16.0, false);
+        let advice = advise(&empty_scan(), 16.0, &[], false);
         assert_eq!(advice.stage, Stage::NothingInstalled);
         assert!(!advice.steps.is_empty());
         assert!(!advice.can_install_from_here);
@@ -607,7 +658,7 @@ mod tests {
     fn an_installed_but_silent_ollama_is_told_to_start_it() {
         let mut scan = empty_scan();
         scan.ollama.cli_installed = true;
-        let advice = advise(&scan, 16.0, false);
+        let advice = advise(&scan, 16.0, &[], false);
         assert_eq!(advice.stage, Stage::InstalledNotRunning);
         assert!(advice.can_install_from_here);
     }
@@ -618,7 +669,7 @@ mod tests {
         scan.ollama.cli_installed = true;
         scan.local_servers = vec![server(11434, &[])];
         scan.has_local_provider = true;
-        let advice = advise(&scan, 16.0, false);
+        let advice = advise(&scan, 16.0, &[], false);
         assert_eq!(advice.stage, Stage::RunningNoModel);
         assert_eq!(advice.endpoint.as_deref(), Some("http://localhost:11434"));
         assert_eq!(advice.provider.as_deref(), Some("ollama"));
@@ -629,7 +680,7 @@ mod tests {
         let mut scan = empty_scan();
         scan.local_servers = vec![server(11434, &["llama3.2:1b"])];
         scan.has_local_provider = true;
-        let advice = advise(&scan, 16.0, false);
+        let advice = advise(&scan, 16.0, &[], false);
         assert_eq!(advice.stage, Stage::ReadyToSelect);
         assert_eq!(advice.installed_models, vec!["llama3.2:1b"]);
     }
@@ -638,13 +689,13 @@ mod tests {
     /// server that is no longer up is exactly the state the wizard exists to catch.
     #[test]
     fn settings_alone_do_not_make_a_machine_configured() {
-        let advice = advise(&empty_scan(), 16.0, true);
+        let advice = advise(&empty_scan(), 16.0, &[], true);
         assert_eq!(advice.stage, Stage::NothingInstalled);
 
         let mut scan = empty_scan();
         scan.local_servers = vec![server(11434, &["llama3.2:1b"])];
         scan.has_local_provider = true;
-        assert_eq!(advise(&scan, 16.0, true).stage, Stage::Configured);
+        assert_eq!(advise(&scan, 16.0, &[], true).stage, Stage::Configured);
     }
 
     /// A server with models is preferred over one without, so the HUD fills its fields in
@@ -654,7 +705,7 @@ mod tests {
         let mut scan = empty_scan();
         scan.local_servers = vec![server(8080, &[]), server(11434, &["qwen2.5:1.5b"])];
         scan.has_local_provider = true;
-        let advice = advise(&scan, 16.0, false);
+        let advice = advise(&scan, 16.0, &[], false);
         assert_eq!(advice.endpoint.as_deref(), Some("http://localhost:11434"));
     }
 
@@ -675,21 +726,21 @@ mod tests {
     /// 3B model, not be talked down to a 1B one.
     #[test]
     fn an_ordinary_machine_is_recommended_a_middling_model() {
-        let models = models_for(8.0);
+        let models = models_for(8.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
         assert_eq!(pick.name, "llama3.2:3b");
     }
 
     #[test]
     fn a_small_machine_is_recommended_a_small_model() {
-        let models = models_for(4.0);
+        let models = models_for(4.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
         assert_eq!(pick.name, "llama3.2:1b");
     }
 
     #[test]
     fn a_big_machine_is_recommended_a_big_model() {
-        let models = models_for(64.0);
+        let models = models_for(64.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
         assert_eq!(pick.name, "qwen2.5:14b");
     }
@@ -698,7 +749,7 @@ mod tests {
     /// a HUD with a 3D avatar in it. It should land on an 8B model.
     #[test]
     fn a_gaming_pc_is_recommended_a_large_model() {
-        let models = models_for(16.0);
+        let models = models_for(16.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
         assert_eq!(pick.name, "llama3.1:8b");
     }
@@ -707,7 +758,7 @@ mod tests {
     /// next step, and the smallest model on the list is worth trying anyway.
     #[test]
     fn a_tiny_machine_still_gets_one_recommendation() {
-        let models = models_for(1.0);
+        let models = models_for(1.0, None);
         let picked: Vec<_> = models.iter().filter(|m| m.recommended).collect();
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].name, "qwen2.5:0.5b");
@@ -719,7 +770,7 @@ mod tests {
     #[test]
     fn catalogue_is_ordered_by_memory() {
         let mut previous = 0.0;
-        for (name, _, _, _, needs_gb) in CATALOGUE {
+        for (name, _, _, _, needs_gb, _) in CATALOGUE {
             assert!(
                 *needs_gb >= previous,
                 "{name} needs {needs_gb} GB, less than the entry above it ({previous} GB) -- \
@@ -733,7 +784,7 @@ mod tests {
     /// `fits` has to be honest about which is which.
     #[test]
     fn only_models_the_machine_can_run_are_marked_as_fitting() {
-        let models = models_for(8.0);
+        let models = models_for(8.0, None);
         assert!(models.iter().any(|m| m.fits), "8 GB fits something");
         assert!(
             models.iter().any(|m| !m.fits),
@@ -751,7 +802,7 @@ mod tests {
     /// with a name but no explanation is a dead end in the one place that cannot afford one.
     #[test]
     fn every_model_explains_itself() {
-        for (name, label, blurb, download, _) in CATALOGUE {
+        for (name, label, blurb, download, _, _) in CATALOGUE {
             assert!(!label.is_empty(), "{name} has no label");
             assert!(blurb.len() > 30, "{name} has no real blurb");
             assert!(
@@ -759,6 +810,41 @@ mod tests {
                 "{name} has no size"
             );
         }
+    }
+
+    /// The video-memory figure is what a model needs to sit entirely on the card, and the
+    /// weights are a subset of what the whole thing needs in memory -- so an entry claiming
+    /// to want more video memory than memory is a typo, and a silent one: it would simply
+    /// never light the "fits on the graphics card" line on a machine where it should.
+    ///
+    /// Unlike the coding catalogue there is deliberately no ordering rule here. Nothing
+    /// picks by this column, so each entry states its own need.
+    #[test]
+    fn no_model_wants_more_video_memory_than_memory() {
+        for (name, _, _, _, needs_gb, needs_vram_gb) in CATALOGUE {
+            assert!(
+                needs_vram_gb < needs_gb,
+                "{name} wants {needs_vram_gb} GB of video memory but only {needs_gb} GB of \
+                 memory -- the weights cannot be bigger than the whole model",
+            );
+        }
+    }
+
+    /// A machine with no card and a machine with a card too small are different facts, and
+    /// the hub prints a different line for each. Collapsing them would tell someone with a
+    /// 16 GB card that nothing fits on it.
+    #[test]
+    fn the_graphics_card_answer_is_separate_from_the_memory_one() {
+        // No card: nothing claims to fit on one, whatever the memory.
+        assert!(models_for(64.0, None).iter().all(|m| !m.fits_on_gpu));
+        // A big card on a small machine: the card answer says yes where memory says no.
+        let models = models_for(4.0, Some(16.0));
+        assert!(
+            models.iter().any(|m| m.fits_on_gpu && !m.fits),
+            "a 16 GB card holds models a 4 GB machine has no memory for",
+        );
+        // A card too small for anything does not pretend otherwise.
+        assert!(models_for(64.0, Some(0.5)).iter().all(|m| !m.fits_on_gpu));
     }
 
     /// Two entries with the same ollama name would draw two radio buttons that do the same
@@ -776,8 +862,8 @@ mod tests {
     /// a gate, and someone who knows their hardware may pick past the recommendation.
     #[test]
     fn every_machine_is_offered_the_whole_list() {
-        assert_eq!(models_for(2.0).len(), CATALOGUE.len());
-        assert_eq!(models_for(128.0).len(), CATALOGUE.len());
+        assert_eq!(models_for(2.0, None).len(), CATALOGUE.len());
+        assert_eq!(models_for(128.0, None).len(), CATALOGUE.len());
     }
 
     /// A step that both says "paste this" and "open that" has not decided what it is asking

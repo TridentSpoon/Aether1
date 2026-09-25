@@ -1613,3 +1613,337 @@ body {
     height: 36px;
     pointer-events: none;
 }
+
+/* ===================== THE MODEL HUB =====================================
+   The Brain's model list, arranged the way a model browser is: what the machine
+   has along the top, a list on one side, one model's detail on the other.
+
+   It is a two-column layout inside a pane that is itself the right-hand column
+   of the settings window, so the breakpoint is narrower than it looks -- at
+   900px of window the pane has about 620px, and below that these stack. The
+   list keeps a height of its own rather than growing with the catalogue: a
+   nineteen-entry list that pushes the detail panel off the bottom of the pane
+   is the arrangement this replaced. */
+
+.hub-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.hub-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text-main);
+}
+
+.hub-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+
+.hub-chips {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+/* One reading of the machine. The label is dimmer than the figure on purpose:
+   the numbers are meant to be scannable as a row, and "16 GB VRAM" read as one
+   weight is a row of words. */
+.hub-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 999px;
+    background: var(--bg-panel);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    white-space: nowrap;
+}
+
+.hub-chip-value { color: var(--text-main); }
+.hub-search input::placeholder { color: var(--text-dim); }
+.hub-chip-label { color: var(--text-dim); font-size: 0.6rem; letter-spacing: 0.08em; }
+.hub-chip[data-state="good"] { border-color: rgba(0, 255, 170, 0.5); }
+.hub-chip[data-state="good"] .hub-chip-value { color: var(--neon-green); }
+.hub-chip[data-state="warn"] { border-color: rgba(255, 170, 0, 0.5); }
+.hub-chip[data-state="warn"] .hub-chip-value { color: var(--neon-amber); }
+
+.hub-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.hub-tabs {
+    display: inline-flex;
+    padding: 0.15rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 999px;
+    background: var(--bg-core);
+}
+
+.hub-tab {
+    padding: 0.3rem 0.9rem;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.hub-tab:hover { color: var(--text-main); }
+.hub-tab.is-active {
+    background: var(--tint-main);
+    color: var(--text-accent);
+}
+
+.hub-search {
+    position: relative;
+    flex: 1 1 12rem;
+    min-width: 8rem;
+}
+
+.hub-search-icon {
+    position: absolute;
+    left: 0.6rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.7rem;
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.hub-search input {
+    width: 100%;
+    padding: 0.4rem 0.6rem 0.4rem 1.8rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 999px;
+    background: var(--bg-core);
+    color: var(--text-main);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+}
+
+.hub-search input:focus {
+    outline: none;
+    border-color: var(--border-neon-bright);
+}
+
+.hub-select {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.35rem;
+    background: var(--bg-core);
+    color: var(--text-main);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+}
+
+.hub-body {
+    display: grid;
+    grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: start;
+}
+
+/* The pane is a column inside a column, so this is narrow long before the
+   window is. Below it the detail goes under the list rather than beside it. */
+@media (max-width: 900px) {
+    .hub-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+.hub-list-col { min-width: 0; }
+
+.hub-list-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.15rem 0.35rem 0.15rem;
+}
+
+.hub-list-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.hub-icon-btn {
+    border: 1px solid var(--border-neon);
+    border-radius: 0.3rem;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    line-height: 1;
+    padding: 0.15rem 0.4rem;
+    cursor: pointer;
+}
+
+.hub-icon-btn:hover { color: var(--text-accent); border-color: var(--border-neon-bright); }
+
+.hub-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    max-height: 22rem;
+    overflow-y: auto;
+    padding-right: 0.2rem;
+}
+
+.hub-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    background: var(--bg-panel);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.hub-row:hover { background: var(--bg-panel-hover); }
+
+.hub-row.is-selected {
+    border-color: var(--border-neon);
+    background: var(--tint-main);
+}
+
+.hub-row-glyph { font-size: 0.85rem; line-height: 1.2; opacity: 0.8; }
+.hub-row-body { min-width: 0; flex: 1 1 auto; }
+
+.hub-row-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text-main);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.hub-row-meta {
+    display: flex;
+    gap: 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text-dim);
+}
+
+.hub-row.is-unfit .hub-row-name { color: var(--text-dim); }
+
+.hub-empty {
+    padding: 0.75rem 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+}
+
+.hub-detail {
+    min-width: 0;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.5rem;
+    background: var(--bg-panel);
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.hub-detail-name {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-main);
+    word-break: break-word;
+}
+
+.hub-detail-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+}
+
+.hub-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+
+.hub-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.3rem;
+    background: var(--bg-core);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text-dim);
+}
+
+.hub-tag[data-tone="on"] { border-color: rgba(0, 255, 170, 0.5); color: var(--neon-green); }
+.hub-tag[data-tone="off"] { border-color: rgba(255, 51, 102, 0.4); color: rgba(255, 120, 150, 0.9); }
+.hub-tag[data-tone="pick"] { border-color: var(--border-neon-bright); color: var(--text-accent); }
+
+/* The download row, which is the one thing on this panel that spends somebody's
+   bandwidth -- so it is a bar of its own with the size in it, not a button in a
+   corner. */
+.hub-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.5rem;
+    background: var(--bg-core);
+}
+
+.hub-action-size {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-main);
+}
+
+.hub-blurb {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    line-height: 1.55;
+    color: var(--text-dim);
+}
+
+.hub-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+    gap: 0.4rem;
+}
+
+.hub-fact {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid rgba(125, 165, 201, 0.25);
+    border-radius: 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.hub-fact-label { font-size: 0.55rem; letter-spacing: 0.08em; color: var(--text-dim); }
+.hub-fact-value { font-size: 0.72rem; color: var(--text-main); }
+
+.hub-downloads { display: flex; flex-direction: column; gap: 0.4rem; }
