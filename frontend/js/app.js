@@ -87,16 +87,22 @@ document.addEventListener('DOMContentLoaded', () => {
      * stays in the DOM; this only ever moves the is-active class, so nothing that
      * reads or writes a settings field by id needs to know the layout changed.
      *
-     * Two of the panes are platform-dependent (Desktop Sprite, Startup &
-     * Performance) and start with their rail entry hidden -- revealSettingsSection
-     * is how initSpriteMode/initStartupPerformance turn them on. An entry that is
-     * hidden cannot be chosen, including out of the remembered choice below.
+     * One pane is platform-dependent (Startup & Performance) and starts with its rail
+     * entry hidden -- revealSettingsSection is how initStartupPerformance turns it on.
+     * An entry that is hidden cannot be chosen, including out of the remembered choice
+     * below. Desktop Sprite used to be a second such entry; it is a card inside Display
+     * now (see SETTINGS_SECTION_ALIASES), since both it and the panel grid answer the
+     * same question of where this thing is drawn on screen.
      *
      * A pane whose body is still a <details> is opened when it is chosen, which is
      * what keeps the two groups that probe the machine on open (the coding group,
      * the doctor) probing exactly when someone goes looking at them.
      */
     const SETTINGS_SECTION_KEY = 'aether_settings_section';
+    // Sections that have been folded into another one. Only the remembered choice can still
+    // name one, so this is what stops somebody who was last in Desktop Sprite from being
+    // dropped back at the top of the rail the first time they open Settings after updating.
+    const SETTINGS_SECTION_ALIASES = { sprite: 'layout' };
     const settingsNav = document.getElementById('settings-nav');
     const settingsNavEmpty = document.getElementById('settings-nav-empty');
     const settingsSearch = document.getElementById('settings-search');
@@ -181,6 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function restoreSettingsSection() {
         let remembered = null;
         try { remembered = localStorage.getItem(SETTINGS_SECTION_KEY); } catch (e) { /* private mode */ }
+        if (remembered) remembered = SETTINGS_SECTION_ALIASES[remembered] || remembered;
         if (remembered && showSettingsSection(remembered)) return;
         const first = settingsNavItems().find(item => !item.classList.contains('hidden'));
         if (first) showSettingsSection(first.dataset.settingsSection);
@@ -6157,12 +6164,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Desktop Sprite Mode is a transparent/always-on-top native window -- meaningless in the
-    // plain browser flow, so the whole section stays hidden there (mirrors initVersionAndUpdates).
+    // plain browser flow, so its card stays hidden there (mirrors initVersionAndUpdates). It
+    // is a card in the Display section rather than a section of its own, so there is no rail
+    // entry to reveal: on the web Display is simply the panel grid.
     function initSpriteMode() {
         if (!IS_TAURI) return;
         const section = document.getElementById('sprite-mode-section');
         if (section) section.classList.remove('hidden');
-        revealSettingsSection('sprite');
     }
 
     // Reflects Game Mode's current on/off state on its Quick Commands button -- called both

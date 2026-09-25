@@ -826,7 +826,7 @@
                         <span class="settings-nav-icon">👤</span>
                         <span class="settings-nav-text">Profile</span>
                     </button>
-                    <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar theme colour colors persona speciality sprite hologram" data-hint="avatar, colours and which persona answers" title="avatar, colours and which persona answers">
+                    <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar theme colour colors persona speciality hologram" data-hint="avatar, colours and which persona answers" title="avatar, colours and which persona answers">
                         <span class="settings-nav-icon">🎨</span>
                         <span class="settings-nav-text">Appearance</span>
                     </button>
@@ -838,13 +838,9 @@
                         <span class="settings-nav-icon">⚡</span>
                         <span class="settings-nav-text">Identity</span>
                     </button>
-                    <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide" data-hint="where the panels sit, and which ones exist" title="where the panels sit, and which ones exist">
+                    <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide desktop sprite float floating always on top hologram window" data-hint="where the avatar lives, and where the panels sit" title="where the avatar lives, and where the panels sit">
                         <span class="settings-nav-icon">🧱</span>
-                        <span class="settings-nav-text">HUD Layout</span>
-                    </button>
-                    <button type="button" id="settings-nav-sprite" class="settings-nav-item hidden" data-settings-section="sprite" data-keywords="desktop sprite floating always on top" data-hint="float the avatar on your desktop" title="float the avatar on your desktop">
-                        <span class="settings-nav-icon">🖥️</span>
-                        <span class="settings-nav-text">Desktop Sprite</span>
+                        <span class="settings-nav-text">Display</span>
                     </button>
                     <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key server ollama openai cloud local provider connections github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
                         <span class="settings-nav-icon">🧠</span>
@@ -1228,13 +1224,36 @@
                 </div>
             </section>
 
-            <!-- SECTION: HUD LAYOUT -->
+            <!-- SECTION: DISPLAY -- where the HUD's panels sit, and whether the avatar is
+                 floating free of the window. These were two rail entries, "HUD Layout" and
+                 "Desktop Sprite", until it was pointed out that they are one question asked
+                 twice: both are about where this thing is drawn on your screen. The sprite
+                 half is native-app only (see initSpriteMode / IS_TAURI), so in a browser tab
+                 the card below stays hidden and this section is just the panel grid. Its
+                 data-settings-section is still "layout" so a remembered choice survives;
+                 "sprite" is aliased onto it in app.js. -->
             <section class="settings-pane" data-settings-section="layout">
                 <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">🧱 HUD Layout</h3>
-                    <p class="settings-pane-hint">where the panels sit, and which ones exist</p>
+                    <h3 class="settings-pane-title">🧱 Display</h3>
+                    <p class="settings-pane-hint">where the avatar lives, and where the panels sit</p>
                 </div>
+
+                <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2 mb-3">
+                    <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🖥️ DESKTOP SPRITE</span>
+                    <!-- The checkbox keeps its id: loadSettings/saveSettings and
+                         setHologramFloating all address it by that and know nothing of how it
+                         is drawn. The input is nested inside its own label rather than paired
+                         by "for", so one click is one toggle. -->
+                    <label class="a1-switch">
+                        <input id="setting-sprite-mode" type="checkbox" class="a1-switch-input">
+                        <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        <span class="a1-switch-text">Float the avatar on your desktop -- a live mirror of this HUD's hologram, drag it anywhere, click it to bring this window back</span>
+                    </label>
+                    <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. The hologram panel goes quiet while it's out there. The switch applies once you click Save Changes below.</span>
+                </div>
+
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🧱 HUD PANELS</span>
                 <span class="text-[11px] font-mono text-slate-400 block">Drag a panel by the dotted strip along its top to move it anywhere on the grid, like rearranging home-screen widgets. Drag the corner handle to resize it. Both are remembered.</span>
                 <button id="btn-reset-layout" type="button" class="cyber-btn text-xs py-1.5 px-3">Reset panels to their default places</button>
 
@@ -1251,21 +1270,6 @@
                         nothing hidden here is being kept up to date behind your back.
                     </p>
                 </div>
-                </div>
-            </section>
-
-            <!-- SECTION: DESKTOP SPRITE MODE (native desktop app only -- see IS_TAURI below) -->
-            <section class="settings-pane" data-settings-section="sprite">
-                <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">🖥️ Desktop Sprite</h3>
-                    <p class="settings-pane-hint">float the avatar on your desktop</p>
-                </div>
-                <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2">
-                <div class="flex items-center gap-2">
-                    <input id="setting-sprite-mode" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                    <label for="setting-sprite-mode" class="text-xs font-mono text-slate-300">Float the avatar on your desktop -- a live mirror of this HUD's hologram, drag it anywhere, click it to bring this window back</label>
-                </div>
-                <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. The hologram panel above goes quiet while it's out there. Toggle applies once you click Save Changes below.</span>
                 </div>
             </section>
 
