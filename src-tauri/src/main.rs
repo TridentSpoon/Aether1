@@ -81,6 +81,10 @@ const MAIN_LABEL: &str = "main";
 const SPRITE_LABEL: &str = "sprite";
 const AVATAR_LAB_LABEL: &str = "avatar-lab";
 const FACE_LABEL: &str = "face";
+/// Remembers that the operator has been told once that closing the HUD leaves AETHER1
+/// running in the tray. Same shape as `installs::NOTICE_SETTING`: a thing said once, not a
+/// preference.
+const CLOSE_TO_TRAY_NOTICE: &str = "close_to_tray_notice";
 
 /// Set by build.rs from `git rev-parse HEAD` at compile time; "unknown" if this wasn't
 /// built from a git checkout (e.g. a source tarball without a .git directory).
@@ -1902,7 +1906,8 @@ fn window_is_maximized_rust(window: tauri::WebviewWindow) -> Result<bool, String
 }
 
 /// Goes through `close()` rather than exiting, so the main window keeps the CloseRequested
-/// handling below -- the sprite or the fullscreen face still keeps the app alive.
+/// handling below: closing the HUD hides it to the tray, and only "Quit AETHER1" there
+/// actually ends the process.
 #[tauri::command]
 fn close_window_rust(window: tauri::WebviewWindow) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
@@ -2370,23 +2375,40 @@ fn main() {
             set_game_mode_rust
         ])
         .on_window_event(|window, event| {
-            // Closing the main HUD window would otherwise exit the whole app (Tauri's
-            // default with no other running windows/tray keeping it alive) -- but if the
-            // desktop sprite or the fullscreen face is up, the app should keep running
-            // headless-with-avatar instead, matching the tray's existing "Show AETHER1"
-            // affordance. Both count, and for the same reason: each is a window showing the
-            // avatar somewhere other than the HUD, and quitting out from under one of them
-            // reads as the close button having killed a window on a different screen. Only
-            // intercepts the close when one of them is actually open, so anyone not using
-            // either feature sees the same close-quits-the-app behavior as before.
+            // Closing the main HUD window hides it to the tray rather than exiting. AETHER1
+            // is a background thing -- the hotkey summons it, the crash watcher and the
+            // model server keep running, the tray icon says it is there -- and a close
+            // button that ends all of that is at odds with every other part of the app.
+            // Quitting is deliberate and lives in one place: "Quit AETHER1" in the tray
+            // menu.
+            //
+            // This used to hide only while the desktop sprite or the fullscreen face was up,
+            // and quit otherwise. That was the same reasoning applied to two cases instead
+            // of all of them.
             if window.label() == MAIN_LABEL {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     let app = window.app_handle();
-                    let avatar_is_elsewhere = app.get_webview_window(SPRITE_LABEL).is_some()
-                        || app.get_webview_window(FACE_LABEL).is_some();
-                    if avatar_is_elsewhere {
-                        api.prevent_close();
-                        let _ = window.hide();
+                    api.prevent_close();
+                    let _ = window.hide();
+
+                    // Said once, and only once. An app that vanishes from the screen and
+                    // keeps running is a reasonable thing to be; an app that does it without
+                    // saying so is a process somebody finds in a task manager three days
+                    // later. After the first time it is just how AETHER1 behaves.
+                    let db = app.state::<LlmEngine>();
+                    let db = db.db();
+                    if !db.get_setting_bool(CLOSE_TO_TRAY_NOTICE, false) {
+                        let _ = db.set_setting(CLOSE_TO_TRAY_NOTICE, &serde_json::json!(true));
+                        use tauri_plugin_notification::NotificationExt;
+                        let _ = app
+                            .notification()
+                            .builder()
+                            .title("AETHER1 is still running")
+                            .body(
+                                "The window closed to the tray. Open it from the tray icon, \
+                                 or choose Quit AETHER1 there to stop it.",
+                            )
+                            .show();
                     }
                 }
             }
