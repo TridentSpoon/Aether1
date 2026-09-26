@@ -1950,7 +1950,6 @@ fn start_window_resize_rust(window: tauri::WebviewWindow, direction: String) -> 
 /// PNGTuber-style presentation, so its "Undock" button goes there instead. Panel id, window
 /// title suffix, and a starting size sane for that panel's content.
 const PANEL_WINDOWS: &[(&str, &str, f64, f64)] = &[
-    ("tokens", "Model Performance", 380.0, 560.0),
     ("chat", "Neural Dialogue Stream", 480.0, 680.0),
     // Wider and shorter than the rest: 80 columns is what a terminal is for, and a shell
     // squeezed into a 380px column wraps every second command.
