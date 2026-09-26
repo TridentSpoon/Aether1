@@ -58,6 +58,11 @@ struct LanState {
     limiter: Arc<AttemptLimiter>,
 }
 
+/// The port both modes listen on. Named here because it is the one thing start.sh,
+/// start.bat, the README and `aether1 doctor` all assume; the Remote & LAN pane probes it
+/// to say whether anything is serving, and reads it from here rather than repeating it.
+pub const SERVE_PORT: u16 = 8378;
+
 /// The address the HTTP server listens on.
 ///
 /// Loopback is the default because nothing here needs a password to be safe on it: every
@@ -1362,6 +1367,8 @@ mod bind_tests {
 
     /// The default is the whole point of the flag, so it is asserted rather than assumed.
     /// Someone changing this line should have to change a test that says why.
+    use super::SERVE_PORT;
+
     #[test]
     fn serving_without_lan_listens_only_on_the_loopback_address() {
         assert_eq!(bind_address(false), "127.0.0.1:8378");
@@ -1377,7 +1384,10 @@ mod bind_tests {
     #[test]
     fn both_modes_use_the_documented_port() {
         for address in [bind_address(false), bind_address(true)] {
-            assert!(address.ends_with(":8378"), "unexpected port in {address}");
+            assert!(
+                address.ends_with(&format!(":{SERVE_PORT}")),
+                "unexpected port in {address}"
+            );
         }
     }
 }

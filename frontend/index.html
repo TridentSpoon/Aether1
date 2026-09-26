@@ -866,6 +866,13 @@
                         <span class="settings-nav-icon">🌐</span>
                         <span class="settings-nav-text">Network</span>
                     </button>
+                    <!-- Native app only: the Start button starts a child process, which a
+                         browser tab cannot do. Revealed by initRemoteLan once IS_TAURI is
+                         confirmed, the same way sprite and startup are. -->
+                    <button type="button" id="settings-nav-lan" class="settings-nav-item hidden" data-settings-section="lan" data-keywords="lan remote network serve pair pairing phrase devices token revoke tls certificate port share phone tablet" data-hint="reaching this machine from your other devices" title="reaching this machine from your other devices">
+                        <span class="settings-nav-icon">📡</span>
+                        <span class="settings-nav-text">Remote &amp; LAN</span>
+                    </button>
                     <button type="button" id="settings-nav-startup" class="settings-nav-item hidden" data-settings-section="startup" data-keywords="autostart login game mode performance quiet" data-hint="what runs on login, and how to quiet it" title="what runs on login, and how to quiet it">
                         <span class="settings-nav-icon">⚡</span>
                         <span class="settings-nav-text">Startup &amp; Performance</span>
@@ -1800,87 +1807,125 @@
             </section>
 
             <!-- ======================= WHAT IT MAY DO ======================= -->
+            <!-- Laid out with the same cards as Remote & LAN, and for the same reason:
+                 each card is one grant, with its own switch and the settings that only
+                 mean anything while it is on. The two halves stay apart on purpose --
+                 "may my companion read my files" and "may the coding model call gh" are
+                 not one decision. See code_perms.rs. -->
             <section class="settings-pane" data-settings-section="permissions">
-                <details id="settings-group-permissions" class="settings-group">
-                <summary class="settings-group-summary">
-                    <span class="settings-group-title">🔐 What it may do</span>
-                    <span class="settings-group-hint">reading this machine, running programs</span>
-                </summary>
-                <div class="settings-group-body">
-                    <div class="space-y-1">
-                        <div class="flex items-center gap-2">
-                            <input id="setting-tools" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-tools" class="text-xs font-mono text-slate-300">Let it look at this computer (reading only)</label>
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">🔐 What it may do</h3>
+                    <p class="settings-pane-hint">reading this machine, running programs</p>
+                </div>
+
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🔎</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">Looking at this computer</h4>
+                            <p class="net-card-hint">
+                                Lets the AI read files, list directories and check processes to
+                                answer you.
+                                <!-- Named folders are filled in by applyOsWording() in app.js, because
+                                     which ones exist depends on the machine Aether1 is running on --
+                                     see tools/domain.rs::directories(). The wording below is the
+                                     no-JavaScript fallback: true on every platform, specific on none. -->
+                                <span id="tools-readable-roots">Only your home directory and the
+                                system's own log and configuration folders</span>;
+                                never passwords or keys. Every use is recorded in the Activity Log.
+                                Nothing is changed without you approving it first.
+                            </p>
                         </div>
-                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            Lets the AI read files, list directories and check processes to answer you.
-                            <!-- Named folders are filled in by applyOsWording() in app.js, because
-                                 which ones exist depends on the machine Aether1 is running on --
-                                 see tools/domain.rs::directories(). The wording below is the
-                                 no-JavaScript fallback: true on every platform, specific on none. -->
-                            <span id="tools-readable-roots">Only your home directory and the
-                            system's own log and configuration folders</span>;
-                            never passwords or keys. Every use is recorded in the Activity Log.
-                            Nothing is changed without you approving it first.
-                        </p>
-                    </div>
-
-                    <div class="space-y-1 pt-1">
-                        <label for="setting-command-allowlist" class="text-xs font-mono text-cyan-300 block">PROGRAMS IT MAY ASK TO RUN</label>
-                        <!-- The placeholder is replaced per-platform by applyOsWording() in app.js. -->
-                        <input id="setting-command-allowlist" type="text" placeholder="e.g. ping" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Comma separated. Starts with a few programs that can only look at this
-                            machine, never change it &mdash; add your own, or empty the box to allow
-                            nothing. Every run still needs your approval &mdash; this only decides what
-                            it is allowed to ask for. There is no shell: no pipes, redirects or
-                            wildcards.
-                        </p>
-                    </div>
-
-                    <div class="space-y-1 pt-1">
-                        <label for="setting-persona-roots" class="text-xs font-mono text-cyan-300 block">
-                            FOLDERS <span id="persona-roots-who">IT</span> MAY READ WITHOUT ASKING
+                        <label class="net-switch">
+                            <input id="setting-tools" type="checkbox">
+                            <span aria-hidden="true"></span>
                         </label>
-                        <input id="setting-persona-roots" type="text" placeholder="e.g. ~/Projects, ~/Documents" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <p id="persona-roots-note" class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Comma separated. Each speciality already reads the folders its job needs;
-                            anything else is asked about every single time. Add a folder here and it
-                            stops asking about that one. This applies to the speciality selected above
-                            and to no other, and it never overrides the list of files that are never
-                            read &mdash; passwords and keys stay off limits regardless.
-                        </p>
                     </div>
 
-                    <!-- The coding panel answers a different question from the avatar and
-                         gets its own switches for the same reason: "may my companion read
-                         my files" and "may the coding model call gh" are not one decision.
-                         See code_perms.rs. -->
-                    <div class="space-y-1 pt-3 border-t border-cyan-500/20">
-                        <label class="text-xs font-mono text-cyan-300 block">AETHER CODE MAY LOOK AT</label>
-                        <div class="flex items-center gap-2">
-                            <input id="setting-code-perm-system" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-code-perm-system" class="text-xs font-mono text-slate-300">This machine &mdash; your files and what the hardware is</label>
+                    <div class="net-row net-row-stacked">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Programs it may ask to run</p>
+                            <!-- The placeholder is replaced per-platform by applyOsWording() in app.js. -->
+                            <p class="net-row-hint">
+                                Comma separated. Starts with a few programs that can only look at this
+                                machine, never change it &mdash; add your own, or empty the box to allow
+                                nothing. Every run still needs your approval &mdash; this only decides what
+                                it is allowed to ask for. There is no shell: no pipes, redirects or
+                                wildcards.
+                            </p>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <input id="setting-code-perm-github" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-code-perm-github" class="text-xs font-mono text-slate-300">GitHub, through the <span class="font-mono">gh</span> command</label>
+                    </div>
+                    <div class="net-field">
+                        <label for="setting-command-allowlist" class="sr-only">Programs it may ask to run</label>
+                        <input id="setting-command-allowlist" type="text" placeholder="e.g. ping" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+
+                    <div class="net-row net-row-stacked">
+                        <div class="net-row-text">
+                            <p class="net-row-title">
+                                Folders <span id="persona-roots-who">it</span> may read without asking
+                            </p>
+                            <p id="persona-roots-note" class="net-row-hint">
+                                Comma separated. Each speciality already reads the folders its job needs;
+                                anything else is asked about every single time. Add a folder here and it
+                                stops asking about that one. This applies to the speciality selected in
+                                Appearance and to no other, and it never overrides the list of files that
+                                are never read &mdash; passwords and keys stay off limits regardless.
+                            </p>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <input id="setting-code-perm-internet" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-code-perm-internet" class="text-xs font-mono text-slate-300">The internet, for documentation it needs</label>
-                        </div>
-                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            All three only read. The coding model cannot edit a file, commit, merge or
-                            install anything &mdash; <span class="font-mono">gh pr view</span> runs,
-                            <span class="font-mono">gh pr merge</span> is refused. When the next step
-                            would change something it writes the command out instead, and that command
-                            becomes a button that types it into your terminal. Nothing enters your
-                            terminal but your own Return key.
-                        </p>
+                    </div>
+                    <div class="net-field">
+                        <label for="setting-persona-roots" class="sr-only">Folders it may read without asking</label>
+                        <input id="setting-persona-roots" type="text" placeholder="e.g. ~/Projects, ~/Documents" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
-                </details>
+
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">⌨️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">AETHER CODE may look at</h4>
+                            <p class="net-card-hint">
+                                All three only read. The coding model cannot edit a file, commit, merge or
+                                install anything &mdash; <span class="font-mono">gh pr view</span> runs,
+                                <span class="font-mono">gh pr merge</span> is refused. When the next step
+                                would change something it writes the command out instead, and that command
+                                becomes a button that types it into your terminal. Nothing enters your
+                                terminal but your own Return key.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">This machine</p>
+                            <p class="net-row-hint">Your files, and what the hardware is.</p>
+                        </div>
+                        <label class="net-switch">
+                            <input id="setting-code-perm-system" type="checkbox">
+                            <span aria-hidden="true"></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">GitHub</p>
+                            <p class="net-row-hint">Through the <span class="font-mono">gh</span> command, reading only.</p>
+                        </div>
+                        <label class="net-switch">
+                            <input id="setting-code-perm-github" type="checkbox">
+                            <span aria-hidden="true"></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">The internet</p>
+                            <p class="net-row-hint">For the documentation it needs.</p>
+                        </div>
+                        <label class="net-switch">
+                            <input id="setting-code-perm-internet" type="checkbox">
+                            <span aria-hidden="true"></span>
+                        </label>
+                    </div>
+                </div>
             </section>
 
             <!-- ======================= NETWORK ======================= -->
@@ -1911,6 +1956,137 @@
                     </div>
                 </div>
                 </details>
+            </section>
+
+            <!-- ======================= REMOTE & LAN ======================= -->
+            <!-- Step 45 in the window. `aether1 --serve --lan`, `aether1 pair`,
+                 `aether1 devices` and `aether1 revoke <id>` all already existed; what was
+                 missing was an operator who never opens a terminal. See src-tauri/src/lan.rs
+                 for the two rules this pane rests on: AETHER1 only ever stops a server it
+                 started itself, and opening this pane never mints a pairing phrase.
+
+                 Laid out as cards rather than the app's usual stack of fields because each
+                 card is one capability -- it is either on or off, it has a switch of its
+                 own, and the rows beneath it only make sense in its company. -->
+            <section class="settings-pane" data-settings-section="lan">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">📡 Remote &amp; LAN</h3>
+                    <p class="settings-pane-hint">reaching this AETHER1 from your other devices, over your own network</p>
+                </div>
+
+                <!-- CARD 1: the server itself. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🛰️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">
+                                LAN access
+                                <span id="lan-state" class="net-state" data-state="off"><i aria-hidden="true"></i>Off</span>
+                            </h4>
+                            <p class="net-card-hint">
+                                Use AETHER1 from a phone, a tablet or another computer on your
+                                Wi-Fi or wired network. Traffic is encrypted, and every request
+                                needs a token the device earns by typing the pairing phrase once.
+                            </p>
+                        </div>
+                        <button type="button" id="btn-lan-toggle" class="net-card-action">Start</button>
+                    </div>
+                    <p id="lan-notice" class="net-notice hidden"></p>
+
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Address</p>
+                            <p class="net-row-hint">What to type into a browser on the other device. The certificate is this machine's own, so the browser will ask once whether you trust it.</p>
+                        </div>
+                        <p id="lan-address" class="net-row-value">&mdash;</p>
+                    </div>
+
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Port</p>
+                            <p class="net-row-hint">Fixed. start.sh, start.bat, the README and <span class="font-mono">aether1 doctor</span> all assume this port, so it is a fact about AETHER1 rather than a setting.</p>
+                        </div>
+                        <p id="lan-port" class="net-row-value">8378</p>
+                    </div>
+
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Start automatically</p>
+                            <p class="net-row-hint">Put this machine on the network each time AETHER1 starts. Stopping LAN access now will not turn this off. Game Mode holds it back, like everything else it quiets.</p>
+                        </div>
+                        <label class="net-switch">
+                            <input id="setting-lan-autostart" type="checkbox">
+                            <span aria-hidden="true"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- CARD 2: local auth. The phrase is the entry credential; the tokens it
+                     hands out are what every later request actually carries. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🔑</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">
+                                Pairing phrase
+                                <span id="lan-phrase-state" class="net-state" data-state="off"><i aria-hidden="true"></i>Not set</span>
+                            </h4>
+                            <p class="net-card-hint">
+                                Twelve words, typed once into each device you want to let in.
+                                It is never stored and never sent over the network &mdash; what
+                                is kept is the hash of a token derived from it, so a copied
+                                settings file hands out nothing usable.
+                            </p>
+                        </div>
+                        <button type="button" id="btn-lan-new-phrase" class="net-card-action net-card-action-quiet">New phrase</button>
+                    </div>
+
+                    <!-- Shown exactly once, by the press that made it: nothing stores the
+                         phrase, so there is no second chance to read it. -->
+                    <div id="lan-phrase-box" class="net-phrase hidden">
+                        <p class="net-phrase-label">Write this down now &mdash; it is not shown again</p>
+                        <p id="lan-phrase-words" class="net-phrase-words"></p>
+                        <p id="lan-phrase-note" class="net-row-hint"></p>
+                    </div>
+
+                    <div class="net-row net-row-stacked">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Paired devices</p>
+                            <p class="net-row-hint">Each one carries a token of its own, so taking one away leaves the rest alone. The same list is in Profile.</p>
+                        </div>
+                        <button type="button" id="btn-lan-revoke-all" class="cyber-btn text-[10px] py-1 px-2 border-red-400 text-red-400 hover:bg-red-900/40 hidden">Revoke all</button>
+                    </div>
+                    <div id="lan-devices" class="profile-devices"></div>
+                </div>
+
+                <!-- CARD 3: what needs no pairing at all, and why that is safe. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🖥️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">Access from this machine</h4>
+                            <p class="net-card-hint">
+                                <span class="font-mono">aether1 --serve</span> without
+                                <span class="font-mono">--lan</span> binds 127.0.0.1, which the
+                                operating system itself refuses every remote connection to.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">No pairing needed</p>
+                            <p class="net-row-hint">Reaching 127.0.0.1 already means being a program on this computer, so there is nothing a phrase would add.</p>
+                        </div>
+                        <p class="net-row-value">http://localhost:8378</p>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Whether anything may leave this machine</p>
+                            <p class="net-row-hint">A separate question from who may come in, and it has its own page.</p>
+                        </div>
+                        <button type="button" class="net-card-action net-card-action-quiet" data-settings-goto="network">Open Network</button>
+                    </div>
+                </div>
             </section>
 
             <!-- ======================= STARTUP & PERFORMANCE ======================= -->
