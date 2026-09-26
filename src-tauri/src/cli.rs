@@ -411,10 +411,12 @@ pub fn parse(argv: &[String]) -> Invocation {
                 None => Ok(Invocation::Status { json, events }),
             })
         }
-        "diagnostics" | "health" | "health check" => free_text(rest).and_then(|extra| match extra {
-            Some(extra) => Err(format!("diagnostics takes no arguments (got {extra:?})")),
-            None => Ok(Invocation::Diagnostics),
-        }),
+        "diagnostics" | "health" | "health check" => {
+            free_text(rest).and_then(|extra| match extra {
+                Some(extra) => Err(format!("diagnostics takes no arguments (got {extra:?})")),
+                None => Ok(Invocation::Diagnostics),
+            })
+        }
         "doctor" => parse_doctor(rest),
         "crashes" => free_text(rest).and_then(|extra| match extra {
             Some(extra) => Err(format!("crashes takes no arguments (got {extra:?})")),
@@ -796,8 +798,10 @@ pub(crate) fn run_diagnostics() -> String {
     let machine = crate::profile::machine_description(crate::build_llm_engine().db());
 
     // System telemetry section
-    let mut output = format!("=== SYSTEM DIAGNOSTICS ===\nMachine: {machine}\n{}",
-                             telemetry.diagnostic_report());
+    let mut output = format!(
+        "=== SYSTEM DIAGNOSTICS ===\nMachine: {machine}\n{}",
+        telemetry.diagnostic_report()
+    );
 
     // Recent issues section - always included in diagnostics
     output.push_str("\n\n=== RECENT ISSUES ===\n");
