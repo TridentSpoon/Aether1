@@ -35,6 +35,7 @@ mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod persona_voice;
 mod profile;
 mod releases;
 mod serve_auth;
@@ -1472,8 +1473,31 @@ fn test_speech_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 }
 
 #[tauri::command(async)]
-fn list_personas_rust() -> serde_json::Value {
-    commands::list_personas()
+fn list_personas_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::list_personas(&engine)
+}
+
+#[tauri::command(async)]
+fn voice_pickers_rust() -> serde_json::Value {
+    commands::voice_pickers()
+}
+
+#[tauri::command(async)]
+fn set_persona_voice_rust(
+    engine: tauri::State<LlmEngine>,
+    persona: String,
+    voice: Option<String>,
+    local_voice: Option<String>,
+) -> Result<serde_json::Value, String> {
+    commands::set_persona_voice(&engine, persona, voice, local_voice)
+}
+
+#[tauri::command(async)]
+fn clear_persona_voice_rust(
+    engine: tauri::State<LlmEngine>,
+    persona: String,
+) -> Result<serde_json::Value, String> {
+    commands::clear_persona_voice(&engine, persona)
 }
 
 #[tauri::command(async)]
@@ -2191,6 +2215,9 @@ fn main() {
             code_conventions_rust,
             test_speech_rust,
             list_personas_rust,
+            voice_pickers_rust,
+            set_persona_voice_rust,
+            clear_persona_voice_rust,
             get_version_info,
             other_installs_rust,
             remove_install_rust,
