@@ -479,12 +479,65 @@ pub fn reset_benchmarks(engine: &LlmEngine) -> Result<(), String> {
     engine.db().clear_benchmarks().map_err(|e| e.to_string())
 }
 
-/// The persona catalogue Settings renders its list from. Static -- it depends on nothing but
-/// the enum -- but it goes through the same two transports as everything else rather than
+/// The persona catalogue Settings renders its list from. The list itself depends on nothing
+/// but the enum, but it goes through the same two transports as everything else rather than
 /// being written out a second time in the HTML, which is how the list and the behaviour
 /// would come to disagree.
-pub fn list_personas() -> Value {
-    llm::Persona::catalogue()
+///
+/// Each row carries both answers about voice: `voice`/`local_voice` are what this avatar
+/// actually speaks in, and `default_voice`/`default_local_voice` are the identity table's
+/// own, so the avatar's pane can show "default: X" beside a changed choice and know whether
+/// there is anything to reset. They are equal on an avatar nobody has touched.
+pub fn list_personas(engine: &LlmEngine) -> Value {
+    let db = engine.db();
+    let mut rows = llm::Persona::catalogue();
+    if let Value::Array(rows) = &mut rows {
+        for row in rows.iter_mut() {
+            let Some(key) = row.get("key").and_then(Value::as_str).map(str::to_string) else {
+                continue;
+            };
+            let chosen = crate::persona_voice::choice(db, &key);
+            row["default_voice"] = row["voice"].clone();
+            row["default_local_voice"] = row["local_voice"].clone();
+            row["voice_customised"] = Value::Bool(!chosen.is_empty());
+            if let Some(voice) = chosen.voice {
+                row["voice"] = Value::String(voice);
+            }
+            if let Some(voice) = chosen.local_voice {
+                row["local_voice"] = Value::String(voice);
+            }
+        }
+    }
+    rows
+}
+
+/// The voices an avatar can be given: the cloud names, and the Piper catalogue with whether
+/// each one is on this machine.
+pub fn voice_pickers() -> Value {
+    crate::persona_voice::pickers()
+}
+
+/// Gives one avatar a voice of the operator's choosing. An empty string for either half
+/// means "back to the identity table's" for that half alone.
+pub fn set_persona_voice(
+    engine: &LlmEngine,
+    persona: String,
+    voice: Option<String>,
+    local_voice: Option<String>,
+) -> Result<Value, String> {
+    crate::persona_voice::set(
+        engine.db(),
+        &persona,
+        voice.as_deref(),
+        local_voice.as_deref(),
+    )?;
+    Ok(list_personas(engine))
+}
+
+/// Puts one avatar back to the voices it was written with.
+pub fn clear_persona_voice(engine: &LlmEngine, persona: String) -> Result<Value, String> {
+    crate::persona_voice::clear(engine.db(), &persona)?;
+    Ok(list_personas(engine))
 }
 
 pub fn get_settings(engine: &LlmEngine) -> Value {
@@ -717,14 +770,43 @@ pub fn set_persona_access(engine: &LlmEngine, paths: Vec<String>) -> Result<Valu
 pub fn flow_mode(engine: &LlmEngine) -> Value {
     let db = engine.db();
     let persona = llm::Persona::from_key(&db.get_setting_string("persona_type", "default"));
+    let picked = llm::flow::line(db);
     serde_json::json!({
         "enabled": llm::flow::enabled(db),
-        "group": persona.group(),
+        // The line hand-offs may move within: the one picked whole if there is one, and
+        // otherwise the one the selected avatar belongs to.
+        "group": picked.or_else(|| persona.group()),
+        // Which of those two it is. `line` is what the Avatars pane draws as picked, and
+        // it is what survives a hand-off -- `group` follows the avatar once it moves.
+        "line": picked,
+        // The lines that can be picked whole, so the pane offers the ones that can
+        // actually pass a question around rather than every cast in the catalogue. The
+        // eXcelsior Class (no personas yet) and Trace Protocols (one) are not in here.
+        "lines": llm::Persona::flow_lines(),
     })
 }
 
 pub fn set_flow_mode(engine: &LlmEngine, enabled: bool) -> Result<(), String> {
     llm::flow::set_enabled(engine.db(), enabled)
+}
+
+/// Pick a whole line, or release it with `None`, and report the state the chin bar and the
+/// Avatars pane should now show. `persona` is set when picking moved the operator to the
+/// line's anchor, so the HUD knows to wear that avatar; it is null when they were already
+/// standing inside the line.
+pub fn set_flow_line(engine: &LlmEngine, line: Option<String>) -> Result<Value, String> {
+    let db = engine.db();
+    let moved = llm::flow::set_line(db, line.as_deref())?;
+    let mut state = flow_mode(engine);
+    state["persona"] = match &moved {
+        Some(p) => Value::String(p.key().to_string()),
+        None => Value::Null,
+    };
+    state["agent_name"] = match &moved {
+        Some(p) => Value::String(p.avatar().unwrap_or("AETHER").to_string()),
+        None => Value::Null,
+    };
+    Ok(state)
 }
 
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling
@@ -746,16 +828,20 @@ pub fn synthesize_speech(
     // by flow mode -- without any of them having to remember to write a voice setting, and
     // without overwriting the operator's own choice, which is still what a persona with no
     // voice of its own speaks in. An explicit `voice` argument (the voice test) still wins.
+    // The operator can disagree with the identity table's choice, one avatar at a time
+    // (persona_voice::set, from the avatar's own pane in Settings); `cloud_voice` and
+    // `local_voice` answer with that choice where there is one and the table's where there
+    // is not, so nothing below has to know which of the two it got.
     let persona_key = db.get_setting_string("persona_type", "default");
     let persona_voice = voice
         .map(str::to_string)
-        .or_else(|| llm::persona_voice(&persona_key).map(str::to_string))
+        .or_else(|| crate::persona_voice::cloud_voice(db, &persona_key))
         .unwrap_or(configured_voice);
     // Piper speaks a model file rather than a voice name, so an identity's local voice is
     // only usable once that model is on disk. A persona whose voice has not been downloaded
     // speaks in the one the operator installed rather than failing to speak at all.
-    let local_voice = llm::persona_local_voice(&persona_key)
-        .and_then(llm::tts::installed_catalogue_voice)
+    let local_voice = crate::persona_voice::local_voice(db, &persona_key)
+        .and_then(|name| llm::tts::installed_catalogue_voice(&name))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or(configured_local_voice);
 
