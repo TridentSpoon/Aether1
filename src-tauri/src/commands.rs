@@ -1178,7 +1178,7 @@ pub fn graft_detect_projects() -> Result<Value, String> {
 }
 
 /// Build the Graft graph for a project
-pub fn graft_build_graph(engine: &LlmEngine, project_path: String) -> Result<Value, String> {
+pub fn graft_build_graph(_engine: &LlmEngine, project_path: String) -> Result<Value, String> {
     let path = PathBuf::from(&project_path);
     crate::graft::build_graph(&path)?;
     Ok(serde_json::json!({
@@ -1188,10 +1188,7 @@ pub fn graft_build_graph(engine: &LlmEngine, project_path: String) -> Result<Val
 }
 
 /// Select a project for code analysis
-pub fn graft_select_project(
-    engine: &LlmEngine,
-    project_path: String,
-) -> Result<Value, String> {
+pub fn graft_select_project(engine: &LlmEngine, project_path: String) -> Result<Value, String> {
     let path = PathBuf::from(&project_path);
     crate::graft::set_selected_project(engine.db(), &path)?;
     Ok(serde_json::json!({

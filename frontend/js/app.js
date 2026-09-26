@@ -9035,7 +9035,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Load initial Graft status when settings are opened
-    const settingsModal = document.getElementById('settings-modal');
     if (settingsModal) {
         const observer = new MutationObserver(() => {
             if (!settingsModal.classList.contains('hidden')) {

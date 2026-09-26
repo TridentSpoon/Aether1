@@ -10,11 +10,11 @@
 // - Auto-rebuilds when changes are detected
 // - Tracks Graft version to ensure compatibility
 
+use crate::llm::MemoryDb;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
-use crate::llm::MemoryDb;
 
 /// Path setting for the currently selected project
 const SELECTED_PROJECT_SETTING: &str = "graft_selected_project";
@@ -69,22 +69,21 @@ pub fn detect_projects() -> Vec<Project> {
         crate::paths::home_dir().map(|h| h.join("dev")),
     ];
 
-    for dir_opt in search_dirs {
-        if let Some(dir) = dir_opt {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        // Check if it's a git repository
-                        if path.join(".git").exists() {
-                            if let Some(name) = path.file_name() {
-                                let graft_status = check_graft_status(&path);
-                                projects.push(Project {
-                                    path,
-                                    name: name.to_string_lossy().to_string(),
-                                    graft_status,
-                                });
-                            }
+    for dir in search_dirs.into_iter().flatten() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Check if it's a git repository
+                    if path.join(".git").exists() {
+                        if let Some(name) = path.file_name() {
+                            let name_string = name.to_string_lossy().to_string();
+                            let graft_status = check_graft_status(&path);
+                            projects.push(Project {
+                                path,
+                                name: name_string,
+                                graft_status,
+                            });
                         }
                     }
                 }
@@ -107,7 +106,7 @@ fn check_graft_status(project_path: &Path) -> GraftStatus {
         if let Ok(entries) = std::fs::read_dir(&graft_dir) {
             let has_graph = entries
                 .flatten()
-                .any(|e| e.path().extension().map_or(false, |ext| ext == "md"));
+                .any(|e| e.path().extension().is_some_and(|ext| ext == "md"));
             if has_graph {
                 return GraftStatus::Ready;
             }
@@ -182,7 +181,7 @@ fn load_graph_files(project_path: &Path) -> Result<Vec<(String, String)>, String
     if let Ok(entries) = std::fs::read_dir(&graft_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "md") {
+            if path.extension().is_some_and(|ext| ext == "md") {
                 if let Ok(contents) = std::fs::read_to_string(&path) {
                     let name = path
                         .file_name()
@@ -201,7 +200,7 @@ fn search_graph_nodes(files: &[(String, String)], query: &str) -> Vec<String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    for (filename, contents) in files {
+    for (_filename, contents) in files {
         // Simple search: look for lines containing the query
         for line in contents.lines() {
             if line.to_lowercase().contains(&query_lower) {
@@ -237,7 +236,9 @@ fn set_last_build_time(db: &MemoryDb, timestamp: u64) {
 /// Check if code has changed since the last build
 fn has_code_changed(project_path: &Path, last_build_time: u64) -> bool {
     // Check if any source files are newer than the last build
-    let source_extensions = ["rs", "py", "js", "ts", "go", "c", "cpp", "java", "rb", "php"];
+    let source_extensions = [
+        "rs", "py", "js", "ts", "go", "c", "cpp", "java", "rb", "php",
+    ];
 
     if let Ok(entries) = std::fs::read_dir(project_path) {
         for entry in entries.flatten() {
