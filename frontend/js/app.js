@@ -7760,6 +7760,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 startTalking();
             }
         }).catch((e) => console.warn('Could not listen for sprite listen-toggle requests', e));
+
+        // The sprite's own power button ("Send the avatar back to the main window") turns
+        // Desktop Sprite Mode off from over there, and that window closing is invisible to
+        // this one. Without this, the hologram panel stays quiet behind its floating notice
+        // and the Settings toggle stays on: the avatar left the desktop and never arrived
+        // here. The sprite persists the setting itself, so this is only the docking half --
+        // no save, no toggle_sprite_window_rust, and so no loop back to the window that
+        // sent it.
+        window.__TAURI__.event.listen('sprite-mode-changed', (event) => {
+            const enabled = !!(event.payload && event.payload.enabled);
+            const spriteModeToggle = document.getElementById('setting-sprite-mode');
+            if (spriteModeToggle) spriteModeToggle.checked = enabled;
+            setHologramFloating(enabled);
+        }).catch((e) => console.warn('Could not listen for sprite mode changes', e));
     }
 
     // Every panel's "Undock" button opens it in its own solo-panel window (see

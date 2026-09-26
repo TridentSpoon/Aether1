@@ -71,6 +71,31 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) {
             console.warn('Could not persist sprite-mode-off setting', err);
         }
+
+        // Tell the HUD to take the avatar back *before* this window goes. Closing the sprite
+        // is only half of what this button says it does: until the main window hears about
+        // it, its hologram panel stays quiet behind the "the avatar is floating, click to
+        // bring it back" notice, so the avatar isn't sent anywhere -- it just stops being
+        // drawn. Awaited, because an event emitted from a window that has already closed
+        // never lands.
+        if (window.__TAURI__ && window.__TAURI__.event) {
+            try {
+                await window.__TAURI__.event.emit('sprite-mode-changed', { enabled: false });
+            } catch (err) {
+                console.warn('Could not tell the main window the sprite is going', err);
+            }
+        }
+
+        // And the main window has to be on screen to send anything back to: closing the HUD
+        // puts it in the tray rather than quitting it (see the CloseRequested handler in
+        // main.rs), so without this the avatar can leave the desktop for a window nobody can
+        // see, which is indistinguishable from the button doing nothing.
+        try {
+            await tauriInvoke('show_main_window_rust');
+        } catch (err) {
+            console.warn('Could not open the main HUD', err);
+        }
+
         tauriInvoke('toggle_sprite_window_rust', { enabled: false }).catch(() => {});
     });
 
