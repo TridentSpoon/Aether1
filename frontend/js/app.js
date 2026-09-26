@@ -1675,9 +1675,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Voice Callbacks
     voiceEngine.onStateChange = (state) => {
         setAvatarState(state);
-        // THINKING and SPEAKING are the states where something is actually answering, and
-        // the panel should be showing whichever half of itself describes what is doing it.
-        setTelemetryBusy(state === 'THINKING' || state === 'SPEAKING');
         if (elStatusBadge) {
             elStatusBadge.textContent = state;
             if (state === 'LISTENING') {
@@ -2001,81 +1998,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    /* The telemetry panel's two views.
-     *
-     * A cloud model and a local one raise different questions. Against an API the question
-     * is what this session has spent; on your own hardware nothing is being spent and the
-     * question is how fast it runs and how much it can hold. So there are two views, and
-     * the panel picks between them rather than showing one set of numbers that is only ever
-     * half relevant.
-     *
-     * Idle, it alternates -- but only once both views have something to say, since cycling
-     * to a view that reads "--" is worse than not cycling. While a reply is being generated
-     * it pins to whichever view matches what is answering. A click pins it too, for long
-     * enough to read, and then the cycling resumes. */
-    const TELEMETRY_VIEWS = ['speed', 'usage'];
-    const TELEMETRY_CYCLE_MS = 9000;
-    const TELEMETRY_CLICK_HOLD_MS = 120000;
-    let telemetryView = 'usage';
-    let telemetryHeldUntil = 0;
-    let telemetryPinned = false;
-    /* Pinning depends on a THINKING being followed by an IDLE, and there are paths where an
-       error could swallow the second half. A pin that never released would quietly stop the
-       panel cycling forever, so it expires on its own too. */
-    const TELEMETRY_PIN_MAX_MS = 180000;
-    let telemetryPinnedAt = 0;
+    /* Both halves of the performance tab are on screen together, so there is no view to
+       pick between and nothing to cycle. Until PR #165 this was a four-column panel that
+       could show only one at a time and alternated on a timer, with pinning while a reply
+       was generating and a hold after a click so the reader was not pulled off what they had
+       just chosen. All of that machinery existed to work around the width; the tab has the
+       room, so it is gone. */
     let lastTokens = null;
-
-    function showTelemetryView(view, pinned) {
-        telemetryView = view;
-        telemetryPinned = !!pinned;
-        document.querySelectorAll('[data-telemetry-view]').forEach(panel => {
-            panel.classList.toggle('hidden', panel.getAttribute('data-telemetry-view') !== view);
-        });
-        document.querySelectorAll('.telemetry-tab').forEach(tab => {
-            const mine = tab.getAttribute('data-telemetry-tab') === view;
-            tab.setAttribute('aria-pressed', mine ? 'true' : 'false');
-            if (mine && telemetryPinned) tab.setAttribute('data-pinned', 'true');
-            else tab.removeAttribute('data-pinned');
-        });
-    }
-
-    /* Whether a view has anything worth showing. Usage needs a request to have happened;
-       speed needs something to have actually been measured on this machine. */
-    function telemetryHasData(view, tokens) {
-        if (!tokens) return view === 'usage';
-        if (view === 'usage') return tokens.requests > 0;
-        const board = tokens.benchmarks || [];
-        return board.length > 0 || (tokens.mode === 'local' && !!tokens.capability);
-    }
-
-    function relevantTelemetryView(tokens) {
-        return tokens && tokens.mode === 'local' ? 'speed' : 'usage';
-    }
-
-    function cycleTelemetryView() {
-        if (telemetryPinned && Date.now() - telemetryPinnedAt > TELEMETRY_PIN_MAX_MS) {
-            telemetryPinned = false;
-            showTelemetryView(telemetryView, false);
-        }
-        if (telemetryPinned || Date.now() < telemetryHeldUntil) return;
-        const usable = TELEMETRY_VIEWS.filter(v => telemetryHasData(v, lastTokens));
-        if (usable.length < 2) return;
-        const next = usable[(usable.indexOf(telemetryView) + 1) % usable.length];
-        showTelemetryView(next, false);
-    }
-
-    /* Called when a turn starts and ends. Generating pins the view to whatever is doing the
-       work; finishing releases it back to the cycle. */
-    function setTelemetryBusy(busy) {
-        if (busy) {
-            telemetryPinnedAt = Date.now();
-            showTelemetryView(relevantTelemetryView(lastTokens), true);
-        } else if (telemetryPinned) {
-            telemetryPinned = false;
-            showTelemetryView(telemetryView, false);
-        }
-    }
 
     /* The speed of whichever model is configured right now, as measured -- or null when
        nothing measurable has been recorded for it. Reading it off the scoreboard is what
@@ -2102,6 +2031,25 @@ document.addEventListener('DOMContentLoaded', () => {
             elTps.textContent = tps === null ? '--' : `${tps} tok/s`;
         }
         if (elSessionTokens) elSessionTokens.textContent = `${(tokens.total_session_tokens || 0).toLocaleString()}`;
+
+        /* Which model is answering, and where it is answering from, said in the tab's own
+           header. The panel never named it: it stood in a column beside a scoreboard whose
+           current row was highlighted, and that was enough to work it out. A tab is opened
+           on its own and has to say what it is describing. `mode` rather than the provider
+           alone, because "on this machine" and "through openai" are the distinction every
+           number below turns on. */
+        const elPerfModel = document.getElementById('perf-model');
+        if (elPerfModel) {
+            const where = tokens.mode === 'local'
+                ? `on this machine via ${tokens.provider || 'a local server'}`
+                : `through ${tokens.provider || 'the cloud'}`;
+            elPerfModel.textContent = tokens.mode === 'offline'
+                ? 'No model connected. Connect one in Settings.'
+                : `${tokens.model || 'unnamed model'} \u00b7 ${where}`;
+            elPerfModel.title = tokens.requests
+                ? `${tokens.requests.toLocaleString()} ${tokens.requests === 1 ? 'reply' : 'replies'} this session.`
+                : 'Nothing has been asked of it this session.';
+        }
 
         const elIn = document.getElementById('tokens-in-val');
         const elOut = document.getElementById('tokens-out-val');
@@ -2130,12 +2078,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         updateSpeedView(tokens);
         updateCostView(tokens);
-
-        // A view showing nothing useful should give way to the one that is.
-        if (!telemetryPinned && Date.now() >= telemetryHeldUntil && !telemetryHasData(telemetryView, tokens)) {
-            const fallback = TELEMETRY_VIEWS.find(v => telemetryHasData(v, tokens));
-            if (fallback) showTelemetryView(fallback, false);
-        }
     }
 
     /* The scoreboard: every model this machine has been timed running, fastest first.
@@ -8250,17 +8192,6 @@ document.addEventListener('DOMContentLoaded', () => {
             paintTheme(Aether1Theme.setTone(slot, input.value));
         });
     });
-
-    /* The telemetry tabs. A click selects a view and holds it there long enough to read
-       before the idle cycle resumes -- being pulled off the thing you just chose to look at
-       is the failure mode a cycling panel has. */
-    document.querySelectorAll('.telemetry-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            telemetryHeldUntil = Date.now() + TELEMETRY_CLICK_HOLD_MS;
-            showTelemetryView(tab.getAttribute('data-telemetry-tab'), false);
-        });
-    });
-    setInterval(cycleTelemetryView, TELEMETRY_CYCLE_MS);
 
     const btnThemeColoursReset = document.getElementById('btn-theme-colours-reset');
     if (btnThemeColoursReset) {

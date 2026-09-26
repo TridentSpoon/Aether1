@@ -232,74 +232,8 @@
     <!-- MAIN DASHBOARD CONTENT (FREE-FORM PANEL GRID) -->
     <main id="hud-layout" class="flex-1 p-4 overflow-auto z-10">
 
-        <!-- Token Usage & Availability Telemetry -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens" data-panel-name="Model performance" data-grid-col="1" data-grid-row="1" data-grid-w="4" data-grid-h="37">
-            <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
-            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
-            <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Token Telemetry in its own window">⧉</button>
-                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-2">
-                    <h2 class="font-orbitron text-xs font-bold text-purple-400 tracking-wider flex items-center gap-1.5">
-                        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        MODEL PERFORMANCE
-                    </h2>
-                    <span id="tps-val" class="text-[10px] font-mono text-purple-300 font-bold">--</span>
-                </div>
-
-                <!-- Two views, because a cloud model and a local one raise different
-                     questions. On your own hardware nothing is being spent and the question
-                     is how fast it runs; against an API the question is what it cost. The
-                     tabs alternate while nothing is happening and pin to whichever is in
-                     use once something is. -->
-                <div id="telemetry-tabs" class="flex gap-1 text-[10px] font-mono">
-                    <button type="button" class="telemetry-tab" data-telemetry-tab="speed" aria-pressed="true">SPEED</button>
-                    <button type="button" class="telemetry-tab" data-telemetry-tab="usage" aria-pressed="false">USAGE</button>
-                </div>
-
-                <!-- SPEED: how fast each model runs on this machine.
-                     A scoreboard rather than a single live reading, because the question
-                     worth answering is comparative -- "is mistral faster than llama3 here?"
-                     -- and one number in isolation cannot answer it. Rows accumulate from
-                     ordinary use; nothing extra is run to fill them. -->
-                <div class="space-y-1" data-telemetry-view="speed">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">ON THIS MACHINE</span>
-                        <span id="speed-current" class="text-purple-300 font-bold">--</span>
-                    </div>
-                    <!-- Hidden until there is a board to reset. The readings describe this
-                         machine, so a new graphics card or a different quantisation makes
-                         the old ones worth throwing away rather than averaging in. -->
-                    <button type="button" id="speed-reset" class="speed-reset hidden" title="Forget every speed reading and start measuring again.">RESET READINGS</button>
-                    <div id="speed-board" class="space-y-1"></div>
-                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="speed-note">Nothing measured yet.</div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-400" id="capacity-row">
-                        <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
-                        <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
-                    </div>
-                </div>
-
-                <!-- USAGE: what this session has actually used, and what that cost. -->
-                <div class="space-y-1 hidden" data-telemetry-view="usage">
-                    <div class="flex justify-between text-xs font-mono">
-                        <span class="text-slate-300">THIS SESSION</span>
-                        <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
-                    </div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-400">
-                        <span>In: <strong id="tokens-in-val" class="text-cyan-300">0</strong> · Out: <strong id="tokens-out-val" class="text-cyan-300">0</strong></span>
-                        <!-- Says whether the numbers above were reported by the provider or
-                             worked out from the length of the text. They are different
-                             claims and only one of them is checkable. -->
-                        <span id="tokens-accounting" class="text-slate-500">--</span>
-                    </div>
-                    <div class="flex justify-between text-xs font-mono pt-1" id="cost-row">
-                        <span class="text-slate-300">COST</span>
-                        <span id="cost-val" class="text-purple-300 font-bold">--</span>
-                    </div>
-                    <div class="text-[10px] font-mono text-slate-500 leading-snug" id="cost-note">Nothing has been sent anywhere yet.</div>
-                </div>
-            </div>
-
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
-        <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-panel-name="The avatar" data-grid-col="5" data-grid-row="1" data-grid-w="4" data-grid-h="37">
+        <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-panel-name="The avatar" data-grid-col="1" data-grid-row="1" data-grid-w="6" data-grid-h="37">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <!-- Unlike the other panels' Undock, this one doesn't open a bordered copy of
@@ -370,7 +304,7 @@
         </div>
 
         <!-- RIGHT PANEL: NEURAL TERMINAL & CHAT CONSOLE -->
-        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="chat" data-panel-name="Conversation" data-grid-col="9" data-grid-row="1" data-grid-w="4" data-grid-h="37">
+        <div class="hud-panel movable-panel grip-inset flex flex-col rounded overflow-hidden" data-panel="chat" data-panel-name="Conversation" data-grid-col="7" data-grid-row="1" data-grid-w="6" data-grid-h="37">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="chat" title="Open this panel in its own window" aria-label="Open the Neural Dialogue Stream in its own window">⧉</button>
@@ -422,6 +356,14 @@
                 <button type="button" id="tab-chat-activity" data-chat-tab="activity"
                         class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
                         aria-selected="false">ACTIVITY</button>
+                <!-- Last, and about the machinery rather than the conversation: how fast
+                     whatever is answering runs here, and what this session has spent. It was
+                     the whole left column of the HUD, which is a lot of window for a reading
+                     glanced at now and then, and it is the same subject as the tab it sits
+                     beside -- the model doing the answering. -->
+                <button type="button" id="tab-chat-performance" data-chat-tab="performance"
+                        class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
+                        aria-selected="false">MODEL PERFORMANCE</button>
             </div>
 
             <div id="chat-view-conversation" class="flex-1 min-h-0 flex flex-col" data-chat-view="conversation">
@@ -593,6 +535,63 @@
                         back &mdash; the way to undo it.
                     </p>
                     <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
+                </div>
+            </div>
+
+            <!-- MODEL PERFORMANCE. Both halves at once, which the panel could not afford:
+                 a cloud model and a local one raise different questions -- how fast does it
+                 run here, and what did it cost -- and in a four-column panel only one of
+                 them fitted, so the two alternated on a timer. A tab is opened on purpose
+                 and is the full height of the window, so nothing has to take turns and
+                 nothing moves under the reader while they are reading it. -->
+            <div id="chat-view-performance" class="flex-1 min-h-0 flex-col hidden" data-chat-view="performance">
+                <div class="px-4 py-1.5 bg-slate-950/40 border-b border-cyan-500/10 flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <span id="perf-model" class="text-slate-400 truncate">no model connected</span>
+                    <span id="tps-val" class="text-purple-300 font-bold shrink-0">--</span>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 space-y-5 min-h-0">
+
+                    <!-- SPEED: how fast each model runs on this machine.
+                         A scoreboard rather than a single live reading, because the question
+                         worth answering is comparative -- "is mistral faster than llama3 here?"
+                         -- and one number in isolation cannot answer it. Rows accumulate from
+                         ordinary use; nothing extra is run to fill them. -->
+                    <section class="space-y-1" data-telemetry-view="speed">
+                        <div class="flex justify-between text-xs font-mono">
+                            <span class="text-slate-300">ON THIS MACHINE</span>
+                            <span id="speed-current" class="text-purple-300 font-bold">--</span>
+                        </div>
+                        <!-- Hidden until there is a board to reset. The readings describe this
+                             machine, so a new graphics card or a different quantisation makes
+                             the old ones worth throwing away rather than averaging in. -->
+                        <button type="button" id="speed-reset" class="speed-reset hidden" title="Forget every speed reading and start measuring again.">RESET READINGS</button>
+                        <div id="speed-board" class="space-y-1"></div>
+                        <div class="text-[10px] font-mono text-slate-500 leading-snug" id="speed-note">Nothing measured yet.</div>
+                        <div class="flex justify-between text-[10px] font-mono text-slate-400" id="capacity-row">
+                            <span>Context: <strong id="capacity-context" class="text-cyan-300">--</strong></span>
+                            <span>Size: <strong id="capacity-size" class="text-cyan-300">--</strong></span>
+                        </div>
+                    </section>
+
+                    <!-- USAGE: what this session has actually used, and what that cost. -->
+                    <section class="space-y-1" data-telemetry-view="usage">
+                        <div class="flex justify-between text-xs font-mono">
+                            <span class="text-slate-300">THIS SESSION</span>
+                            <span id="session-tokens-val" class="text-purple-300 font-bold">0</span>
+                        </div>
+                        <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                            <span>In: <strong id="tokens-in-val" class="text-cyan-300">0</strong> &middot; Out: <strong id="tokens-out-val" class="text-cyan-300">0</strong></span>
+                            <!-- Says whether the numbers above were reported by the provider or
+                                 worked out from the length of the text. They are different
+                                 claims and only one of them is checkable. -->
+                            <span id="tokens-accounting" class="text-slate-500">--</span>
+                        </div>
+                        <div class="flex justify-between text-xs font-mono pt-1" id="cost-row">
+                            <span class="text-slate-300">COST</span>
+                            <span id="cost-val" class="text-purple-300 font-bold">--</span>
+                        </div>
+                        <div class="text-[10px] font-mono text-slate-500 leading-snug" id="cost-note">Nothing has been sent anywhere yet.</div>
+                    </section>
                 </div>
             </div>
         </div>
