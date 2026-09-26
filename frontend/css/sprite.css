@@ -175,3 +175,15 @@ html, body {
   background: var(--sprite-accent);
   color: #000;
 }
+
+/* A command that failed, said on the button itself: this window has no console anybody will
+   open and no room for a status line, so the only place a dead button can explain itself is
+   its own face (see reportFailure in js/sprite.js, which also puts the reason in the title).
+   Deliberately not themed -- red for "this did not work" reads the same in every palette. */
+#sprite-topbar button.sprite-btn-failed,
+#sprite-btn-power.sprite-btn-failed {
+  opacity: 1;
+  border-color: rgba(255, 60, 60, 0.9);
+  background: rgba(60, 4, 10, 0.85);
+  color: #ff5c5c;
+}
