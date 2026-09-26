@@ -29,7 +29,7 @@
        itself with HologramAvatar.registerAvatar and carries its own build/animate. */
     const AVATARS = {
         'halcy':          { file: 'avatar-halcy.js',          v: 17, builder: 'buildHalcyAvatar',    animator: 'animateHalcy' },
-        'arx-limes':      { file: 'avatar-arx-limes.js',      v: 18, builder: 'buildArxLimesAvatar', animator: 'animateArxLimes' },
+        'arx-limes':      { file: 'avatar-arx-limes.js',      v: 19, builder: 'buildArxLimesAvatar', animator: 'animateArxLimes' },
         'nexus':          { file: 'avatar-nexus.js',          v: 29, builder: 'buildNexusAvatar',    animator: 'animateNexus' },
         'red':            { file: 'avatar-red9000.js',        v: 19, builder: 'buildRed9000Avatar',  animator: 'animateRed9000' },
         'arx-logos':      { file: 'avatar-arx-logos.js',      v: 18, builder: 'buildArxLogosAvatar', animator: 'animateArxLogos' },

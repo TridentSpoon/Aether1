@@ -30,7 +30,7 @@ HologramAvatar.prototype.buildArxLimesAvatar = function() {
         color: 0x040209, side: THREE.DoubleSide, transparent: true, opacity: 0.94
     });
     this.arxLimesHubRimMat = new THREE.LineBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.95 });
-    const hub = this.buildRoundedCube(11, 3, 0.45);
+    const hub = this.buildRoundedCube(14, 3, 0.45);
     this.arxLimesHubMesh = new THREE.Mesh(hub.geometry, this.arxLimesHubFillMat);
     // The facet grid comes back with the shape rather than from EdgesGeometry -- no
     // single edge threshold draws both the shallow facets on a face and the sharp ones

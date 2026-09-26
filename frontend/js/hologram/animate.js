@@ -563,11 +563,14 @@ HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity,
     }
 
     if (this.arxLimesHubOutline) {
+        // Swell kept smaller than it was: the hub is a rounded cube at radius 14 now,
+        // not a geodesic at 9, so the old 1.9x peak put the void outside the accretion
+        // disc entirely. These land it inside the outer band at full voice.
         let hubScale = 1.0;
         if (isSpeaking) {
-            hubScale = 1.0 + audioIntensity * 0.9;
+            hubScale = 1.0 + audioIntensity * 0.5;
         } else if (isThinking) {
-            hubScale = 1.0 + Math.sin(elapsedTime * 18) * 0.35;
+            hubScale = 1.0 + Math.sin(elapsedTime * 18) * 0.22;
         } else {
             hubScale = 1.0 + clickPulse * 0.3;
         }
