@@ -1449,6 +1449,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function syncThemeControls(theme) {
         if (themeChipValue) themeChipValue.textContent = Aether1Theme.MODE_LABELS[theme.mode] || theme.mode;
 
+        /* Game Mode is called Sleep Mode outside Cyberpunk, so the name follows the theme.
+           Re-read from the button rather than kept here: the state is the machine's, and it
+           can be changed from the tray, the hotkey or another window. */
+        const gameModeBtn = document.getElementById('btn-game-mode');
+        if (gameModeBtn) setGameModeButtonState(gameModeBtn.dataset.active === 'true');
+
         // Covers both the three buttons in Settings and the three in the top bar's slide-out.
         document.querySelectorAll('.theme-mode-btn').forEach(btn => {
             btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
@@ -7559,14 +7565,41 @@ document.addEventListener('DOMContentLoaded', () => {
         if (section) section.classList.remove('hidden');
     }
 
+    /* The same switch, named for the room it is in. In Cyberpunk it is Game Mode, which is
+       what it is for: you are about to play something and you want the machine back. Daylight
+       and Midnight are the modes you have open at work, and a gamepad in the corner of those
+       reads as a toy -- worse, "Game Mode: OFF" reads as the machine being *held* by
+       something. Sleep Mode says the plain thing in either room: the platform stands down and
+       the resources are yours. Nothing about what it does changes with the name. */
+    /* A function declaration rather than a const map: the first paintTheme runs long before
+       this point in the file, and a `const` up here would still be in its dead zone then. */
+    function gameModeWording() {
+        if (currentTheme && currentTheme.mode === 'cyberpunk') {
+            return {
+                off: '🎮 Game Mode: OFF',
+                on: '🎮 Game Mode: ON',
+                title: 'Game Mode: stop the background services and hide the HUD, without quitting.',
+            };
+        }
+        return {
+            off: '💤 Sleep Mode: OFF',
+            on: '💤 Sleep Mode: ON',
+            title: 'Sleep Mode: hand the machine back — the background services stop and the '
+                + 'window hides, and Aether1 keeps running.',
+        };
+    }
+
     // Reflects Game Mode's current on/off state on its button in the chin bar's command
     // line -- called both from loadSettings (what was saved from a previous session) and
     // from the 'game-mode-changed' event (a live toggle, from this window or another).
+    // syncThemeControls calls it again when the mode changes, since the name goes with it.
     function setGameModeButtonState(active) {
         const btn = document.getElementById('btn-game-mode');
         if (!btn) return;
+        const wording = gameModeWording();
         btn.dataset.active = active ? 'true' : 'false';
-        btn.textContent = active ? '🎮 Game Mode: ON' : '🎮 Game Mode: OFF';
+        btn.textContent = active ? wording.on : wording.off;
+        btn.title = wording.title;
         btn.classList.toggle('is-on', active);
     }
 
