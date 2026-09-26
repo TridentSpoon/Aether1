@@ -850,33 +850,50 @@
                         <span class="settings-nav-icon">📓</span>
                         <span class="settings-nav-text">Memory</span>
                     </button>
-                    <button type="button" id="settings-nav-permissions" class="settings-nav-item" data-settings-section="permissions" data-keywords="commands allowlist approval files programs read run" data-hint="reading this machine, running programs" title="reading this machine, running programs">
-                        <span class="settings-nav-icon">🔐</span>
-                        <span class="settings-nav-text">What it may do</span>
-                    </button>
-                    <button type="button" id="settings-nav-network" class="settings-nav-item" data-settings-section="network" data-keywords="internet offline cloud lan proxy leave machine" data-hint="whether anything may leave this machine" title="whether anything may leave this machine">
-                        <span class="settings-nav-icon">🌐</span>
-                        <span class="settings-nav-text">Network</span>
-                    </button>
-                    <!-- Native app only: the Start button starts a child process, which a
-                         browser tab cannot do. Revealed by initRemoteLan once IS_TAURI is
-                         confirmed, the same way sprite and startup are. -->
-                    <button type="button" id="settings-nav-lan" class="settings-nav-item hidden" data-settings-section="lan" data-keywords="lan remote network serve pair pairing phrase devices token revoke tls certificate port share phone tablet" data-hint="reaching this machine from your other devices" title="reaching this machine from your other devices">
-                        <span class="settings-nav-icon">📡</span>
-                        <span class="settings-nav-text">Remote &amp; LAN</span>
-                    </button>
-                    <button type="button" id="settings-nav-startup" class="settings-nav-item hidden" data-settings-section="startup" data-keywords="autostart login game mode performance quiet" data-hint="what runs on login, and how to quiet it" title="what runs on login, and how to quiet it">
-                        <span class="settings-nav-icon">⚡</span>
-                        <span class="settings-nav-text">Startup &amp; Performance</span>
-                    </button>
-                    <button type="button" id="settings-nav-doctor" class="settings-nav-item" data-settings-section="doctor" data-keywords="diagnostics broken fix repair doctor not working" data-hint="every part of AETHER1, and the broken ones" title="every part of AETHER1, and the broken ones">
-                        <span class="settings-nav-icon">🩺</span>
-                        <span class="settings-nav-text">Is it working?</span>
-                    </button>
-                    <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="hotkey shortcut version update release" data-hint="hotkey, version, updates" title="hotkey, version, updates">
-                        <span class="settings-nav-icon">🖥</span>
-                        <span class="settings-nav-text">The app itself</span>
-                    </button>
+                    <!-- Everything from "What it may do" down is Advanced: set once at
+                         install time, or gone looking for only when something is wrong.
+                         Collapsed by default so the rail opens on the sections people
+                         actually change. It is a <details> rather than a JS toggle so the
+                         keyboard and the disclosure arrow come for free; the rail opens it
+                         whenever the chosen section is one of these (including the
+                         remembered one), and the search box opens it whenever a query
+                         matches something inside. -->
+                    <details id="settings-nav-advanced" class="settings-nav-group">
+                        <summary class="settings-nav-group-summary">
+                            <span class="settings-nav-icon">&#128736;</span>
+                            <span class="settings-nav-text">Advanced</span>
+                            <span class="settings-nav-caret" aria-hidden="true">&#9656;</span>
+                        </summary>
+                        <div class="settings-nav-group-items">
+                        <button type="button" id="settings-nav-permissions" class="settings-nav-item" data-settings-section="permissions" data-keywords="commands allowlist approval files programs read run" data-hint="reading this machine, running programs" title="reading this machine, running programs">
+                            <span class="settings-nav-icon">🔐</span>
+                            <span class="settings-nav-text">What it may do</span>
+                        </button>
+                        <button type="button" id="settings-nav-network" class="settings-nav-item" data-settings-section="network" data-keywords="internet offline cloud lan proxy leave machine" data-hint="whether anything may leave this machine" title="whether anything may leave this machine">
+                            <span class="settings-nav-icon">🌐</span>
+                            <span class="settings-nav-text">Network</span>
+                        </button>
+                        <!-- Native app only: the Start button starts a child process, which a
+                             browser tab cannot do. Revealed by initRemoteLan once IS_TAURI is
+                             confirmed, the same way sprite and startup are. -->
+                        <button type="button" id="settings-nav-lan" class="settings-nav-item hidden" data-settings-section="lan" data-keywords="lan remote network serve pair pairing phrase devices token revoke tls certificate port share phone tablet" data-hint="reaching this machine from your other devices" title="reaching this machine from your other devices">
+                            <span class="settings-nav-icon">📡</span>
+                            <span class="settings-nav-text">Remote &amp; LAN</span>
+                        </button>
+                        <button type="button" id="settings-nav-startup" class="settings-nav-item hidden" data-settings-section="startup" data-keywords="autostart login game mode performance quiet" data-hint="what runs on login, and how to quiet it" title="what runs on login, and how to quiet it">
+                            <span class="settings-nav-icon">⚡</span>
+                            <span class="settings-nav-text">Startup &amp; Performance</span>
+                        </button>
+                        <button type="button" id="settings-nav-doctor" class="settings-nav-item" data-settings-section="doctor" data-keywords="diagnostics broken fix repair doctor not working" data-hint="every part of AETHER1, and the broken ones" title="every part of AETHER1, and the broken ones">
+                            <span class="settings-nav-icon">🩺</span>
+                            <span class="settings-nav-text">Is it working?</span>
+                        </button>
+                        <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="hotkey shortcut version update release" data-hint="hotkey, version, updates" title="hotkey, version, updates">
+                            <span class="settings-nav-icon">🖥</span>
+                            <span class="settings-nav-text">The app itself</span>
+                        </button>
+                        </div>
+                    </details>
                 </nav>
 
 

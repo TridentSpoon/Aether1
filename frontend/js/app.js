@@ -109,10 +109,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const settingsNavItems = () => Array.from(document.querySelectorAll('.settings-nav-item'));
     const settingsPaneFor = (name) => document.querySelector(`.settings-pane[data-settings-section="${name}"]`);
     const settingsNavFor = (name) => document.getElementById(`settings-nav-${name}`);
+    // The Advanced group in the rail: the sections from "What it may do" down, folded away
+    // because they are set once and then only visited when something is wrong. Nothing
+    // about a section changes by being in it -- it is a <details> around five rail entries,
+    // and it is opened whenever one of them is the section being shown.
+    const settingsNavAdvanced = document.getElementById('settings-nav-advanced');
+    const settingsNavIsAdvanced = (item) => !!item && !!settingsNavAdvanced?.contains(item);
 
     function showSettingsSection(name) {
         const item = settingsNavFor(name);
         if (!item || item.classList.contains('hidden')) return false;
+        // An entry folded inside Advanced would otherwise be marked active out of sight,
+        // which is how the remembered section arrives after a restart.
+        if (settingsNavIsAdvanced(item) && settingsNavAdvanced) settingsNavAdvanced.open = true;
         settingsNavItems().forEach(btn => {
             btn.classList.toggle('is-active', btn === item);
             btn.setAttribute('aria-current', btn === item ? 'true' : 'false');
@@ -171,14 +180,25 @@ document.addEventListener('DOMContentLoaded', () => {
     settingsSearch?.addEventListener('input', () => {
         const q = settingsSearch.value.trim().toLowerCase();
         let shown = 0;
+        let advancedMatched = false;
         settingsNavItems().forEach(item => {
             if (item.dataset.available === 'false') return;
             const hay = `${item.textContent} ${item.dataset.hint || ''} ${item.dataset.keywords || ''}`.toLowerCase();
             const match = !q || hay.includes(q);
             item.classList.toggle('hidden', !match);
             if (match) shown += 1;
+            if (match && settingsNavIsAdvanced(item)) advancedMatched = true;
         });
         settingsNavEmpty?.classList.toggle('hidden', shown > 0);
+        // While there is something typed, Advanced follows the search: open when a match is
+        // hidden inside it, shut when nothing in it matches. Clearing the box hands it back
+        // to the section being shown rather than leaving it however the last query left it.
+        if (settingsNavAdvanced) {
+            settingsNavAdvanced.classList.toggle('hidden', !!q && !advancedMatched);
+            settingsNavAdvanced.open = q
+                ? advancedMatched
+                : settingsNavIsAdvanced(document.querySelector('.settings-nav-item.is-active'));
+        }
     });
 
     settingsNavItems().forEach(item => {
