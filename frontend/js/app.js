@@ -4096,6 +4096,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!codeChatLoaded) { codeChatLoaded = true; loadCodeChat(); }
             codeChatInput?.focus();
         }
+        /* The four reading tabs are re-read on every visit rather than cached. Each is a
+           list of something that changes while you are looking away -- a note written by
+           the last answer, a conversation started in another window, a tool call made a
+           second ago -- and a stale list is worse here than a short wait. Nothing is read
+           until a tab is actually opened. */
+        if (which === 'memories') loadMemories();
+        if (which === 'history') openSessions();
+        if (which === 'notes') openNotesReader();
+        if (which === 'activity') loadActivityLog();
+        /* Left the notes tab: the graph is drawing frames nobody is looking at. It keeps
+           its layout, so coming back shows the same arrangement rather than a new one. */
+        if (which !== 'notes') stopNoteGraph();
     }
 
     document.querySelectorAll('.chat-tab').forEach(tab => {
@@ -7547,15 +7559,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (section) section.classList.remove('hidden');
     }
 
-    // Reflects Game Mode's current on/off state on its Quick Commands button -- called both
-    // from loadSettings (what was saved from a previous session) and from the
-    // 'game-mode-changed' event (a live toggle, from this window or another).
+    // Reflects Game Mode's current on/off state on its button in the chin bar's command
+    // line -- called both from loadSettings (what was saved from a previous session) and
+    // from the 'game-mode-changed' event (a live toggle, from this window or another).
     function setGameModeButtonState(active) {
         const btn = document.getElementById('btn-game-mode');
         if (!btn) return;
         btn.dataset.active = active ? 'true' : 'false';
         btn.textContent = active ? '🎮 Game Mode: ON' : '🎮 Game Mode: OFF';
-        btn.classList.toggle('cyber-btn-active', active);
+        btn.classList.toggle('is-on', active);
     }
 
     // Launch autostart, Ollama autostart and Game Mode are all native-process/window
@@ -8241,7 +8253,6 @@ document.addEventListener('DOMContentLoaded', () => {
     /* so every piece of it reaches the page as a text node.                 */
     /* ------------------------------------------------------------------ */
 
-    const notesModal = document.getElementById('notes-modal');
     const notesList = document.getElementById('notes-list');
     const notesBody = document.getElementById('notes-body');
     const notesTitle = document.getElementById('notes-title');
@@ -8528,8 +8539,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     async function openNotesReader() {
-        voiceEngine.playSFX('click');
-        notesModal.classList.remove('hidden');
         showReaderView();
         notesSearch.value = '';
         noteTrail = [];
@@ -8546,6 +8555,86 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* -------------------------------------------------------------------- */
+    /* Memories.                                                            */
+    /*                                                                      */
+    /* The core notes, which vault::prime pastes into every system prompt   */
+    /* whether or not the question calls for them. Same folder as NOTES and */
+    /* the same read, filtered on the `core` flag the reader already sends  */
+    /* -- there is no second store behind this and nothing here that the    */
+    /* notes tab cannot also show. It is a tab of its own because "what it  */
+    /* always knows about me" is a different question from "what is in my   */
+    /* vault", and answering the first by scrolling a list looking for a    */
+    /* marker is how you end up not asking it.                              */
+    /*                                                                      */
+    /* Read-only, like the reader: a note is changed through the tools,     */
+    /* behind the consent path, with a way back.                            */
+    /* -------------------------------------------------------------------- */
+
+    const memoriesList = document.getElementById('memories-list');
+    const memoriesCount = document.getElementById('memories-count');
+
+    function renderMemories(notes) {
+        memoriesList.textContent = '';
+        const core = notes.filter((n) => n.core);
+        memoriesCount.textContent = core.length
+            ? `${core.length} note${core.length === 1 ? '' : 's'}, always loaded`
+            : 'nothing always-loaded yet';
+
+        if (!core.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-[11px] font-mono text-slate-500 leading-snug';
+            empty.textContent =
+                'Nothing is marked always-loaded yet. Notes it writes about you land here '
+                + 'once they are, and everything else is under NOTES.';
+            memoriesList.appendChild(empty);
+            return;
+        }
+
+        core.forEach((note) => {
+            const size = note.bytes < 1024 ? `${note.bytes} B` : `${Math.round(note.bytes / 1024)} KB`;
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'w-full text-left px-2 py-1.5 rounded border border-cyan-500/20 '
+                + 'bg-slate-900/50 hover:border-cyan-400/60 hover:bg-slate-800/60 cursor-pointer';
+            const name = document.createElement('div');
+            name.className = 'font-mono text-[11px] text-cyan-200 truncate';
+            name.textContent = note.name;
+            const meta = document.createElement('div');
+            meta.className = 'font-mono text-[10px] text-slate-500 truncate';
+            meta.textContent = `${size} · ${noteAge(note.modified)}`;
+            row.append(name, meta);
+            /* One reader, one place a note is read. This list hands off to it rather
+               than growing a second body pane that could disagree with the first. */
+            row.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                switchChatTab('notes');
+                noteTrail = [];
+                openNote(note.name);
+            });
+            memoriesList.appendChild(row);
+        });
+    }
+
+    async function loadMemories() {
+        memoriesCount.textContent = 'reading the folder…';
+        try {
+            renderMemories(await fetchNotes());
+        } catch (err) {
+            memoriesList.textContent = '';
+            memoriesCount.textContent = 'could not read the folder';
+            const p = document.createElement('p');
+            p.className = 'text-[11px] font-mono text-amber-300';
+            p.textContent = `Could not read the notes folder: ${err.message || err}`;
+            memoriesList.appendChild(p);
+        }
+    }
+
+    document.getElementById('btn-memories-refresh')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        loadMemories();
+    });
+
+    /* -------------------------------------------------------------------- */
     /* Conversations.                                                       */
     /*                                                                      */
     /* A conversation is a transcript with a name. Switching to one reloads  */
@@ -8558,7 +8647,6 @@ document.addEventListener('DOMContentLoaded', () => {
     /* switch, rename or delete a conversation, the same way it cannot turn  */
     /* its own tools or panels on.                                          */
     /* -------------------------------------------------------------------- */
-    const sessionsModal = document.getElementById('sessions-modal');
     const sessionsList = document.getElementById('sessions-list');
     const sessionsCount = document.getElementById('sessions-count');
 
@@ -8692,13 +8780,13 @@ document.addEventListener('DOMContentLoaded', () => {
     async function switchToSession(id) {
         voiceEngine.playSFX('click');
         setCurrentSession(id);
-        sessionsModal.classList.add('hidden');
+        /* Picking a conversation is asking to read it, so the panel goes back to the
+           conversation itself rather than leaving you on the list you just used. */
+        switchChatTab('conversation');
         await loadChatHistory();
     }
 
     async function openSessions() {
-        voiceEngine.playSFX('click');
-        sessionsModal.classList.remove('hidden');
         sessionsList.textContent = '';
         try {
             renderSessions(await fetchSessions());
@@ -8711,10 +8799,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    document.getElementById('btn-conversations')?.addEventListener('click', openSessions);
-    document.getElementById('btn-close-sessions')?.addEventListener('click', () => {
+    document.getElementById('btn-conversations')?.addEventListener('click', () => {
         voiceEngine.playSFX('click');
-        sessionsModal.classList.add('hidden');
+        switchChatTab('history');
     });
     document.getElementById('btn-session-new')?.addEventListener('click', async () => {
         voiceEngine.playSFX('click');
@@ -8722,7 +8809,7 @@ document.addEventListener('DOMContentLoaded', () => {
             /* A new conversation is an id and nothing else. It starts existing when
                something is said in it, which is why it is not in the list yet. */
             setCurrentSession(await mintSession());
-            sessionsModal.classList.add('hidden');
+            switchChatTab('conversation');
             await loadChatHistory();
         } catch (err) {
             alert(`Could not start a new conversation: ${err.message || err}`);
@@ -8821,7 +8908,10 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    document.getElementById('btn-notes')?.addEventListener('click', openNotesReader);
+    document.getElementById('btn-notes')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        switchChatTab('notes');
+    });
     document.getElementById('btn-read-notes')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
         openNotesReader();
@@ -8919,24 +9009,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (noteGraph) noteGraph.fit();
     });
 
-    document.getElementById('btn-close-notes').addEventListener('click', () => {
-        voiceEngine.playSFX('click');
-        notesModal.classList.add('hidden');
-        /* Closed means stopped. The canvas keeps its layout, so this is the one
-           place that has to say so. */
+    /* Leaving the tab means stopped. The canvas keeps its layout, so this is the
+       one place that has to say so -- switchChatTab calls it on every tab that
+       isn't this one. */
+    function stopNoteGraph() {
         if (noteGraph) noteGraph.stop();
-    });
+    }
 
-    const btnActivity = document.getElementById('btn-activity');
-    const activityModal = document.getElementById('activity-modal');
-    btnActivity.addEventListener('click', () => {
+    document.getElementById('btn-activity')?.addEventListener('click', () => {
         voiceEngine.playSFX('click');
-        activityModal.classList.remove('hidden');
-        loadActivityLog();
+        switchChatTab('activity');
     });
-    document.getElementById('btn-close-activity').addEventListener('click', () => {
+    document.getElementById('btn-activity-refresh')?.addEventListener('click', () => {
         voiceEngine.playSFX('click');
-        activityModal.classList.add('hidden');
+        loadActivityLog();
     });
 
     btnSettings.addEventListener('click', () => {

@@ -2027,6 +2027,172 @@ select,
    The strip never wraps: on a narrow window the cells that matter least drop out (see the
    media queries at the end) rather than pushing the bar to two lines and stealing height
    from the HUD, which is what this move was meant to give back. */
+/* ===================================================================   The chat panel's tabs
+   ==========================================================================
+   Seven of them now: three you type into, then a rule, then the four the
+   conversation leaves behind. That is more than fits across a column of the
+   HUD on a narrow window, so the strip scrolls sideways rather than wrapping
+   into a second row that would eat the messages. No scrollbar is drawn -- a
+   visible one under 10px labels is thicker than the labels. */
+.chat-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+}
+
+.chat-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.chat-tab {
+    flex: 0 0 auto;
+}
+
+/* The seam between talking and looking. */
+.chat-tab-rule {
+    flex: 0 0 auto;
+    align-self: stretch;
+    width: 1px;
+    margin: 0.3rem 0.35rem;
+    background: var(--border-neon);
+}
+
+/* The neon rule disappears on a white page, so the flat modes get a grey one. */
+[data-theme="solar"] .chat-tab-rule {
+    background: rgba(15, 23, 42, 0.18);
+}
+
+[data-theme="eclipse"] .chat-tab-rule {
+    background: rgba(226, 241, 255, 0.18);
+}
+
+/* The note list sits above the note rather than beside it in this column, so it
+   is capped: past about a third of the panel the list is the reader and the note
+   is a slot. */
+.notes-list-strip {
+    max-height: 32%;
+    min-height: 3.5rem;
+}
+
+/* ===================================================================   The chin's command line
+   ==========================================================================
+   One line above the state row: Status on the left, Game Mode in the middle,
+   Diagnostics and Help on the right. Three tracks rather than a flex row with
+   margins, so the middle button is centred on the window and not on whatever
+   is left over after the sides -- the sides are different widths, and a button
+   that drifts when a label changes reads as a bug.
+
+   The buttons are deliberately quieter than .cyber-btn: this strip is under
+   everything else on screen for the whole session, and four glowing buttons
+   down there pull the eye off the conversation. */
+.chin-commands {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 0.5rem;
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.12);
+}
+
+.chin-commands-group {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+/* The middle track is `auto`, so it is exactly as wide as the button in it and
+   the two 1fr tracks either side are equal -- that is what centres it. */
+.chin-commands-mid {
+    justify-content: center;
+}
+
+.chin-commands-end {
+    justify-content: flex-end;
+}
+
+.chin-cmd {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid rgba(0, 240, 255, 0.28);
+    border-radius: 3px;
+    background: rgba(0, 240, 255, 0.05);
+    color: var(--text-accent);
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.chin-cmd:hover {
+    background: rgba(0, 240, 255, 0.16);
+    border-color: var(--neon-cyan);
+    color: var(--text-main);
+}
+
+/* Game Mode wears the highlight accent and a clipped corner -- the one control
+   on this line that changes the machine rather than asking the companion a
+   question, and the only place in the HUD that shape is used. */
+.chin-cmd-game {
+    border-color: rgba(176, 38, 255, 0.55);
+    background: linear-gradient(90deg, rgba(176, 38, 255, 0.10), rgba(0, 240, 255, 0.10));
+    color: var(--text-highlight);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+
+.chin-cmd-game:hover {
+    border-color: var(--neon-purple);
+    background: linear-gradient(90deg, rgba(176, 38, 255, 0.22), rgba(0, 240, 255, 0.18));
+    color: var(--text-main);
+    box-shadow: var(--glow-purple);
+}
+
+/* Game Mode ON: it is doing something to the machine right now, so it is lit
+   rather than outlined. app.js sets this class beside the label. */
+.chin-cmd-game.is-on {
+    background: var(--neon-purple);
+    border-color: var(--neon-purple);
+    color: #0b0217;
+    box-shadow: var(--glow-purple);
+}
+
+/* The flat modes drop the neon and the clipped corner with it. */
+[data-theme="solar"] .chin-cmd,
+[data-theme="eclipse"] .chin-cmd {
+    border-radius: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+[data-theme="solar"] .chin-cmd-game,
+[data-theme="eclipse"] .chin-cmd-game {
+    clip-path: none;
+}
+
+/* Narrow windows: the three tracks stop being three. Status and the pair on the
+   right keep their ends and Game Mode wraps under them rather than squeezing the
+   labels into ellipses. */
+@media (max-width: 760px) {
+    .chin-commands {
+        grid-template-columns: auto auto;
+        justify-content: space-between;
+        row-gap: 0.25rem;
+    }
+
+    .chin-commands-mid {
+        grid-column: 1 / -1;
+        order: 3;
+        justify-content: center;
+    }
+}
+
 .chin-telemetry {
     display: flex;
     align-items: center;
