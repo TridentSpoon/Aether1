@@ -64,6 +64,36 @@
             scrollback: 5000,
             theme: readTheme(surface),
         });
+        /* Copy and paste, in the terminal's own spelling. xterm draws its own selection
+           rather than the page's, so the window-wide rule that everything is selectable
+           stops at this surface and the keys have to be wired by hand. Ctrl-C cannot be
+           copy in here -- it is SIGINT, and a terminal that swallows it is broken -- so
+           copy is Ctrl-Shift-C, as it is in every other terminal, and Cmd-C on macOS
+           where there is no such clash. Ctrl-V already pastes through the helper
+           textarea; Ctrl-Shift-V is the terminal spelling of the same thing. */
+        const IS_MAC = /mac/i.test(navigator.platform || '');
+        term.attachCustomKeyEventHandler((e) => {
+            if (e.type !== 'keydown') return true;
+            const combo = IS_MAC ? (e.metaKey && !e.ctrlKey) : (e.ctrlKey && e.shiftKey);
+            if (!combo) return true;
+            const key = (e.key || '').toLowerCase();
+            if (key === 'c' && term.hasSelection()) {
+                navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+                return false;
+            }
+            if (key === 'v') {
+                /* readText is the half of the clipboard a webview is most likely to
+                   refuse. When it does, say nothing and let the keypress fall through:
+                   the plain Ctrl-V path still works. */
+                if (!navigator.clipboard?.readText) return true;
+                navigator.clipboard.readText()
+                    .then((text) => { if (text) term.paste(text); })
+                    .catch(() => {});
+                return false;
+            }
+            return true;
+        });
+
         const fitAddon = new window.FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         term.open(surface);
