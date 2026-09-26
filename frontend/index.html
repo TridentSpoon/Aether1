@@ -1173,6 +1173,15 @@
                     <button type="button" class="avatar-back" data-avatar-back="groups">&lsaquo; All lines</button>
                     <h4 id="avatar-members-title" class="avatar-stage-title"></h4>
                     <p id="avatar-members-blurb" class="avatar-stage-lede"></p>
+
+                    <!-- A line can be picked whole, not only one of its members: the cast
+                         answers, and the question goes to whichever node of it owns the
+                         subject. See llm/flow.rs; the button is only the switch. -->
+                    <div class="avatar-line-pick">
+                        <button type="button" id="btn-avatar-line" class="avatar-line-btn"></button>
+                        <p id="avatar-line-note" class="avatar-line-note"></p>
+                    </div>
+
                     <div id="avatar-member-grid" class="avatar-member-grid"></div>
                     <p id="avatar-members-locked" class="avatar-locked-note hidden"></p>
                 </div>

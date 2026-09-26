@@ -1357,6 +1357,47 @@ body {
     color: var(--neon-cyan);
 }
 
+/* The whole line as a pick of its own. Lit when it is the one in force, because it is
+   the same kind of state as FLOW in the chin bar: what it means is that the avatar on
+   screen is not necessarily the one that answers next. */
+.avatar-line-pick {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    margin: 0.25rem 0 0.15rem;
+}
+
+.avatar-line-btn {
+    flex: none;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.3rem;
+    background: var(--bg-panel);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.62rem;
+    letter-spacing: 0.12em;
+    color: var(--text-highlight);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.avatar-line-btn:hover { border-color: var(--border-neon-bright); background: var(--bg-panel-hover); }
+.avatar-line-btn.is-picked {
+    border-color: var(--neon-cyan);
+    background: var(--neon-cyan);
+    color: var(--bg-core);
+}
+.avatar-line-btn:disabled { opacity: 0.45; cursor: default; }
+
+.avatar-line-note {
+    margin: 0;
+    flex: 1 1 14rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
 .avatar-locked-note {
     margin: 0;
     font-family: 'JetBrains Mono', monospace;
