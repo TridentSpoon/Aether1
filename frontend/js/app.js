@@ -4067,6 +4067,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let codeChatBusy = false;
     let codeChatLoaded = false;
 
+    /* Set by the terminal block below. A tab's view has no layout box while it is hidden,
+       so xterm measures zero there and the shell would keep that size once it is shown --
+       the same reason a switched-off panel gets `aether1:panels-changed`. */
+    let onTerminalTabShown = null;
+
     function switchChatTab(which) {
         document.querySelectorAll('[data-chat-view]').forEach(view => {
             const mine = view.getAttribute('data-chat-view') === which;
@@ -4081,6 +4086,9 @@ document.addEventListener('DOMContentLoaded', () => {
             tab.classList.toggle('text-slate-400', !mine);
             tab.classList.toggle('border-transparent', !mine);
         });
+        if (which === 'terminal') {
+            if (typeof onTerminalTabShown === 'function') onTerminalTabShown();
+        }
         if (which === 'code') {
             /* Nothing is probed until the tab is opened: a scan of the machine's ports
                on every launch, for a panel nobody looked at, is work the operator did
@@ -4301,6 +4309,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async function sendToTerminal(command) {
         if (!terminalBridge) return false;
         try {
+            /* The shell shares this panel with the conversation now, so the tab has to come
+               forward: a command typed into a hidden view is a command the operator cannot
+               see, and their Return key is the only thing that runs it. */
+            switchChatTab('terminal');
             if (!terminalBridge.running()) await terminalBridge.ensureStarted();
             return terminalBridge.type(command);
         } catch (e) {
@@ -8726,16 +8738,20 @@ document.addEventListener('DOMContentLoaded', () => {
     /* scripts/check_terminal_isolation.sh fails the build if any of those  */
     /* three stops being true.                                              */
     /*                                                                      */
-    /* In a browser the panel is removed from the DOM rather than disabled. */
-    /* There is no route behind it there, and a terminal that looks like it */
-    /* works is worse than no terminal at all -- it also keeps it out of    */
-    /* the module switch list, which would otherwise offer to turn on       */
-    /* something that cannot exist.                                         */
+    /* It lives in the conversation panel, as the third tab beside          */
+    /* CONVERSATION and AETHER CODE, because that is where the operator     */
+    /* already is when a command is offered to them -- and because a shell  */
+    /* they would rather have elsewhere is one they can open natively.      */
+    /*                                                                      */
+    /* In a browser the tab and its view are removed from the DOM rather    */
+    /* than disabled. There is no route behind it there, and a terminal     */
+    /* that looks like it works is worse than no terminal at all.           */
     /* -------------------------------------------------------------------- */
-    const terminalPanel = document.querySelector('[data-panel="terminal"]');
-    if (terminalPanel && !IS_TAURI) {
-        terminalPanel.remove();
-    } else if (terminalPanel) {
+    const terminalView = document.getElementById('chat-view-terminal');
+    if (terminalView && !IS_TAURI) {
+        terminalView.remove();
+        document.getElementById('tab-chat-terminal')?.remove();
+    } else if (terminalView) {
         const terminalSurface = document.getElementById('terminal-surface');
         const terminalState = document.getElementById('terminal-state');
         const terminalNote = document.getElementById('terminal-note');
@@ -8795,8 +8811,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         /* A panel switched off has no layout box, so xterm cannot measure it; switched
-           back on it needs to be told its size before the shell draws at the old one. */
+           back on it needs to be told its size before the shell draws at the old one. A
+           hidden tab is the same thing one level down, hence the hook. */
         document.addEventListener('aether1:panels-changed', () => shell?.fit());
+        onTerminalTabShown = () => {
+            if (!shell) return;
+            /* After the browser has laid the view out, not before it. */
+            requestAnimationFrame(() => shell.fit());
+        };
     }
 
     document.getElementById('btn-notes')?.addEventListener('click', openNotesReader);
