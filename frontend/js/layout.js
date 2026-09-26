@@ -16,12 +16,23 @@
     'use strict';
 
     const STORE_KEY = 'aether_hud_layout';
-    const STORE_VERSION = 2;
+    /* Bumped to 3 when the grid went from 12 columns to 24: a layout saved in
+       twelfths would be read as twenty-fourths and every panel would come back
+       half its width. A version this file does not recognise is dropped, so an
+       operator gets the shipped layout rather than a broken one. */
+    const STORE_VERSION = 3;
 
     /* Keep these in sync with the custom properties #hud-layout sets in
        css/layout.css -- the drag/resize math converts pointer pixels to
        cells using these same numbers. */
-    const COLS = 12;
+    /* 24, not 12. Columns are the resolution at which a panel's width can be
+       stated, and the seam between two panels (below) can only land on a column
+       boundary -- in twelfths, dragging the join between the avatar and the
+       conversation jumped in steps of 8% of the window, which reads as a
+       control that is fighting you. In twenty-fourths a step is 4%, small
+       enough that the drag feels continuous, and still coarse enough that
+       panels stay aligned with each other. */
+    const COLS = 24;
     const GAP_PX = 10;
 
     /* Row height is not a constant. Columns have always been twelfths of the
@@ -39,7 +50,7 @@
 
     /* A panel smaller than this is not a panel, it is a sliver you cannot
        read and cannot easily grab your way out of. */
-    const MIN_W = 2;
+    const MIN_W = 4;
     const MIN_H = 4;
     /* Pointer travel before a press counts as a drag rather than a click. */
     const DRAG_THRESHOLD_PX = 4;
@@ -237,6 +248,7 @@
         }
         applyAll();
         renderToggles();
+        renderSeams();
     }
 
     // ---- Which panels exist at all ------------------------------------------
@@ -257,6 +269,7 @@
         if (on) off.delete(id); else off.add(id);
         applyVisibility();
         save();
+        renderSeams();
         settle();
         /* A panel switched off has no layout box, so anything that measures itself --
            the terminal, which has to tell the shell how many columns it has -- reads
@@ -303,6 +316,7 @@
         applyVisibility();
         applyAll();
         renderToggles();
+        renderSeams();
         settle();
     }
 
@@ -358,6 +372,9 @@
         requestAnimationFrame(() => {
             fitQueued = false;
             fitRowHeight();
+            /* A row that changed height moves every join below it, and a narrow
+               window has no joins to draw at all. */
+            renderSeams();
             /* Panels that measure themselves -- the terminal sizes its shell
                from its box -- need to hear about it after the row height has
                landed, not before. */
@@ -381,6 +398,12 @@
         return {
             left: rect.left + padLeft,
             top: rect.top + padTop,
+            /* The same origin expressed inside the grid rather than on the
+               screen, for anything positioned absolutely within it: the grid
+               scrolls, and a child placed in content coordinates scrolls with
+               it instead of sliding off its panels. */
+            padLeft,
+            padTop,
             colPitch: (contentWidth + GAP_PX) / COLS,
             rowPitch: rowPx + GAP_PX,
         };
@@ -406,6 +429,7 @@
 
     function activateDrag() {
         drag.active = true;
+        renderSeams();
         drag.panel.classList.add('is-dragging');
         document.body.classList.add('layout-dragging');
     }
@@ -438,6 +462,7 @@
             save();
         }
         apply(panel);
+        renderSeams();
         settle();
     }
 
@@ -468,6 +493,7 @@
         if (event.key !== 'Escape') return;
         if (drag) endDrag(false);
         if (resize) endResize(false);
+        if (seamDrag) endSeamDrag(false);
     });
 
     // ---- Moving a panel from the keyboard -----------------------------------
@@ -483,6 +509,7 @@
         if (overlapsAny({ col, row, w: home.w, h: home.h }, id)) return false;
         state.set(id, { ...home, col, row });
         apply(panel);
+        renderSeams();
         settle();
         save();
         return true;
@@ -547,6 +574,7 @@
             save();
         }
         apply(panel);
+        renderSeams();
         settle();
     }
 
@@ -566,6 +594,7 @@
             const moved = Math.hypot(event.clientX - resize.startX, event.clientY - resize.startY);
             if (moved < DRAG_THRESHOLD_PX) return;
             resize.active = true;
+            renderSeams();
             resize.panel.classList.add('is-resizing');
             document.body.classList.add('layout-resizing');
         }
@@ -574,6 +603,227 @@
 
     layout.addEventListener('pointerup', () => endResize(true));
     layout.addEventListener('pointercancel', () => endResize(false));
+
+
+    // ---- The seam between two panels side by side ---------------------------
+    /* Two panels whose edges meet share a join, and the join is the obvious
+       place to grab when one of them wants more room -- now that the HUD is the
+       avatar and the conversation and nothing else, it is the only resize most
+       operators will ever want. Dragging it is one move rather than two
+       resizes: the boundary column is what changes, and the panel on each side
+       of it follows, so the pair stays snapped together throughout.
+     *
+     * The handles are not panels and hold no place in the grid. They are drawn
+     * over the gap between the two columns, in the grid's own content
+     * coordinates (see metrics().padLeft/padTop), and rebuilt whenever anything
+     * that could move a join happens. Keeping them out of `panels` matters: the
+     * placement, persistence and visibility code all iterate that list and none
+     * of it should ever see a handle. */
+
+    /* Wide enough to hit with a pointer without aiming, which is wider than the
+       10px gap it sits in -- so it overhangs both panels slightly. That costs
+       nothing: the strip it covers is panel border, not content. */
+    const SEAM_HIT_PX = 14;
+
+    let seamEls = [];
+    let seamDrag = null;
+
+    function rowsOverlap(a, b) {
+        return a.row < b.row + b.h && b.row < a.row + a.h;
+    }
+
+    /* Every vertical join between two visible panels: the left one's right edge
+       is exactly the right one's left edge, and they share some rows. A panel
+       can be in more than one seam (three panels in a row give two), and each
+       is dragged independently. */
+    function findSeams() {
+        const live = [];
+        for (const [id, rect] of state) {
+            if (off.has(id)) continue;
+            live.push({ id, rect });
+        }
+        const found = [];
+        for (const a of live) {
+            for (const b of live) {
+                if (a.id === b.id) continue;
+                if (a.rect.col + a.rect.w !== b.rect.col) continue;
+                if (!rowsOverlap(a.rect, b.rect)) continue;
+                found.push({
+                    leftId: a.id,
+                    rightId: b.id,
+                    boundary: b.rect.col,
+                    rowStart: Math.max(a.rect.row, b.rect.row),
+                    rowEnd: Math.min(a.rect.row + a.rect.h, b.rect.row + b.rect.h),
+                });
+            }
+        }
+        return found;
+    }
+
+    function placeSeam(el, seam) {
+        const m = metrics();
+        /* The gap lies immediately to the left of the boundary column's start,
+           and the handle is centred on it. */
+        const boundaryX = m.padLeft + (seam.boundary - 1) * m.colPitch;
+        const centre = boundaryX - GAP_PX / 2;
+        el.style.left = (centre - SEAM_HIT_PX / 2) + 'px';
+        el.style.width = SEAM_HIT_PX + 'px';
+        el.style.top = (m.padTop + (seam.rowStart - 1) * m.rowPitch) + 'px';
+        el.style.height = Math.max(
+            0,
+            (seam.rowEnd - seam.rowStart) * m.rowPitch - GAP_PX
+        ) + 'px';
+    }
+
+    function seamTitle(seam) {
+        const left = byId.get(seam.leftId);
+        const right = byId.get(seam.rightId);
+        if (!left || !right) return 'Drag to resize both panels';
+        return 'Drag to resize ' + panelLabel(left) + ' and ' + panelLabel(right)
+            + '. Arrow keys move it too.';
+    }
+
+    function renderSeams() {
+        /* Nothing is drawn while a panel is being dragged or resized: the join
+           it is about to make does not exist yet, and a stale handle over a
+           moving panel is worse than no handle. The end of either gesture
+           rebuilds them. */
+        const suppress = !!drag || !!resize || window.innerWidth < GRID_MIN_WIDTH;
+        const seams = suppress ? [] : findSeams();
+        while (seamEls.length > seams.length) seamEls.pop().remove();
+        seams.forEach((seam, i) => {
+            let el = seamEls[i];
+            if (!el) {
+                el = document.createElement('button');
+                el.type = 'button';
+                el.className = 'panel-seam';
+                layout.appendChild(el);
+                seamEls[i] = el;
+            }
+            el.dataset.seamLeft = seam.leftId;
+            el.dataset.seamRight = seam.rightId;
+            el.title = seamTitle(seam);
+            el.setAttribute('aria-label', seamTitle(seam));
+            placeSeam(el, seam);
+        });
+    }
+
+    function seamFor(el) {
+        const leftId = el.dataset.seamLeft;
+        const rightId = el.dataset.seamRight;
+        const left = state.get(leftId);
+        const right = state.get(rightId);
+        if (!left || !right) return null;
+        return { leftId, rightId, left, right };
+    }
+
+    /* How far the boundary may travel from where it is, in columns. Neither
+       panel may go below MIN_W, and since the pair keeps its combined width the
+       two limits are all there is to check. */
+    function clampSeamDelta(pair, delta) {
+        const min = MIN_W - pair.left.w;
+        const max = pair.right.w - MIN_W;
+        return Math.max(min, Math.min(max, delta));
+    }
+
+    function previewSeam(pair, delta) {
+        const leftEl = byId.get(pair.leftId);
+        const rightEl = byId.get(pair.rightId);
+        if (leftEl) leftEl.style.setProperty('--gw', pair.left.w + delta);
+        if (rightEl) {
+            rightEl.style.setProperty('--gcol', pair.right.col + delta);
+            rightEl.style.setProperty('--gw', pair.right.w - delta);
+        }
+    }
+
+    function commitSeam(pair, delta) {
+        if (!delta) return false;
+        state.set(pair.leftId, { ...pair.left, w: pair.left.w + delta });
+        state.set(pair.rightId, {
+            ...pair.right,
+            col: pair.right.col + delta,
+            w: pair.right.w - delta,
+        });
+        save();
+        return true;
+    }
+
+    layout.addEventListener('pointerdown', (event) => {
+        const handle = event.target.closest('.panel-seam');
+        if (!handle || event.button !== 0) return;
+        const pair = seamFor(handle);
+        if (!pair) return;
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        seamDrag = { handle, pair, startX: event.clientX, delta: 0, active: false };
+    });
+
+    layout.addEventListener('pointermove', (event) => {
+        if (!seamDrag) return;
+        if (!seamDrag.active) {
+            if (Math.abs(event.clientX - seamDrag.startX) < DRAG_THRESHOLD_PX) return;
+            seamDrag.active = true;
+            seamDrag.handle.classList.add('is-seaming');
+            document.body.classList.add('layout-seaming');
+        }
+        const m = metrics();
+        const raw = Math.round((event.clientX - seamDrag.startX) / m.colPitch);
+        seamDrag.delta = clampSeamDelta(seamDrag.pair, raw);
+        previewSeam(seamDrag.pair, seamDrag.delta);
+        /* The handle follows the boundary it is moving rather than the pointer,
+           so it snaps to the column the panels have actually taken. */
+        placeSeam(seamDrag.handle, {
+            boundary: seamDrag.pair.right.col + seamDrag.delta,
+            rowStart: Math.max(seamDrag.pair.left.row, seamDrag.pair.right.row),
+            rowEnd: Math.min(
+                seamDrag.pair.left.row + seamDrag.pair.left.h,
+                seamDrag.pair.right.row + seamDrag.pair.right.h
+            ),
+        });
+    });
+
+    function endSeamDrag(commit) {
+        if (!seamDrag) return;
+        const { handle, pair, active, delta } = seamDrag;
+        seamDrag = null;
+        handle.classList.remove('is-seaming');
+        document.body.classList.remove('layout-seaming');
+        if (active && commit) commitSeam(pair, delta);
+        /* Whether it was committed or abandoned, the two panels are put back to
+           whatever state says -- the preview wrote custom properties straight
+           onto them and apply() is the only thing that owns those. */
+        [pair.leftId, pair.rightId].forEach((id) => {
+            const el = byId.get(id);
+            if (el) apply(el);
+        });
+        renderSeams();
+        if (active && commit) settle();
+    }
+
+    layout.addEventListener('pointerup', () => endSeamDrag(true));
+    layout.addEventListener('pointercancel', () => endSeamDrag(false));
+
+    /* The handle is a button, so it can be tabbed to; arrow keys move the
+       boundary a column at a time, the same bargain the grips make. */
+    layout.addEventListener('keydown', (event) => {
+        const handle = event.target.closest('.panel-seam');
+        if (!handle) return;
+        const step = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+        if (!step) return;
+        const pair = seamFor(handle);
+        if (!pair) return;
+        const delta = clampSeamDelta(pair, step);
+        if (!delta) return;
+        event.preventDefault();
+        commitSeam(pair, delta);
+        [pair.leftId, pair.rightId].forEach((id) => {
+            const el = byId.get(id);
+            if (el) apply(el);
+        });
+        renderSeams();
+        settle();
+        handle.focus();
+    });
 
     // ---- Wiring -------------------------------------------------------------
 
