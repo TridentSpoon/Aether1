@@ -29,7 +29,7 @@
        itself with HologramAvatar.registerAvatar and carries its own build/animate. */
     const AVATARS = {
         'halcy':          { file: 'avatar-halcy.js',          v: 17, builder: 'buildHalcyAvatar',    animator: 'animateHalcy' },
-        'arx-limes':      { file: 'avatar-arx-limes.js',      v: 17, builder: 'buildArxLimesAvatar', animator: 'animateArxLimes' },
+        'arx-limes':      { file: 'avatar-arx-limes.js',      v: 20, builder: 'buildArxLimesAvatar', animator: 'animateArxLimes' },
         'nexus':          { file: 'avatar-nexus.js',          v: 29, builder: 'buildNexusAvatar',    animator: 'animateNexus' },
         'red':            { file: 'avatar-red9000.js',        v: 19, builder: 'buildRed9000Avatar',  animator: 'animateRed9000' },
         'arx-logos':      { file: 'avatar-arx-logos.js',      v: 18, builder: 'buildArxLogosAvatar', animator: 'animateArxLogos' },
@@ -53,7 +53,7 @@
         /* The custom avatar is assembled from the shared parts library rather than modelled
            by hand, so its file is useless without it -- 56 KB that only this one avatar
            needs, which is exactly the kind of weight worth not carrying at launch. */
-        'custom':         { file: 'avatar-custom.js',         v: 2, needs: [{ file: 'parts.js', v: 1 }] },
+        'custom':         { file: 'avatar-custom.js',         v: 2, needs: [{ file: 'parts.js', v: 2 }] },
     };
 
     /* Older names the HUD and saved settings still use for the same avatar. setAvatar has

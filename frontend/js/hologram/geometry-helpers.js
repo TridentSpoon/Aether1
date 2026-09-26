@@ -211,3 +211,84 @@ HologramAvatar.prototype.buildPolygonShard = function(points2D, bulge, fillMat, 
     }
     return group;
 };
+
+// A faceted "rounded" cube: square-shouldered enough to read as a cube, with its edges and
+// corners cut back into facets instead of meeting at a point.
+//
+// Built by spherifying a subdivided cube rather than by chamfering one. Each face is a
+// grid of `segments` x `segments` quads, and every grid point is pushed part of the way
+// (`round`, 0 = cube, 1 = sphere) toward the sphere it sits on; a face's centre is already
+// on that sphere and does not move, so the corners come in while the flat faces stay put.
+// A chamfer would have wanted a convex hull, and three.js's own RoundedBoxGeometry is an
+// addon this vendored build does not carry.
+//
+// Returns the fill geometry and, separately, the facet grid as line segments. The grid is
+// built here rather than left to EdgesGeometry because the facets near a face's centre
+// meet at a couple of degrees and the ones at a corner at twenty: no single threshold
+// draws them all, and any threshold low enough to try also draws the diagonal each quad is
+// split along, which is not a facet edge.
+//
+// `radius` is the distance to the furthest (corner) point, matching IcosahedronGeometry's
+// radius, so a rounded cube can be swapped in for a geodesic at the same number.
+HologramAvatar.prototype.buildRoundedCube = function(radius, segments = 3, round = 0.45) {
+    // Each face as an origin corner and the two edge vectors spanning it, in a cube
+    // running -1..1 on every axis.
+    const faces = [
+        { o: [-1, -1,  1], du: [ 2, 0,  0], dv: [0,  2,  0] }, // +Z
+        { o: [ 1, -1, -1], du: [-2, 0,  0], dv: [0,  2,  0] }, // -Z
+        { o: [ 1, -1,  1], du: [ 0, 0, -2], dv: [0,  2,  0] }, // +X
+        { o: [-1, -1, -1], du: [ 0, 0,  2], dv: [0,  2,  0] }, // -X
+        { o: [-1,  1,  1], du: [ 2, 0,  0], dv: [0,  0, -2] }, // +Y
+        { o: [-1, -1, -1], du: [ 2, 0,  0], dv: [0,  0,  2] }, // -Y
+    ];
+
+    // The corner is the furthest point and the one that moves, so the scale that lands it
+    // on `radius` is only known after the lerp.
+    const corner = new THREE.Vector3(1, 1, 1);
+    const cornerLen = corner.clone().lerp(corner.clone().normalize(), round).length();
+    const scale = radius / cornerLen;
+
+    const point = (face, u, v) => {
+        const p = new THREE.Vector3(
+            face.o[0] + face.du[0] * u + face.dv[0] * v,
+            face.o[1] + face.du[1] * u + face.dv[1] * v,
+            face.o[2] + face.du[2] * u + face.dv[2] * v
+        );
+        p.lerp(p.clone().normalize(), round).multiplyScalar(scale);
+        return p;
+    };
+
+    const tris = [];
+    const lines = [];
+    const push = (arr, ...points) => points.forEach(p => arr.push(p.x, p.y, p.z));
+
+    faces.forEach((face) => {
+        const grid = [];
+        for (let i = 0; i <= segments; i++) {
+            grid.push([]);
+            for (let j = 0; j <= segments; j++) {
+                grid[i].push(point(face, i / segments, j / segments));
+            }
+        }
+        for (let i = 0; i < segments; i++) {
+            for (let j = 0; j < segments; j++) {
+                const a = grid[i][j], b = grid[i + 1][j], c = grid[i + 1][j + 1], d = grid[i][j + 1];
+                push(tris, a, b, c);
+                push(tris, a, c, d);
+                // Two sides per quad, plus the far sides of the last row and column, so
+                // every facet boundary is drawn exactly once within this face.
+                push(lines, a, b);
+                push(lines, a, d);
+                if (i === segments - 1) push(lines, b, c);
+                if (j === segments - 1) push(lines, d, c);
+            }
+        }
+    });
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(tris, 3));
+    geometry.computeVertexNormals();
+    const edges = new THREE.BufferGeometry();
+    edges.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+    return { geometry, edges };
+};

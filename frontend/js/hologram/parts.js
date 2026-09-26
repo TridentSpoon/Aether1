@@ -116,13 +116,67 @@
         return group;
     }
 
+    // A faceted "rounded" cube: a cube whose edges and corners are cut back into facets.
+    // Each face is a grid of quads and every grid point is pushed part of the way toward
+    // the sphere it sits on, so the corners come in while the flat faces stay put. The
+    // facet grid comes back as its own line segments because no EdgesGeometry threshold
+    // draws both the shallow facets mid-face and the sharp ones at a corner.
+    function roundedCube(radius, segments, round) {
+        const faces = [
+            { o: [-1, -1,  1], du: [ 2, 0,  0], dv: [0,  2,  0] },
+            { o: [ 1, -1, -1], du: [-2, 0,  0], dv: [0,  2,  0] },
+            { o: [ 1, -1,  1], du: [ 0, 0, -2], dv: [0,  2,  0] },
+            { o: [-1, -1, -1], du: [ 0, 0,  2], dv: [0,  2,  0] },
+            { o: [-1,  1,  1], du: [ 2, 0,  0], dv: [0,  0, -2] },
+            { o: [-1, -1, -1], du: [ 2, 0,  0], dv: [0,  0,  2] },
+        ];
+        const corner = new THREE.Vector3(1, 1, 1);
+        const scale = radius / corner.clone().lerp(corner.clone().normalize(), round).length();
+        const point = (f, u, v) => {
+            const p = new THREE.Vector3(
+                f.o[0] + f.du[0] * u + f.dv[0] * v,
+                f.o[1] + f.du[1] * u + f.dv[1] * v,
+                f.o[2] + f.du[2] * u + f.dv[2] * v
+            );
+            return p.lerp(p.clone().normalize(), round).multiplyScalar(scale);
+        };
+        const tris = [];
+        const lines = [];
+        const push = (arr, ...pts) => pts.forEach((q) => arr.push(q.x, q.y, q.z));
+        faces.forEach((f) => {
+            const grid = [];
+            for (let i = 0; i <= segments; i++) {
+                grid.push([]);
+                for (let j = 0; j <= segments; j++) grid[i].push(point(f, i / segments, j / segments));
+            }
+            for (let i = 0; i < segments; i++) {
+                for (let j = 0; j < segments; j++) {
+                    const a = grid[i][j], b = grid[i + 1][j], c = grid[i + 1][j + 1], d = grid[i][j + 1];
+                    push(tris, a, b, c);
+                    push(tris, a, c, d);
+                    push(lines, a, b);
+                    push(lines, a, d);
+                    if (i === segments - 1) push(lines, b, c);
+                    if (j === segments - 1) push(lines, d, c);
+                }
+            }
+        });
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(tris, 3));
+        geometry.computeVertexNormals();
+        const edges = new THREE.BufferGeometry();
+        edges.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+        return { geometry, edges };
+    }
+
     // ---- Cores: the thing at the middle -------------------------------------
     //
     // Two things sat here and no longer do, so nobody re-adds them under the opt-out
     // rule: A1ter_nul's broken shard stack, which is a row of equaliser bars rather than
-    // a core, and A.R.X.LIMES's faceted hub, which is the faceted crystal at a smaller
-    // size. Both were withdrawn at the owner's request on 2026-09-20; neither avatar was
-    // touched, and both still contribute to other tiers.
+    // a core, and A.R.X.LIMES's old geodesic hub, which was the faceted crystal at a
+    // smaller size. Both were withdrawn at the owner's request on 2026-09-20; neither
+    // avatar was touched, and both still contribute to other tiers. LIMES's hub is a
+    // faceted rounded cube now, a shape the kit did not have, so it is carried below.
 
     const CORES = {
         none: {
@@ -170,6 +224,29 @@
                     applyPalette(p) { fill.color.setHex(p.hex); edge.color.setHex(p.hex3); },
                     animate(ctx) {
                         group.scale.setScalar(1 + ctx.audio * 0.2 + ctx.click * 0.15);
+                    },
+                };
+            },
+        },
+
+        // Adapted from A.R.X.LIMES's hub: a near-opaque void -- no additive blending, an
+        // additive near-black is invisible against the HUD -- inside a bright facet grid.
+        roundedCube: {
+            label: 'Faceted rounded cube',
+            build(api, options) {
+                const { geometry, edges } = roundedCube(options.size, 3, 0.45);
+                const fill = new THREE.MeshBasicMaterial({
+                    color: 0x040209, side: THREE.DoubleSide, transparent: true, opacity: 0.94,
+                });
+                const edgeMat = new THREE.LineBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.95 });
+                const group = new THREE.Group();
+                group.add(new THREE.Mesh(geometry, fill), new THREE.LineSegments(edges, edgeMat));
+                return {
+                    object: group,
+                    applyPalette(p) { edgeMat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        group.scale.setScalar(1 + ctx.audio * 0.25 + ctx.click * 0.15);
+                        edgeMat.opacity = Math.min(1, 0.7 + ctx.audio * 0.5 + ctx.click * 0.3);
                     },
                 };
             },
