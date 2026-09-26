@@ -9,10 +9,26 @@
 
 name: CI
 
+# A change to nothing but prose cannot fail any check in this file, and a workflow that
+# never starts costs nothing -- so those are filtered out here, before a runner is handed
+# out. Everything else is decided inside the jobs below, because "did this change matter"
+# has a different answer for the Rust checks than for the frontend ones.
+#
+# This only skips a run when *every* changed file matches. A commit touching README.md and
+# src-tauri/ together still runs in full. The list is spelled out twice because GitHub's
+# workflow parser does not support YAML anchors.
 on:
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
 
 # A second push to the same branch makes the first run's answer worthless, so it is
 # cancelled rather than left to finish.
@@ -35,6 +51,77 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The filter below diffs this change against its base, which needs more history
+          # than the single commit a default checkout fetches. It also makes build.rs's
+          # `git log -60` able to find a merge subject, which it cannot in a depth-1 clone.
+          fetch-depth: 0
+
+      # Around a third of the changes that land here touch nothing under src-tauri/ -- and
+      # no Rust check can notice that. Nothing under src-tauri/ reads a frontend file at build or test
+      # time (server.rs serves that directory at *runtime*, and there is no src-tauri/tests),
+      # so `cargo fmt`, `cargo clippy` and `cargo test` return exactly what they returned on
+      # the previous commit while taking five and a half minutes to say so.
+      #
+      # The cross-cutting checks -- the ones that compare frontend/ against src-tauri/, like
+      # check_panel_fields.sh -- all live in the `frontend` job, which is why that job has no
+      # filter and always runs. This one is the expensive half, and the only one worth
+      # skipping.
+      #
+      # Done as an early exit inside the job rather than an `if:` on the job itself, for two
+      # reasons: GitHub bills every job it starts as a whole minute, so a separate filter job
+      # would hand back a minute of the saving on every single run; and a job whose steps all
+      # skip still reports success, where a skipped job reports "skipped" and would look like
+      # a check that never ran.
+      - name: Work out whether anything Rust changed
+        id: filter
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+
+          # A base that cannot be resolved means the question cannot be answered, so
+          # everything runs. That covers a brand-new branch (github.event.before is all
+          # zeroes), a force-push that orphaned the previous tip, and a re-run after the
+          # history it referred to moved.
+          if [ -z "${BASE:-}" ] \
+             || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "No usable base commit to compare against -- running the Rust checks."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Three dots, so this is measured from where the branch left the base rather than
+          # against the base's current tip -- otherwise commits landing on main meanwhile
+          # get counted as part of this change.
+          changed=$(git diff --name-only "${BASE}...HEAD")
+
+          if [ -z "$changed" ]; then
+            echo "Nothing changed against ${BASE} -- running the Rust checks."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Changed against ${BASE}:"
+          printf '%s\n' "$changed" | sed 's/^/  /'
+
+          # src-tauri/ is the whole crate: sources, Cargo.toml, Cargo.lock, build.rs,
+          # tauri.conf.json, capabilities. ci.yml counts too -- it is hashed into the apt
+          # cache key below, and a change to these steps has to be exercised by them.
+          # A here-string rather than `printf | grep -q`: grep -q exits the moment it
+          # matches, which can leave printf killed by SIGPIPE, and under `pipefail` that
+          # makes the pipeline fail *because* the pattern was found.
+          if grep -qE '^(src-tauri/|\.github/workflows/ci\.yml$)' <<<"$changed"; then
+            echo "Rust-relevant files changed -- running the Rust checks."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing under src-tauri/ changed -- skipping the Rust checks."
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Every step from here down carries the same condition, so that a change which cannot
+      # affect them ends the job in about twenty seconds instead of five and a half minutes.
 
       # Aether1 links against the system webview and GTK stack on Linux; without these
       # the build fails at link time with an error that names a .pc file rather than a
@@ -46,12 +133,14 @@ jobs:
       # into it fails on permissions. The key covers this file, so editing the package list
       # gets a fresh cache rather than a stale one missing whatever was added.
       - name: Cache the apt downloads
+        if: steps.filter.outputs.rust == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/aether1-apt
           key: apt-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
 
       - name: Install the Linux build dependencies
+        if: steps.filter.outputs.rust == 'true'
         run: |
           set -euo pipefail
           echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99keep-debs
@@ -70,29 +159,40 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" ~/.cache/aether1-apt
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.rust == 'true'
         with:
           components: clippy, rustfmt
 
       # Keyed on the lockfile so a dependency change gets a fresh cache and everything
       # else reuses one -- the compile is by far the longest step here.
       - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.rust == 'true'
         with:
           workspaces: src-tauri
 
       - name: Format
+        if: steps.filter.outputs.rust == 'true'
         working-directory: src-tauri
         run: cargo fmt --check
 
       # --all-targets so the tests are linted too: a warning in a test is still a warning,
       # and test code is where sloppiness hides.
       - name: Clippy
+        if: steps.filter.outputs.rust == 'true'
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Tests
+        if: steps.filter.outputs.rust == 'true'
         working-directory: src-tauri
         run: cargo test
 
+  # Deliberately unfiltered, unlike the Rust job above. Several of these checks read
+  # src-tauri/ as well as frontend/ -- check_panel_fields.sh compares the panel's fields
+  # against llm/mod.rs, and check_terminal_isolation.sh reads only Rust files -- so a
+  # Rust-only change is exactly when some of them matter most. It runs in about fifteen
+  # seconds, which is inside the one minute GitHub bills as a minimum anyway, so there is
+  # nothing to save here even when it has no work to do.
   frontend:
     name: Frontend -- syntax
     runs-on: ubuntu-latest
