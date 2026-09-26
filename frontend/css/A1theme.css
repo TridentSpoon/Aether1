@@ -2535,3 +2535,75 @@ body {
 .hub-fact-value { font-size: 0.72rem; color: var(--text-main); }
 
 .hub-downloads { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* A switch, for a setting that is plainly one thing being on or off ------------------
+ * The Display section asks two questions: where the panels sit, and whether the avatar
+ * is floating free of the window. The second is a mode, and a mode reads better as a
+ * switch than as a tick-box. The checkbox is still the control -- it keeps its id and
+ * its checked state, so everything that reads or writes the setting is unchanged -- it
+ * is just moved out of sight and drawn as the track beside it.
+ */
+.a1-switch {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    cursor: pointer;
+}
+
+.a1-switch-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+.a1-switch-track {
+    position: relative;
+    flex: 0 0 auto;
+    width: 2.1rem;
+    height: 1.1rem;
+    margin-top: 0.05rem;
+    border-radius: 999px;
+    border: 1px solid rgba(125, 165, 201, 0.45);
+    background: rgba(8, 14, 24, 0.75);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.a1-switch-knob {
+    position: absolute;
+    top: 0.15rem;
+    left: 0.17rem;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 999px;
+    background: var(--text-dim);
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.a1-switch-input:checked + .a1-switch-track {
+    border-color: var(--text-accent);
+    /* The flat rgba is the fallback for a webview without color-mix; the accent-tinted
+       version is what a current one draws, so the switch follows the theme. */
+    background: rgba(0, 240, 255, 0.22);
+    background: color-mix(in srgb, var(--text-accent) 26%, transparent);
+}
+
+.a1-switch-input:checked + .a1-switch-track .a1-switch-knob {
+    transform: translateX(0.95rem);
+    background: var(--text-accent);
+}
+
+/* Keyboard focus has to be visible on the track, since the checkbox it belongs to is
+ * not on screen to show it. */
+.a1-switch-input:focus-visible + .a1-switch-track {
+    outline: 1px solid var(--text-highlight);
+    outline-offset: 2px;
+}
+
+.a1-switch-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--text-main);
+}
