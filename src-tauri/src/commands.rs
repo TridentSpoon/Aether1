@@ -217,6 +217,14 @@ pub fn forget_voice_download(voice: String) -> Value {
     serde_json::json!({ "ok": crate::voice_download::forget(&voice) })
 }
 
+/// The speakers and microphones this machine has, as the operating system names them.
+///
+/// Asked for every time the panel opens rather than cached: a headset plugged in while
+/// AETHER1 was running is the whole reason somebody opens this list.
+pub fn audio_devices() -> Value {
+    serde_json::json!({ "devices": crate::audio_devices::scan() })
+}
+
 /// Starts the local model server when it is installed but not running.
 ///
 /// This is the one case where the app can fix a missing dependency itself rather than
@@ -499,6 +507,15 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "command_allowlist": [],
         "tts_engine": "auto",
         "tts_local_voice": "",
+        // Which speaker and microphone to use, as audio_devices.rs names them. Empty is
+        // the ordinary value and means "whatever the system picks" -- the behaviour
+        // everything had before there was anywhere to choose. The label is stored beside
+        // the id because the two lists this is matched against (the operating system's
+        // and the browser's) do not share identifiers; see resolveAudioDevice in app.js.
+        "audio_output_device": "",
+        "audio_output_label": "",
+        "audio_input_device": "",
+        "audio_input_label": "",
         "stt_model_path": "",
         "stt_language": "en",
         "vault_path": "",

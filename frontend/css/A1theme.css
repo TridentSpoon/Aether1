@@ -2354,6 +2354,11 @@ body {
     .hub-body { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* Two cards of equal weight rather than a list and its detail: the speaker and the
+   microphone are the same kind of thing, and the 15rem column makes one of them look
+   like a sidebar for the other. */
+.hub-body-even { grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr)); }
+
 .hub-list-col { min-width: 0; }
 
 .hub-list-head {
@@ -2423,6 +2428,9 @@ body {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.72rem;
     color: var(--text-main);
+    /* A span is inline, and overflow/text-overflow do nothing to an inline box -- so
+       without this a long name is cut off mid-word with no ellipsis to say it was. */
+    display: block;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -2535,3 +2543,21 @@ body {
 .hub-fact-value { font-size: 0.72rem; color: var(--text-main); }
 
 .hub-downloads { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* The microphone level bar in the Voice & Sound hub. A tick saying "microphone found"
+   is true of a muted input and of one pointed at the wrong socket, so the check that
+   answers "is this the right device" has to be a moving bar. */
+.hub-level {
+    height: 0.4rem;
+    border-radius: 0.2rem;
+    background: var(--bg-core);
+    border: 1px solid var(--border-neon);
+    overflow: hidden;
+}
+
+.hub-level-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--neon-green), var(--text-accent));
+    transition: width 80ms linear;
+}

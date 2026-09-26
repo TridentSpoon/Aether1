@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=30">
+    <link rel="stylesheet" href="css/A1theme.css?v=31">
     <link rel="stylesheet" href="css/layout.css?v=3">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
@@ -850,7 +850,7 @@
                         <span class="settings-nav-icon">🧠</span>
                         <span class="settings-nav-text">The Brain</span>
                     </button>
-                    <button type="button" id="settings-nav-voice" class="settings-nav-item" data-settings-section="voice" data-keywords="speech piper tts microphone sound beeps sfx mute volume" data-hint="how it speaks, and whether it beeps" title="how it speaks, and whether it beeps">
+                    <button type="button" id="settings-nav-voice" class="settings-nav-item" data-settings-section="voice" data-keywords="speech piper tts microphone sound beeps sfx mute volume speaker output input audio device headset" data-hint="its voice, its speaker and its microphone" title="its voice, its speaker and its microphone">
                         <span class="settings-nav-icon">🗣</span>
                         <span class="settings-nav-text">Voice &amp; Sound</span>
                     </button>
@@ -1656,9 +1656,34 @@
                 <details id="settings-group-voice" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🗣 Voice &amp; Sound</span>
-                    <span class="settings-group-hint">how it speaks, and whether it beeps</span>
+                    <span class="settings-group-hint">how it speaks, what it plays through, and whether it beeps</span>
                 </summary>
                 <div class="settings-group-body">
+
+                    <!-- ---------------------- THE VOICE & SOUND HUB ----------------------
+                         The Brain's hub arrangement, applied to the other half of the
+                         companion, and for the same reason: the pane used to be a column
+                         of engine names and file paths, which is no help to somebody whose
+                         question is "why can I not hear it" or "why is it coming out of the
+                         monitor".
+
+                         Two tabs, because they are two questions. Voices is which voice it
+                         speaks in -- the same fixed Piper catalogue the wizard offers, now
+                         with a detail panel instead of a row of buttons. Devices is which
+                         speaker and which microphone, read from the operating system by
+                         audio_devices.rs and merged with what this page itself can see.
+
+                         Nothing here is fetched from a website except a voice file the
+                         operator asks for by name. The device list is this machine, asked
+                         with a fixed command and never a shell. -->
+                    <div class="hub-head">
+                        <div class="min-w-0">
+                            <div class="hub-title">Voice &amp; Sound hub</div>
+                            <div class="hub-sub">Voices, speakers and microphones, on this computer.</div>
+                        </div>
+                        <div id="vhub-machine" class="hub-chips"></div>
+                    </div>
+
                     <!-- The same offer the brain group makes, for the same reason: a list
                          of engine names is no use to somebody whose companion will not
                          talk, and the wizard is the thing that says why. -->
@@ -1669,6 +1694,89 @@
                         <button id="btn-open-voice-settings" type="button" class="cyber-btn cyber-btn-active text-xs py-2 px-3 whitespace-nowrap">🗣 Test &amp; fix the voice</button>
                     </div>
 
+                    <div class="hub-controls">
+                        <div class="hub-tabs" role="tablist">
+                            <button type="button" id="vhub-tab-voices" class="hub-tab is-active" data-vhub-tab="voices" role="tab">Voices</button>
+                            <button type="button" id="vhub-tab-devices" class="hub-tab" data-vhub-tab="devices" role="tab">Devices</button>
+                        </div>
+                        <div class="hub-search">
+                            <span class="hub-search-icon" aria-hidden="true">🔍</span>
+                            <input id="vhub-search" type="search" placeholder="Search voices" autocomplete="off" aria-label="Search voices">
+                        </div>
+                        <select id="vhub-filter" class="hub-select" aria-label="Which voices to show">
+                            <option value="all">All voices</option>
+                            <option value="installed">Already downloaded</option>
+                            <option value="missing">Not downloaded yet</option>
+                        </select>
+                    </div>
+
+                    <!-- ---- Voices ---- -->
+                    <div id="vhub-pane-voices" class="hub-body">
+                        <div class="hub-list-col">
+                            <div class="hub-list-head">
+                                <span id="vhub-list-title" class="hub-list-title">Offline voices</span>
+                                <button type="button" id="vhub-refresh" class="hub-icon-btn" title="Look at this computer again">&#8635;</button>
+                            </div>
+                            <div id="vhub-list" class="hub-list" role="listbox" aria-label="Voices"></div>
+                        </div>
+                        <!-- One voice at a time, and the Download button lives in here
+                             rather than on every row: same reasoning as the model hub, a
+                             column of Download buttons invites a second sixty-megabyte
+                             download nobody meant to start. -->
+                        <div id="vhub-detail" class="hub-detail"></div>
+                    </div>
+
+                    <!-- ---- Devices ----
+                         A speaker chosen here is not the system's default being changed:
+                         AETHER1 sends its own sound there and leaves the rest of the
+                         machine alone. Empty means "whatever the system picks", which is
+                         what everything did before this existed. -->
+                    <div id="vhub-pane-devices" class="hub-body hub-body-even hidden">
+                        <div class="hub-detail">
+                            <div class="hub-detail-name">🔈 Speaker</div>
+                            <div class="hub-detail-sub">Where the companion's voice comes out.</div>
+                            <select id="setting-audio-output" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <option value="">System default</option>
+                            </select>
+                            <div class="hub-action">
+                                <span id="vhub-output-note" class="hub-action-size">Reading this computer...</span>
+                                <button type="button" id="vhub-test-output" class="cyber-btn text-[10px] py-1 px-2">▶ Test this speaker</button>
+                            </div>
+                            <p class="hub-blurb">
+                                Only Aether1's own sound moves; nothing else on this computer is
+                                changed. Remember to press Save Changes.
+                            </p>
+                        </div>
+                        <div class="hub-detail">
+                            <div class="hub-detail-name">🎤 Microphone</div>
+                            <div class="hub-detail-sub">What it listens on when you hold the talk key.</div>
+                            <select id="setting-audio-input" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <option value="">System default</option>
+                            </select>
+                            <div class="hub-action">
+                                <span id="vhub-input-note" class="hub-action-size">Reading this computer...</span>
+                                <button type="button" id="vhub-test-input" class="cyber-btn text-[10px] py-1 px-2">🎤 Check the level</button>
+                            </div>
+                            <!-- A level bar rather than a tick: a microphone that is
+                                 selected, permitted and pointed at a muted input reports
+                                 success on every other check there is. -->
+                            <div id="vhub-level" class="hub-level hidden"><div id="vhub-level-fill" class="hub-level-fill"></div></div>
+                        </div>
+                    </div>
+
+                    <div id="vhub-downloads" class="hub-downloads"></div>
+                    <div id="vhub-status" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-500/20"></div>
+
+                    <!-- ------------------- HOW IT SPEAKS -------------------
+                         The fields as they were, with the same ids, behind a heading of
+                         their own: the hub above answers "which voice and out of what",
+                         and this answers "which engine makes it". -->
+                    <details id="settings-group-speech" class="settings-group settings-group-nested" open>
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">How it speaks</span>
+                            <span class="settings-group-hint">the engine, and the switches</span>
+                        </summary>
+                        <div class="settings-group-body">
                     <div class="space-y-1">
                         <label for="setting-tts-engine" class="text-xs font-mono text-cyan-300 block">WHAT DOES THE SPEAKING</label>
                         <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
@@ -1713,6 +1821,8 @@
                         <input id="setting-sfx" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
                         <label for="setting-sfx" class="text-xs font-mono text-slate-300">Interface sound effects (clicks, alerts)</label>
                     </div>
+                        </div>
+                    </details>
 
                     <!-- These three have been saved settings, and read by the backend
                          (voice_status and transcribe_audio), since before there was anywhere
@@ -2100,12 +2210,12 @@
          being repeated in this page, sprite.html and avatar-lab.html. -->
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=39"></script>
-    <script src="js/voice.js?v=17"></script>
+    <script src="js/voice.js?v=18"></script>
     <script src="js/notes-graph.js?v=1"></script>
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
-    <script src="js/app.js?v=56"></script>
+    <script src="js/app.js?v=57"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

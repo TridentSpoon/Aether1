@@ -590,12 +590,24 @@ fn text_or_stdin(text: Option<String>, what: &str) -> Result<String, String> {
     }
 }
 
-fn play_audio(path: &Path) -> Result<(), String> {
+/// Plays a clip, on the chosen speaker where that can be arranged.
+///
+/// `device` is whatever Settings holds for the output device, and only PulseAudio-based
+/// players can be steered by it -- `audio_devices::player_env` is what decides whether
+/// the stored value is a real node name or only a label. An empty or unusable one is not
+/// an error: the clip plays on the system default, which is what happened before this
+/// setting existed.
+fn play_audio(path: &Path, device: &str) -> Result<(), String> {
+    let env = crate::audio_devices::player_env(device);
     for (player, flags) in PLAYERS {
         let Ok(binary) = which::which(player) else {
             continue;
         };
-        let status = std::process::Command::new(binary)
+        let mut command = std::process::Command::new(binary);
+        if let Some((key, value)) = &env {
+            command.env(key, value);
+        }
+        let status = command
             .args(*flags)
             .arg(path)
             .status()
@@ -1270,7 +1282,7 @@ fn run_say(text: Option<String>, voice: Option<String>, play: bool) -> Result<St
     let voice = voice.or_else(|| Some(engine.db().get_setting_string("voice_name", DEFAULT_VOICE)));
     let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
     if play {
-        play_audio(&path)?;
+        play_audio(&path, &engine.db().get_setting_string("audio_output_device", ""))?;
         Ok(String::new())
     } else {
         Ok(path.display().to_string())

@@ -4680,11 +4680,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderVoiceDownloads(list) {
-        if (!voicePickerDownloads) return;
-        voicePickerDownloads.innerHTML = '';
-        // The same row the model downloads use, so a bar means the same thing in both
-        // places. It reads `model`, so the voice name goes in under that name.
-        for (const d of list) voicePickerDownloads.appendChild(renderDownloadRow({
+        // Two places show the same bars: the wizard, and the Voice & Sound hub in
+        // Settings. One download, drawn wherever it is being watched from -- a bar that
+        // only appeared in the panel the button was pressed in would make a download
+        // started in the hub look like nothing happened.
+        const boxes = [voicePickerDownloads, document.getElementById('vhub-downloads')]
+            .filter(Boolean);
+        if (!boxes.length) return;
+        for (const box of boxes) box.innerHTML = '';
+        for (const box of boxes) for (const d of list) box.appendChild(renderDownloadRow({
             model: d.voice,
             phase: d.phase,
             detail: d.detail,
@@ -4718,6 +4722,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // A voice that just landed changes what the probe would say, so ask it again
             // rather than leaving the verdict above describing the machine as it was.
             const advice = await refreshVoiceAdvice();
+            // The hub's list says "already here" per voice, so it is stale the moment one
+            // lands. Quiet, because this is already inside the poll that noticed.
+            refreshSoundHub({ quiet: true }).catch(() => null);
             if (failed) {
                 setVoiceStatus(`⚠ ${failed.voice}: ${failed.error || 'the download failed'}`, 'bad');
             } else if (done.length) {
@@ -4801,6 +4808,638 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-open-voice-settings')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
         openVoiceWizard();
+    });
+
+    /* ====================== THE VOICE & SOUND HUB =========================
+     * The Brain's hub, applied to the other half of the companion.
+     *
+     * Two tabs, because the pane answers two questions and they had been stirred
+     * together into one column of fields. Voices is *which voice it speaks in*: the
+     * fixed Piper catalogue, with a detail panel instead of a row of download buttons.
+     * Devices is *which speaker and which microphone*, which the app had never asked
+     * about at all -- it used whatever the system handed it, which on a desk with a
+     * headset, an interface and an HDMI monitor is a coin toss, and the symptom is
+     * silence.
+     *
+     * The device list comes from two places at once and neither is sufficient alone:
+     *
+     *   - The operating system, through audio_devices.rs. Always available, names every
+     *     device whether or not this page has been given permission to see them, and is
+     *     the only list the native window can get -- WebKitGTK never answers the media
+     *     permission request there (the microphone bug), so enumerateDevices comes back
+     *     with blank labels.
+     *   - The browser, through enumerateDevices. The only list whose identifiers can
+     *     actually be used: setSinkId and getUserMedia take a browser deviceId and
+     *     nothing else.
+     *
+     * So the choice is stored as an id *and* a label, and resolveAudioDevice matches the
+     * two lists up by label at the moment of use. A stored device that is unplugged
+     * resolves to nothing and the system default is used, which is the right answer and
+     * not an error.
+     */
+
+    const soundHub = {
+        tab: 'voices',
+        search: '',
+        filter: 'all',
+        voices: [],
+        selected: null,
+        system: { outputs: [], inputs: [], source: 'none', note: '' },
+        browser: { outputs: [], inputs: [] },
+        loading: false,
+        loaded: false,
+        // What loadSettings last read, so the selects can be filled before the device
+        // lists arrive and still end up on the right entry once they do.
+        chosen: { output: '', outputLabel: '', input: '', inputLabel: '' },
+    };
+
+    async function fetchAudioDevices() {
+        if (IS_TAURI) return tauriInvoke('audio_devices_rust');
+        const resp = await apiFetch('/api/audio/devices');
+        if (!resp.ok) throw new Error(`device list failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* What this page can see. Labels are blank until something has been granted
+       microphone permission, which is normal rather than broken -- the system list above
+       carries the names in that case. */
+    async function enumerateBrowserDevices() {
+        if (!navigator.mediaDevices?.enumerateDevices) return { outputs: [], inputs: [] };
+        try {
+            const all = await navigator.mediaDevices.enumerateDevices();
+            const pick = (kind) => all
+                .filter(d => d.kind === kind && d.deviceId && d.deviceId !== 'default')
+                .map(d => ({ deviceId: d.deviceId, label: d.label || '' }));
+            return { outputs: pick('audiooutput'), inputs: pick('audioinput') };
+        } catch (e) {
+            return { outputs: [], inputs: [] };
+        }
+    }
+
+    /* The stored choice turned into something the browser will accept, or '' for "let
+       the system decide". The id is tried first because it is exact; the label is the
+       fallback that carries a choice made from the system list across to the browser's
+       own identifiers, which are a different namespace entirely. */
+    function resolveAudioDevice(list, id, label) {
+        if (!id && !label) return '';
+        const exact = list.find(d => d.deviceId === id);
+        if (exact) return exact.deviceId;
+        const want = String(label || '').trim().toLowerCase();
+        if (!want) return '';
+        const loose = list.find(d => {
+            const have = d.label.trim().toLowerCase();
+            return have && (have === want || have.includes(want) || want.includes(have));
+        });
+        return loose ? loose.deviceId : '';
+    }
+
+    /* One select's worth of options: every device the system named, then any the browser
+       can see and the system did not. Each option carries its own label, because that is
+       what gets saved alongside the id. */
+    function audioOptionsFor(direction) {
+        const system = direction === 'input' ? soundHub.system.inputs : soundHub.system.outputs;
+        const browser = direction === 'input' ? soundHub.browser.inputs : soundHub.browser.outputs;
+        const options = system.map(d => ({
+            value: d.id,
+            label: d.label,
+            suffix: d.is_default ? ' — system default' : '',
+        }));
+        for (const d of browser) {
+            if (!d.label) continue;
+            const already = options.some(o => {
+                const have = o.label.trim().toLowerCase();
+                const mine = d.label.trim().toLowerCase();
+                return have === mine || have.includes(mine) || mine.includes(have);
+            });
+            if (!already) options.push({ value: d.deviceId, label: d.label, suffix: '' });
+        }
+        return options;
+    }
+
+    function fillDeviceSelect(id, direction, chosenValue, chosenLabel) {
+        const select = document.getElementById(id);
+        if (!select) return;
+        const options = audioOptionsFor(direction);
+        select.innerHTML = '';
+
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = 'System default';
+        first.dataset.label = '';
+        select.appendChild(first);
+
+        for (const option of options) {
+            const el = document.createElement('option');
+            el.value = option.value;
+            el.textContent = option.label + option.suffix;
+            el.dataset.label = option.label;
+            select.appendChild(el);
+        }
+
+        // A device that was chosen and is now unplugged stays in the list, marked, rather
+        // than silently reverting to the default: "why is it not using my headset" has a
+        // visible answer that way.
+        if (chosenValue && !Array.from(select.options).some(o => o.value === chosenValue)) {
+            const gone = document.createElement('option');
+            gone.value = chosenValue;
+            gone.textContent = `${chosenLabel || chosenValue} — not plugged in`;
+            gone.dataset.label = chosenLabel || '';
+            select.appendChild(gone);
+        }
+        select.value = chosenValue || '';
+    }
+
+    function setSoundHubStatus(message, tone) {
+        const box = document.getElementById('vhub-status');
+        if (!box) return;
+        if (!message) { box.classList.add('hidden'); box.textContent = ''; return; }
+        box.classList.remove('hidden');
+        box.className = 'text-xs font-mono p-2.5 rounded border leading-snug ' + ({
+            good: 'border-green-500/40 bg-green-950/20 text-green-300',
+            bad: 'border-red-500/40 bg-red-950/20 text-red-300',
+            busy: 'border-cyan-500/30 bg-slate-900/80 text-cyan-200',
+        }[tone] || 'border-cyan-500/20 bg-slate-900/80 text-slate-300');
+        box.textContent = message;
+    }
+
+    function renderSoundChips() {
+        const box = document.getElementById('vhub-machine');
+        if (!box) return;
+        box.innerHTML = '';
+        const chip = (value, label, state) => {
+            const el = document.createElement('span');
+            el.className = 'hub-chip';
+            if (state) el.dataset.state = state;
+            const v = document.createElement('span');
+            v.className = 'hub-chip-value';
+            v.textContent = value;
+            const l = document.createElement('span');
+            l.className = 'hub-chip-label';
+            l.textContent = label;
+            el.append(v, l);
+            box.appendChild(el);
+        };
+
+        const installed = soundHub.voices.filter(v => v.installed).length;
+        chip(`${installed}/${soundHub.voices.length}`, 'VOICES', installed ? 'good' : 'warn');
+
+        const named = (direction) => {
+            const chosenLabel = direction === 'input'
+                ? soundHub.chosen.inputLabel : soundHub.chosen.outputLabel;
+            const chosenId = direction === 'input'
+                ? soundHub.chosen.input : soundHub.chosen.output;
+            if (chosenLabel || chosenId) return chosenLabel || chosenId;
+            const list = direction === 'input' ? soundHub.system.inputs : soundHub.system.outputs;
+            const fallback = list.find(d => d.is_default);
+            return fallback ? fallback.label : 'System default';
+        };
+        chip(soundHubShort(named('output')), 'SPEAKER');
+        chip(soundHubShort(named('input')), 'MIC');
+    }
+
+    /* A chip is one line on a narrow window, and a device name can run to forty
+       characters of chipset model. The full name is in the select below it. */
+    function soundHubShort(text) {
+        const value = String(text || '').trim();
+        return value.length > 22 ? `${value.slice(0, 21)}…` : (value || '—');
+    }
+
+    function soundHubVisibleVoices() {
+        const needle = soundHub.search.trim().toLowerCase();
+        return soundHub.voices.filter(voice => {
+            if (soundHub.filter === 'installed' && !voice.installed) return false;
+            if (soundHub.filter === 'missing' && voice.installed) return false;
+            if (!needle) return true;
+            return `${voice.name} ${voice.label}`.toLowerCase().includes(needle);
+        });
+    }
+
+    function renderSoundHubList() {
+        const list = document.getElementById('vhub-list');
+        if (!list) return;
+        list.innerHTML = '';
+        const voices = soundHubVisibleVoices();
+
+        const title = document.getElementById('vhub-list-title');
+        if (title) title.textContent = `Offline voices (${voices.length})`;
+
+        if (!voices.length) {
+            const empty = document.createElement('div');
+            empty.className = 'hub-empty';
+            empty.textContent = soundHub.loaded
+                ? 'No voice here matches that.'
+                : 'Reading the voices folder...';
+            list.appendChild(empty);
+            return;
+        }
+
+        for (const voice of voices) {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'hub-row';
+            row.setAttribute('role', 'option');
+            const selected = voice.name === soundHub.selected;
+            row.classList.toggle('is-selected', selected);
+            row.setAttribute('aria-selected', selected ? 'true' : 'false');
+
+            const glyph = document.createElement('span');
+            glyph.className = 'hub-row-glyph';
+            glyph.textContent = voice.installed ? '◉' : '○';
+            row.appendChild(glyph);
+
+            const body = document.createElement('span');
+            body.className = 'hub-row-body';
+            const name = document.createElement('span');
+            name.className = 'hub-row-name';
+            name.textContent = voice.label;
+            const meta = document.createElement('span');
+            meta.className = 'hub-row-meta';
+            meta.textContent = voice.installed
+                ? `${voice.name} · already here`
+                : `${voice.name} · ${voice.size_hint}`;
+            body.append(name, meta);
+            row.appendChild(body);
+
+            row.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                soundHub.selected = voice.name;
+                renderSoundHubList();
+                renderSoundHubDetail();
+            });
+            list.appendChild(row);
+        }
+    }
+
+    /* Which avatars already speak in this voice. It comes from the backend persona
+       catalogue rather than from anything written here -- the same rows the avatar
+       browser joins on -- so downloading a voice can say who it is for. */
+    function avatarsUsingVoice(name) {
+        return Array.from(personaRows.values())
+            .filter(row => row.local_voice === name)
+            .map(row => row.label || row.key)
+            .filter(Boolean);
+    }
+
+    function renderSoundHubDetail() {
+        const panel = document.getElementById('vhub-detail');
+        if (!panel) return;
+        panel.innerHTML = '';
+
+        const voice = soundHub.voices.find(v => v.name === soundHub.selected);
+        if (!voice) {
+            const empty = document.createElement('div');
+            empty.className = 'hub-empty';
+            empty.textContent = soundHub.voices.length
+                ? 'Pick a voice to see what it is and how big it is.'
+                : 'Nothing to show yet.';
+            panel.appendChild(empty);
+            return;
+        }
+
+        const name = document.createElement('div');
+        name.className = 'hub-detail-name';
+        name.textContent = voice.label;
+        const sub = document.createElement('div');
+        sub.className = 'hub-detail-sub';
+        sub.textContent = voice.name;
+        panel.append(name, sub);
+
+        const tags = document.createElement('div');
+        tags.className = 'hub-tags';
+        const tag = (text, tone) => {
+            const el = document.createElement('span');
+            el.className = 'hub-tag';
+            if (tone) el.dataset.tone = tone;
+            el.textContent = text;
+            tags.appendChild(el);
+        };
+        tag(voice.installed ? 'Downloaded' : 'Not here yet', voice.installed ? 'on' : 'off');
+        tag('Piper · offline', 'pick');
+        panel.appendChild(tags);
+
+        const users = avatarsUsingVoice(voice.name);
+        const blurb = document.createElement('p');
+        blurb.className = 'hub-blurb';
+        blurb.textContent = users.length
+            ? `${users.join(', ')} speak${users.length === 1 ? 's' : ''} in this one, once it is downloaded.`
+            : 'No avatar asks for this voice by name; it is available to the ones that have none of their own.';
+        panel.appendChild(blurb);
+
+        const facts = document.createElement('div');
+        facts.className = 'hub-facts';
+        const fact = (label, value) => {
+            const box = document.createElement('div');
+            box.className = 'hub-fact';
+            const l = document.createElement('div');
+            l.className = 'hub-fact-label';
+            l.textContent = label;
+            const v = document.createElement('div');
+            v.className = 'hub-fact-value';
+            v.textContent = value;
+            box.append(l, v);
+            facts.appendChild(box);
+        };
+        fact('SIZE', voice.installed ? 'on disk' : voice.size_hint);
+        fact('FILE', voice.path ? voice.path.split(/[\\/]/).pop() : `${voice.name}.onnx`);
+        panel.appendChild(facts);
+
+        const action = document.createElement('div');
+        action.className = 'hub-action';
+        const size = document.createElement('span');
+        size.className = 'hub-action-size';
+        // The size is already a fact above, so this line says *where it goes* instead --
+        // the one thing a download decision needs that the row does not carry.
+        size.textContent = voice.path
+            ? (voice.installed ? voice.path : `Downloads to ${voice.path}`)
+            : 'In the voices folder';
+        action.appendChild(size);
+
+        if (voice.installed) {
+            // Fills the Piper voice-file box rather than saving by itself: this panel
+            // shares one Save Changes with every other pane, and a panel that saved on
+            // its own would also commit half-typed edits somewhere else.
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'cyber-btn cyber-btn-active text-[11px] py-1.5 px-3';
+            use.textContent = '✔ Use this one';
+            use.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                const box = document.getElementById('setting-tts-local-voice');
+                if (box) box.value = voice.path || '';
+                setSoundHubStatus(
+                    `${voice.label} is now the Piper voice file. Press Save Changes to keep it.`,
+                    'good');
+            });
+            action.appendChild(use);
+        } else {
+            const get = document.createElement('button');
+            get.type = 'button';
+            get.className = 'cyber-btn cyber-btn-active text-[11px] py-1.5 px-3';
+            get.textContent = '⬇ Download';
+            get.addEventListener('click', () => startVoiceDownload(voice.name, get));
+            action.appendChild(get);
+        }
+        panel.appendChild(action);
+    }
+
+    function renderSoundHubDevices() {
+        fillDeviceSelect('setting-audio-output', 'output',
+            soundHub.chosen.output, soundHub.chosen.outputLabel);
+        fillDeviceSelect('setting-audio-input', 'input',
+            soundHub.chosen.input, soundHub.chosen.inputLabel);
+
+        const sources = {
+            pactl: 'Read from PipeWire/PulseAudio.',
+            wpctl: 'Read from WirePlumber.',
+            powershell: 'Read from Windows.',
+            system_profiler: 'Read from macOS.',
+            none: 'This computer would not list its devices.',
+        };
+        const note = soundHub.system.note
+            || sources[soundHub.system.source]
+            || '';
+        const blind = !soundHub.browser.outputs.some(d => d.label);
+        const outNote = document.getElementById('vhub-output-note');
+        if (outNote) {
+            // Two different facts, and conflating them is how somebody concludes the
+            // setting does nothing: the device list is read from the system and always
+            // works, but *moving the sound from this window* needs the browser to offer
+            // the same device, which it will not do until it has been given audio
+            // permission. The saved choice still steers `aether1 say` either way.
+            outNote.textContent = blind
+                ? `${soundHub.system.outputs.length} found. ${note} Press "Check the level" once so this window can use them too.`.trim()
+                : `${soundHub.system.outputs.length} found. ${note}`.trim();
+        }
+        const inNote = document.getElementById('vhub-input-note');
+        if (inNote) {
+            inNote.textContent = blind
+                ? `${soundHub.system.inputs.length} found. Names come from the system; this window has not been given microphone access.`
+                : `${soundHub.system.inputs.length} found. ${note}`.trim();
+        }
+    }
+
+    async function refreshSoundHub(options = {}) {
+        if (!document.getElementById('vhub-list') || soundHub.loading) return;
+        soundHub.loading = true;
+        try {
+            const [catalogue, devices, browser] = await Promise.all([
+                fetchVoiceCatalogue().catch(() => null),
+                fetchAudioDevices().catch(() => null),
+                enumerateBrowserDevices(),
+            ]);
+            soundHub.voices = (catalogue && catalogue.voices) || [];
+            if (devices && devices.devices) soundHub.system = devices.devices;
+            soundHub.browser = browser;
+            if (!soundHub.selected && soundHub.voices.length) {
+                soundHub.selected = (soundHub.voices.find(v => v.installed) || soundHub.voices[0]).name;
+            }
+            soundHub.loaded = true;
+        } finally {
+            soundHub.loading = false;
+        }
+        renderSoundChips();
+        renderSoundHubList();
+        renderSoundHubDetail();
+        renderSoundHubDevices();
+        applyAudioDevices();
+        if (!options.quiet) refreshVoiceDownloads().catch(() => null);
+    }
+
+    /* Points the audio engine at the chosen devices. Called after every load, save and
+       device refresh, so the running window follows the setting without a restart. */
+    function applyAudioDevices() {
+        const out = resolveAudioDevice(soundHub.browser.outputs,
+            soundHub.chosen.output, soundHub.chosen.outputLabel);
+        const mic = resolveAudioDevice(soundHub.browser.inputs,
+            soundHub.chosen.input, soundHub.chosen.inputLabel);
+        voiceEngine.setOutputDevice(out);
+        voiceEngine.setInputDevice(mic);
+    }
+
+    /* Reads the two selects into soundHub.chosen. Called from saveSettings, which is what
+       decides what is stored -- this keeps the label beside the id. */
+    function readAudioDeviceChoice() {
+        const read = (id) => {
+            const select = document.getElementById(id);
+            if (!select) return { value: '', label: '' };
+            return {
+                value: select.value || '',
+                label: select.selectedOptions[0]?.dataset.label || '',
+            };
+        };
+        const output = read('setting-audio-output');
+        const input = read('setting-audio-input');
+        soundHub.chosen = {
+            output: output.value,
+            outputLabel: output.label,
+            input: input.value,
+            inputLabel: input.label,
+        };
+        return soundHub.chosen;
+    }
+
+    /* Out loud, on the device that is selected right now -- not on the one that was saved.
+       Choosing a speaker and then finding out at the next answer whether it was the right
+       one is the failure this whole tab exists to end. */
+    async function testOutputDevice() {
+        voiceEngine.playSFX('click');
+        const select = document.getElementById('setting-audio-output');
+        const chosen = select ? select.value : '';
+        const label = select?.selectedOptions[0]?.dataset.label || 'the system default';
+        const resolved = resolveAudioDevice(soundHub.browser.outputs, chosen,
+            select?.selectedOptions[0]?.dataset.label || '');
+
+        if (!chosen) {
+            await voiceEngine.setOutputDevice('');
+            voiceEngine.playSFX('incoming');
+            setSoundHubStatus('Played a sound on whatever this computer picks.', 'good');
+        } else if (!resolved) {
+            // The device is real -- the system named it -- but this window cannot address
+            // it, because the browser has not offered a matching one. Saying "played on
+            // the headset" here would be a lie, and the exact lie somebody would then
+            // spend an evening chasing.
+            await voiceEngine.setOutputDevice('');
+            voiceEngine.playSFX('incoming');
+            setSoundHubStatus(
+                `Played a sound, but on the system default: this window cannot address ` +
+                `${label} itself. The choice is still saved and still used by \`aether1 say\`.`,
+                'bad');
+        } else {
+            const moved = await voiceEngine.setOutputDevice(resolved);
+            voiceEngine.playSFX('incoming');
+            setSoundHubStatus(moved
+                ? `Played a sound on ${label}. Press Save Changes to keep it.`
+                : `Played a sound, but it went to the system default — this window could not ` +
+                  `move it to ${label}. The choice is still saved and still used by ` +
+                  '`aether1 say`.',
+                moved ? 'good' : 'bad');
+        }
+        // Back to what is actually saved, so a test does not leave the window speaking
+        // somewhere nobody chose.
+        applyAudioDevices();
+    }
+
+    /* A live level bar for the selected microphone. Six seconds, then it stops the stream
+       itself -- a settings pane must not leave a recording light on. */
+    let levelStop = null;
+    async function testInputDevice() {
+        voiceEngine.playSFX('click');
+        const bar = document.getElementById('vhub-level');
+        const fill = document.getElementById('vhub-level-fill');
+        if (levelStop) { levelStop(); levelStop = null; }
+        const select = document.getElementById('setting-audio-input');
+        const resolved = resolveAudioDevice(soundHub.browser.inputs, select?.value || '',
+            select?.selectedOptions[0]?.dataset.label || '');
+
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: resolved ? { deviceId: { exact: resolved } } : true,
+            });
+        } catch (e) {
+            setSoundHubStatus(
+                `That microphone could not be opened: ${e.message || e}. In the desktop window ` +
+                'the microphone is still blocked; it works in a browser.', 'bad');
+            return;
+        }
+
+        // Permission granted means the labels exist now, so the list is worth re-reading.
+        soundHub.browser = await enumerateBrowserDevices();
+        renderSoundHubDevices();
+
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioContextCtor();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        bar?.classList.remove('hidden');
+        setSoundHubStatus('Say something — the bar should move.', 'busy');
+
+        let peak = 0;
+        let frame = null;
+        const tick = () => {
+            analyser.getByteTimeDomainData(data);
+            let max = 0;
+            for (const v of data) max = Math.max(max, Math.abs(v - 128));
+            peak = Math.max(peak, max);
+            if (fill) fill.style.width = `${Math.min(100, Math.round((max / 64) * 100))}%`;
+            frame = requestAnimationFrame(tick);
+        };
+        tick();
+
+        levelStop = () => {
+            if (frame) cancelAnimationFrame(frame);
+            stream.getTracks().forEach(track => track.stop());
+            ctx.close().catch(() => null);
+            if (fill) fill.style.width = '0%';
+            bar?.classList.add('hidden');
+            levelStop = null;
+            setSoundHubStatus(peak > 3
+                ? 'That microphone is picking sound up. Press Save Changes to keep it.'
+                : 'Nothing came through on that one — it may be muted, or the wrong device.',
+                peak > 3 ? 'good' : 'bad');
+        };
+        setTimeout(() => { if (levelStop) levelStop(); }, 6000);
+    }
+
+    function initSoundHub() {
+        const search = document.getElementById('vhub-search');
+        if (!search) return;
+        search.addEventListener('input', () => {
+            soundHub.search = search.value;
+            renderSoundHubList();
+        });
+        for (const tab of document.querySelectorAll('[data-vhub-tab]')) {
+            tab.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                soundHub.tab = tab.dataset.vhubTab;
+                document.querySelectorAll('[data-vhub-tab]').forEach(other => {
+                    other.classList.toggle('is-active', other === tab);
+                });
+                document.getElementById('vhub-pane-voices')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'voices');
+                document.getElementById('vhub-pane-devices')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'devices');
+                // The search box only means anything on one of the two tabs, and it is
+                // the wrapper that goes -- hiding the input alone leaves its magnifying
+                // glass sitting on the row with nothing to type into.
+                search.closest('.hub-search')?.classList.toggle('hidden', soundHub.tab !== 'voices');
+                document.getElementById('vhub-filter')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'voices');
+            });
+        }
+        document.getElementById('vhub-filter')?.addEventListener('change', (event) => {
+            soundHub.filter = event.target.value;
+            renderSoundHubList();
+        });
+        document.getElementById('vhub-refresh')?.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            refreshSoundHub();
+        });
+        document.getElementById('vhub-test-output')?.addEventListener('click', testOutputDevice);
+        document.getElementById('vhub-test-input')?.addEventListener('click', testInputDevice);
+        // Choosing a device points the window at it straight away, so the next thing the
+        // companion says comes out of it. Save Changes is what makes it survive a restart.
+        for (const id of ['setting-audio-output', 'setting-audio-input']) {
+            document.getElementById(id)?.addEventListener('change', () => {
+                readAudioDeviceChoice();
+                applyAudioDevices();
+                renderSoundChips();
+            });
+        }
+        // A device plugged in while the window is open changes the list under it.
+        navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+            refreshSoundHub({ quiet: true }).catch(() => null);
+        });
+    }
+
+    initSoundHub();
+
+    // Read when the section is opened, and read again on each visit: a headset plugged in
+    // while AETHER1 was running is the whole reason somebody opens this list.
+    document.addEventListener('aether-settings-section', event => {
+        if (event.detail === 'voice') refreshSoundHub().catch(() => null);
     });
 
     /* The line at the top of The Brain saying what is actually connected. Settings that
@@ -6493,6 +7132,18 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-tts-local-voice').value = s.tts_local_voice || '';
             document.getElementById('setting-stt-model').value = s.stt_model_path || '';
             document.getElementById('setting-stt-language').value = s.stt_language || 'en';
+            // The device choice is an id and the label that was beside it, because the two
+            // lists it is matched against -- the operating system's and the browser's --
+            // do not share identifiers. See resolveAudioDevice.
+            soundHub.chosen = {
+                output: s.audio_output_device || '',
+                outputLabel: s.audio_output_label || '',
+                input: s.audio_input_device || '',
+                inputLabel: s.audio_input_label || '',
+            };
+            renderSoundHubDevices();
+            renderSoundChips();
+            applyAudioDevices();
             document.getElementById('setting-vault-path').value = s.vault_path || '';
             // Absent means on, matching vault::journal_enabled -- a setting that has never
             // been saved must not read as "off" here when the vault is in fact writing.
@@ -6636,6 +7287,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Falls back rather than saving an empty language: transcribe_audio passes
                 // this straight to the recognizer, which wants a code, not nothing.
                 stt_language: document.getElementById('setting-stt-language').value.trim() || 'en',
+                ...(() => {
+                    const chosen = readAudioDeviceChoice();
+                    return {
+                        audio_output_device: chosen.output,
+                        audio_output_label: chosen.outputLabel,
+                        audio_input_device: chosen.input,
+                        audio_input_label: chosen.inputLabel,
+                    };
+                })(),
                 local_only: document.getElementById('setting-local-only').checked,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 vault_journal: document.getElementById('setting-vault-journal').checked,
@@ -6666,6 +7326,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         autoSpeak = payload.settings.auto_speak;
+        applyAudioDevices();
         applySfx(payload.settings.enable_sfx);
         updateAgentNameDisplay(payload.settings.agent_name);
 
