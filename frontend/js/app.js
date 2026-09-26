@@ -7437,6 +7437,79 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // WINDOW CHROME
+    // The main window is built with `decorations: false`, so everything a title bar used to
+    // do has to exist here: the three buttons, dragging the window by the top bar, and eight
+    // invisible strips on the edges to resize by. Only the real desktop HUD gets any of it --
+    // a browser under `--serve` has no window to move, and an undocked panel window keeps its
+    // native frame, so the buttons would sit under a title bar that already has them.
+    function initWindowChrome() {
+        const controls = document.getElementById('window-controls');
+        const grips = document.getElementById('window-resize-grips');
+        if (!IS_TAURI || document.documentElement.hasAttribute('data-solo-panel')) return;
+        if (!controls || !grips) return;
+
+        controls.classList.replace('hidden', 'flex');
+        grips.classList.remove('hidden');
+
+        const btnMaximize = document.getElementById('btn-window-maximize');
+        const glyph = btnMaximize?.querySelector('.window-btn-glyph');
+
+        // The button says what pressing it will do, which is the opposite of the state the
+        // window is in -- so it has to be redrawn after anything that can maximise it,
+        // including a double-click on the bar or the window manager's own shortcut.
+        function paintMaximize(isMaximized) {
+            if (!btnMaximize) return;
+            btnMaximize.setAttribute('aria-pressed', isMaximized ? 'true' : 'false');
+            btnMaximize.title = isMaximized ? 'Restore' : 'Maximise';
+            if (glyph) glyph.textContent = isMaximized ? '\u2750' : '\u25a1';
+        }
+
+        function refreshMaximize() {
+            tauriInvoke('window_is_maximized_rust').then(paintMaximize).catch(() => {});
+        }
+
+        document.getElementById('btn-window-minimize')?.addEventListener('click', () => {
+            tauriInvoke('minimize_window_rust').catch((err) => console.warn('Could not minimise', err));
+        });
+
+        btnMaximize?.addEventListener('click', () => {
+            tauriInvoke('toggle_maximize_window_rust')
+                .then(paintMaximize)
+                .catch((err) => console.warn('Could not maximise', err));
+        });
+
+        document.getElementById('btn-window-close')?.addEventListener('click', () => {
+            tauriInvoke('close_window_rust').catch((err) => console.warn('Could not close', err));
+        });
+
+        // Resizing the viewport is the one signal that covers every way the window can change
+        // state, including the ones that never touch our buttons.
+        window.addEventListener('resize', refreshMaximize);
+        refreshMaximize();
+
+        grips.querySelectorAll('[data-resize]').forEach((grip) => {
+            grip.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                tauriInvoke('start_window_resize_rust', { direction: grip.dataset.resize }).catch(() => {});
+            });
+        });
+
+        // The top bar is the window's handle now. Anything pressable in it is not: a drag
+        // started on the avatar chip would swallow the click that opens its menu.
+        const header = document.querySelector('header');
+        header?.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            if (e.target.closest('button, a, input, select, textarea, .hud-slideout, [data-no-window-drag]')) return;
+            tauriInvoke('start_window_drag_rust').catch(() => {});
+        });
+        header?.addEventListener('dblclick', (e) => {
+            if (e.target.closest('button, a, input, select, textarea, .hud-slideout, [data-no-window-drag]')) return;
+            tauriInvoke('toggle_maximize_window_rust').then(paintMaximize).catch(() => {});
+        });
+    }
+
     function initVersionAndUpdates() {
         if (!IS_TAURI) {
             document.getElementById('setting-hotkey-wrap')?.classList.add('hidden');
@@ -9087,6 +9160,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // banner is appended to the chat container, and loadChatHistory empties it.
     loadChatHistory().then(refreshPendingApprovals).then(announceIfNoBrain);
     connectTelemetry();
+    initWindowChrome();
     initVersionAndUpdates();
     initModelHub();
     initSpriteMode();

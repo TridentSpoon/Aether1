@@ -1874,6 +1874,66 @@ fn start_window_drag_rust(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|e| e.to_string())
 }
 
+/// The main HUD window has no native title bar either (`decorations: false` in
+/// tauri.conf.json), so the three window buttons live in the HUD's own top bar and come back
+/// here. Minimise, maximise/restore and close are one command each rather than the built-in
+/// core:window permissions, to keep capabilities/default.json as the single small grant it is.
+#[tauri::command]
+fn minimize_window_rust(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
+
+/// Returns the state the window is in *after* the toggle, so the button can redraw itself
+/// without a second round trip.
+#[tauri::command]
+fn toggle_maximize_window_rust(window: tauri::WebviewWindow) -> Result<bool, String> {
+    if window.is_maximized().map_err(|e| e.to_string())? {
+        window.unmaximize().map_err(|e| e.to_string())?;
+        Ok(false)
+    } else {
+        window.maximize().map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+fn window_is_maximized_rust(window: tauri::WebviewWindow) -> Result<bool, String> {
+    window.is_maximized().map_err(|e| e.to_string())
+}
+
+/// Goes through `close()` rather than exiting, so the main window keeps the CloseRequested
+/// handling below -- the sprite or the fullscreen face still keeps the app alive.
+#[tauri::command]
+fn close_window_rust(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}
+
+/// An undecorated window has no frame to grab, and unlike Windows, GTK gives us no invisible
+/// resize border of its own -- so without this the HUD would be stuck at its launch size on
+/// exactly the machines it is built for. The frontend lays eight thin strips over the window
+/// edges and corners (`.window-resize-grip` in layout.css) and each one calls this on
+/// mousedown with its direction.
+#[tauri::command]
+fn start_window_resize_rust(window: tauri::WebviewWindow, direction: String) -> Result<(), String> {
+    use tauri_runtime::ResizeDirection;
+    let direction = match direction.as_str() {
+        "north" => ResizeDirection::North,
+        "south" => ResizeDirection::South,
+        "east" => ResizeDirection::East,
+        "west" => ResizeDirection::West,
+        "north-east" => ResizeDirection::NorthEast,
+        "north-west" => ResizeDirection::NorthWest,
+        "south-east" => ResizeDirection::SouthEast,
+        "south-west" => ResizeDirection::SouthWest,
+        other => return Err(format!("{other:?} is not a resize direction")),
+    };
+    window
+        .as_ref()
+        .window()
+        .start_resize_dragging(direction)
+        .map_err(|e| e.to_string())
+}
+
 /// Every HUD panel that can be undocked into its own window other than the hologram --
 /// that one already has a floating window of its own (see build_sprite_window) with its own
 /// PNGTuber-style presentation, so its "Undock" button goes there instead. Panel id, window
@@ -2302,6 +2362,11 @@ fn main() {
             set_window_always_on_top_rust,
             show_main_window_rust,
             start_window_drag_rust,
+            minimize_window_rust,
+            toggle_maximize_window_rust,
+            window_is_maximized_rust,
+            close_window_rust,
+            start_window_resize_rust,
             set_game_mode_rust
         ])
         .on_window_event(|window, event| {
@@ -2737,6 +2802,11 @@ mod ipc_thread_tests {
         "set_window_always_on_top_rust",
         "show_main_window_rust",
         "start_window_drag_rust",
+        "start_window_resize_rust",
+        "minimize_window_rust",
+        "toggle_maximize_window_rust",
+        "window_is_maximized_rust",
+        "close_window_rust",
     ];
 
     #[test]
