@@ -55,6 +55,10 @@ pub struct Voice {
     pub size_hint: &'static str,
     /// Whether this one is already sitting in the voices folder, complete.
     pub installed: bool,
+    /// Where it lives, or would live. Shown in the hub, and what the "use this one"
+    /// button puts in the Piper voice-file box -- so that field is something a person can
+    /// fill by pressing a button rather than by typing a path they have to go and find.
+    pub path: String,
 }
 
 /// The voices offered, chosen rather than listed.
@@ -114,11 +118,15 @@ pub fn catalogue() -> Vec<Voice> {
     let dir = crate::llm::tts::voices_dir();
     CATALOGUE
         .iter()
-        .map(|(name, label, size_hint, _)| Voice {
-            name,
-            label,
-            size_hint,
-            installed: crate::llm::tts::voice_problem(&dir.join(format!("{name}.onnx"))).is_none(),
+        .map(|(name, label, size_hint, _)| {
+            let file = dir.join(format!("{name}.onnx"));
+            Voice {
+                name,
+                label,
+                size_hint,
+                installed: crate::llm::tts::voice_problem(&file).is_none(),
+                path: file.display().to_string(),
+            }
         })
         .collect()
 }

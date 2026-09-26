@@ -135,6 +135,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/download", post(start_voice_download))
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
+        .route("/api/audio/devices", get(audio_devices))
         .route("/api/setup/start-server", post(start_local_server))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
@@ -992,6 +993,14 @@ async fn voice_download_status() -> Json<serde_json::Value> {
 
 async fn forget_voice_download(Query(q): Query<VoiceQuery>) -> Json<serde_json::Value> {
     Json(commands::forget_voice_download(q.voice.unwrap_or_default()))
+}
+
+async fn audio_devices() -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(commands::audio_devices)
+            .await
+            .expect("audio_devices panicked"),
+    )
 }
 
 // Spawns the `ollama` already installed on this machine, with a fixed argument and no

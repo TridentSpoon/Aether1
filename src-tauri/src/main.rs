@@ -17,6 +17,7 @@
     windows_subsystem = "windows"
 )]
 
+mod audio_devices;
 mod background_services;
 mod cli;
 mod code_chat;
@@ -1116,6 +1117,11 @@ fn voice_download_status_rust() -> serde_json::Value {
 #[tauri::command(async)]
 fn forget_voice_download_rust(voice: String) -> serde_json::Value {
     commands::forget_voice_download(voice)
+}
+
+#[tauri::command(async)]
+fn audio_devices_rust() -> serde_json::Value {
+    commands::audio_devices()
 }
 
 #[tauri::command(async)]
@@ -2225,6 +2231,7 @@ fn main() {
             start_voice_download_rust,
             voice_download_status_rust,
             forget_voice_download_rust,
+            audio_devices_rust,
             start_local_server_rust,
             get_static_info_rust,
             get_tools_rust,
