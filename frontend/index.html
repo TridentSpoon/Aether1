@@ -311,7 +311,7 @@
             <div class="bg-slate-950/60 border-b border-cyan-500/20 px-4 py-2.5 flex items-center justify-between">
                 <div class="flex items-center gap-2">
                     <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
-                    <span class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">NEURAL DIALOGUE STREAM</span>
+                    <span id="chat-panel-title" class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">NEURAL DIALOGUE STREAM</span>
                 </div>
                 <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: HALCY</span>
             </div>
@@ -922,6 +922,10 @@
                     <button type="button" id="settings-nav-memory" class="settings-nav-item" data-settings-section="memory" data-keywords="notes database history remember forget storage" data-hint="what it remembers, and where that lives" title="what it remembers, and where that lives">
                         <span class="settings-nav-icon">📓</span>
                         <span class="settings-nav-text">Memory</span>
+                    </button>
+                    <button type="button" id="settings-nav-codeanalysis" class="settings-nav-item" data-settings-section="codeanalysis" data-keywords="graft code analysis graph project codebase repository git" data-hint="code graph analysis and repository understanding" title="code graph analysis and repository understanding">
+                        <span class="settings-nav-icon">💻</span>
+                        <span class="settings-nav-text">Code Analysis</span>
                     </button>
                     <!-- Everything from "What it may do" down is Advanced: set once at
                          install time, or gone looking for only when something is wrong.
@@ -2070,6 +2074,51 @@
                             it decides to remember <em>about</em> you &mdash; is still only written with
                             your approval.
                         </p>
+                    </div>
+                </div>
+                </details>
+            </section>
+
+            <!-- ======================= CODE ANALYSIS ======================= -->
+            <section class="settings-pane" data-settings-section="codeanalysis">
+                <details id="settings-group-codeanalysis" class="settings-group">
+                <summary class="settings-group-summary">
+                    <span class="settings-group-title">💻 Code Analysis</span>
+                    <span class="settings-group-hint">code graph analysis and repository understanding</span>
+                </summary>
+                <div class="settings-group-body">
+                    <div class="space-y-1">
+                        <label class="text-xs font-mono text-cyan-300 block">GRAFT STATUS</label>
+                        <div id="graft-status" class="text-[10px] font-mono text-slate-400 mb-3">Loading Graft status...</div>
+
+                        <label class="text-xs font-mono text-cyan-300 block">DETECTED PROJECTS</label>
+                        <div id="graft-projects-list" class="bg-slate-900 border border-cyan-500/40 rounded p-2 mb-3 max-h-48 overflow-y-auto text-[10px] font-mono text-slate-300">
+                            <div class="text-slate-400">Searching for projects...</div>
+                        </div>
+
+                        <div class="flex items-center gap-2 mb-3">
+                            <button id="btn-graft-detect" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🔍 Detect Projects</button>
+                            <button id="btn-graft-build" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer" disabled>🔨 Build Graph</button>
+                        </div>
+
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            Graft builds a graph of your codebase to help understand its structure. The graph
+                            is automatically kept in sync with your code &mdash; it rebuilds periodically or
+                            when changes are detected. Once built, relevant code nodes are injected into the
+                            AI's context when answering code questions.
+                        </p>
+
+                        <div class="mt-3">
+                            <label for="setting-graft-autosync" class="text-xs font-mono text-cyan-300 block mb-1">AUTO-SYNC</label>
+                            <div class="flex items-center gap-2">
+                                <input id="setting-graft-autosync" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                                <label for="setting-graft-autosync" class="text-xs font-mono text-slate-300">Auto-rebuild every hour or when code changes</label>
+                            </div>
+                            <p class="text-[10px] font-mono text-slate-400 leading-snug mt-1">
+                                Graft automatically detects code changes and rebuilds the graph. Disable this to
+                                only rebuild manually via the "Build Graph" button.
+                            </p>
+                        </div>
                     </div>
                 </div>
                 </details>

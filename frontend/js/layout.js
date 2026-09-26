@@ -636,6 +636,10 @@
        is exactly the right one's left edge, and they share some rows. A panel
        can be in more than one seam (three panels in a row give two), and each
        is dragged independently. */
+    function colsOverlap(a, b) {
+        return a.col < b.col + b.w && b.col < a.col + a.w;
+    }
+
     function findSeams() {
         const live = [];
         for (const [id, rect] of state) {
@@ -643,12 +647,15 @@
             live.push({ id, rect });
         }
         const found = [];
+
+        // Vertical seams: panels side by side (a.col + a.w === b.col)
         for (const a of live) {
             for (const b of live) {
                 if (a.id === b.id) continue;
                 if (a.rect.col + a.rect.w !== b.rect.col) continue;
                 if (!rowsOverlap(a.rect, b.rect)) continue;
                 found.push({
+                    type: 'vertical',
                     leftId: a.id,
                     rightId: b.id,
                     boundary: b.rect.col,
@@ -657,30 +664,74 @@
                 });
             }
         }
+
+        // Horizontal seams: panels stacked vertically (a.row + a.h === b.row)
+        for (const a of live) {
+            for (const b of live) {
+                if (a.id === b.id) continue;
+                if (a.rect.row + a.rect.h !== b.rect.row) continue;
+                if (!colsOverlap(a.rect, b.rect)) continue;
+                found.push({
+                    type: 'horizontal',
+                    topId: a.id,
+                    bottomId: b.id,
+                    boundary: b.rect.row,
+                    colStart: Math.max(a.rect.col, b.rect.col),
+                    colEnd: Math.min(a.rect.col + a.rect.w, b.rect.col + b.rect.w),
+                });
+            }
+        }
         return found;
     }
 
     function placeSeam(el, seam) {
         const m = metrics();
-        /* The gap lies immediately to the left of the boundary column's start,
-           and the handle is centred on it. */
-        const boundaryX = m.padLeft + (seam.boundary - 1) * m.colPitch;
-        const centre = boundaryX - GAP_PX / 2;
-        el.style.left = (centre - SEAM_HIT_PX / 2) + 'px';
-        el.style.width = SEAM_HIT_PX + 'px';
-        el.style.top = (m.padTop + (seam.rowStart - 1) * m.rowPitch) + 'px';
-        el.style.height = Math.max(
-            0,
-            (seam.rowEnd - seam.rowStart) * m.rowPitch - GAP_PX
-        ) + 'px';
+        if (seam.type === 'vertical') {
+            /* The gap lies immediately to the left of the boundary column's start,
+               and the handle is centred on it. */
+            const boundaryX = m.padLeft + (seam.boundary - 1) * m.colPitch;
+            const centre = boundaryX - GAP_PX / 2;
+            el.style.left = (centre - SEAM_HIT_PX / 2) + 'px';
+            el.style.width = SEAM_HIT_PX + 'px';
+            el.style.top = (m.padTop + (seam.rowStart - 1) * m.rowPitch) + 'px';
+            el.style.height = Math.max(
+                0,
+                (seam.rowEnd - seam.rowStart) * m.rowPitch - GAP_PX
+            ) + 'px';
+            el.classList.add('panel-seam-vertical');
+            el.classList.remove('panel-seam-horizontal');
+        } else if (seam.type === 'horizontal') {
+            /* The gap lies immediately above the boundary row's start,
+               and the handle is centred on it. */
+            const boundaryY = m.padTop + (seam.boundary - 1) * m.rowPitch;
+            const centre = boundaryY - GAP_PX / 2;
+            el.style.top = (centre - SEAM_HIT_PX / 2) + 'px';
+            el.style.height = SEAM_HIT_PX + 'px';
+            el.style.left = (m.padLeft + (seam.colStart - 1) * m.colPitch) + 'px';
+            el.style.width = Math.max(
+                0,
+                (seam.colEnd - seam.colStart) * m.colPitch - GAP_PX
+            ) + 'px';
+            el.classList.add('panel-seam-horizontal');
+            el.classList.remove('panel-seam-vertical');
+        }
     }
 
     function seamTitle(seam) {
-        const left = byId.get(seam.leftId);
-        const right = byId.get(seam.rightId);
-        if (!left || !right) return 'Drag to resize both panels';
-        return 'Drag to resize ' + panelLabel(left) + ' and ' + panelLabel(right)
-            + '. Arrow keys move it too.';
+        if (seam.type === 'vertical') {
+            const left = byId.get(seam.leftId);
+            const right = byId.get(seam.rightId);
+            if (!left || !right) return 'Drag to resize both panels';
+            return 'Drag to resize ' + panelLabel(left) + ' and ' + panelLabel(right)
+                + '. Arrow keys move it too.';
+        } else if (seam.type === 'horizontal') {
+            const top = byId.get(seam.topId);
+            const bottom = byId.get(seam.bottomId);
+            if (!top || !bottom) return 'Drag to resize both panels';
+            return 'Drag to resize ' + panelLabel(top) + ' and ' + panelLabel(bottom)
+                + '. Arrow keys move it too.';
+        }
+        return 'Drag to resize both panels';
     }
 
     function renderSeams() {
@@ -700,8 +751,17 @@
                 layout.appendChild(el);
                 seamEls[i] = el;
             }
-            el.dataset.seamLeft = seam.leftId;
-            el.dataset.seamRight = seam.rightId;
+            if (seam.type === 'vertical') {
+                el.dataset.seamLeft = seam.leftId;
+                el.dataset.seamRight = seam.rightId;
+                delete el.dataset.seamTop;
+                delete el.dataset.seamBottom;
+            } else if (seam.type === 'horizontal') {
+                el.dataset.seamTop = seam.topId;
+                el.dataset.seamBottom = seam.bottomId;
+                delete el.dataset.seamLeft;
+                delete el.dataset.seamRight;
+            }
             el.title = seamTitle(seam);
             el.setAttribute('aria-label', seamTitle(seam));
             placeSeam(el, seam);
@@ -711,39 +771,77 @@
     function seamFor(el) {
         const leftId = el.dataset.seamLeft;
         const rightId = el.dataset.seamRight;
-        const left = state.get(leftId);
-        const right = state.get(rightId);
-        if (!left || !right) return null;
-        return { leftId, rightId, left, right };
+        const topId = el.dataset.seamTop;
+        const bottomId = el.dataset.seamBottom;
+
+        if (leftId && rightId) {
+            const left = state.get(leftId);
+            const right = state.get(rightId);
+            if (!left || !right) return null;
+            return { type: 'vertical', leftId, rightId, left, right };
+        } else if (topId && bottomId) {
+            const top = state.get(topId);
+            const bottom = state.get(bottomId);
+            if (!top || !bottom) return null;
+            return { type: 'horizontal', topId, bottomId, top, bottom };
+        }
+        return null;
     }
 
-    /* How far the boundary may travel from where it is, in columns. Neither
-       panel may go below MIN_W, and since the pair keeps its combined width the
-       two limits are all there is to check. */
+    /* How far the boundary may travel from where it is, in columns (vertical seams)
+       or rows (horizontal seams). Neither panel may go below MIN_W/MIN_H, and
+       since the pair keeps its combined width/height the two limits are all there
+       is to check. */
     function clampSeamDelta(pair, delta) {
-        const min = MIN_W - pair.left.w;
-        const max = pair.right.w - MIN_W;
-        return Math.max(min, Math.min(max, delta));
+        if (pair.type === 'vertical') {
+            const min = MIN_W - pair.left.w;
+            const max = pair.right.w - MIN_W;
+            return Math.max(min, Math.min(max, delta));
+        } else if (pair.type === 'horizontal') {
+            const min = MIN_H - pair.top.h;
+            const max = pair.bottom.h - MIN_H;
+            return Math.max(min, Math.min(max, delta));
+        }
+        return 0;
     }
 
     function previewSeam(pair, delta) {
-        const leftEl = byId.get(pair.leftId);
-        const rightEl = byId.get(pair.rightId);
-        if (leftEl) leftEl.style.setProperty('--gw', pair.left.w + delta);
-        if (rightEl) {
-            rightEl.style.setProperty('--gcol', pair.right.col + delta);
-            rightEl.style.setProperty('--gw', pair.right.w - delta);
+        if (pair.type === 'vertical') {
+            const leftEl = byId.get(pair.leftId);
+            const rightEl = byId.get(pair.rightId);
+            if (leftEl) leftEl.style.setProperty('--gw', pair.left.w + delta);
+            if (rightEl) {
+                rightEl.style.setProperty('--gcol', pair.right.col + delta);
+                rightEl.style.setProperty('--gw', pair.right.w - delta);
+            }
+        } else if (pair.type === 'horizontal') {
+            const topEl = byId.get(pair.topId);
+            const bottomEl = byId.get(pair.bottomId);
+            if (topEl) topEl.style.setProperty('--gh', pair.top.h + delta);
+            if (bottomEl) {
+                bottomEl.style.setProperty('--grow', pair.bottom.row + delta);
+                bottomEl.style.setProperty('--gh', pair.bottom.h - delta);
+            }
         }
     }
 
     function commitSeam(pair, delta) {
         if (!delta) return false;
-        state.set(pair.leftId, { ...pair.left, w: pair.left.w + delta });
-        state.set(pair.rightId, {
-            ...pair.right,
-            col: pair.right.col + delta,
-            w: pair.right.w - delta,
-        });
+        if (pair.type === 'vertical') {
+            state.set(pair.leftId, { ...pair.left, w: pair.left.w + delta });
+            state.set(pair.rightId, {
+                ...pair.right,
+                col: pair.right.col + delta,
+                w: pair.right.w - delta,
+            });
+        } else if (pair.type === 'horizontal') {
+            state.set(pair.topId, { ...pair.top, h: pair.top.h + delta });
+            state.set(pair.bottomId, {
+                ...pair.bottom,
+                row: pair.bottom.row + delta,
+                h: pair.bottom.h - delta,
+            });
+        }
         save();
         return true;
     }
@@ -755,31 +853,56 @@
         if (!pair) return;
         event.preventDefault();
         handle.setPointerCapture(event.pointerId);
-        seamDrag = { handle, pair, startX: event.clientX, delta: 0, active: false };
+        seamDrag = { handle, pair, startX: event.clientX, startY: event.clientY, delta: 0, active: false };
     });
 
     layout.addEventListener('pointermove', (event) => {
         if (!seamDrag) return;
+        const m = metrics();
         if (!seamDrag.active) {
-            if (Math.abs(event.clientX - seamDrag.startX) < DRAG_THRESHOLD_PX) return;
+            let threshold;
+            if (seamDrag.pair.type === 'vertical') {
+                threshold = Math.abs(event.clientX - seamDrag.startX) < DRAG_THRESHOLD_PX;
+            } else {
+                threshold = Math.abs(event.clientY - seamDrag.startY) < DRAG_THRESHOLD_PX;
+            }
+            if (threshold) return;
             seamDrag.active = true;
             seamDrag.handle.classList.add('is-seaming');
             document.body.classList.add('layout-seaming');
         }
-        const m = metrics();
-        const raw = Math.round((event.clientX - seamDrag.startX) / m.colPitch);
-        seamDrag.delta = clampSeamDelta(seamDrag.pair, raw);
-        previewSeam(seamDrag.pair, seamDrag.delta);
-        /* The handle follows the boundary it is moving rather than the pointer,
-           so it snaps to the column the panels have actually taken. */
-        placeSeam(seamDrag.handle, {
-            boundary: seamDrag.pair.right.col + seamDrag.delta,
-            rowStart: Math.max(seamDrag.pair.left.row, seamDrag.pair.right.row),
-            rowEnd: Math.min(
-                seamDrag.pair.left.row + seamDrag.pair.left.h,
-                seamDrag.pair.right.row + seamDrag.pair.right.h
-            ),
-        });
+
+        if (seamDrag.pair.type === 'vertical') {
+            const raw = Math.round((event.clientX - seamDrag.startX) / m.colPitch);
+            seamDrag.delta = clampSeamDelta(seamDrag.pair, raw);
+            previewSeam(seamDrag.pair, seamDrag.delta);
+            /* The handle follows the boundary it is moving rather than the pointer,
+               so it snaps to the column the panels have actually taken. */
+            placeSeam(seamDrag.handle, {
+                type: 'vertical',
+                boundary: seamDrag.pair.right.col + seamDrag.delta,
+                rowStart: Math.max(seamDrag.pair.left.row, seamDrag.pair.right.row),
+                rowEnd: Math.min(
+                    seamDrag.pair.left.row + seamDrag.pair.left.h,
+                    seamDrag.pair.right.row + seamDrag.pair.right.h
+                ),
+            });
+        } else if (seamDrag.pair.type === 'horizontal') {
+            const raw = Math.round((event.clientY - seamDrag.startY) / m.rowPitch);
+            seamDrag.delta = clampSeamDelta(seamDrag.pair, raw);
+            previewSeam(seamDrag.pair, seamDrag.delta);
+            /* The handle follows the boundary it is moving rather than the pointer,
+               so it snaps to the row the panels have actually taken. */
+            placeSeam(seamDrag.handle, {
+                type: 'horizontal',
+                boundary: seamDrag.pair.bottom.row + seamDrag.delta,
+                colStart: Math.max(seamDrag.pair.top.col, seamDrag.pair.bottom.col),
+                colEnd: Math.min(
+                    seamDrag.pair.top.col + seamDrag.pair.top.w,
+                    seamDrag.pair.bottom.col + seamDrag.pair.bottom.w
+                ),
+            });
+        }
     });
 
     function endSeamDrag(commit) {
@@ -792,7 +915,10 @@
         /* Whether it was committed or abandoned, the two panels are put back to
            whatever state says -- the preview wrote custom properties straight
            onto them and apply() is the only thing that owns those. */
-        [pair.leftId, pair.rightId].forEach((id) => {
+        const ids = pair.type === 'vertical'
+            ? [pair.leftId, pair.rightId]
+            : [pair.topId, pair.bottomId];
+        ids.forEach((id) => {
             const el = byId.get(id);
             if (el) apply(el);
         });
@@ -804,19 +930,31 @@
     layout.addEventListener('pointercancel', () => endSeamDrag(false));
 
     /* The handle is a button, so it can be tabbed to; arrow keys move the
-       boundary a column at a time, the same bargain the grips make. */
+       boundary a column at a time (vertical) or row at a time (horizontal),
+       the same bargain the grips make. */
     layout.addEventListener('keydown', (event) => {
         const handle = event.target.closest('.panel-seam');
         if (!handle) return;
-        const step = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
-        if (!step) return;
         const pair = seamFor(handle);
         if (!pair) return;
+
+        let step = 0;
+        if (pair.type === 'vertical') {
+            step = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+        } else if (pair.type === 'horizontal') {
+            step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+        }
+        if (!step) return;
+
         const delta = clampSeamDelta(pair, step);
         if (!delta) return;
         event.preventDefault();
         commitSeam(pair, delta);
-        [pair.leftId, pair.rightId].forEach((id) => {
+
+        const ids = pair.type === 'vertical'
+            ? [pair.leftId, pair.rightId]
+            : [pair.topId, pair.bottomId];
+        ids.forEach((id) => {
             const el = byId.get(id);
             if (el) apply(el);
         });
