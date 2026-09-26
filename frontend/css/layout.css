@@ -18,7 +18,7 @@
      is what the grid uses before that script has run, and what it falls back to
      if the script never runs at all -- so it is the old fixed row height, which
      is a layout that works rather than one that collapses. */
-  --grid-cols: 12;
+  --grid-cols: 24;
   --cell-h: 24px;
   --grid-gap: 10px;
   display: grid;
@@ -231,6 +231,68 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
   pointer-events: none;
 }
 
+/* ---- The seam between two snapped panels -----------------------------------
+   A vertical strip drawn over the gap where two panels meet. Positioned in the
+   grid's own content coordinates by layout.js, so it scrolls with the panels it
+   belongs to. Quiet until the pointer is near it -- the join is already visible
+   as a line of empty space, and this only has to say that the line can be
+   moved. */
+
+.panel-seam {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  z-index: 4;
+  touch-action: none;
+  /* The hit strip overhangs both panels; the mark inside it does not. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The grabbable mark: a thin rule down the gap with a thicker middle, the same
+   idea as the panel grip's dots. */
+.panel-seam::before {
+  content: '';
+  width: 2px;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--neon-cyan) 12%,
+    var(--neon-cyan) 88%,
+    transparent 100%
+  );
+  /* At rest it matches the panel grips' 0.35: visible enough to be found
+     without hunting, quiet enough not to draw a line down the middle of the
+     HUD. */
+  opacity: 0.35;
+  transition: opacity 0.15s ease;
+}
+
+.panel-seam:hover::before,
+.panel-seam:focus-visible::before,
+.panel-seam.is-seaming::before {
+  opacity: 0.9;
+}
+
+.panel-seam:focus-visible {
+  outline: none;
+}
+
+body.layout-seaming {
+  cursor: ew-resize;
+  user-select: none;
+}
+
+/* Same bargain as a panel drag: while the seam is being pulled the pointer must
+   keep reaching the grid, not a canvas or a text input inside a panel. */
+body.layout-seaming .movable-panel > * {
+  pointer-events: none;
+}
+
 /* ---- Narrow windows -------------------------------------------------------
    Below the point where the grid is legible, the HUD stacks in one column in
    the order the panels appear in the markup -- dragging and resizing turn
@@ -251,7 +313,8 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
   }
 
   .panel-grip,
-  .panel-resize {
+  .panel-resize,
+  .panel-seam {
     display: none;
   }
 }
@@ -267,7 +330,8 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
 :root[data-solo-panel] header,
 :root[data-solo-panel] .panel-grip,
 :root[data-solo-panel] .panel-undock,
-:root[data-solo-panel] .panel-resize {
+:root[data-solo-panel] .panel-resize,
+:root[data-solo-panel] .panel-seam {
   display: none !important;
 }
 
