@@ -3069,3 +3069,42 @@ body {
     background: linear-gradient(90deg, var(--neon-green), var(--text-accent));
     transition: width 80ms linear;
 }
+
+/* WINDOW BUTTONS
+   The native title bar is off, so minimise / maximise / close are drawn here. Deliberately
+   quiet -- square, hairline, no glow -- so the three most destructive controls in the window
+   are not also the brightest thing in a bar that already competes for attention. Close is the
+   only one that colours, and only under the pointer. */
+.window-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px;
+  line-height: 1;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.window-btn:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-neon);
+  color: var(--text-accent);
+}
+
+.window-btn:focus-visible {
+  outline: 1px solid var(--border-neon-bright);
+  outline-offset: 1px;
+}
+
+.window-btn-close:hover {
+  background: #b3202b;
+  border-color: #d9333f;
+  color: #fff;
+}

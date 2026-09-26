@@ -290,3 +290,33 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
 :root[data-solo-panel] .grip-inset {
   padding-top: 0;
 }
+
+/* WINDOW RESIZE GRIPS
+   Invisible strips over the four edges and four corners of an undecorated window. GTK gives
+   an undecorated window no resize border of its own, so these are the only way to resize the
+   HUD on Linux. 4px edges, 12px corners -- wide enough to hit, narrow enough that a click
+   aimed at the panel grid never lands here. They sit above the HUD (z-index) but the corners
+   sit above the edges, so a corner drag resizes two axes rather than one. */
+#window-resize-grips .window-resize-grip {
+  position: fixed;
+  z-index: 60;
+}
+
+.window-resize-grip.grip-n { top: 0; left: 0; right: 0; height: 4px; cursor: ns-resize; }
+.window-resize-grip.grip-s { bottom: 0; left: 0; right: 0; height: 4px; cursor: ns-resize; }
+.window-resize-grip.grip-w { top: 0; bottom: 0; left: 0; width: 4px; cursor: ew-resize; }
+.window-resize-grip.grip-e { top: 0; bottom: 0; right: 0; width: 4px; cursor: ew-resize; }
+
+.window-resize-grip.grip-nw,
+.window-resize-grip.grip-ne,
+.window-resize-grip.grip-sw,
+.window-resize-grip.grip-se {
+  width: 12px;
+  height: 12px;
+  z-index: 61;
+}
+
+.window-resize-grip.grip-nw { top: 0; left: 0; cursor: nwse-resize; }
+.window-resize-grip.grip-ne { top: 0; right: 0; cursor: nesw-resize; }
+.window-resize-grip.grip-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.window-resize-grip.grip-se { bottom: 0; right: 0; cursor: nwse-resize; }

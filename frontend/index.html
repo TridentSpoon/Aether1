@@ -11,8 +11,8 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=31">
-    <link rel="stylesheet" href="css/layout.css?v=3">
+    <link rel="stylesheet" href="css/A1theme.css?v=32">
+    <link rel="stylesheet" href="css/layout.css?v=4">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
@@ -194,8 +194,40 @@
                     <button id="btn-settings" class="hud-slideout-action" role="menuitem">⚙️ Settings</button>
                 </div>
             </div>
+
+            <!-- The window buttons. The native title bar is off (`decorations: false` in
+                 tauri.conf.json), so minimise / maximise / close are the HUD's own controls
+                 now -- and the rest of this bar is the thing you drag the window by. Hidden
+                 until app.js confirms this really is the desktop window: in a browser under
+                 `--serve`, and in an undocked panel window (which keeps its native frame),
+                 there is nothing for them to act on. -->
+            <div id="window-controls" class="hidden shrink-0 items-center gap-1" data-no-window-drag>
+                <button id="btn-window-minimize" type="button" class="window-btn" title="Minimise">
+                    <span aria-hidden="true">&#x2013;</span><span class="sr-only">Minimise</span>
+                </button>
+                <button id="btn-window-maximize" type="button" class="window-btn" title="Maximise" aria-pressed="false">
+                    <span class="window-btn-glyph" aria-hidden="true">&#x25a1;</span><span class="sr-only">Maximise</span>
+                </button>
+                <button id="btn-window-close" type="button" class="window-btn window-btn-close" title="Close">
+                    <span aria-hidden="true">&#x2715;</span><span class="sr-only">Close</span>
+                </button>
+            </div>
         </div>
     </header>
+
+    <!-- Eight strips over the window edges, revealed with the buttons above. An undecorated
+         GTK window has no frame to grab, so without these the HUD would be stuck at its
+         launch size; each one starts an OS-level resize in its own direction. -->
+    <div id="window-resize-grips" class="hidden">
+        <div class="window-resize-grip grip-n" data-resize="north"></div>
+        <div class="window-resize-grip grip-s" data-resize="south"></div>
+        <div class="window-resize-grip grip-w" data-resize="west"></div>
+        <div class="window-resize-grip grip-e" data-resize="east"></div>
+        <div class="window-resize-grip grip-nw" data-resize="north-west"></div>
+        <div class="window-resize-grip grip-ne" data-resize="north-east"></div>
+        <div class="window-resize-grip grip-sw" data-resize="south-west"></div>
+        <div class="window-resize-grip grip-se" data-resize="south-east"></div>
+    </div>
 
     <!-- MAIN DASHBOARD CONTENT (FREE-FORM PANEL GRID) -->
     <main id="hud-layout" class="flex-1 p-4 overflow-auto z-10">
