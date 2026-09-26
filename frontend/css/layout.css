@@ -243,7 +243,6 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
   padding: 0;
   border: 0;
   background: transparent;
-  cursor: ew-resize;
   z-index: 4;
   touch-action: none;
   /* The hit strip overhangs both panels; the mark inside it does not. */
@@ -252,12 +251,20 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
   justify-content: center;
 }
 
-/* The grabbable mark: a thin rule down the gap with a thicker middle, the same
-   idea as the panel grip's dots. */
+/* Vertical seams: grab and drag left-right */
+.panel-seam-vertical {
+  cursor: ew-resize;
+}
+
+/* Horizontal seams: grab and drag up-down */
+.panel-seam-horizontal {
+  cursor: ns-resize;
+}
+
+/* The grabbable mark: a thin rule down/across the gap with a thicker middle,
+   the same idea as the panel grip's dots. */
 .panel-seam::before {
   content: '';
-  width: 2px;
-  height: 100%;
   background: linear-gradient(
     to bottom,
     transparent 0,
@@ -272,6 +279,25 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
   transition: opacity 0.15s ease;
 }
 
+/* Vertical seam mark: vertical rule */
+.panel-seam-vertical::before {
+  width: 2px;
+  height: 100%;
+}
+
+/* Horizontal seam mark: horizontal rule */
+.panel-seam-horizontal::before {
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    var(--neon-cyan) 12%,
+    var(--neon-cyan) 88%,
+    transparent 100%
+  );
+}
+
 .panel-seam:hover::before,
 .panel-seam:focus-visible::before,
 .panel-seam.is-seaming::before {
@@ -283,8 +309,16 @@ body.layout-resizing .movable-panel > *:not(.panel-resize) {
 }
 
 body.layout-seaming {
-  cursor: ew-resize;
   user-select: none;
+}
+
+/* Cursor changes based on seam type during drag */
+body.layout-seaming .panel-seam-vertical {
+  cursor: ew-resize;
+}
+
+body.layout-seaming .panel-seam-horizontal {
+  cursor: ns-resize;
 }
 
 /* Same bargain as a panel drag: while the seam is being pulled the pointer must

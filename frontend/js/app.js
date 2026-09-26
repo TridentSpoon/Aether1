@@ -1449,6 +1449,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function syncThemeControls(theme) {
         if (themeChipValue) themeChipValue.textContent = Aether1Theme.MODE_LABELS[theme.mode] || theme.mode;
 
+        /* Update the Neural Dialogue Stream title based on theme.
+           In Light and Dark modes, show "chat or interaction window"; in Cyberpunk, show "Neural Dialogue Stream". */
+        const chatPanelTitle = document.getElementById('chat-panel-title');
+        if (chatPanelTitle) {
+            chatPanelTitle.textContent = theme.mode === 'cyberpunk' ? 'NEURAL DIALOGUE STREAM' : 'CHAT OR INTERACTION WINDOW';
+        }
+
         /* Game Mode is called Sleep Mode outside Cyberpunk, so the name follows the theme.
            Re-read from the button rather than kept here: the state is the machine's, and it
            can be changed from the tray, the hotkey or another window. */
