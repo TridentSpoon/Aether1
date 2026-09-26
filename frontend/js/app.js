@@ -8915,6 +8915,137 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('btn-notes-open-folder')?.addEventListener('click', openVaultFolder);
 
+    /* ================================================================ */
+    /* Graft integration for code analysis                             */
+    /* ================================================================ */
+
+    async function loadGraftStatus() {
+        try {
+            const statusEl = document.getElementById('graft-status');
+            if (!statusEl) return;
+
+            // Check Graft version
+            try {
+                if (IS_TAURI) {
+                    const version = await tauriInvoke('graft_version_rust');
+                    statusEl.textContent = `✓ Graft ${version.version} installed`;
+                } else {
+                    statusEl.textContent = `ℹ️ Graft status requires Tauri`;
+                }
+            } catch (e) {
+                statusEl.textContent = '✗ Graft not installed. Install from https://github.com/nanonets/graft';
+            }
+        } catch (e) {
+            console.error('Error loading Graft status:', e);
+        }
+    }
+
+    async function loadGraftProjects() {
+        try {
+            const projectsList = document.getElementById('graft-projects-list');
+            if (!projectsList) return;
+
+            if (!IS_TAURI) {
+                projectsList.innerHTML = '<div class="text-slate-400">Project detection requires Tauri</div>';
+                return;
+            }
+
+            projectsList.innerHTML = '<div class="text-slate-400">Detecting projects...</div>';
+            const projects = await tauriInvoke('graft_detect_projects_rust');
+
+            if (!projects || projects.length === 0) {
+                projectsList.innerHTML = '<div class="text-slate-400">No repositories found in common locations</div>';
+                return;
+            }
+
+            const selected = await tauriInvoke('graft_get_selected_project_rust');
+            const selectedPath = selected.path;
+
+            projectsList.innerHTML = projects.map(p => `
+                <div class="p-2 border-b border-slate-700 cursor-pointer hover:bg-slate-800 transition-colors"
+                     data-project-path="${p.path}"
+                     onclick="graftSelectProject('${p.path.replace(/'/g, "\\'")}')">
+                    <div class="flex justify-between items-start">
+                        <span class="font-semibold text-cyan-300">${p.name}</span>
+                        <span class="text-[9px] text-slate-400">${p.graft_status}</span>
+                    </div>
+                    <div class="text-[9px] text-slate-500 break-all">${p.path}</div>
+                    ${selectedPath === p.path ? '<div class="text-[9px] text-green-400 mt-1">✓ Selected</div>' : ''}
+                </div>
+            `).join('');
+        } catch (e) {
+            console.error('Error loading Graft projects:', e);
+            document.getElementById('graft-projects-list').innerHTML =
+                `<div class="text-red-400 text-[10px]">Error: ${e.message || e}</div>`;
+        }
+    }
+
+    window.graftSelectProject = async function(projectPath) {
+        try {
+            if (!IS_TAURI) return;
+
+            await tauriInvoke('graft_select_project_rust', { project_path: projectPath });
+
+            // Re-enable build button
+            const buildBtn = document.getElementById('btn-graft-build');
+            if (buildBtn) buildBtn.disabled = false;
+
+            // Reload project list to show selection
+            await loadGraftProjects();
+
+            appendMessage(currentAgentName, `📊 Selected project: ${projectPath}`);
+        } catch (e) {
+            console.error('Error selecting project:', e);
+            appendMessage(currentAgentName, `❌ Error selecting project: ${e.message || e}`);
+        }
+    };
+
+    document.getElementById('btn-graft-detect')?.addEventListener('click', loadGraftProjects);
+
+    document.getElementById('btn-graft-build')?.addEventListener('click', async () => {
+        try {
+            if (!IS_TAURI) return;
+
+            const selected = await tauriInvoke('graft_get_selected_project_rust');
+            if (!selected.path) {
+                appendMessage(currentAgentName, '⚠️ Please select a project first');
+                return;
+            }
+
+            const buildBtn = document.getElementById('btn-graft-build');
+            buildBtn.disabled = true;
+            buildBtn.textContent = '⏳ Building...';
+
+            await tauriInvoke('graft_build_graph_rust', { project_path: selected.path });
+
+            // Reload status to show "Ready"
+            await loadGraftStatus();
+            await loadGraftProjects();
+
+            appendMessage(currentAgentName, `✓ Graft graph built for: ${selected.path}`);
+            buildBtn.textContent = '🔨 Build Graph';
+            buildBtn.disabled = false;
+        } catch (e) {
+            console.error('Error building Graft graph:', e);
+            appendMessage(currentAgentName, `❌ Failed to build Graft graph: ${e.message || e}`);
+            const buildBtn = document.getElementById('btn-graft-build');
+            buildBtn.textContent = '🔨 Build Graph';
+            buildBtn.disabled = false;
+        }
+    });
+
+    // Load initial Graft status when settings are opened
+    const settingsModal = document.getElementById('settings-modal');
+    if (settingsModal) {
+        const observer = new MutationObserver(() => {
+            if (!settingsModal.classList.contains('hidden')) {
+                loadGraftStatus();
+                loadGraftProjects();
+            }
+        });
+        observer.observe(settingsModal, { attributes: true, attributeFilter: ['class'] });
+    }
+
     /* -------------------------------------------------------------------- */
     /* The graph.                                                           */
     /*                                                                      */
