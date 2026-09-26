@@ -498,6 +498,52 @@ body {
   transition: background 0.3s ease;
 }
 
+/* ---- Selection ------------------------------------------------------------
+   The HUD used to carry `select-none` on <body>, so nothing in the window could
+   be highlighted: not a chat reply, not an error message, not a model's own
+   name. That is the wrong default for a window whose whole content is text you
+   might want to paste somewhere else. Selection is on by default now, and the
+   exceptions below are the things that are handles rather than words -- the
+   ones where a drag has to drag, or a double-click would leave a blue smear on
+   a button instead of pressing it. */
+body {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* The top bar IS the title bar (see initWindowChrome): a press anywhere in it
+   that is not a control starts a native window drag, so a selection begun
+   there could never finish. The resize grips and the panel grips are the same
+   thing at the edges. */
+header,
+#window-resize-grips,
+.panel-grip,
+.panel-resize,
+/* Controls. Their labels are names of actions, not content, and a
+   double-click on one should press it twice rather than highlight it. */
+button,
+summary,
+.a1-switch,
+.settings-nav-item,
+.hud-chip,
+input[type='range'],
+canvas {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ...but a handle that holds real text hands it back. The bar's slide-out
+   panels are content that happens to hang off the title bar, and a field is
+   always selectable whatever it sits inside. */
+header .hud-slideout,
+input:not([type='range']),
+textarea,
+select,
+[data-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .scanlines {
   position: fixed;
   top: 0; left: 0; width: 100%; height: 100%;
