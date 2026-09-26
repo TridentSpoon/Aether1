@@ -578,6 +578,9 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // survives a restart rather than silently reverting).
         "autostart_app": false,
         "autostart_ollama": false,
+        // Remote & LAN: whether AETHER1 puts this machine on the network as it starts.
+        // Off unless asked for -- see lan.rs.
+        "lan_autostart": false,
         "voice_startup_audible": true,
         "game_mode": false,
     });

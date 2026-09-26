@@ -2625,6 +2625,220 @@ body {
 
 .hub-downloads { display: flex; flex-direction: column; gap: 0.4rem; }
 
+/* ============================================================================
+   REMOTE & LAN -- the card pattern
+   ----------------------------------------------------------------------------
+   One card per capability. The head says what it is, what state it is in and
+   carries its one verb; the rows below are the settings that only mean anything
+   while that capability is the subject. The rows are separated by rules rather
+   than boxed individually, so a card reads as one thing with a list under it
+   rather than as four stacked panels.
+
+   Built as its own family rather than reusing .profile-card: that one is a
+   titled box, this one has a head, a status, an action and divided rows, and
+   bending one into the other would leave both harder to read.
+   ============================================================================ */
+
+.net-card {
+    border: 1px solid var(--border-neon);
+    border-radius: 0.5rem;
+    background: var(--bg-panel);
+    overflow: hidden;
+}
+
+.net-card + .net-card { margin-top: 0.75rem; }
+
+.net-card-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem;
+}
+
+.net-card-icon {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.5rem;
+    background: var(--bg-panel-hover);
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.net-card-heading { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+
+.net-card-title {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+    color: var(--text-main);
+}
+
+.net-card-hint {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+/* The dot is the state; the word beside it is the same state for anyone who
+   cannot tell the colours apart, which is why both are always drawn. */
+.net-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    text-transform: none;
+}
+
+.net-state i {
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--text-dim);
+}
+
+.net-state[data-state="on"] { color: var(--text-accent); }
+.net-state[data-state="on"] i { background: var(--text-accent); box-shadow: 0 0 6px var(--text-accent); }
+.net-state[data-state="busy"] i { background: var(--neon-amber); box-shadow: 0 0 6px var(--neon-amber); }
+.net-state[data-state="busy"] { color: var(--neon-amber); }
+
+.net-card-action {
+    flex: 0 0 auto;
+    padding: 0.4rem 1.1rem;
+    border: 1px solid var(--text-accent);
+    border-radius: 0.375rem;
+    background: color-mix(in srgb, var(--text-accent) 18%, transparent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-accent);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.net-card-action:hover:not(:disabled) { background: var(--text-accent); color: var(--bg-core); }
+.net-card-action:disabled { opacity: 0.45; cursor: default; }
+
+/* The second verb on a card, where there is one: present but never competing
+   with the card's own action. */
+.net-card-action-quiet {
+    border-color: var(--border-neon);
+    background: var(--bg-panel-hover);
+    color: var(--text-main);
+}
+
+.net-card-action-quiet:hover:not(:disabled) { background: var(--bg-panel-hover); color: var(--text-accent); border-color: var(--text-accent); }
+
+/* Full-bleed: the rule runs the width of the card, the way the reference does,
+   which is what makes the rows read as a list rather than as inset boxes. */
+.net-notice {
+    margin: 0;
+    padding: 0.5rem 0.875rem;
+    border-top: 1px solid var(--border-neon);
+    background: var(--bg-panel-hover);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.63rem;
+    line-height: 1.5;
+    color: var(--neon-amber);
+}
+
+.net-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 0.875rem;
+    border-top: 1px solid var(--border-neon);
+}
+
+.net-row-text { min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+
+.net-row-title {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--text-main);
+}
+
+.net-row-hint {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+.net-row-value {
+    margin: 0;
+    flex: 0 0 auto;
+    max-width: 45%;
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text-accent);
+    overflow-wrap: anywhere;
+}
+
+/* A row whose content is a list rather than one control: the list follows
+   underneath it, so the row itself carries only the heading and its verb. */
+.net-row-stacked { border-bottom: 0; padding-bottom: 0.4rem; }
+
+#lan-devices { padding: 0 0.875rem 0.875rem; }
+
+.net-phrase {
+    padding: 0.75rem 0.875rem;
+    border-top: 1px solid var(--border-neon);
+    background: var(--bg-panel-hover);
+}
+
+.net-phrase-label {
+    margin: 0 0 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+    color: var(--neon-amber);
+}
+
+.net-phrase-words {
+    margin: 0 0 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: var(--text-accent);
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+/* The card rows use the app's own switch (.a1-switch, from the Display
+   section) with no text of its own: in a row the title beside it is the
+   label, so a second one would say the same thing twice. */
+.net-row-switch { flex: 0 0 auto; }
+
+/* Under about 620px the value or switch on the right has nowhere to go, so the
+   row becomes two lines with the control under its own description. */
+@media (max-width: 620px) {
+    .net-row { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+    .net-row-value { max-width: 100%; text-align: left; }
+    .net-card-head { flex-wrap: wrap; }
+    .net-card-action { width: 100%; }
+}
+
+/* A field that belongs to the row above it: the row carries the label and the
+   explanation, and a text input has nowhere to sit on a row's right-hand side
+   without shrinking to something unusable. */
+.net-field { padding: 0 0.875rem 0.875rem; }
 
 /* ---- Appearance: the pane and the colour panel behind it -------------------------------
    The theme is one decision with nine controls, so it drills down one level out of the pane
@@ -2701,7 +2915,6 @@ body {
     white-space: nowrap;
 }
 .theme-palette-btn.is-selected .theme-palette-name { color: var(--text-accent); }
-=======
 /* A switch, for a setting that is plainly one thing being on or off ------------------
  * The Display section asks two questions: where the panels sit, and whether the avatar
  * is floating free of the window. The second is a mode, and a mode reads better as a

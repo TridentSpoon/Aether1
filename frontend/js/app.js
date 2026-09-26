@@ -4688,11 +4688,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function renderDevices(payload) {
-        if (!profileDevicesEl) return;
-        profileDevicesEl.replaceChildren();
+    /* Drawn from one function into whichever pane is asking: Profile shows the devices
+       because that is where an operator looks for their own things, and Remote & LAN
+       shows them because that is where the pairing that created them lives. Two copies
+       of this list would be two chances to disagree about who is paired. */
+    function renderDevices(payload, listEl, revokeAllBtn, refresh) {
+        if (!listEl) return;
+        listEl.replaceChildren();
         const devices = payload.devices || [];
-        btnRevokeAllDevices?.classList.toggle('hidden', devices.length === 0);
+        revokeAllBtn?.classList.toggle('hidden', devices.length === 0);
 
         if (!devices.length) {
             const empty = document.createElement('p');
@@ -4700,9 +4704,9 @@ document.addEventListener('DOMContentLoaded', () => {
             empty.textContent = payload.pairing_set_up
                 ? 'Nothing has paired yet. Run aether1 --serve --lan, then type the pairing '
                   + 'phrase into a browser on another device on your network.'
-                : 'No pairing phrase has been made yet. One is generated the first time you run '
-                  + 'aether1 --serve --lan, and it is printed once — write it down then.';
-            profileDevicesEl.appendChild(empty);
+                : 'No pairing phrase has been made yet. Make one with New phrase in Remote & '
+                  + 'LAN, or run aether1 --serve --lan, which makes one and prints it once.';
+            listEl.appendChild(empty);
             return;
         }
 
@@ -4728,18 +4732,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 revoke.disabled = true;
                 try {
                     await requestRevoke(device.id);
-                    await refreshProfile();
+                    await refresh();
                 } catch (e) {
                     revoke.disabled = false;
                     alert(`Could not revoke that device: ${e.message || e}`);
                 }
             });
             row.append(text, revoke);
-            profileDevicesEl.appendChild(row);
+            listEl.appendChild(row);
         });
     }
 
-    btnRevokeAllDevices?.addEventListener('click', async () => {
+    /* The "revoke everything" press, shared by both panes for the same reason the list
+       is: one confirmation, one call, one consequence, wherever it was pressed from. */
+    async function revokeEveryDevice(refresh) {
         voiceEngine.playSFX('click');
         // Worth spelling out on this one: run from a browser over the LAN, "all" includes
         // the browser doing the revoking, which will be logged out by its own click.
@@ -4747,11 +4753,13 @@ document.addEventListener('DOMContentLoaded', () => {
             + 'on the LAN? The pairing phrase is unchanged, so each can pair again.')) return;
         try {
             await requestRevoke('all');
-            await refreshProfile();
+            await refresh();
         } catch (e) {
             alert(`Could not revoke: ${e.message || e}`);
         }
-    });
+    }
+
+    btnRevokeAllDevices?.addEventListener('click', () => revokeEveryDevice(refreshProfile));
 
     async function refreshProfile() {
         if (!profileStatsEl) return;
@@ -4810,7 +4818,8 @@ document.addEventListener('DOMContentLoaded', () => {
         );
 
         renderModels(report.models || []);
-        renderDevices(report.devices || { devices: [], pairing_set_up: false });
+        renderDevices(report.devices || { devices: [], pairing_set_up: false },
+            profileDevicesEl, btnRevokeAllDevices, refreshProfile);
     }
 
     // Read when the section is opened, and read again on each visit after the first: the
@@ -4818,6 +4827,182 @@ document.addEventListener('DOMContentLoaded', () => {
     // Settings was first opened is worse than one that takes a moment to fill.
     document.addEventListener('aether-settings-section', event => {
         if (event.detail === 'profile') refreshProfile();
+    });
+
+    /* ====================== REMOTE & LAN =================================
+     * Step 45 in the window: start the server, stop the one AETHER1 started, make a
+     * pairing phrase, and see who has used one.
+     *
+     * Native app only. Starting `aether1 --serve --lan` means starting a child process,
+     * which a browser tab cannot do -- and a browser that got here over the LAN is
+     * talking *through* the very server the Stop button would kill. The rail entry is
+     * hidden in the markup and revealed below once IS_TAURI is confirmed, the same way
+     * the sprite and startup sections are.
+     *
+     * Everything the pane knows comes from one read (lan_status_rust). Nothing is
+     * inferred on this side: whether the port is answering, whether the process is one
+     * AETHER1 may stop, and whether a phrase exists are all questions only the Rust side
+     * can answer honestly, and all three change the buttons.
+     */
+
+    const lanStateEl = document.getElementById('lan-state');
+    const lanPhraseStateEl = document.getElementById('lan-phrase-state');
+    const lanNoticeEl = document.getElementById('lan-notice');
+    const lanAddressEl = document.getElementById('lan-address');
+    const lanPortEl = document.getElementById('lan-port');
+    const lanDevicesEl = document.getElementById('lan-devices');
+    const btnLanToggle = document.getElementById('btn-lan-toggle');
+    const btnLanNewPhrase = document.getElementById('btn-lan-new-phrase');
+    const btnLanRevokeAll = document.getElementById('btn-lan-revoke-all');
+    const lanPhraseBox = document.getElementById('lan-phrase-box');
+    const lanPhraseWords = document.getElementById('lan-phrase-words');
+    const lanPhraseNote = document.getElementById('lan-phrase-note');
+
+    // What the last read said, so a button press knows whether it is starting or
+    // stopping without asking again.
+    let lanReport = null;
+
+    /* The dot and the word are one state told twice -- the colour for a glance, the
+       word for anyone who cannot use the colour. The dot is markup and stays; only the
+       text node after it is rewritten. */
+    function setNetState(el, state, label) {
+        if (!el) return;
+        el.dataset.state = state;
+        if (el.lastChild && el.lastChild.nodeType === Node.TEXT_NODE) {
+            el.lastChild.textContent = label;
+        } else {
+            el.append(label);
+        }
+    }
+
+    function renderLan(report) {
+        lanReport = report;
+        if (!lanStateEl) return;
+        const running = report.running === true;
+        const ours = report.managed === true;
+        const starting = report.starting === true;
+        const devices = report.devices || { devices: [], pairing_set_up: false };
+
+        setNetState(lanStateEl, starting ? 'busy' : (running ? 'on' : 'off'),
+            starting ? 'Starting' : (running ? (ours ? 'On' : 'On, started elsewhere') : 'Off'));
+        setNetState(lanPhraseStateEl, devices.pairing_set_up ? 'on' : 'off',
+            devices.pairing_set_up ? 'Set' : 'Not set');
+
+        if (btnLanToggle) {
+            btnLanToggle.textContent = running ? 'Stop' : 'Start';
+            // A server AETHER1 did not start is not AETHER1's to stop -- the Rust side
+            // refuses it, and the button says so rather than offering a press that fails.
+            btnLanToggle.disabled = starting || (running && !ours);
+            btnLanToggle.title = running && !ours
+                ? 'Started outside AETHER1, so AETHER1 will not stop it.'
+                : '';
+        }
+
+        let notice = '';
+        if (!devices.pairing_set_up) {
+            notice = 'Make a pairing phrase before putting this machine on the network — '
+                + 'without one there is nothing for another device to type.';
+        } else if (running && !ours) {
+            notice = `Something is already answering on port ${report.port}. AETHER1 did not `
+                + 'start it, so it will not stop it either.';
+        } else if (running && !devices.devices.length) {
+            notice = 'Nothing has paired yet. Open the address below on the other device and '
+                + 'type the pairing phrase when it asks.';
+        }
+        lanNoticeEl?.classList.toggle('hidden', !notice);
+        if (lanNoticeEl) lanNoticeEl.textContent = notice;
+
+        if (lanAddressEl) {
+            const addresses = report.addresses || [];
+            lanAddressEl.textContent = addresses.length
+                ? addresses.map(ip => `https://${ip}:${report.port}`).join('  ·  ')
+                : 'no network address on this machine';
+        }
+        if (lanPortEl) lanPortEl.textContent = String(report.port ?? 8378);
+
+        renderDevices(devices, lanDevicesEl, btnLanRevokeAll, refreshLan);
+    }
+
+    async function refreshLan() {
+        if (!IS_TAURI || !lanStateEl) return;
+        // The phrase is shown by the press that made it and by nothing else. Leaving it on
+        // screen until Settings closes would put a working credential in front of whoever
+        // walks past next -- so coming back to the pane takes it down.
+        lanPhraseBox?.classList.add('hidden');
+        try {
+            renderLan(await tauriInvoke('lan_status_rust'));
+        } catch (e) {
+            if (lanNoticeEl) {
+                lanNoticeEl.textContent = `Could not read the server's state: ${e.message || e}`;
+                lanNoticeEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    btnLanToggle?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        const stopping = lanReport?.running === true;
+        btnLanToggle.disabled = true;
+        // Said while it happens: starting waits for the child to actually bind the port,
+        // which on a cold start is seconds, and a button that just sat there would read
+        // as a press that did nothing.
+        btnLanToggle.textContent = stopping ? 'Stopping…' : 'Starting…';
+        try {
+            renderLan(await tauriInvoke(stopping ? 'lan_stop_rust' : 'lan_start_rust'));
+        } catch (e) {
+            alert(String(e.message || e));
+            await refreshLan();
+        }
+    });
+
+    btnLanNewPhrase?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        const paired = lanReport?.devices?.devices?.length || 0;
+        const warning = paired
+            ? `This unpairs ${paired === 1 ? 'the one device' : `all ${paired} devices`} `
+              + 'paired with the old phrase. Each can pair again with the new one. Continue?'
+            : 'Make a new pairing phrase? It is shown once and never again.';
+        if (!confirm(warning)) return;
+        btnLanNewPhrase.disabled = true;
+        try {
+            const report = await tauriInvoke('lan_new_phrase_rust');
+            renderLan(report);
+            if (lanPhraseWords) lanPhraseWords.textContent = report.phrase || '';
+            if (lanPhraseNote) {
+                lanPhraseNote.textContent = report.unpaired
+                    ? `${report.unpaired} device${report.unpaired === 1 ? '' : 's'} were unpaired `
+                      + 'by this and will each have to type the new phrase.'
+                    : 'Type it into a browser on the other device when it asks.';
+            }
+            lanPhraseBox?.classList.remove('hidden');
+        } catch (e) {
+            alert(`Could not make a pairing phrase: ${e.message || e}`);
+        } finally {
+            btnLanNewPhrase.disabled = false;
+        }
+    });
+
+    btnLanRevokeAll?.addEventListener('click', () => revokeEveryDevice(refreshLan));
+
+    // The one cross-pane button: "who may come in" and "what may go out" are different
+    // questions, and the card that says so can open the page that answers the other.
+    document.querySelectorAll('[data-settings-goto]').forEach(button => {
+        button.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showSettingsSection(button.dataset.settingsGoto);
+        });
+    });
+
+    function initRemoteLan() {
+        if (!IS_TAURI) return;
+        revealSettingsSection('lan');
+    }
+    initRemoteLan();
+
+    // Read when the section is opened, and on each visit after: whether a server is up is
+    // a fact about right now, and it can change from a terminal while Settings is open.
+    document.addEventListener('aether-settings-section', event => {
+        if (event.detail === 'lan') refreshLan();
     });
 
     /* ====================== GIVE IT A VOICE =============================
@@ -6951,6 +7136,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // been saved must not read as "off" here when the vault is in fact writing.
             document.getElementById('setting-vault-journal').checked = s.vault_journal !== false;
             document.getElementById('setting-local-only').checked = s.local_only === true;
+            // Remote & LAN. Saved by Save Changes with everything else rather than the
+            // moment the switch moves: Settings has one Save button, and a panel that
+            // committed on its own would also commit half-typed edits on another pane.
+            const lanAutostart = document.getElementById('setting-lan-autostart');
+            if (lanAutostart) lanAutostart.checked = s.lan_autostart === true;
             // After the checkbox is set, not before: loadVoiceStatus is what discovers an
             // environment-forced mode and overrides the saved value on screen.
             loadVoiceStatus();
@@ -7090,6 +7280,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // this straight to the recognizer, which wants a code, not nothing.
                 stt_language: document.getElementById('setting-stt-language').value.trim() || 'en',
                 local_only: document.getElementById('setting-local-only').checked,
+                lan_autostart: document.getElementById('setting-lan-autostart')?.checked === true,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 vault_journal: document.getElementById('setting-vault-journal').checked,
                 // Sent only from the native app: the browser fallback has no window for the
