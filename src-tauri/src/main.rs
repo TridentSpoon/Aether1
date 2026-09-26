@@ -36,6 +36,7 @@ mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod persona_voice;
 mod profile;
 mod releases;
 mod serve_auth;
@@ -1035,6 +1036,15 @@ fn set_flow_mode_rust(engine: tauri::State<LlmEngine>, enabled: bool) -> Result<
     commands::set_flow_mode(&engine, enabled)
 }
 
+/// Pick a whole line to flow within, or release it with `line: null`.
+#[tauri::command(async)]
+fn set_flow_line_rust(
+    engine: tauri::State<LlmEngine>,
+    line: Option<String>,
+) -> Result<serde_json::Value, String> {
+    commands::set_flow_line(&engine, line)
+}
+
 #[tauri::command(async)]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
@@ -1512,8 +1522,31 @@ fn test_speech_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 }
 
 #[tauri::command(async)]
-fn list_personas_rust() -> serde_json::Value {
-    commands::list_personas()
+fn list_personas_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::list_personas(&engine)
+}
+
+#[tauri::command(async)]
+fn voice_pickers_rust() -> serde_json::Value {
+    commands::voice_pickers()
+}
+
+#[tauri::command(async)]
+fn set_persona_voice_rust(
+    engine: tauri::State<LlmEngine>,
+    persona: String,
+    voice: Option<String>,
+    local_voice: Option<String>,
+) -> Result<serde_json::Value, String> {
+    commands::set_persona_voice(&engine, persona, voice, local_voice)
+}
+
+#[tauri::command(async)]
+fn clear_persona_voice_rust(
+    engine: tauri::State<LlmEngine>,
+    persona: String,
+) -> Result<serde_json::Value, String> {
+    commands::clear_persona_voice(&engine, persona)
 }
 
 #[tauri::command(async)]
@@ -2180,6 +2213,7 @@ fn main() {
             set_speciality_model_rust,
             flow_mode_rust,
             set_flow_mode_rust,
+            set_flow_line_rust,
             doctor_report_rust,
             doctor_repair_rust,
             setup_advice_rust,
@@ -2232,6 +2266,9 @@ fn main() {
             code_conventions_rust,
             test_speech_rust,
             list_personas_rust,
+            voice_pickers_rust,
+            set_persona_voice_rust,
+            clear_persona_voice_rust,
             get_version_info,
             other_installs_rust,
             remove_install_rust,

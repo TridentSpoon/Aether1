@@ -13,8 +13,10 @@
  *   colours background, main, highlight
  *           Three values, set as custom properties on <html>, from which every other colour
  *           the stylesheet reads is derived here in one place. The presets in palettes.js are
- *           just named bundles of them, so anything a preset can do the three colour pickers
- *           in Settings can do too -- including to Solar and Eclipse.
+ *           just named bundles of them, so anything a preset can do the colour pickers in
+ *           Settings can do too. How many of the three are yours depends on the mode -- see
+ *           slotsFor below: all three in Cyberpunk, the two accents in Daylight and Midnight,
+ *           whose ground is the light and the dark shell rather than a colour choice.
  *
  * Each mode remembers its own colours, so switching to Solar to read something in daylight and
  * back to Cyberpunk afterwards does not cost you the accent you had picked.
@@ -37,8 +39,37 @@
     const LEGACY_KEY = 'aether_color_theme';   // the single-word themes this replaced
     const MODES = ['solar', 'eclipse', 'cyberpunk'];
 
-    const MODE_LABELS = { solar: 'Solar', eclipse: 'Eclipse', cyberpunk: 'Cyberpunk' };
+    /* The names shown to the operator. Internally the two flat modes are still solar and
+       eclipse -- every stored state and every data-theme attribute uses those -- but the
+       two presets that draw them were always called Daylight and Midnight, and that is
+       what they are called out loud now, in one place rather than two. */
+    const MODE_LABELS = { solar: 'Daylight', eclipse: 'Midnight', cyberpunk: 'Cyberpunk' };
     const DEFAULT_PRESET = { solar: 'solar', eclipse: 'eclipse', cyberpunk: 'halcy' };
+
+    /* What a mode lets you change.
+     *
+     * Cyberpunk is the mode that is *made* of its colours: the ground is part of the look, the
+     * washes, grid and scanlines are drawn out of it, and a near-black with a blue cast is as
+     * much the theme as the cyan on top of it. All three are yours there.
+     *
+     * Daylight and Midnight are not palettes, they are the light and the dark window shell --
+     * a near-white page and a near-black one, drawn the way they were designed. Letting the
+     * ground move in those two only ever produced the broken middle: a "light" theme on a grey
+     * page, a Midnight that had drifted halfway to Daylight, and the light-or-dark decisions
+     * below (which read the background rather than the mode) quietly flipping with it. So in
+     * those two you pick the accents and the shell stays as drawn. Depth still shifts the
+     * ground, because that is a bounded adjustment of the designed colour rather than a
+     * replacement of it. */
+    const COLOUR_SLOTS = ['background', 'main', 'highlight'];
+    const ACCENT_SLOTS = ['main', 'highlight'];
+
+    function slotsFor(mode) {
+        return mode === 'cyberpunk' ? COLOUR_SLOTS.slice() : ACCENT_SLOTS.slice();
+    }
+
+    function groundIsFixed(mode) {
+        return mode !== 'cyberpunk';
+    }
 
     // ---- colour arithmetic --------------------------------------------------------------
     // Everything below works in plain sRGB. Not because sRGB is the right space for mixing
@@ -364,7 +395,10 @@
             const c = raw.colours && raw.colours[mode];
             if (!c || !isColour(c.background) || !isColour(c.main) || !isColour(c.highlight)) return;
             state.colours[mode] = {
-                background: c.background,
+                /* Not merely un-editable: a background stored for Daylight or Midnight by an
+                   older build is replaced by the designed one here, so the rule holds for what
+                   is painted and not only for what the pickers offer. */
+                background: groundIsFixed(mode) ? defaultColours(mode).background : c.background,
                 main: c.main,
                 highlight: c.highlight,
                 saturation: clampNumber(c.saturation, 0, 100, SATURATION_DEFAULT),
@@ -487,13 +521,36 @@
     }
 
     function setColour(slot, hex) {
-        if (['background', 'main', 'highlight'].indexOf(slot) === -1 || !isColour(hex)) return current();
+        if (!isColour(hex)) return current();
         const now = current();
+        if (slotsFor(now.mode).indexOf(slot) === -1) return current();
         const state = readStored();
         state.mode = now.mode;
         const colours = state.colours[now.mode] || defaultColours(now.mode);
         colours[slot] = toHex(toRgb(hex));
         colours.preset = null;   // hand-mixed now, so no preset should show as selected
+        state.colours[now.mode] = colours;
+        write(state);
+        return current();
+    }
+
+    /* A named palette worn as accents only, leaving the mode's own ground alone. This is how
+       the swatches work in Daylight and Midnight: Night City's yellow on a white page is a
+       perfectly reasonable thing to want, Night City's near-black ground on a light shell is
+       not, and picking a colour should not silently move you into another mode to get it.
+       The preset is still recorded, so it shows as selected and its hand-tuned mid-tone is
+       still the one used -- midToneFor matches on the two accents, which are exactly what was
+       taken from it. */
+    function setAccents(id) {
+        const p = preset(id);
+        if (!p) return current();
+        const now = current();
+        const state = readStored();
+        state.mode = now.mode;
+        const colours = state.colours[now.mode] || defaultColours(now.mode);
+        colours.main = p.main;
+        colours.highlight = p.highlight;
+        colours.preset = p.id;
         state.colours[now.mode] = colours;
         write(state);
         return current();
@@ -537,6 +594,9 @@
         setMode: setMode,
         setPreset: setPreset,
         setColour: setColour,
+        setAccents: setAccents,
+        slotsFor: slotsFor,
+        groundIsFixed: groundIsFixed,
         setTone: setTone,
         toneOf: function (colours) {
             return { saturation: saturationOf(colours), depth: depthOf(colours) };

@@ -57,6 +57,8 @@ USAGE:
     aether1 flow                   Show whether the avatar follows the question (STATIC or
                                    FLOW), and which line it can move within
     aether1 flow on|off            Turn that on or off
+    aether1 flow line <NAME>       Pick a whole line instead of one avatar, so the question
+                                   goes to whichever of its nodes owns it (`clear` to release)
     aether1 signin                 Sign in to GitHub, so this copy can see new releases.
                                    Shows a code to type in at github.com; nothing else
     aether1 signout                Forget that sign-in
@@ -175,6 +177,9 @@ pub enum Invocation {
     /// mistake and a wrong one is not.
     Flow {
         state: Option<String>,
+        /// `flow line <NAME>`: pick a whole cast rather than one of its members, so the
+        /// question goes to whichever node of that line owns it. `clear` releases it.
+        line: Option<String>,
     },
     /// `signin`: the GitHub device flow, in a terminal. Prints the code, waits for it to be
     /// approved in a browser, and keeps the token in the OS keychain. See github_auth.rs for
@@ -480,12 +485,34 @@ pub fn parse(argv: &[String]) -> Invocation {
                     .to_string(),
             ),
         },
-        "flow" => match rest.len() {
-            0 => Ok(Invocation::Flow { state: None }),
-            1 => Ok(Invocation::Flow {
-                state: Some(rest[0].to_string()),
+        "flow" => match rest
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => Ok(Invocation::Flow {
+                state: None,
+                line: None,
             }),
-            _ => Err("flow takes either nothing, or `on` or `off`".to_string()),
+            // The line's name is several words ("The Umbrals"), so it is the rest of the
+            // command rather than one argument -- and any part of the name will do.
+            ["line", name @ ..] if !name.is_empty() => Ok(Invocation::Flow {
+                state: None,
+                line: Some(name.join(" ")),
+            }),
+            ["line"] => Err("flow line needs the name of a line, or `clear` -- run \
+                             `aether1 flow` to see them"
+                .to_string()),
+            [word] => Ok(Invocation::Flow {
+                state: Some((*word).to_string()),
+                line: None,
+            }),
+            _ => Err(
+                "flow takes nothing, `on` or `off`, or `line <NAME>` -- for example \
+                 `aether1 flow line umbrals`"
+                    .to_string(),
+            ),
         },
         "signin" => free_text(rest).and_then(|extra| match extra {
             None => Ok(Invocation::SignIn),
@@ -637,10 +664,11 @@ fn run_prompt(text: Option<String>, session: Option<String>) -> Result<String, S
     }
 }
 
-/// `aether1 flow`, and the two words that set it. Reports the line the current avatar
-/// belongs to as well as the mode, because FLOW with no line to move within does nothing
-/// and the operator should be able to see that rather than wonder why it is quiet.
-fn run_flow(state: Option<&str>) -> Result<String, String> {
+/// `aether1 flow`, the two words that set it, and `flow line` for picking a whole cast.
+/// Reports the line hand-offs may move within as well as the mode, because FLOW with no
+/// line to move within does nothing and the operator should be able to see that rather
+/// than wonder why it is quiet.
+fn run_flow(state: Option<&str>, line: Option<&str>) -> Result<String, String> {
     let engine = crate::build_llm_engine();
     let db = engine.db();
 
@@ -653,24 +681,73 @@ fn run_flow(state: Option<&str>) -> Result<String, String> {
         crate::llm::flow::set_enabled(db, on)?;
     }
 
+    if let Some(name) = line {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "clear" | "none" | "off" => {
+                crate::llm::flow::set_line(db, None)?;
+            }
+            wanted => {
+                let group = resolve_line(wanted)?;
+                crate::llm::flow::set_line(db, Some(group))?;
+            }
+        }
+    }
+
     let on = crate::llm::flow::enabled(db);
+    let picked = crate::llm::flow::line(db);
     let persona = crate::llm::Persona::from_key(&db.get_setting_string("persona_type", "default"));
     let here = persona.avatar().unwrap_or("AETHER");
     let mut out = String::new();
     out.push_str(if on { "FLOW\n" } else { "STATIC\n" });
-    match (on, persona.group()) {
-        (true, Some(group)) => out.push_str(&format!(
+    match (on, picked, persona.group()) {
+        // A picked line is a different arrangement from wearing one of its members, and
+        // saying so is the difference between "this avatar can hand over" and "this cast
+        // is answering, currently through this one".
+        (true, Some(group), _) => out.push_str(&format!(
+            "\n    {group} is picked whole. {here} is holding the line, and the question \
+             goes to whichever node of the cast owns it.\n"
+        )),
+        (true, None, Some(group)) => out.push_str(&format!(
             "\n    {here} is answering, and the question can move to any other node of {group}.\n"
         )),
-        (true, None) => out.push_str(&format!(
-            "\n    {here} belongs to no line, so nothing moves. Pick an avatar from a group \
-             to let it.\n"
+        (true, None, None) => out.push_str(&format!(
+            "\n    {here} belongs to no line, so nothing moves. Pick an avatar from a group, \
+             or a whole line with `aether1 flow line <NAME>`, to let it.\n"
         )),
-        (false, _) => out.push_str(&format!(
+        (false, Some(group), _) => out.push_str(&format!(
+            "\n    {group} is picked whole, but STATIC holds the question with {here}.\n"
+        )),
+        (false, None, _) => out.push_str(&format!(
             "\n    {here} answers everything until you pick somebody else.\n"
         )),
     }
+    out.push_str("\n    Lines that can be picked whole: ");
+    out.push_str(&crate::llm::Persona::flow_lines().join(", "));
+    out.push('\n');
     Ok(out)
+}
+
+/// Any part of a line's name, in any case, rather than the exact string: the names are
+/// several words and typing "The Umbrals" exactly at a prompt is a worse answer than
+/// typing "umbrals".
+fn resolve_line(wanted: &str) -> Result<&'static str, String> {
+    let groups = crate::llm::Persona::flow_lines();
+    let hits: Vec<&'static str> = groups
+        .iter()
+        .copied()
+        .filter(|g| g.to_ascii_lowercase().contains(wanted))
+        .collect();
+    match hits.as_slice() {
+        [one] => Ok(one),
+        [] => Err(format!(
+            "no line matches {wanted:?} -- the lines are {}",
+            groups.join(", ")
+        )),
+        several => Err(format!(
+            "{wanted:?} matches more than one line: {}",
+            several.join(", ")
+        )),
+    }
 }
 
 fn run_status(json: bool, events: bool) -> String {
@@ -1705,7 +1782,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::Models { persona, model } => run_models(persona, model),
-        Invocation::Flow { state } => run_flow(state.as_deref()),
+        Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),
         Invocation::SignIn => run_sign_in(),
         Invocation::SignOut => Ok(run_sign_out()),
         Invocation::Update { download } => run_update(download),

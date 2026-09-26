@@ -87,16 +87,22 @@ document.addEventListener('DOMContentLoaded', () => {
      * stays in the DOM; this only ever moves the is-active class, so nothing that
      * reads or writes a settings field by id needs to know the layout changed.
      *
-     * Two of the panes are platform-dependent (Desktop Sprite, Startup &
-     * Performance) and start with their rail entry hidden -- revealSettingsSection
-     * is how initSpriteMode/initStartupPerformance turn them on. An entry that is
-     * hidden cannot be chosen, including out of the remembered choice below.
+     * One pane is platform-dependent (Startup & Performance) and starts with its rail
+     * entry hidden -- revealSettingsSection is how initStartupPerformance turns it on.
+     * An entry that is hidden cannot be chosen, including out of the remembered choice
+     * below. Desktop Sprite used to be a second such entry; it is a card inside Display
+     * now (see SETTINGS_SECTION_ALIASES), since both it and the panel grid answer the
+     * same question of where this thing is drawn on screen.
      *
      * A pane whose body is still a <details> is opened when it is chosen, which is
      * what keeps the two groups that probe the machine on open (the coding group,
      * the doctor) probing exactly when someone goes looking at them.
      */
     const SETTINGS_SECTION_KEY = 'aether_settings_section';
+    // Sections that have been folded into another one. Only the remembered choice can still
+    // name one, so this is what stops somebody who was last in Desktop Sprite from being
+    // dropped back at the top of the rail the first time they open Settings after updating.
+    const SETTINGS_SECTION_ALIASES = { sprite: 'layout' };
     const settingsNav = document.getElementById('settings-nav');
     const settingsNavEmpty = document.getElementById('settings-nav-empty');
     const settingsSearch = document.getElementById('settings-search');
@@ -123,6 +129,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // visible would otherwise leave a second hologram rendering behind the Network page.
         if (name === 'avatars') openAvatarBrowser();
         else if (typeof disposeAvatarPreview === 'function') disposeAvatarPreview();
+        // Same reasoning as the avatar browser's: the stage you were on is only meaningful
+        // while you are in the section. Coming back to Appearance should land on the pane,
+        // not halfway inside the colour panel you left open yesterday.
+        if (name !== 'appearance') showAppearanceStage('main');
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
         try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
@@ -181,6 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function restoreSettingsSection() {
         let remembered = null;
         try { remembered = localStorage.getItem(SETTINGS_SECTION_KEY); } catch (e) { /* private mode */ }
+        if (remembered) remembered = SETTINGS_SECTION_ALIASES[remembered] || remembered;
         if (remembered && showSettingsSection(remembered)) return;
         const first = settingsNavItems().find(item => !item.classList.contains('hidden'));
         if (first) showSettingsSection(first.dataset.settingsSection);
@@ -278,6 +289,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let avatarBrowserSelection = null;  // which avatar stage 3 is showing
     let avatarPreviewEngine = null;
     let avatarBrowserBuilt = false;
+    /* The last answer from /api/flow: whether hand-offs are on, the line they may move
+       within, the line picked whole if there is one, and which lines have personas behind
+       them at all. The browser draws from this copy rather than awaiting a fetch in the
+       middle of a render; refreshFlowMode is what keeps it current. */
+    let flowState = null;
 
     /* The persona catalogue's rows themselves, not just the <option>s built from them: the
        avatar browser wants a persona's speciality, access and voice beside its avatar, and
@@ -285,6 +301,12 @@ document.addEventListener('DOMContentLoaded', () => {
        an attribute first. Up here for the same reason as the state above. */
     let personaRows = new Map();
     function personaRow(key) { return personaRows.get(key) || null; }
+    /* The two voice lists the avatar's own picker is built from, fetched once and kept:
+       they are a table in the binary plus a directory listing, and the pane is opened
+       and closed a dozen times while somebody is choosing. Up here with personaRows for
+       the same reason -- refreshAvatarBrowser runs before this file's later declarations
+       (see openAvatarDetail), and a `let` further down would be a TDZ error at startup. */
+    let voicePickerLists = null;
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
@@ -441,6 +463,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Avatar Engine Handler (3D shape + optional linked persona identity)
     function applyAvatar(avatarName, updatePersona = false) {
+        // Picking one character is a decision against the cast: a line picked whole
+        // outranks whoever is on screen (see llm/flow.rs), so leaving it in force here
+        // would send the next question back into the old line the moment it matched.
+        // Only a real pick counts -- a restored avatar at startup is not one.
+        if (updatePersona) releasePickedLineFor(avatarName);
         currentAvatar = avatarName;
         localStorage.setItem('aether_avatar', avatarName);
         setHologramAvatar(avatarName);
@@ -659,6 +686,76 @@ document.addEventListener('DOMContentLoaded', () => {
         return cat ? cat.inGroup(groupId).filter(avatarIsVisible) : [];
     }
 
+    /* ---- A whole line as the pick ------------------------------------------
+       An avatar is a character; a line is a cast. Picking the cast means the question goes
+       to whichever of its nodes owns the subject, and the one on screen is whoever is
+       holding it at that moment -- so the pick survives every hand-off, which wearing a
+       member of the line does not. The rule itself is llm/flow.rs; these three are the
+       state it is drawn from. */
+    function pickedLine() {
+        return (flowState && flowState.line) || null;
+    }
+
+    /* Not every line is a cast. The eXcelsior Class is five shapes with no directives
+       behind them yet, and Trace Protocols is one persona and three eggs that carry none --
+       picking either would promise a group and deliver a single node. The backend says
+       which lines it can actually pass a question around, rather than this being guessed
+       at here from the catalogue. */
+    function lineCanBePicked(groupName) {
+        return Boolean(flowState && Array.isArray(flowState.lines)
+            && flowState.lines.includes(groupName));
+    }
+
+    /* Releases the picked line unless the avatar being worn is one of its own. Wearing
+       another member of the same cast is not a change of mind about the cast. */
+    function releasePickedLineFor(avatarName) {
+        const line = pickedLine();
+        if (!line) return;
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(avatarName);
+        const group = entry && cat.group(entry.group);
+        if (group && group.name === line) return;
+        setFlowLine(null);
+    }
+
+    async function setFlowLine(name) {
+        let state = null;
+        try {
+            if (IS_TAURI) {
+                state = await tauriInvoke('set_flow_line_rust', { line: name });
+            } else {
+                const resp = await apiFetch('/api/flow/line', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ line: name }),
+                });
+                if (resp.ok) state = await resp.json();
+            }
+        } catch (e) {
+            console.error('Could not change the picked line', e);
+        }
+        if (!state) return;
+        flowState = state;
+        /* Picking a line the operator was standing outside of lands them on its anchor --
+           the cast's generalist -- and the backend has already written that persona. The
+           HUD wears the matching avatar so the hologram agrees with who is answering,
+           greeting included: it is a change of who you are talking to, and a silent one
+           would be the hologram lying about it. */
+        const personaSelect = document.getElementById('setting-persona');
+        const answering = state.persona || (personaSelect && personaSelect.value) || null;
+        if (answering) {
+            const cat = avatarCatalogue();
+            const entry = cat && cat.all.find((a) => a.persona === answering);
+            // Also when the backend moved nobody: the operator can have been inside the
+            // line by persona while wearing a shape from somewhere else, and a hologram
+            // from another cast while this one answers is the confusion the pick exists
+            // to remove.
+            if (entry && entry.id !== currentAvatar) applyAvatar(entry.id, true);
+        }
+        refreshFlowMode();
+        refreshAvatarBrowser();
+    }
+
     function showAvatarStage(name) {
         AVATAR_STAGES.forEach((stage) => {
             document.querySelectorAll(`[data-avatar-stage="${stage}"]`).forEach((el) => {
@@ -716,6 +813,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 count.textContent += ' · wearing one of these';
                 card.classList.add('is-current');
             }
+            // Two different states worth telling apart on the same card: wearing a member
+            // of this line, and having picked the line itself.
+            if (pickedLine() === group.name) {
+                count.textContent += ' · picked as a line';
+                card.classList.add('is-current');
+            } else if (lineCanBePicked(group.name)) {
+                count.textContent += ' · can be picked whole';
+            }
 
             card.append(faces, name, tagline, blurb, count);
             card.addEventListener('click', () => {
@@ -755,7 +860,53 @@ document.addEventListener('DOMContentLoaded', () => {
                 : `${hidden} more members of this line have not turned up yet.`;
         }
 
+        renderLinePick(group);
         showAvatarStage('members');
+    }
+
+    /* The button that picks a line whole, and the sentence explaining what that does. It
+       says the consequence rather than the setting: what changes is who answers the next
+       question, and "flow_group" would mean nothing to the person reading it. */
+    function renderLinePick(group) {
+        const button = document.getElementById('btn-avatar-line');
+        const note = document.getElementById('avatar-line-note');
+        if (!button || !note) return;
+
+        const picked = pickedLine() === group.name;
+        const available = lineCanBePicked(group.name);
+        button.classList.toggle('is-picked', picked);
+        button.disabled = !available;
+
+        if (!available) {
+            const cat = avatarCatalogue();
+            // One persona in the line and one alone is a different thing from none: the
+            // first is a cast that has not grown yet, the second is shapes. Counted from
+            // the catalogue rather than the visible list, so an unlocked egg does not
+            // change the sentence and a locked one is not given away by it.
+            const backed = cat ? cat.inGroup(group.id).filter((a) => a.persona).length : 0;
+            button.textContent = 'Not a cast yet';
+            note.textContent = backed === 1
+                ? 'Only one of these carries a persona so far, so picking the line would be '
+                    + 'the same as wearing that one. Do that instead, for now.'
+                : 'These have shapes but no directives behind them, so there is nobody here '
+                    + 'to hand a question to. Wearing one leaves whoever you had selected '
+                    + 'answering.';
+        } else if (picked) {
+            button.textContent = 'Release this line';
+            note.textContent = `${group.name} is answering. Each question goes to whichever of `
+                + 'them owns the subject, and the one holding it says so before it moves. '
+                + 'Releasing leaves you with whoever is answering at the time.';
+        } else {
+            button.textContent = 'Use this whole line';
+            note.textContent = 'Pick the cast instead of one of its members: the question goes '
+                + `to whichever node of ${group.name} owns it, and the hologram follows. You `
+                + 'can still wear a single one of them below.';
+        }
+
+        button.onclick = () => {
+            voiceEngine.playSFX('click');
+            setFlowLine(picked ? null : group.name);
+        };
     }
 
     function buildAvatarCard(entry) {
@@ -839,7 +990,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const voiceRow = document.getElementById('avatar-detail-voice-row');
         voiceRow.classList.toggle('hidden', !persona);
-        if (persona) document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+        if (persona) renderAvatarVoice(persona);
 
         const isCurrent = avatarId === currentAvatar;
         const useBtn = document.getElementById('btn-avatar-use');
@@ -900,6 +1051,156 @@ document.addEventListener('DOMContentLoaded', () => {
         return parts.join('  ·  ');
     }
 
+    /* ---- Giving one avatar a voice of your own choosing ---------------------
+       The identity table in genesis.rs is where an avatar's voices come from, and it is the
+       author's taste, not the operator's. This is where they disagree with it: two selects,
+       saved the moment one changes, and a reset that removes the choice rather than writing
+       today's default into it -- so an avatar put back to its own voice follows the table if
+       the table ever changes. Nothing here touches the settings form, so it is safe to save
+       on change even though the window has one Save Changes button. */
+    async function fetchVoicePickerLists() {
+        if (voicePickerLists) return voicePickerLists;
+        const data = IS_TAURI
+            ? await tauriInvoke('voice_pickers_rust')
+            : await (await apiFetch('/api/voice/pickers')).json();
+        voicePickerLists = data;
+        return voicePickerLists;
+    }
+
+    function renderAvatarVoice(persona) {
+        document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+
+        // What it would speak in if you changed nothing, shown only when you have: two
+        // identical lines, one labelled "default", is a pane telling you nothing twice.
+        const defaults = document.getElementById('avatar-detail-voice-default');
+        defaults.classList.toggle('hidden', !persona.voice_customised);
+        if (persona.voice_customised) {
+            const hasOwn = persona.default_voice || persona.default_local_voice;
+            defaults.textContent = hasOwn
+                ? `Its own voice: ${avatarVoiceLine({
+                    voice: persona.default_voice,
+                    local_voice: persona.default_local_voice,
+                })}`
+                : 'This one was written without a voice of its own: reset it and it speaks '
+                    + 'in whatever Voice & Sound says.';
+        }
+
+        const reset = document.getElementById('btn-avatar-voice-reset');
+        reset.classList.toggle('hidden', !persona.voice_customised);
+        reset.onclick = () => {
+            voiceEngine.playSFX('click');
+            saveAvatarVoice(persona.key, null);
+        };
+
+        const note = document.getElementById('avatar-voice-note');
+        const cloud = document.getElementById('avatar-voice-cloud');
+        const local = document.getElementById('avatar-voice-local');
+        note.textContent = '';
+
+        fetchVoicePickerLists().then((lists) => {
+            fillVoiceSelect(cloud, lists.cloud.map((v) => ({
+                value: v.name,
+                label: `${v.name} — ${v.label}`,
+            })), persona.default_voice, persona.voice);
+            fillVoiceSelect(local, lists.local.map((v) => ({
+                value: v.name,
+                // A voice that is not downloaded is still offered: it is a real choice that
+                // needs fetching first, and hiding it would make this picker disagree with
+                // the download list in Voice & Sound.
+                label: `${v.name} — ${v.label}${v.installed ? '' : ' (not downloaded)'}`,
+            })), persona.default_local_voice, persona.local_voice);
+        }).catch((e) => {
+            console.warn('Could not load the voice lists', e);
+            note.textContent = 'The voice lists could not be loaded, so this avatar keeps '
+                + 'the voice it was written with.';
+        });
+
+        cloud.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+        local.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+    }
+
+    /* The first option is always "leave it alone", and it says what leaving it alone sounds
+       like -- an avatar with no voice of its own in the identity table speaks in whatever
+       Voice & Sound says, and that is worth reading rather than inferring from a blank. */
+    function fillVoiceSelect(select, options, defaultValue, current) {
+        select.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = defaultValue
+            ? `Its own: ${defaultValue}`
+            : 'Whatever Voice & Sound says';
+        select.appendChild(first);
+        options.forEach((opt) => {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            select.appendChild(el);
+        });
+        // `current` is the voice it actually speaks in; it only counts as a *choice* when it
+        // is not simply the default, or the picker would show every avatar as customised.
+        select.value = current && current !== defaultValue ? current : '';
+        if (select.value !== '' && !options.some((o) => o.value === select.value)) {
+            select.value = '';
+        }
+    }
+
+    /* `choice` null resets this avatar; otherwise each half is a voice name or '' for "leave
+       that half at its default". The reply is the whole persona list, so the pane redraws
+       from what was stored rather than from what it hoped would be. */
+    async function saveAvatarVoice(personaKey, choice) {
+        const note = document.getElementById('avatar-voice-note');
+        try {
+            let personas;
+            if (choice === null) {
+                personas = IS_TAURI
+                    ? await tauriInvoke('clear_persona_voice_rust', { persona: personaKey })
+                    : await postJson('/api/personas/voice/reset', { persona: personaKey });
+            } else {
+                const body = {
+                    persona: personaKey,
+                    voice: choice.voice || null,
+                    localVoice: choice.local_voice || null,
+                };
+                personas = IS_TAURI
+                    ? await tauriInvoke('set_persona_voice_rust', body)
+                    : await postJson('/api/personas/voice', {
+                        persona: personaKey,
+                        voice: choice.voice || null,
+                        local_voice: choice.local_voice || null,
+                    });
+            }
+            if (Array.isArray(personas)) {
+                personaRows = new Map(personas.map((p) => [p.key, p]));
+            }
+            // Redrawn first, because redrawing clears the note -- and the note is the only
+            // thing on screen that says the choice reached the database.
+            const row = personaRow(personaKey);
+            if (row) renderAvatarVoice(row);
+            note.textContent = choice === null
+                ? 'Back to the voice it was written with.'
+                : 'Saved. It speaks in this from its next answer.';
+        } catch (e) {
+            console.warn('Could not save the avatar voice', e);
+            note.textContent = `That voice could not be saved: ${e.message || e}`;
+        }
+    }
+
+    async function postJson(path, body) {
+        const resp = await apiFetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await resp.text() || `${resp.status}`);
+        return resp.json();
+    }
+
     // ---- The live preview ---------------------------------------------------
     function buildAvatarPreview(avatarId) {
         const viewport = document.getElementById('avatar-preview-viewport');
@@ -952,6 +1253,9 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshAvatarEntryCard();
         renderAvatarGroups();
         if (avatarBrowserGroup) {
+            const cat = avatarCatalogue();
+            const group = cat && cat.group(avatarBrowserGroup);
+            if (group) renderLinePick(group);
             const active = document.querySelector('[data-avatar-stage="members"].is-active')
                 || document.querySelector('[data-avatar-stage="detail"].is-active');
             const grid = document.getElementById('avatar-member-grid');
@@ -1018,6 +1322,93 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* ---- Appearance: the pane, and the colour panel behind its theme card -------------
+       The avatar got its own section because there are twenty-two of them with something to
+       say about each. The theme is one decision with a lot of controls, so it stays in
+       Appearance and drills down one level instead. */
+    const APPEARANCE_STAGES = ['main', 'theme'];
+
+    function showAppearanceStage(name) {
+        APPEARANCE_STAGES.forEach((stage) => {
+            document.querySelectorAll(`[data-appearance-stage="${stage}"]`).forEach((el) => {
+                el.classList.toggle('is-active', stage === name);
+            });
+        });
+        const detail = document.getElementById('settings-detail');
+        if (detail) detail.scrollTop = 0;
+    }
+
+    const themeEntryCard = document.getElementById('theme-entry-card');
+    if (themeEntryCard) {
+        themeEntryCard.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showAppearanceStage('theme');
+        });
+    }
+    document.querySelectorAll('[data-appearance-back]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showAppearanceStage(btn.dataset.appearanceBack || 'main');
+        });
+    });
+
+    /* The named palettes, built from the preset list rather than from markup.
+       What a swatch *does* depends on the mode, which is the whole of the change here:
+       in Cyberpunk it is the palette, ground included; in Daylight and Midnight it is the
+       two accents, worn on the shell those modes were designed with. The two flat presets
+       are not offered as swatches -- they are what those modes already are, which is what
+       the mode buttons above and the reset button below already say. */
+    function renderThemePalette(theme) {
+        const grid = document.getElementById('theme-palette-grid');
+        if (!grid) return;
+        const accentOnly = Aether1Theme.groundIsFixed(theme.mode);
+        const list = Aether1Theme.presets().filter((p) => p.mode === 'cyberpunk');
+        if (accentOnly) {
+            // The mode's own accents belong in the row too, or the palette it ships with is
+            // the one thing you cannot pick.
+            const own = Aether1Theme.preset(theme.mode);
+            if (own) list.unshift(own);
+        }
+        grid.innerHTML = '';
+        list.forEach((p) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'theme-palette-btn';
+            btn.dataset.colorTheme = p.id;
+            btn.title = accentOnly
+                ? `${p.label} accents, on the ${Aether1Theme.MODE_LABELS[theme.mode]} shell`
+                : `${p.label}: the whole palette, background included`;
+            const bars = document.createElement('span');
+            bars.className = 'theme-palette-bars';
+            bars.setAttribute('aria-hidden', 'true');
+            // In accent mode the ground bar is the mode's own, not the preset's, so the
+            // swatch shows what pressing it would actually paint.
+            const ground = accentOnly ? theme.colours.background : p.background;
+            [ground, p.main, p.highlight].forEach((hex) => {
+                const bar = document.createElement('span');
+                bar.className = 'theme-palette-bar';
+                bar.style.background = hex;
+                bars.appendChild(bar);
+            });
+            /* A swatch lights up only while the colours still match it exactly -- nudge one
+               picker and nothing is selected, which is the honest state: what is on screen is
+               no longer any of these. Decided here rather than in a later pass, because the
+               grid is rebuilt on every theme change and anything marked afterwards would be
+               marked on nodes about to be replaced. */
+            btn.classList.toggle('is-selected', p.id === theme.colours.preset);
+            const label = document.createElement('span');
+            label.className = 'theme-palette-name';
+            label.textContent = p.label;
+            btn.appendChild(bars);
+            btn.appendChild(label);
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                paintTheme(accentOnly ? Aether1Theme.setAccents(p.id) : Aether1Theme.setPreset(p.id));
+            });
+            grid.appendChild(btn);
+        });
+    }
+
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
        is saved and when -- and everything here is the consequences of it: the page, the 3D
@@ -1043,17 +1434,71 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
         });
 
-        /* A preset button lights up only while the colours still match it exactly. Nudge one
-           picker and nothing is selected, which is the honest state: what is on screen is no
-           longer any of the presets. */
-        document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
-            const val = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            btn.classList.toggle('cyber-btn-active', val === theme.colours.preset);
-        });
-
         Object.keys(themeColourInputs).forEach(slot => {
             const input = themeColourInputs[slot];
             if (input && input.value.toLowerCase() !== theme.colours[slot]) input.value = theme.colours[slot];
+        });
+
+        /* How much of the palette this mode hands over. Cyberpunk is made of its colours and
+           gives you all three; Daylight and Midnight are the light and the dark shell, so the
+           ground is theirs and the accents are yours. The pickers are removed rather than
+           disabled -- a greyed-out background swatch still showing a colour invites the
+           question of why it will not move. */
+        const slots = Aether1Theme.slotsFor(theme.mode);
+        const accentOnly = Aether1Theme.groundIsFixed(theme.mode);
+        ['background', 'main', 'highlight'].forEach(slot => {
+            const row = document.getElementById('theme-colour-row-' + slot);
+            if (row) row.classList.toggle('hidden', slots.indexOf(slot) === -1);
+        });
+        const colourGrid = document.getElementById('theme-colour-grid');
+        if (colourGrid) {
+            colourGrid.classList.toggle('grid-cols-3', slots.length > 2);
+            colourGrid.classList.toggle('grid-cols-2', slots.length === 2);
+        }
+        // The two accents are called Main and Highlight while there is a background beside
+        // them to be the other thing; on their own they are simply the accent and its
+        // companion, which is what they are doing in those two modes.
+        const mainLabel = document.getElementById('theme-colour-label-main');
+        const highlightLabel = document.getElementById('theme-colour-label-highlight');
+        if (mainLabel) mainLabel.textContent = accentOnly ? 'Accent' : 'Main';
+        if (highlightLabel) highlightLabel.textContent = accentOnly ? 'Companion' : 'Highlight';
+
+        const groundNote = document.getElementById('theme-ground-note');
+        if (groundNote) {
+            groundNote.textContent = accentOnly
+                ? `${Aether1Theme.MODE_LABELS[theme.mode]} keeps the page it was designed with, so only the accents are yours here. Depth below still moves how dark that page sits.`
+                : '';
+        }
+
+        const themeStageLede = document.getElementById('theme-stage-lede');
+        if (themeStageLede) {
+            themeStageLede.textContent = accentOnly
+                ? 'The flat window shell, light or dark, with an accent of your choosing.'
+                : 'Neon, scanlines and corner brackets, and every colour of it yours -- the ground included, because in this mode the ground is part of the look.';
+        }
+
+        renderThemePalette(theme);
+
+        /* The card back in the pane. The three swatches are read out of the derived variables
+           rather than off theme.colours, so they are the palette as painted -- tone and all --
+           which is the only version worth previewing. */
+        const themeEntryName = document.getElementById('theme-entry-name');
+        const themeEntryMeta = document.getElementById('theme-entry-meta');
+        if (themeEntryName) themeEntryName.textContent = Aether1Theme.MODE_LABELS[theme.mode] || theme.mode;
+        if (themeEntryMeta) {
+            const named = Aether1Theme.preset(theme.colours.preset);
+            // "Daylight / Daylight accents" says one thing twice. A mode wearing its own
+            // palette is simply untouched, which is worth saying instead.
+            themeEntryMeta.textContent = !named
+                ? 'Colours of your own'
+                : named.id === theme.mode
+                    ? 'As it was designed'
+                    : (accentOnly ? `${named.label} accents` : `${named.label} palette`);
+        }
+        const painted = Aether1Theme.variablesFor(theme.mode, theme.colours);
+        [['main', '--neon-cyan'], ['mid', '--neon-blue'], ['highlight', '--neon-purple']].forEach(([name, variable]) => {
+            const swatch = document.getElementById('theme-entry-swatch-' + name);
+            if (swatch) swatch.style.background = painted[variable];
         });
 
         /* The tone sliders are read back through toneOf rather than straight off the stored
@@ -1366,6 +1811,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.error('Could not read the flow mode setting', e);
         }
+        flowState = state;
+        // Settings' Avatars pane draws the picked line in two places (the line's card and
+        // the button on its members stage), so a change of mode has to reach it too.
+        refreshAvatarBrowser();
         if (!state || !state.group) {
             button.classList.add('hidden');
             return;
@@ -1377,9 +1826,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // labels in identical styling read as a caption rather than a switch that is on.
         button.classList.toggle('flow-on', !!state.enabled);
         button.textContent = state.enabled ? '\u25cf FLOW' : 'STATIC';
+        const picked = state.line
+            ? `${state.group} is picked whole, so the cast answers rather than one of them. `
+            : '';
         button.title = state.enabled
-            ? `The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
-            : `This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
+            ? `${picked}The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
+            : `${picked}This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
     }
 
     function initFlowMode() {
@@ -6342,12 +6794,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Desktop Sprite Mode is a transparent/always-on-top native window -- meaningless in the
-    // plain browser flow, so the whole section stays hidden there (mirrors initVersionAndUpdates).
+    // plain browser flow, so its card stays hidden there (mirrors initVersionAndUpdates). It
+    // is a card in the Display section rather than a section of its own, so there is no rail
+    // entry to reveal: on the web Display is simply the panel grid.
     function initSpriteMode() {
         if (!IS_TAURI) return;
         const section = document.getElementById('sprite-mode-section');
         if (section) section.classList.remove('hidden');
-        revealSettingsSection('sprite');
     }
 
     // Reflects Game Mode's current on/off state on its Quick Commands button -- called both
@@ -6919,13 +7372,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    /* Applying a colour preset. Note it can move you between modes: the Daylight and Midnight
-       presets belong to Solar and Eclipse, so picking one from Cyberpunk switches the chrome
-       too -- which is what someone clicking a light preset means. */
-    function applyThemePreset(id) {
-        paintTheme(Aether1Theme.setPreset(id));
-    }
-
     // Mode: the three buttons in Settings and the same three in the top bar's slide-out.
     document.querySelectorAll('.theme-mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -6934,18 +7380,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Colours: the presets...
-    document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const preset = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            if (preset) {
-                voiceEngine.playSFX('click');
-                applyThemePreset(preset);
-            }
-        });
-    });
+    /* Applying a whole named palette, mode included. This is what forging an identity does
+       when the name it lands on has a palette of its own (see the A.R.X. names below), and it
+       is what a Cyberpunk swatch does. It can move you between modes, which is the point when
+       the preset is a light one. The accent-only path in Daylight and Midnight is
+       Aether1Theme.setAccents instead -- see renderThemePalette. */
+    function applyThemePreset(id) {
+        paintTheme(Aether1Theme.setPreset(id));
+    }
 
-    /* ...and the three pickers. 'input' rather than 'change' so the page repaints while the
+    /* The palette swatches are wired as they are built -- see renderThemePalette, which is
+       re-run on every theme change because what a swatch means depends on the mode.
+
+       The pickers, though, are here and permanent. 'input' rather than 'change' so the page repaints while the
        colour is being dragged around -- picking a background you cannot see the effect of is
        guesswork. Each write only touches its own slot, which is what keeps the background
        stable while an accent is being tried. */
