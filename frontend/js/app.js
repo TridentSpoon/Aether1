@@ -87,16 +87,22 @@ document.addEventListener('DOMContentLoaded', () => {
      * stays in the DOM; this only ever moves the is-active class, so nothing that
      * reads or writes a settings field by id needs to know the layout changed.
      *
-     * Two of the panes are platform-dependent (Desktop Sprite, Startup &
-     * Performance) and start with their rail entry hidden -- revealSettingsSection
-     * is how initSpriteMode/initStartupPerformance turn them on. An entry that is
-     * hidden cannot be chosen, including out of the remembered choice below.
+     * One pane is platform-dependent (Startup & Performance) and starts with its rail
+     * entry hidden -- revealSettingsSection is how initStartupPerformance turns it on.
+     * An entry that is hidden cannot be chosen, including out of the remembered choice
+     * below. Desktop Sprite used to be a second such entry; it is a card inside Display
+     * now (see SETTINGS_SECTION_ALIASES), since both it and the panel grid answer the
+     * same question of where this thing is drawn on screen.
      *
      * A pane whose body is still a <details> is opened when it is chosen, which is
      * what keeps the two groups that probe the machine on open (the coding group,
      * the doctor) probing exactly when someone goes looking at them.
      */
     const SETTINGS_SECTION_KEY = 'aether_settings_section';
+    // Sections that have been folded into another one. Only the remembered choice can still
+    // name one, so this is what stops somebody who was last in Desktop Sprite from being
+    // dropped back at the top of the rail the first time they open Settings after updating.
+    const SETTINGS_SECTION_ALIASES = { sprite: 'layout' };
     const settingsNav = document.getElementById('settings-nav');
     const settingsNavEmpty = document.getElementById('settings-nav-empty');
     const settingsSearch = document.getElementById('settings-search');
@@ -181,6 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function restoreSettingsSection() {
         let remembered = null;
         try { remembered = localStorage.getItem(SETTINGS_SECTION_KEY); } catch (e) { /* private mode */ }
+        if (remembered) remembered = SETTINGS_SECTION_ALIASES[remembered] || remembered;
         if (remembered && showSettingsSection(remembered)) return;
         const first = settingsNavItems().find(item => !item.classList.contains('hidden'));
         if (first) showSettingsSection(first.dataset.settingsSection);
@@ -278,6 +285,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let avatarBrowserSelection = null;  // which avatar stage 3 is showing
     let avatarPreviewEngine = null;
     let avatarBrowserBuilt = false;
+    /* The last answer from /api/flow: whether hand-offs are on, the line they may move
+       within, the line picked whole if there is one, and which lines have personas behind
+       them at all. The browser draws from this copy rather than awaiting a fetch in the
+       middle of a render; refreshFlowMode is what keeps it current. */
+    let flowState = null;
 
     /* The persona catalogue's rows themselves, not just the <option>s built from them: the
        avatar browser wants a persona's speciality, access and voice beside its avatar, and
@@ -285,6 +297,12 @@ document.addEventListener('DOMContentLoaded', () => {
        an attribute first. Up here for the same reason as the state above. */
     let personaRows = new Map();
     function personaRow(key) { return personaRows.get(key) || null; }
+    /* The two voice lists the avatar's own picker is built from, fetched once and kept:
+       they are a table in the binary plus a directory listing, and the pane is opened
+       and closed a dozen times while somebody is choosing. Up here with personaRows for
+       the same reason -- refreshAvatarBrowser runs before this file's later declarations
+       (see openAvatarDetail), and a `let` further down would be a TDZ error at startup. */
+    let voicePickerLists = null;
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
@@ -441,6 +459,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Avatar Engine Handler (3D shape + optional linked persona identity)
     function applyAvatar(avatarName, updatePersona = false) {
+        // Picking one character is a decision against the cast: a line picked whole
+        // outranks whoever is on screen (see llm/flow.rs), so leaving it in force here
+        // would send the next question back into the old line the moment it matched.
+        // Only a real pick counts -- a restored avatar at startup is not one.
+        if (updatePersona) releasePickedLineFor(avatarName);
         currentAvatar = avatarName;
         localStorage.setItem('aether_avatar', avatarName);
         setHologramAvatar(avatarName);
@@ -659,6 +682,76 @@ document.addEventListener('DOMContentLoaded', () => {
         return cat ? cat.inGroup(groupId).filter(avatarIsVisible) : [];
     }
 
+    /* ---- A whole line as the pick ------------------------------------------
+       An avatar is a character; a line is a cast. Picking the cast means the question goes
+       to whichever of its nodes owns the subject, and the one on screen is whoever is
+       holding it at that moment -- so the pick survives every hand-off, which wearing a
+       member of the line does not. The rule itself is llm/flow.rs; these three are the
+       state it is drawn from. */
+    function pickedLine() {
+        return (flowState && flowState.line) || null;
+    }
+
+    /* Not every line is a cast. The eXcelsior Class is five shapes with no directives
+       behind them yet, and Trace Protocols is one persona and three eggs that carry none --
+       picking either would promise a group and deliver a single node. The backend says
+       which lines it can actually pass a question around, rather than this being guessed
+       at here from the catalogue. */
+    function lineCanBePicked(groupName) {
+        return Boolean(flowState && Array.isArray(flowState.lines)
+            && flowState.lines.includes(groupName));
+    }
+
+    /* Releases the picked line unless the avatar being worn is one of its own. Wearing
+       another member of the same cast is not a change of mind about the cast. */
+    function releasePickedLineFor(avatarName) {
+        const line = pickedLine();
+        if (!line) return;
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(avatarName);
+        const group = entry && cat.group(entry.group);
+        if (group && group.name === line) return;
+        setFlowLine(null);
+    }
+
+    async function setFlowLine(name) {
+        let state = null;
+        try {
+            if (IS_TAURI) {
+                state = await tauriInvoke('set_flow_line_rust', { line: name });
+            } else {
+                const resp = await apiFetch('/api/flow/line', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ line: name }),
+                });
+                if (resp.ok) state = await resp.json();
+            }
+        } catch (e) {
+            console.error('Could not change the picked line', e);
+        }
+        if (!state) return;
+        flowState = state;
+        /* Picking a line the operator was standing outside of lands them on its anchor --
+           the cast's generalist -- and the backend has already written that persona. The
+           HUD wears the matching avatar so the hologram agrees with who is answering,
+           greeting included: it is a change of who you are talking to, and a silent one
+           would be the hologram lying about it. */
+        const personaSelect = document.getElementById('setting-persona');
+        const answering = state.persona || (personaSelect && personaSelect.value) || null;
+        if (answering) {
+            const cat = avatarCatalogue();
+            const entry = cat && cat.all.find((a) => a.persona === answering);
+            // Also when the backend moved nobody: the operator can have been inside the
+            // line by persona while wearing a shape from somewhere else, and a hologram
+            // from another cast while this one answers is the confusion the pick exists
+            // to remove.
+            if (entry && entry.id !== currentAvatar) applyAvatar(entry.id, true);
+        }
+        refreshFlowMode();
+        refreshAvatarBrowser();
+    }
+
     function showAvatarStage(name) {
         AVATAR_STAGES.forEach((stage) => {
             document.querySelectorAll(`[data-avatar-stage="${stage}"]`).forEach((el) => {
@@ -716,6 +809,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 count.textContent += ' · wearing one of these';
                 card.classList.add('is-current');
             }
+            // Two different states worth telling apart on the same card: wearing a member
+            // of this line, and having picked the line itself.
+            if (pickedLine() === group.name) {
+                count.textContent += ' · picked as a line';
+                card.classList.add('is-current');
+            } else if (lineCanBePicked(group.name)) {
+                count.textContent += ' · can be picked whole';
+            }
 
             card.append(faces, name, tagline, blurb, count);
             card.addEventListener('click', () => {
@@ -755,7 +856,53 @@ document.addEventListener('DOMContentLoaded', () => {
                 : `${hidden} more members of this line have not turned up yet.`;
         }
 
+        renderLinePick(group);
         showAvatarStage('members');
+    }
+
+    /* The button that picks a line whole, and the sentence explaining what that does. It
+       says the consequence rather than the setting: what changes is who answers the next
+       question, and "flow_group" would mean nothing to the person reading it. */
+    function renderLinePick(group) {
+        const button = document.getElementById('btn-avatar-line');
+        const note = document.getElementById('avatar-line-note');
+        if (!button || !note) return;
+
+        const picked = pickedLine() === group.name;
+        const available = lineCanBePicked(group.name);
+        button.classList.toggle('is-picked', picked);
+        button.disabled = !available;
+
+        if (!available) {
+            const cat = avatarCatalogue();
+            // One persona in the line and one alone is a different thing from none: the
+            // first is a cast that has not grown yet, the second is shapes. Counted from
+            // the catalogue rather than the visible list, so an unlocked egg does not
+            // change the sentence and a locked one is not given away by it.
+            const backed = cat ? cat.inGroup(group.id).filter((a) => a.persona).length : 0;
+            button.textContent = 'Not a cast yet';
+            note.textContent = backed === 1
+                ? 'Only one of these carries a persona so far, so picking the line would be '
+                    + 'the same as wearing that one. Do that instead, for now.'
+                : 'These have shapes but no directives behind them, so there is nobody here '
+                    + 'to hand a question to. Wearing one leaves whoever you had selected '
+                    + 'answering.';
+        } else if (picked) {
+            button.textContent = 'Release this line';
+            note.textContent = `${group.name} is answering. Each question goes to whichever of `
+                + 'them owns the subject, and the one holding it says so before it moves. '
+                + 'Releasing leaves you with whoever is answering at the time.';
+        } else {
+            button.textContent = 'Use this whole line';
+            note.textContent = 'Pick the cast instead of one of its members: the question goes '
+                + `to whichever node of ${group.name} owns it, and the hologram follows. You `
+                + 'can still wear a single one of them below.';
+        }
+
+        button.onclick = () => {
+            voiceEngine.playSFX('click');
+            setFlowLine(picked ? null : group.name);
+        };
     }
 
     function buildAvatarCard(entry) {
@@ -839,7 +986,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const voiceRow = document.getElementById('avatar-detail-voice-row');
         voiceRow.classList.toggle('hidden', !persona);
-        if (persona) document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+        if (persona) renderAvatarVoice(persona);
 
         const isCurrent = avatarId === currentAvatar;
         const useBtn = document.getElementById('btn-avatar-use');
@@ -900,6 +1047,156 @@ document.addEventListener('DOMContentLoaded', () => {
         return parts.join('  ·  ');
     }
 
+    /* ---- Giving one avatar a voice of your own choosing ---------------------
+       The identity table in genesis.rs is where an avatar's voices come from, and it is the
+       author's taste, not the operator's. This is where they disagree with it: two selects,
+       saved the moment one changes, and a reset that removes the choice rather than writing
+       today's default into it -- so an avatar put back to its own voice follows the table if
+       the table ever changes. Nothing here touches the settings form, so it is safe to save
+       on change even though the window has one Save Changes button. */
+    async function fetchVoicePickerLists() {
+        if (voicePickerLists) return voicePickerLists;
+        const data = IS_TAURI
+            ? await tauriInvoke('voice_pickers_rust')
+            : await (await apiFetch('/api/voice/pickers')).json();
+        voicePickerLists = data;
+        return voicePickerLists;
+    }
+
+    function renderAvatarVoice(persona) {
+        document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+
+        // What it would speak in if you changed nothing, shown only when you have: two
+        // identical lines, one labelled "default", is a pane telling you nothing twice.
+        const defaults = document.getElementById('avatar-detail-voice-default');
+        defaults.classList.toggle('hidden', !persona.voice_customised);
+        if (persona.voice_customised) {
+            const hasOwn = persona.default_voice || persona.default_local_voice;
+            defaults.textContent = hasOwn
+                ? `Its own voice: ${avatarVoiceLine({
+                    voice: persona.default_voice,
+                    local_voice: persona.default_local_voice,
+                })}`
+                : 'This one was written without a voice of its own: reset it and it speaks '
+                    + 'in whatever Voice & Sound says.';
+        }
+
+        const reset = document.getElementById('btn-avatar-voice-reset');
+        reset.classList.toggle('hidden', !persona.voice_customised);
+        reset.onclick = () => {
+            voiceEngine.playSFX('click');
+            saveAvatarVoice(persona.key, null);
+        };
+
+        const note = document.getElementById('avatar-voice-note');
+        const cloud = document.getElementById('avatar-voice-cloud');
+        const local = document.getElementById('avatar-voice-local');
+        note.textContent = '';
+
+        fetchVoicePickerLists().then((lists) => {
+            fillVoiceSelect(cloud, lists.cloud.map((v) => ({
+                value: v.name,
+                label: `${v.name} — ${v.label}`,
+            })), persona.default_voice, persona.voice);
+            fillVoiceSelect(local, lists.local.map((v) => ({
+                value: v.name,
+                // A voice that is not downloaded is still offered: it is a real choice that
+                // needs fetching first, and hiding it would make this picker disagree with
+                // the download list in Voice & Sound.
+                label: `${v.name} — ${v.label}${v.installed ? '' : ' (not downloaded)'}`,
+            })), persona.default_local_voice, persona.local_voice);
+        }).catch((e) => {
+            console.warn('Could not load the voice lists', e);
+            note.textContent = 'The voice lists could not be loaded, so this avatar keeps '
+                + 'the voice it was written with.';
+        });
+
+        cloud.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+        local.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+    }
+
+    /* The first option is always "leave it alone", and it says what leaving it alone sounds
+       like -- an avatar with no voice of its own in the identity table speaks in whatever
+       Voice & Sound says, and that is worth reading rather than inferring from a blank. */
+    function fillVoiceSelect(select, options, defaultValue, current) {
+        select.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = defaultValue
+            ? `Its own: ${defaultValue}`
+            : 'Whatever Voice & Sound says';
+        select.appendChild(first);
+        options.forEach((opt) => {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            select.appendChild(el);
+        });
+        // `current` is the voice it actually speaks in; it only counts as a *choice* when it
+        // is not simply the default, or the picker would show every avatar as customised.
+        select.value = current && current !== defaultValue ? current : '';
+        if (select.value !== '' && !options.some((o) => o.value === select.value)) {
+            select.value = '';
+        }
+    }
+
+    /* `choice` null resets this avatar; otherwise each half is a voice name or '' for "leave
+       that half at its default". The reply is the whole persona list, so the pane redraws
+       from what was stored rather than from what it hoped would be. */
+    async function saveAvatarVoice(personaKey, choice) {
+        const note = document.getElementById('avatar-voice-note');
+        try {
+            let personas;
+            if (choice === null) {
+                personas = IS_TAURI
+                    ? await tauriInvoke('clear_persona_voice_rust', { persona: personaKey })
+                    : await postJson('/api/personas/voice/reset', { persona: personaKey });
+            } else {
+                const body = {
+                    persona: personaKey,
+                    voice: choice.voice || null,
+                    localVoice: choice.local_voice || null,
+                };
+                personas = IS_TAURI
+                    ? await tauriInvoke('set_persona_voice_rust', body)
+                    : await postJson('/api/personas/voice', {
+                        persona: personaKey,
+                        voice: choice.voice || null,
+                        local_voice: choice.local_voice || null,
+                    });
+            }
+            if (Array.isArray(personas)) {
+                personaRows = new Map(personas.map((p) => [p.key, p]));
+            }
+            // Redrawn first, because redrawing clears the note -- and the note is the only
+            // thing on screen that says the choice reached the database.
+            const row = personaRow(personaKey);
+            if (row) renderAvatarVoice(row);
+            note.textContent = choice === null
+                ? 'Back to the voice it was written with.'
+                : 'Saved. It speaks in this from its next answer.';
+        } catch (e) {
+            console.warn('Could not save the avatar voice', e);
+            note.textContent = `That voice could not be saved: ${e.message || e}`;
+        }
+    }
+
+    async function postJson(path, body) {
+        const resp = await apiFetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await resp.text() || `${resp.status}`);
+        return resp.json();
+    }
+
     // ---- The live preview ---------------------------------------------------
     function buildAvatarPreview(avatarId) {
         const viewport = document.getElementById('avatar-preview-viewport');
@@ -952,6 +1249,9 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshAvatarEntryCard();
         renderAvatarGroups();
         if (avatarBrowserGroup) {
+            const cat = avatarCatalogue();
+            const group = cat && cat.group(avatarBrowserGroup);
+            if (group) renderLinePick(group);
             const active = document.querySelector('[data-avatar-stage="members"].is-active')
                 || document.querySelector('[data-avatar-stage="detail"].is-active');
             const grid = document.getElementById('avatar-member-grid');
@@ -1366,6 +1666,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.error('Could not read the flow mode setting', e);
         }
+        flowState = state;
+        // Settings' Avatars pane draws the picked line in two places (the line's card and
+        // the button on its members stage), so a change of mode has to reach it too.
+        refreshAvatarBrowser();
         if (!state || !state.group) {
             button.classList.add('hidden');
             return;
@@ -1377,9 +1681,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // labels in identical styling read as a caption rather than a switch that is on.
         button.classList.toggle('flow-on', !!state.enabled);
         button.textContent = state.enabled ? '\u25cf FLOW' : 'STATIC';
+        const picked = state.line
+            ? `${state.group} is picked whole, so the cast answers rather than one of them. `
+            : '';
         button.title = state.enabled
-            ? `The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
-            : `This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
+            ? `${picked}The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
+            : `${picked}This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
     }
 
     function initFlowMode() {
@@ -6157,12 +6464,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Desktop Sprite Mode is a transparent/always-on-top native window -- meaningless in the
-    // plain browser flow, so the whole section stays hidden there (mirrors initVersionAndUpdates).
+    // plain browser flow, so its card stays hidden there (mirrors initVersionAndUpdates). It
+    // is a card in the Display section rather than a section of its own, so there is no rail
+    // entry to reveal: on the web Display is simply the panel grid.
     function initSpriteMode() {
         if (!IS_TAURI) return;
         const section = document.getElementById('sprite-mode-section');
         if (section) section.classList.remove('hidden');
-        revealSettingsSection('sprite');
     }
 
     // Reflects Game Mode's current on/off state on its Quick Commands button -- called both

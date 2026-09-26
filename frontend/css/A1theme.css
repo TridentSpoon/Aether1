@@ -1357,6 +1357,47 @@ body {
     color: var(--neon-cyan);
 }
 
+/* The whole line as a pick of its own. Lit when it is the one in force, because it is
+   the same kind of state as FLOW in the chin bar: what it means is that the avatar on
+   screen is not necessarily the one that answers next. */
+.avatar-line-pick {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    margin: 0.25rem 0 0.15rem;
+}
+
+.avatar-line-btn {
+    flex: none;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.3rem;
+    background: var(--bg-panel);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.62rem;
+    letter-spacing: 0.12em;
+    color: var(--text-highlight);
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.avatar-line-btn:hover { border-color: var(--border-neon-bright); background: var(--bg-panel-hover); }
+.avatar-line-btn.is-picked {
+    border-color: var(--neon-cyan);
+    background: var(--neon-cyan);
+    color: var(--bg-core);
+}
+.avatar-line-btn:disabled { opacity: 0.45; cursor: default; }
+
+.avatar-line-note {
+    margin: 0;
+    flex: 1 1 14rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.66rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
 .avatar-locked-note {
     margin: 0;
     font-family: 'JetBrains Mono', monospace;
@@ -1462,6 +1503,53 @@ body {
     margin: 0.2rem 0 0 0;
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.65rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+/* The avatar's own voice pickers. Two columns where there is room and one where there is
+   not, because the settings window is narrow enough on a laptop that two 220px selects
+   would push the detail pane into a horizontal scroll. */
+.avatar-voice-picker {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+}
+
+.avatar-voice-field { display: flex; flex-direction: column; gap: 0.15rem; }
+
+.avatar-voice-field-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+/* Colour is left to the panel-wide field rule ([data-theme] :is(input, select, textarea)),
+   which is mixed for the settings panel this sits on -- the cyber-select treatment is for
+   the dark projection bay and would put cyan-on-pale here under Solar. */
+.avatar-voice-select {
+    width: 100%;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.25rem;
+    padding: 0.3rem 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+}
+
+.avatar-voice-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+}
+
+.avatar-voice-note {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
     line-height: 1.5;
     color: var(--text-dim);
 }
@@ -2535,3 +2623,75 @@ body {
 .hub-fact-value { font-size: 0.72rem; color: var(--text-main); }
 
 .hub-downloads { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* A switch, for a setting that is plainly one thing being on or off ------------------
+ * The Display section asks two questions: where the panels sit, and whether the avatar
+ * is floating free of the window. The second is a mode, and a mode reads better as a
+ * switch than as a tick-box. The checkbox is still the control -- it keeps its id and
+ * its checked state, so everything that reads or writes the setting is unchanged -- it
+ * is just moved out of sight and drawn as the track beside it.
+ */
+.a1-switch {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    cursor: pointer;
+}
+
+.a1-switch-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+.a1-switch-track {
+    position: relative;
+    flex: 0 0 auto;
+    width: 2.1rem;
+    height: 1.1rem;
+    margin-top: 0.05rem;
+    border-radius: 999px;
+    border: 1px solid rgba(125, 165, 201, 0.45);
+    background: rgba(8, 14, 24, 0.75);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.a1-switch-knob {
+    position: absolute;
+    top: 0.15rem;
+    left: 0.17rem;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 999px;
+    background: var(--text-dim);
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.a1-switch-input:checked + .a1-switch-track {
+    border-color: var(--text-accent);
+    /* The flat rgba is the fallback for a webview without color-mix; the accent-tinted
+       version is what a current one draws, so the switch follows the theme. */
+    background: rgba(0, 240, 255, 0.22);
+    background: color-mix(in srgb, var(--text-accent) 26%, transparent);
+}
+
+.a1-switch-input:checked + .a1-switch-track .a1-switch-knob {
+    transform: translateX(0.95rem);
+    background: var(--text-accent);
+}
+
+/* Keyboard focus has to be visible on the track, since the checkbox it belongs to is
+ * not on screen to show it. */
+.a1-switch-input:focus-visible + .a1-switch-track {
+    outline: 1px solid var(--text-highlight);
+    outline-offset: 2px;
+}
+
+.a1-switch-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--text-main);
+}
