@@ -33,8 +33,52 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.__TAURI__.core.invoke(cmd, args);
     }
 
-    function showMainHud() {
-        tauriInvoke('show_main_window_rust').catch((err) => console.warn('Could not open main HUD', err));
+    async function tauriEmit(event, payload) {
+        if (!window.__TAURI__ || !window.__TAURI__.event) {
+            throw new Error('Tauri event bridge unavailable');
+        }
+        return window.__TAURI__.event.emit(event, payload);
+    }
+
+    // A button here that quietly does nothing is worse than one that isn't there: this window
+    // has no console anybody is going to open, no status line and no room for one, so a
+    // failed command says so on the button itself -- red, and the reason in its tooltip --
+    // until the next time it is pressed. Everything below reports through this rather than
+    // console.warn alone.
+    function reportFailure(btn, what, err) {
+        console.warn(what, err);
+        if (!btn) return;
+        btn.classList.add('sprite-btn-failed');
+        btn.title = `${what}: ${err && err.message ? err.message : err}`;
+    }
+
+    function clearFailure(btn, title) {
+        if (!btn) return;
+        btn.classList.remove('sprite-btn-failed');
+        btn.title = title;
+    }
+
+    // Two ways to the same place, because the sprite is the window least able to tell which
+    // of its bridges is healthy. The direct command is the straightforward one; the event is
+    // for the case where this window's command bridge is the broken half -- the HUD is hidden
+    // rather than gone (closing it goes to the tray), so its own JS is still running and can
+    // show itself with a command bridge that is known to work. Both are harmless together:
+    // showing a window that is already showing is a no-op.
+    async function showMainHud() {
+        let trouble = null;
+        try {
+            await tauriEmit('sprite-open-hud');
+        } catch (err) {
+            trouble = err;
+        }
+        try {
+            await tauriInvoke('show_main_window_rust');
+            clearFailure(btnHud, 'Open main HUD');
+            return;
+        } catch (err) {
+            trouble = trouble || err;
+        }
+        if (trouble) reportFailure(btnHud, 'Could not open the main HUD', trouble);
     }
 
     // Asks the main HUD to start or stop push-to-talk listening -- it decides which, since
@@ -77,26 +121,32 @@ document.addEventListener('DOMContentLoaded', () => {
         // it, its hologram panel stays quiet behind the "the avatar is floating, click to
         // bring it back" notice, so the avatar isn't sent anywhere -- it just stops being
         // drawn. Awaited, because an event emitted from a window that has already closed
-        // never lands.
-        if (window.__TAURI__ && window.__TAURI__.event) {
-            try {
-                await window.__TAURI__.event.emit('sprite-mode-changed', { enabled: false });
-            } catch (err) {
-                console.warn('Could not tell the main window the sprite is going', err);
-            }
+        // never lands. The HUD also brings itself on screen when it hears this (see
+        // initSpriteListenBridge in js/app.js): the window the avatar is being sent to may
+        // be sitting in the tray, and an avatar sent to a window nobody can see is
+        // indistinguishable from this button doing nothing.
+        let trouble = null;
+        try {
+            await tauriEmit('sprite-mode-changed', { enabled: false });
+        } catch (err) {
+            trouble = err;
         }
 
-        // And the main window has to be on screen to send anything back to: closing the HUD
-        // puts it in the tray rather than quitting it (see the CloseRequested handler in
-        // main.rs), so without this the avatar can leave the desktop for a window nobody can
-        // see, which is indistinguishable from the button doing nothing.
+        // The same request straight down this window's own command bridge, for the case
+        // where the event half is the broken one.
         try {
             await tauriInvoke('show_main_window_rust');
         } catch (err) {
-            console.warn('Could not open the main HUD', err);
+            trouble = trouble || err;
         }
 
-        tauriInvoke('toggle_sprite_window_rust', { enabled: false }).catch(() => {});
+        try {
+            await tauriInvoke('toggle_sprite_window_rust', { enabled: false });
+        } catch (err) {
+            reportFailure(btnPower, 'Could not send the avatar back', err);
+            return;
+        }
+        if (trouble) reportFailure(btnPower, 'The avatar was sent back, but the HUD did not open', trouble);
     });
 
     // Matches whatever avatar/theme/voice-preference the main HUD is currently using --

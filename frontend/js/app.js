@@ -7773,7 +7773,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
             if (spriteModeToggle) spriteModeToggle.checked = enabled;
             setHologramFloating(enabled);
+            // The window the avatar is being sent back to may be sitting in the tray, so
+            // this end puts it on screen. Asked for from here rather than only from the
+            // sprite because this window is hidden, not gone, and its command bridge is the
+            // one known to work -- see showMainHud in js/sprite.js for the other half.
+            if (!enabled) {
+                tauriInvoke('show_main_window_rust').catch((e) => console.warn('Could not show the main window', e));
+            }
         }).catch((e) => console.warn('Could not listen for sprite mode changes', e));
+
+        // The sprite's ⧉ button, coming the long way round for the same reason.
+        window.__TAURI__.event.listen('sprite-open-hud', () => {
+            tauriInvoke('show_main_window_rust').catch((e) => console.warn('Could not show the main window', e));
+        }).catch((e) => console.warn('Could not listen for sprite HUD requests', e));
     }
 
     // Every panel's "Undock" button opens it in its own solo-panel window (see

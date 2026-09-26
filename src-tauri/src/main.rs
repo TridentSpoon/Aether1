@@ -1767,12 +1767,18 @@ fn open_avatar_lab_rust(app: tauri::AppHandle) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// Re-shows and focuses the main HUD window -- used by the sprite's "open main HUD" button,
-/// since closing to tray (see the CloseRequested handler in main()) hides rather than
-/// destroys it.
+/// Re-shows and focuses the main HUD window -- used by the sprite's "open main HUD" and
+/// "send the avatar back" buttons, since closing to tray (see the CloseRequested handler in
+/// main()) hides rather than destroys it.
+///
+/// Unminimizes first: `show()` on a window that was minimized rather than hidden is a no-op
+/// on every platform, and from the sprite's side the two are indistinguishable -- both look
+/// like a HUD that isn't on screen, and a button that only works in one of the two cases
+/// reads as a button that doesn't work.
 #[tauri::command]
 fn show_main_window_rust(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(MAIN_LABEL) {
+        let _ = window.unminimize();
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
     }
