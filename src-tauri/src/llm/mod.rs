@@ -585,8 +585,11 @@ impl LlmEngine {
         let lowered = trimmed.to_lowercase();
 
         match lowered.as_str() {
-            "status" | "system status" | "telemetry" | "diagnostics" | "health check" | "specs" => {
+            "status" | "system status" | "telemetry" | "specs" => {
                 return Some(Telemetry::snapshot().diagnostic_report());
+            }
+            "diagnostics" | "health check" => {
+                return Some(crate::cli::run_diagnostics());
             }
             "who are you" | "who are you?" | "identify" | "identify yourself" => {
                 return Some(config.persona.who_are_you(&config.agent_name));

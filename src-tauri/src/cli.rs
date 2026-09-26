@@ -226,6 +226,10 @@ pub enum Invocation {
         /// deliberately so -- see watchers/events.rs for why noise is opt-in.
         events: bool,
     },
+    /// `diagnostics` / `health check`: comprehensive system diagnostics including telemetry
+    /// and error-level event logs. Always includes both sections, unlike status which makes
+    /// the event log opt-in.
+    Diagnostics,
     Say {
         text: Option<String>,
         voice: Option<String>,
@@ -407,6 +411,10 @@ pub fn parse(argv: &[String]) -> Invocation {
                 None => Ok(Invocation::Status { json, events }),
             })
         }
+        "diagnostics" | "health" | "health check" => free_text(rest).and_then(|extra| match extra {
+            Some(extra) => Err(format!("diagnostics takes no arguments (got {extra:?})")),
+            None => Ok(Invocation::Diagnostics),
+        }),
         "doctor" => parse_doctor(rest),
         "crashes" => free_text(rest).and_then(|extra| match extra {
             Some(extra) => Err(format!("crashes takes no arguments (got {extra:?})")),
@@ -779,6 +787,23 @@ fn run_status(json: bool, events: bool) -> String {
     // something you ask for. It is appended to the report rather than replacing it, since
     // "what is this machine doing" and "what has gone wrong on it" are read together.
     format!("{report}\n\n{}", crate::watchers::events::report())
+}
+
+/// Comprehensive system diagnostics combining telemetry snapshot and error-level event logs.
+/// Unlike status, diagnostics always includes the event log sweep to help identify system issues.
+pub(crate) fn run_diagnostics() -> String {
+    let telemetry = Telemetry::snapshot();
+    let machine = crate::profile::machine_description(crate::build_llm_engine().db());
+
+    // System telemetry section
+    let mut output = format!("=== SYSTEM DIAGNOSTICS ===\nMachine: {machine}\n{}",
+                             telemetry.diagnostic_report());
+
+    // Recent issues section - always included in diagnostics
+    output.push_str("\n\n=== RECENT ISSUES ===\n");
+    output.push_str(&crate::watchers::events::report());
+
+    output
 }
 
 /// `aether1 crashes`. Deliberately shows muted programs too, marked -- the mute list stops
@@ -1787,6 +1812,7 @@ pub fn run(invocation: Invocation) -> i32 {
         )),
         Invocation::Prompt { text, session } => run_prompt(text, session),
         Invocation::Status { json, events } => Ok(run_status(json, events)),
+        Invocation::Diagnostics => Ok(run_diagnostics()),
         Invocation::Crashes => run_crashes(),
         Invocation::Doctor {
             fix,
