@@ -129,6 +129,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // visible would otherwise leave a second hologram rendering behind the Network page.
         if (name === 'avatars') openAvatarBrowser();
         else if (typeof disposeAvatarPreview === 'function') disposeAvatarPreview();
+        // Same reasoning as the avatar browser's: the stage you were on is only meaningful
+        // while you are in the section. Coming back to Appearance should land on the pane,
+        // not halfway inside the colour panel you left open yesterday.
+        if (name !== 'appearance') showAppearanceStage('main');
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
         try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
@@ -1318,6 +1322,93 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* ---- Appearance: the pane, and the colour panel behind its theme card -------------
+       The avatar got its own section because there are twenty-two of them with something to
+       say about each. The theme is one decision with a lot of controls, so it stays in
+       Appearance and drills down one level instead. */
+    const APPEARANCE_STAGES = ['main', 'theme'];
+
+    function showAppearanceStage(name) {
+        APPEARANCE_STAGES.forEach((stage) => {
+            document.querySelectorAll(`[data-appearance-stage="${stage}"]`).forEach((el) => {
+                el.classList.toggle('is-active', stage === name);
+            });
+        });
+        const detail = document.getElementById('settings-detail');
+        if (detail) detail.scrollTop = 0;
+    }
+
+    const themeEntryCard = document.getElementById('theme-entry-card');
+    if (themeEntryCard) {
+        themeEntryCard.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showAppearanceStage('theme');
+        });
+    }
+    document.querySelectorAll('[data-appearance-back]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showAppearanceStage(btn.dataset.appearanceBack || 'main');
+        });
+    });
+
+    /* The named palettes, built from the preset list rather than from markup.
+       What a swatch *does* depends on the mode, which is the whole of the change here:
+       in Cyberpunk it is the palette, ground included; in Daylight and Midnight it is the
+       two accents, worn on the shell those modes were designed with. The two flat presets
+       are not offered as swatches -- they are what those modes already are, which is what
+       the mode buttons above and the reset button below already say. */
+    function renderThemePalette(theme) {
+        const grid = document.getElementById('theme-palette-grid');
+        if (!grid) return;
+        const accentOnly = Aether1Theme.groundIsFixed(theme.mode);
+        const list = Aether1Theme.presets().filter((p) => p.mode === 'cyberpunk');
+        if (accentOnly) {
+            // The mode's own accents belong in the row too, or the palette it ships with is
+            // the one thing you cannot pick.
+            const own = Aether1Theme.preset(theme.mode);
+            if (own) list.unshift(own);
+        }
+        grid.innerHTML = '';
+        list.forEach((p) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'theme-palette-btn';
+            btn.dataset.colorTheme = p.id;
+            btn.title = accentOnly
+                ? `${p.label} accents, on the ${Aether1Theme.MODE_LABELS[theme.mode]} shell`
+                : `${p.label}: the whole palette, background included`;
+            const bars = document.createElement('span');
+            bars.className = 'theme-palette-bars';
+            bars.setAttribute('aria-hidden', 'true');
+            // In accent mode the ground bar is the mode's own, not the preset's, so the
+            // swatch shows what pressing it would actually paint.
+            const ground = accentOnly ? theme.colours.background : p.background;
+            [ground, p.main, p.highlight].forEach((hex) => {
+                const bar = document.createElement('span');
+                bar.className = 'theme-palette-bar';
+                bar.style.background = hex;
+                bars.appendChild(bar);
+            });
+            /* A swatch lights up only while the colours still match it exactly -- nudge one
+               picker and nothing is selected, which is the honest state: what is on screen is
+               no longer any of these. Decided here rather than in a later pass, because the
+               grid is rebuilt on every theme change and anything marked afterwards would be
+               marked on nodes about to be replaced. */
+            btn.classList.toggle('is-selected', p.id === theme.colours.preset);
+            const label = document.createElement('span');
+            label.className = 'theme-palette-name';
+            label.textContent = p.label;
+            btn.appendChild(bars);
+            btn.appendChild(label);
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                paintTheme(accentOnly ? Aether1Theme.setAccents(p.id) : Aether1Theme.setPreset(p.id));
+            });
+            grid.appendChild(btn);
+        });
+    }
+
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
        is saved and when -- and everything here is the consequences of it: the page, the 3D
@@ -1343,17 +1434,71 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
         });
 
-        /* A preset button lights up only while the colours still match it exactly. Nudge one
-           picker and nothing is selected, which is the honest state: what is on screen is no
-           longer any of the presets. */
-        document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
-            const val = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            btn.classList.toggle('cyber-btn-active', val === theme.colours.preset);
-        });
-
         Object.keys(themeColourInputs).forEach(slot => {
             const input = themeColourInputs[slot];
             if (input && input.value.toLowerCase() !== theme.colours[slot]) input.value = theme.colours[slot];
+        });
+
+        /* How much of the palette this mode hands over. Cyberpunk is made of its colours and
+           gives you all three; Daylight and Midnight are the light and the dark shell, so the
+           ground is theirs and the accents are yours. The pickers are removed rather than
+           disabled -- a greyed-out background swatch still showing a colour invites the
+           question of why it will not move. */
+        const slots = Aether1Theme.slotsFor(theme.mode);
+        const accentOnly = Aether1Theme.groundIsFixed(theme.mode);
+        ['background', 'main', 'highlight'].forEach(slot => {
+            const row = document.getElementById('theme-colour-row-' + slot);
+            if (row) row.classList.toggle('hidden', slots.indexOf(slot) === -1);
+        });
+        const colourGrid = document.getElementById('theme-colour-grid');
+        if (colourGrid) {
+            colourGrid.classList.toggle('grid-cols-3', slots.length > 2);
+            colourGrid.classList.toggle('grid-cols-2', slots.length === 2);
+        }
+        // The two accents are called Main and Highlight while there is a background beside
+        // them to be the other thing; on their own they are simply the accent and its
+        // companion, which is what they are doing in those two modes.
+        const mainLabel = document.getElementById('theme-colour-label-main');
+        const highlightLabel = document.getElementById('theme-colour-label-highlight');
+        if (mainLabel) mainLabel.textContent = accentOnly ? 'Accent' : 'Main';
+        if (highlightLabel) highlightLabel.textContent = accentOnly ? 'Companion' : 'Highlight';
+
+        const groundNote = document.getElementById('theme-ground-note');
+        if (groundNote) {
+            groundNote.textContent = accentOnly
+                ? `${Aether1Theme.MODE_LABELS[theme.mode]} keeps the page it was designed with, so only the accents are yours here. Depth below still moves how dark that page sits.`
+                : '';
+        }
+
+        const themeStageLede = document.getElementById('theme-stage-lede');
+        if (themeStageLede) {
+            themeStageLede.textContent = accentOnly
+                ? 'The flat window shell, light or dark, with an accent of your choosing.'
+                : 'Neon, scanlines and corner brackets, and every colour of it yours -- the ground included, because in this mode the ground is part of the look.';
+        }
+
+        renderThemePalette(theme);
+
+        /* The card back in the pane. The three swatches are read out of the derived variables
+           rather than off theme.colours, so they are the palette as painted -- tone and all --
+           which is the only version worth previewing. */
+        const themeEntryName = document.getElementById('theme-entry-name');
+        const themeEntryMeta = document.getElementById('theme-entry-meta');
+        if (themeEntryName) themeEntryName.textContent = Aether1Theme.MODE_LABELS[theme.mode] || theme.mode;
+        if (themeEntryMeta) {
+            const named = Aether1Theme.preset(theme.colours.preset);
+            // "Daylight / Daylight accents" says one thing twice. A mode wearing its own
+            // palette is simply untouched, which is worth saying instead.
+            themeEntryMeta.textContent = !named
+                ? 'Colours of your own'
+                : named.id === theme.mode
+                    ? 'As it was designed'
+                    : (accentOnly ? `${named.label} accents` : `${named.label} palette`);
+        }
+        const painted = Aether1Theme.variablesFor(theme.mode, theme.colours);
+        [['main', '--neon-cyan'], ['mid', '--neon-blue'], ['highlight', '--neon-purple']].forEach(([name, variable]) => {
+            const swatch = document.getElementById('theme-entry-swatch-' + name);
+            if (swatch) swatch.style.background = painted[variable];
         });
 
         /* The tone sliders are read back through toneOf rather than straight off the stored
@@ -7036,13 +7181,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    /* Applying a colour preset. Note it can move you between modes: the Daylight and Midnight
-       presets belong to Solar and Eclipse, so picking one from Cyberpunk switches the chrome
-       too -- which is what someone clicking a light preset means. */
-    function applyThemePreset(id) {
-        paintTheme(Aether1Theme.setPreset(id));
-    }
-
     // Mode: the three buttons in Settings and the same three in the top bar's slide-out.
     document.querySelectorAll('.theme-mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -7051,18 +7189,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Colours: the presets...
-    document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const preset = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            if (preset) {
-                voiceEngine.playSFX('click');
-                applyThemePreset(preset);
-            }
-        });
-    });
+    /* Applying a whole named palette, mode included. This is what forging an identity does
+       when the name it lands on has a palette of its own (see the A.R.X. names below), and it
+       is what a Cyberpunk swatch does. It can move you between modes, which is the point when
+       the preset is a light one. The accent-only path in Daylight and Midnight is
+       Aether1Theme.setAccents instead -- see renderThemePalette. */
+    function applyThemePreset(id) {
+        paintTheme(Aether1Theme.setPreset(id));
+    }
 
-    /* ...and the three pickers. 'input' rather than 'change' so the page repaints while the
+    /* The palette swatches are wired as they are built -- see renderThemePalette, which is
+       re-run on every theme change because what a swatch means depends on the mode.
+
+       The pickers, though, are here and permanent. 'input' rather than 'change' so the page repaints while the
        colour is being dragged around -- picking a background you cannot see the effect of is
        guesswork. Each write only touches its own slot, which is what keeps the background
        stable while an accent is being tried. */
