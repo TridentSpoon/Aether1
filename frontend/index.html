@@ -233,7 +233,7 @@
     <main id="hud-layout" class="flex-1 p-4 overflow-auto z-10">
 
         <!-- Token Usage & Availability Telemetry -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens" data-panel-name="Model performance" data-grid-col="1" data-grid-row="1" data-grid-w="4" data-grid-h="24">
+        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-3" data-panel="tokens" data-panel-name="Model performance" data-grid-col="1" data-grid-row="1" data-grid-w="4" data-grid-h="37">
             <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
             <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
             <button type="button" class="panel-undock" data-undock="tokens" title="Open this panel in its own window" aria-label="Open Token Telemetry in its own window">⧉</button>
@@ -297,39 +297,6 @@
                     <div class="text-[10px] font-mono text-slate-500 leading-snug" id="cost-note">Nothing has been sent anywhere yet.</div>
                 </div>
             </div>
-
-        <!-- Tactical Commands -->
-        <div class="hud-panel movable-panel p-4 rounded flex flex-col gap-2" data-panel="commands" data-panel-name="Quick commands" data-grid-col="1" data-grid-row="25" data-grid-w="4" data-grid-h="13">
-            <button type="button" class="panel-grip" title="Drag to move this panel. Arrow keys move it too." aria-label="Move this panel"></button>
-            <button type="button" class="panel-resize" title="Drag to resize this panel" aria-label="Resize this panel"></button>
-            <button type="button" class="panel-undock" data-undock="commands" title="Open this panel in its own window" aria-label="Open Quick Commands in its own window">⧉</button>
-            <h3 class="font-orbitron text-xs font-bold text-cyan-400 tracking-wider">
-                TACTICAL QUICK COMMANDS
-            </h3>
-            <div class="grid grid-cols-2 gap-2 text-xs font-mono">
-                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="status">
-                    📊 Status
-                </button>
-                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="diagnostics">
-                    🩺 Diagnostics
-                </button>
-                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="show memories">
-                    🧠 Memories
-                </button>
-                <button class="quick-chip cyber-btn text-[11px] py-1.5 justify-center" data-cmd="help">
-                    ❓ Help Info
-                </button>
-                <!-- Not a quick-chip: this toggles real app state (stop background servers,
-                     hide the HUD) rather than sending a chat command. See set_game_mode_rust
-                     and the game-mode-changed handling in app.js. Native desktop app only --
-                     hidden by initStartupPerformance alongside the rest of that settings
-                     group, since there's no background server or window to manage from a
-                     browser tab. -->
-                <button id="btn-game-mode" type="button" class="hidden cyber-btn text-[11px] py-1.5 justify-center col-span-2">
-                    🎮 Game Mode: OFF
-                </button>
-            </div>
-        </div>
 
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
         <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-panel-name="The avatar" data-grid-col="5" data-grid-row="1" data-grid-w="4" data-grid-h="37">
@@ -420,7 +387,7 @@
                  companion answers as itself; AETHER CODE answers as whichever coding model
                  is downloaded, with the house rules already in front of it. See
                  src-tauri/src/code_chat.rs for why they are kept apart rather than merged. -->
-            <div class="flex border-b border-cyan-500/20 bg-slate-950/40 text-[10px] font-mono">
+            <div class="chat-tabs flex items-center border-b border-cyan-500/20 bg-slate-950/40 text-[10px] font-mono">
                 <button type="button" id="tab-chat-conversation" data-chat-tab="conversation"
                         class="chat-tab px-3 py-1.5 text-cyan-300 border-b-2 border-cyan-400"
                         aria-selected="true">CONVERSATION</button>
@@ -435,6 +402,26 @@
                 <button type="button" id="tab-chat-terminal" data-chat-tab="terminal"
                         class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
                         aria-selected="false">TERMINAL</button>
+
+                <!-- The rule is the seam between talking and looking. Everything left of it
+                     is somewhere you type; everything right of it is something the
+                     conversation left behind -- what it remembers, what was said before,
+                     the notes it reads, what it actually did. They were four modals over
+                     the whole HUD, which is a heavy way to glance at a list, and they are
+                     all the same window as the chat they belong to. -->
+                <span class="chat-tab-rule" aria-hidden="true"></span>
+                <button type="button" id="tab-chat-memories" data-chat-tab="memories"
+                        class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
+                        aria-selected="false">MEMORIES</button>
+                <button type="button" id="tab-chat-history" data-chat-tab="history"
+                        class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
+                        aria-selected="false">HISTORY</button>
+                <button type="button" id="tab-chat-notes" data-chat-tab="notes"
+                        class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
+                        aria-selected="false">NOTES</button>
+                <button type="button" id="tab-chat-activity" data-chat-tab="activity"
+                        class="chat-tab px-3 py-1.5 text-slate-400 border-b-2 border-transparent"
+                        aria-selected="false">ACTIVITY</button>
             </div>
 
             <div id="chat-view-conversation" class="flex-1 min-h-0 flex flex-col" data-chat-view="conversation">
@@ -497,6 +484,117 @@
                     nothing runs here until you press Return.
                 </p>
             </div>
+
+            <!-- MEMORIES. Not a second copy of the notes: these are the ones marked core,
+                 which are loaded into every conversation whether or not the question calls
+                 for them. That is the difference worth a tab of its own -- what it always
+                 knows about you, as against what it can go and look up. Reading one opens
+                 it in NOTES, because there is only one reader and this is a list. -->
+            <div id="chat-view-memories" class="flex-1 min-h-0 flex-col hidden" data-chat-view="memories">
+                <div class="px-4 py-1.5 bg-slate-950/40 border-b border-cyan-500/10 flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <span id="memories-count" class="text-slate-400 truncate">reading the folder&hellip;</span>
+                    <button type="button" id="btn-memories-refresh" class="text-slate-500 hover:text-cyan-300 shrink-0">refresh</button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        Always in front of it. Every other note is only read when the
+                        question calls for it &mdash; those are under NOTES.
+                    </p>
+                    <div id="memories-list" class="space-y-1"></div>
+                </div>
+            </div>
+
+            <!-- HISTORY -- the conversations list, and the way back into an old one.
+                 Every conversation is a separate transcript. That is a convenience, and it
+                 is also a wall: the companion is given the history of the conversation it
+                 is answering in and has no way to reach another one, or to learn that
+                 another one exists. Nothing on this tab is a tool. It cannot start a
+                 conversation, switch to one, rename one or delete one -- those are the
+                 operator's, the same way the module switches and the tool permissions are. -->
+            <div id="chat-view-history" class="flex-1 min-h-0 flex-col hidden" data-chat-view="history">
+                <div class="px-4 py-1.5 bg-slate-950/40 border-b border-cyan-500/10 flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <span id="sessions-count" class="text-slate-400 truncate"></span>
+                    <button type="button" id="btn-session-new" class="text-cyan-300 hover:text-cyan-100 shrink-0">&#65291; New</button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        Click one to pick up where you left off. A new conversation starts with
+                        a clean slate &mdash; it remembers your notes, but not what was said in
+                        the others.
+                    </p>
+                    <div id="sessions-list" class="space-y-1"></div>
+                </div>
+            </div>
+
+            <!-- THE NOTES READER -- the vault, read inside Aether1.
+                 Read-only on purpose, and that is a boundary rather than a missing feature:
+                 notes are changed through the tools, behind the consent path, with a way
+                 back. A reader that could also write would be a second door into the same
+                 folder that nothing had approved. The folder is still just markdown on disk,
+                 so Obsidian or any editor opens the same notes; this is for when you do not
+                 want to leave.
+
+                 The list is above the note rather than beside it. This is a column of the
+                 HUD, not a modal across the whole window, and two columns inside a column
+                 leaves neither wide enough to read. -->
+            <div id="chat-view-notes" class="flex-1 min-h-0 flex-col hidden" data-chat-view="notes">
+                <div class="px-4 py-1.5 bg-slate-950/40 border-b border-cyan-500/10 flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <span class="text-slate-400 truncate">Your vault, read-only</span>
+                    <div class="flex items-center gap-3 shrink-0">
+                        <button type="button" id="btn-notes-graph" class="text-cyan-300 hover:text-cyan-100">&#128376; Graph</button>
+                        <button type="button" id="btn-notes-open-folder" class="text-cyan-300 hover:text-cyan-100">&#128194; Folder</button>
+                    </div>
+                </div>
+                <div id="notes-reader-view" class="flex-1 min-h-0 flex flex-col gap-2 p-3">
+                    <!-- The list. Search runs the same search the companion itself uses on
+                         the vault, so what you find here is what it would have found. -->
+                    <input id="notes-search" type="search" placeholder="Search your notes&hellip;"
+                           class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-xs text-cyan-100 font-mono">
+                    <div id="notes-list" class="notes-list-strip overflow-y-auto space-y-1 pr-1 shrink-0"></div>
+                    <div id="notes-count" class="text-[10px] font-mono text-slate-500"></div>
+                    <!-- The note. -->
+                    <div class="flex items-center gap-2 min-h-[1.5rem]">
+                        <button id="btn-notes-back" class="hidden text-[11px] font-mono text-cyan-300 hover:text-cyan-100 cursor-pointer">&larr; Back</button>
+                        <span id="notes-title" class="font-mono text-xs text-cyan-300 truncate"></span>
+                    </div>
+                    <div id="notes-body" class="flex-1 min-h-0 overflow-y-auto bg-slate-900/60 border border-cyan-500/20 rounded p-4 text-sm text-slate-200 leading-relaxed note-render">
+                        <p class="text-xs font-mono text-slate-500">Pick a note above.</p>
+                    </div>
+                    <div id="notes-backlinks" class="hidden text-[11px] font-mono text-slate-400 border-t border-cyan-500/20 pt-2 space-y-1"></div>
+                </div>
+                <!-- The same notes, drawn. Every dot is a note and every line a [[link]];
+                     the ringed dots are the three it reads before every answer. Click a dot
+                     to read that note. The canvas is `hidden` when the reader is showing, and
+                     js/notes-graph.js stops its loop when it is -- a picture nobody is looking
+                     at should not be costing frames on a machine running a model. Leaving the
+                     tab stops it too. -->
+                <div id="notes-graph-view" class="hidden flex flex-1 min-h-0 flex-col gap-2 p-3">
+                    <div class="flex items-center gap-3 flex-wrap text-[10px] font-mono text-slate-500">
+                        <span id="notes-graph-count"></span>
+                        <button id="btn-notes-graph-fit" class="text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-0.5 bg-cyan-950/40 cursor-pointer">Fit</button>
+                        <span>Drag to move &middot; scroll to zoom &middot; click a note to read it</span>
+                    </div>
+                    <div class="flex-1 min-h-0 rounded border border-cyan-500/20 bg-slate-900/60 overflow-hidden">
+                        <canvas id="notes-graph-canvas" class="w-full h-full block"></canvas>
+                    </div>
+                    <div id="notes-graph-note" class="hidden text-[10px] font-mono text-amber-300"></div>
+                </div>
+            </div>
+
+            <!-- ACTIVITY -- everything the companion has actually done. -->
+            <div id="chat-view-activity" class="flex-1 min-h-0 flex-col hidden" data-chat-view="activity">
+                <div class="px-4 py-1.5 bg-slate-950/40 border-b border-cyan-500/10 flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <span class="text-slate-400 truncate">Every tool call, in order</span>
+                    <button type="button" id="btn-activity-refresh" class="text-slate-500 hover:text-cyan-300 shrink-0">refresh</button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                        What it returned, and &mdash; where something changed and recorded a way
+                        back &mdash; the way to undo it.
+                    </p>
+                    <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
+                </div>
+            </div>
         </div>
 
     </main>
@@ -512,7 +610,51 @@
 
     <!-- THE CHIN BAR. One slim strip along the bottom that is always there, so what the
          companion is doing right now never has to win space against anything else. -->
-    <footer id="chin-bar" class="w-full shrink-0 bg-slate-950/80 border-t border-cyan-500/30 px-4 py-1 flex items-center gap-2 z-20 backdrop-blur-md">
+    <footer id="chin-bar" class="w-full shrink-0 bg-slate-950/80 border-t border-cyan-500/30 z-20 backdrop-blur-md flex flex-col">
+
+        <!-- TACTICAL QUICK COMMANDS. They were a panel in the left column, which put four
+             buttons you press in passing behind the same drag, resize and undock machinery
+             as a panel you read. They are a line of the chin bar now: always there, never
+             competing for a row of the grid, and next to the state they act on.
+
+             Three groups on one line rather than a row of equal buttons, because they are
+             not equal. Status is what the companion is doing, so it sits with STATE on the
+             left. Diagnostics and Help are the two ways out of trouble, so they are together
+             on the right. Game Mode is in the middle on its own: it is the only one here
+             that changes the machine rather than asking a question.
+
+             Memories is no longer here -- it is a tab of the Neural Dialogue Stream, beside
+             the notes it is drawn from. -->
+        <div id="chin-commands" class="chin-commands px-4">
+            <div class="chin-commands-group">
+                <button type="button" class="quick-chip chin-cmd" data-cmd="status" title="Ask what state everything is in">
+                    &#128202; Status
+                </button>
+            </div>
+
+            <!-- Not a quick-chip: this toggles real app state (stop background servers,
+                 hide the HUD) rather than sending a chat command. See set_game_mode_rust
+                 and the game-mode-changed handling in app.js. Native desktop app only --
+                 hidden by initStartupPerformance alongside the rest of that settings
+                 group, since there's no background server or window to manage from a
+                 browser tab. -->
+            <div class="chin-commands-group chin-commands-mid">
+                <button id="btn-game-mode" type="button" class="hidden chin-cmd chin-cmd-game">
+                    &#127918; Game Mode: OFF
+                </button>
+            </div>
+
+            <div class="chin-commands-group chin-commands-end">
+                <button type="button" class="quick-chip chin-cmd" data-cmd="diagnostics" title="Run the self-check and say what it found">
+                    &#129658; Diagnostics
+                </button>
+                <button type="button" class="quick-chip chin-cmd" data-cmd="help" title="What can this thing do?">
+                    &#10067; Help Info
+                </button>
+            </div>
+        </div>
+
+        <div class="chin-line px-4 py-1 flex items-center gap-2">
         <span class="text-[10px] font-mono text-slate-400 tracking-wider">STATE</span>
         <span id="status-badge" class="px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
             IDLE
@@ -575,109 +717,8 @@
                 class="hidden px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30 cursor-pointer hover:text-cyan-200">
             STATIC
         </button>
+        </div>
     </footer>
-
-    <!-- ACTIVITY LOG MODAL -- everything the companion has actually done -->
-    <div id="activity-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-4 max-h-[90vh] overflow-y-auto">
-            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
-                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
-                    📜 ACTIVITY LOG
-                </h2>
-                <button id="btn-close-activity" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
-            </div>
-            <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                Every tool call, in order, with what it returned. Anything that changed something
-                and recorded a way back can be undone here.
-            </p>
-            <div id="activity-list" class="space-y-2 font-mono text-xs"></div>
-        </div>
-    </div>
-
-    <!-- CONVERSATIONS -- the history list, and the way back into an old one.
-         Every conversation is a separate transcript. That is a convenience, and it is also
-         a wall: the companion is given the history of the conversation it is answering in
-         and has no way to reach another one, or to learn that another one exists. Nothing
-         on this panel is a tool. It cannot start a conversation, switch to one, rename one
-         or delete one -- those are the operator's, the same way the module switches and the
-         tool permissions are. -->
-    <div id="sessions-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-3 max-h-[92vh] flex flex-col">
-            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
-                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
-                    💬 CONVERSATIONS
-                </h2>
-                <div class="flex items-center gap-2">
-                    <button id="btn-session-new" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">＋ New</button>
-                    <button id="btn-close-sessions" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
-                </div>
-            </div>
-            <p class="text-[11px] font-mono text-slate-400">
-                Click one to pick up where you left off. A new conversation starts with a clean
-                slate — it remembers your notes, but not what was said in the others.
-            </p>
-            <div id="sessions-list" class="flex-1 overflow-y-auto space-y-1 pr-1 min-h-0"></div>
-            <div id="sessions-count" class="text-[10px] font-mono text-slate-500"></div>
-        </div>
-    </div>
-
-    <!-- THE NOTES READER -- the vault, read inside Aether1.
-         Read-only on purpose, and that is a boundary rather than a missing feature: notes
-         are changed through the tools, behind the consent path, with a way back. A reader
-         that could also write would be a second door into the same folder that nothing
-         had approved. The folder is still just markdown on disk, so Obsidian or any
-         editor opens the same notes; this is for when you do not want to leave. -->
-    <div id="notes-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="hud-panel w-full max-w-5xl p-6 rounded-lg space-y-3 max-h-[92vh] flex flex-col">
-            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
-                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
-                    📓 NOTES
-                </h2>
-                <div class="flex items-center gap-2">
-                    <button id="btn-notes-graph" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🕸 Graph</button>
-                    <button id="btn-notes-open-folder" class="text-[11px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">📂 Folder</button>
-                    <button id="btn-close-notes" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">✕</button>
-                </div>
-            </div>
-            <div id="notes-reader-view" class="flex gap-4 flex-1 min-h-0">
-                <!-- The list. Search runs the same search the companion itself uses on the
-                     vault, so what you find here is what it would have found. -->
-                <div class="w-64 shrink-0 flex flex-col gap-2 min-h-0">
-                    <input id="notes-search" type="search" placeholder="Search your notes…"
-                           class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-xs text-cyan-100 font-mono">
-                    <div id="notes-list" class="flex-1 overflow-y-auto space-y-1 pr-1"></div>
-                    <div id="notes-count" class="text-[10px] font-mono text-slate-500"></div>
-                </div>
-                <!-- The note. -->
-                <div class="flex-1 min-w-0 flex flex-col gap-2">
-                    <div class="flex items-center gap-2 min-h-[1.5rem]">
-                        <button id="btn-notes-back" class="hidden text-[11px] font-mono text-cyan-300 hover:text-cyan-100 cursor-pointer">← Back</button>
-                        <span id="notes-title" class="font-mono text-xs text-cyan-300 truncate"></span>
-                    </div>
-                    <div id="notes-body" class="flex-1 overflow-y-auto bg-slate-900/60 border border-cyan-500/20 rounded p-4 text-sm text-slate-200 leading-relaxed note-render">
-                        <p class="text-xs font-mono text-slate-500">Pick a note on the left.</p>
-                    </div>
-                    <div id="notes-backlinks" class="hidden text-[11px] font-mono text-slate-400 border-t border-cyan-500/20 pt-2 space-y-1"></div>
-                </div>
-            </div>
-            <!-- The same notes, drawn. Every dot is a note and every line a [[link]];
-                 the ringed dots are the three it reads before every answer. Click a dot
-                 to read that note. The canvas is `hidden` when the reader is showing, and
-                 js/notes-graph.js stops its loop when it is -- a picture nobody is looking
-                 at should not be costing frames on a machine running a model. -->
-            <div id="notes-graph-view" class="hidden flex-1 min-h-0 flex flex-col gap-2">
-                <div class="flex items-center gap-3 flex-wrap text-[10px] font-mono text-slate-500">
-                    <span id="notes-graph-count"></span>
-                    <button id="btn-notes-graph-fit" class="text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-0.5 bg-cyan-950/40 cursor-pointer">Fit</button>
-                    <span>Drag to move · scroll to zoom · click a note to read it</span>
-                </div>
-                <div class="flex-1 min-h-0 rounded border border-cyan-500/20 bg-slate-900/60 overflow-hidden">
-                    <canvas id="notes-graph-canvas" class="w-full h-full block"></canvas>
-                </div>
-                <div id="notes-graph-note" class="hidden text-[10px] font-mono text-amber-300"></div>
-            </div>
-        </div>
-    </div>
 
     <!-- SETUP WIZARD -- the way from a fresh install to a model that answers.
          Every stage it shows is re-derived from a live probe of the machine (see
@@ -2349,8 +2390,7 @@
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
                             When AETHER1 starts, also start Ollama if it isn't already
-                            running &mdash; the same thing the Quick Commands "Start Server"
-                            button does, just without you having to click it. Does nothing
+                            running &mdash; without you having to ask for it. Does nothing
                             if Ollama isn't installed, or if something is already listening.
                         </p>
                     </div>
@@ -2371,8 +2411,10 @@
 
                     <p class="text-[10px] font-mono text-slate-500 leading-snug pt-2">
                         Game Mode -- stop the background servers and hide the HUD without
-                        quitting -- is a Quick Command, so it's one click away without
-                        opening Settings first. See 🎮 Game Mode in Tactical Quick Commands.
+                        quitting -- is a quick command, so it's one click away without
+                        opening Settings first. It's in the middle of the bar along the
+                        bottom of the window, called 🎮 Game Mode in Cyberpunk and
+                        💤 Sleep Mode in Daylight and Midnight. Same switch either way.
                     </p>
                 </div>
                 </details>
