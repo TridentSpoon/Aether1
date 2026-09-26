@@ -226,6 +226,59 @@ impl Persona {
         }
     }
 
+    /// Every line that has personas behind it, in the order the HUD lists them.
+    ///
+    /// Built from [`Persona::all`] rather than written out, so a new persona joins its line
+    /// here the moment [`Persona::group`] says which line it is in.
+    pub fn groups() -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for persona in Persona::all() {
+            if let Some(group) = persona.group() {
+                if !out.contains(&group) {
+                    out.push(group);
+                }
+            }
+        }
+        out
+    }
+
+    /// The personas of one line.
+    pub fn group_members(group: &str) -> Vec<Persona> {
+        Persona::all()
+            .iter()
+            .filter(|p| p.group() == Some(group))
+            .cloned()
+            .collect()
+    }
+
+    /// The lines that can be picked whole: the ones with more than one persona in them.
+    ///
+    /// A line of one is the persona itself -- picking it would promise a cast and deliver
+    /// the same single node, with nothing for a hand-off to move to. Trace Protocols sits
+    /// there today: The Nexus and three shapes that carry no directive of their own.
+    pub fn flow_lines() -> Vec<&'static str> {
+        Persona::groups()
+            .into_iter()
+            .filter(|g| Persona::group_members(g).len() > 1)
+            .collect()
+    }
+
+    /// The node that answers for a line when no member of it owns the question in
+    /// particular -- the one the operator lands on when they pick the whole line rather
+    /// than a character (see llm/flow.rs).
+    ///
+    /// It is the generalist of each cast, chosen deliberately: a line picked whole has to
+    /// start somewhere, and starting on a specialist would mean the first ordinary question
+    /// of a session is answered by whoever happens to be first in the enum.
+    pub fn group_anchor(group: &str) -> Option<Persona> {
+        match group {
+            "The Umbrals" => Some(Persona::ArxLocas),
+            "Singular Ascended Class" => Some(Persona::Halcy),
+            "Trace Protocols" => Some(Persona::Nexus),
+            _ => Persona::group_members(group).into_iter().next(),
+        }
+    }
+
     /// What this persona says as it hands the question to somebody better placed.
     ///
     /// Written per persona rather than as one shared sentence because the hand-off is the

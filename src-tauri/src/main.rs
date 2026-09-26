@@ -17,6 +17,7 @@
     windows_subsystem = "windows"
 )]
 
+mod audio_devices;
 mod background_services;
 mod cli;
 mod code_chat;
@@ -31,10 +32,12 @@ mod github_auth;
 mod gpu;
 mod hotkey;
 mod installs;
+mod lan;
 mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod persona_voice;
 mod profile;
 mod releases;
 mod serve_auth;
@@ -446,6 +449,45 @@ fn profile_report_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 #[tauri::command(async)]
 fn revoke_device_rust(id: String) -> Result<serde_json::Value, String> {
     profile::revoke(&id)
+}
+
+/// The Remote & LAN pane, read in one go: whether anything is serving, whether it is
+/// AETHER1's own child, and who is paired.
+#[tauri::command(async)]
+fn lan_status_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+) -> serde_json::Value {
+    lan::status(&engine, &managed)
+}
+
+/// `aether1 --serve --lan`, started from the window and kept as a child so it can be
+/// stopped again from the same button.
+#[tauri::command(async)]
+fn lan_start_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+) -> Result<serde_json::Value, String> {
+    lan::start(&engine, &managed)
+}
+
+/// Stops the server AETHER1 started. One somebody else started is refused, not killed.
+#[tauri::command(async)]
+fn lan_stop_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+) -> Result<serde_json::Value, String> {
+    lan::stop(&engine, &managed)
+}
+
+/// `aether1 pair` from the window. The phrase comes back exactly once -- nothing stores
+/// it -- along with how many devices the rotation just unpaired.
+#[tauri::command(async)]
+fn lan_new_phrase_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+) -> Result<serde_json::Value, String> {
+    lan::new_phrase(&engine, &managed)
 }
 
 #[tauri::command(async)]
@@ -995,6 +1037,15 @@ fn set_flow_mode_rust(engine: tauri::State<LlmEngine>, enabled: bool) -> Result<
     commands::set_flow_mode(&engine, enabled)
 }
 
+/// Pick a whole line to flow within, or release it with `line: null`.
+#[tauri::command(async)]
+fn set_flow_line_rust(
+    engine: tauri::State<LlmEngine>,
+    line: Option<String>,
+) -> Result<serde_json::Value, String> {
+    commands::set_flow_line(&engine, line)
+}
+
 #[tauri::command(async)]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
@@ -1066,6 +1117,11 @@ fn voice_download_status_rust() -> serde_json::Value {
 #[tauri::command(async)]
 fn forget_voice_download_rust(voice: String) -> serde_json::Value {
     commands::forget_voice_download(voice)
+}
+
+#[tauri::command(async)]
+fn audio_devices_rust() -> serde_json::Value {
+    commands::audio_devices()
 }
 
 #[tauri::command(async)]
@@ -1472,8 +1528,31 @@ fn test_speech_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 }
 
 #[tauri::command(async)]
-fn list_personas_rust() -> serde_json::Value {
-    commands::list_personas()
+fn list_personas_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::list_personas(&engine)
+}
+
+#[tauri::command(async)]
+fn voice_pickers_rust() -> serde_json::Value {
+    commands::voice_pickers()
+}
+
+#[tauri::command(async)]
+fn set_persona_voice_rust(
+    engine: tauri::State<LlmEngine>,
+    persona: String,
+    voice: Option<String>,
+    local_voice: Option<String>,
+) -> Result<serde_json::Value, String> {
+    commands::set_persona_voice(&engine, persona, voice, local_voice)
+}
+
+#[tauri::command(async)]
+fn clear_persona_voice_rust(
+    engine: tauri::State<LlmEngine>,
+    persona: String,
+) -> Result<serde_json::Value, String> {
+    commands::clear_persona_voice(&engine, persona)
 }
 
 #[tauri::command(async)]
@@ -2124,6 +2203,7 @@ fn main() {
         ))
         .manage(llm_engine)
         .manage(background_services::ManagedOllama::default())
+        .manage(lan::ManagedServer::default())
         // Only the native app ever has this. `--serve` returns from main() long before
         // here, so in a headless run the map of live terminals does not exist to be
         // reached -- the isolation is a fact about the process, not a check that has to be
@@ -2139,6 +2219,7 @@ fn main() {
             set_speciality_model_rust,
             flow_mode_rust,
             set_flow_mode_rust,
+            set_flow_line_rust,
             doctor_report_rust,
             doctor_repair_rust,
             setup_advice_rust,
@@ -2150,6 +2231,7 @@ fn main() {
             start_voice_download_rust,
             voice_download_status_rust,
             forget_voice_download_rust,
+            audio_devices_rust,
             start_local_server_rust,
             get_static_info_rust,
             get_tools_rust,
@@ -2191,6 +2273,9 @@ fn main() {
             code_conventions_rust,
             test_speech_rust,
             list_personas_rust,
+            voice_pickers_rust,
+            set_persona_voice_rust,
+            clear_persona_voice_rust,
             get_version_info,
             other_installs_rust,
             remove_install_rust,
@@ -2199,6 +2284,10 @@ fn main() {
             apply_update_rust,
             profile_report_rust,
             revoke_device_rust,
+            lan_status_rust,
+            lan_start_rust,
+            lan_stop_rust,
+            lan_new_phrase_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,
@@ -2282,6 +2371,23 @@ fn main() {
                             result["message"].as_str().unwrap_or("unknown error")
                         );
                     }
+                }
+
+                // Putting this machine on the network at startup, when that has been asked
+                // for. Off unless it has been: opening the app must never be the thing that
+                // exposes a machine. Game Mode's whole point is quieting background work, so
+                // it holds this back the same way it holds Ollama back.
+                if !game_mode {
+                    // On a thread: starting a server means waiting for a child process to
+                    // bind a port, and nothing about the window appearing should wait on
+                    // that. `start_if_asked_for` is silent when the setting is off, so the
+                    // thread costs nothing on the normal path.
+                    let app_handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        let engine = app_handle.state::<LlmEngine>();
+                        let managed = app_handle.state::<lan::ManagedServer>();
+                        lan::start_if_asked_for(&engine, &managed);
+                    });
                 }
             }
 

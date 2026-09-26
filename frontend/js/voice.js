@@ -18,6 +18,10 @@ class VoiceAudioEngine {
         this.dataArray = new Uint8Array(64);
         this.currentAudio = null;
         this.capture = null;
+        // Which speaker and microphone to use, as browser device ids. Empty means the
+        // system's own choice, which is what this engine did before Settings could ask.
+        this.outputDeviceId = '';
+        this.inputDeviceId = '';
         this.ttsQueue = [];
         this.isDrainingQueue = false;
         this.sfxEnabled = true;
@@ -49,6 +53,38 @@ class VoiceAudioEngine {
         } catch (e) {
             console.warn("Web Audio API not supported", e);
         }
+    }
+
+    /**
+     * Sends everything this engine plays to one speaker. Returns whether it worked, which
+     * the caller reports rather than swallowing.
+     *
+     * It has to be the *context* that moves, not the audio element. Every clip is routed
+     * through `createMediaElementSource` for the waveform (see playClip), and an element
+     * inside an audio graph no longer has an output of its own -- `HTMLMediaElement
+     * .setSinkId` on it is ignored, silently, which is exactly the kind of failure this
+     * pane exists to end. `AudioContext.setSinkId` is the one that moves the graph, and it
+     * is newer: WebKitGTK, which is what the native window is, does not have it yet. So a
+     * false here is a real answer -- "this window cannot move it" -- and the same setting
+     * still steers `aether1 say`, which plays through its own process.
+     */
+    async setOutputDevice(deviceId) {
+        this.outputDeviceId = deviceId || '';
+        if (!this.audioCtx || typeof this.audioCtx.setSinkId !== 'function') {
+            return !deviceId;
+        }
+        try {
+            await this.audioCtx.setSinkId(this.outputDeviceId || '');
+            return true;
+        } catch (e) {
+            console.warn('could not move audio to that device', e);
+            return false;
+        }
+    }
+
+    /** Which microphone startCapture opens. Applied at the next recording, not this one. */
+    setInputDevice(deviceId) {
+        this.inputDeviceId = deviceId || '';
     }
 
     /**
@@ -126,9 +162,12 @@ class VoiceAudioEngine {
     async startCapture() {
         if (this.capture) return true;
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-            });
+            // `exact` rather than a preference: a chosen microphone that has been
+            // unplugged should fail here and say so, not quietly record the laptop lid
+            // one while the operator believes they are on the headset.
+            const audio = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+            if (this.inputDeviceId) audio.deviceId = { exact: this.inputDeviceId };
+            const stream = await navigator.mediaDevices.getUserMedia({ audio });
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             const ctx = new AudioContext();
             const source = ctx.createMediaStreamSource(stream);

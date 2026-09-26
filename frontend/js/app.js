@@ -87,16 +87,22 @@ document.addEventListener('DOMContentLoaded', () => {
      * stays in the DOM; this only ever moves the is-active class, so nothing that
      * reads or writes a settings field by id needs to know the layout changed.
      *
-     * Two of the panes are platform-dependent (Desktop Sprite, Startup &
-     * Performance) and start with their rail entry hidden -- revealSettingsSection
-     * is how initSpriteMode/initStartupPerformance turn them on. An entry that is
-     * hidden cannot be chosen, including out of the remembered choice below.
+     * One pane is platform-dependent (Startup & Performance) and starts with its rail
+     * entry hidden -- revealSettingsSection is how initStartupPerformance turns it on.
+     * An entry that is hidden cannot be chosen, including out of the remembered choice
+     * below. Desktop Sprite used to be a second such entry; it is a card inside Display
+     * now (see SETTINGS_SECTION_ALIASES), since both it and the panel grid answer the
+     * same question of where this thing is drawn on screen.
      *
      * A pane whose body is still a <details> is opened when it is chosen, which is
      * what keeps the two groups that probe the machine on open (the coding group,
      * the doctor) probing exactly when someone goes looking at them.
      */
     const SETTINGS_SECTION_KEY = 'aether_settings_section';
+    // Sections that have been folded into another one. Only the remembered choice can still
+    // name one, so this is what stops somebody who was last in Desktop Sprite from being
+    // dropped back at the top of the rail the first time they open Settings after updating.
+    const SETTINGS_SECTION_ALIASES = { sprite: 'layout' };
     const settingsNav = document.getElementById('settings-nav');
     const settingsNavEmpty = document.getElementById('settings-nav-empty');
     const settingsSearch = document.getElementById('settings-search');
@@ -132,6 +138,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // visible would otherwise leave a second hologram rendering behind the Network page.
         if (name === 'avatars') openAvatarBrowser();
         else if (typeof disposeAvatarPreview === 'function') disposeAvatarPreview();
+        // Same reasoning as the avatar browser's: the stage you were on is only meaningful
+        // while you are in the section. Coming back to Appearance should land on the pane,
+        // not halfway inside the colour panel you left open yesterday.
+        if (name !== 'appearance') showAppearanceStage('main');
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
         try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
@@ -201,6 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function restoreSettingsSection() {
         let remembered = null;
         try { remembered = localStorage.getItem(SETTINGS_SECTION_KEY); } catch (e) { /* private mode */ }
+        if (remembered) remembered = SETTINGS_SECTION_ALIASES[remembered] || remembered;
         if (remembered && showSettingsSection(remembered)) return;
         const first = settingsNavItems().find(item => !item.classList.contains('hidden'));
         if (first) showSettingsSection(first.dataset.settingsSection);
@@ -298,6 +309,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let avatarBrowserSelection = null;  // which avatar stage 3 is showing
     let avatarPreviewEngine = null;
     let avatarBrowserBuilt = false;
+    /* The last answer from /api/flow: whether hand-offs are on, the line they may move
+       within, the line picked whole if there is one, and which lines have personas behind
+       them at all. The browser draws from this copy rather than awaiting a fetch in the
+       middle of a render; refreshFlowMode is what keeps it current. */
+    let flowState = null;
 
     /* The persona catalogue's rows themselves, not just the <option>s built from them: the
        avatar browser wants a persona's speciality, access and voice beside its avatar, and
@@ -305,6 +321,12 @@ document.addEventListener('DOMContentLoaded', () => {
        an attribute first. Up here for the same reason as the state above. */
     let personaRows = new Map();
     function personaRow(key) { return personaRows.get(key) || null; }
+    /* The two voice lists the avatar's own picker is built from, fetched once and kept:
+       they are a table in the binary plus a directory listing, and the pane is opened
+       and closed a dozen times while somebody is choosing. Up here with personaRows for
+       the same reason -- refreshAvatarBrowser runs before this file's later declarations
+       (see openAvatarDetail), and a `let` further down would be a TDZ error at startup. */
+    let voicePickerLists = null;
     let currentZoom = parseFloat(localStorage.getItem('aether_avatar_zoom')) || 1;
     let currentTheme = Aether1Theme.current();
 
@@ -461,6 +483,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Avatar Engine Handler (3D shape + optional linked persona identity)
     function applyAvatar(avatarName, updatePersona = false) {
+        // Picking one character is a decision against the cast: a line picked whole
+        // outranks whoever is on screen (see llm/flow.rs), so leaving it in force here
+        // would send the next question back into the old line the moment it matched.
+        // Only a real pick counts -- a restored avatar at startup is not one.
+        if (updatePersona) releasePickedLineFor(avatarName);
         currentAvatar = avatarName;
         localStorage.setItem('aether_avatar', avatarName);
         setHologramAvatar(avatarName);
@@ -679,6 +706,76 @@ document.addEventListener('DOMContentLoaded', () => {
         return cat ? cat.inGroup(groupId).filter(avatarIsVisible) : [];
     }
 
+    /* ---- A whole line as the pick ------------------------------------------
+       An avatar is a character; a line is a cast. Picking the cast means the question goes
+       to whichever of its nodes owns the subject, and the one on screen is whoever is
+       holding it at that moment -- so the pick survives every hand-off, which wearing a
+       member of the line does not. The rule itself is llm/flow.rs; these three are the
+       state it is drawn from. */
+    function pickedLine() {
+        return (flowState && flowState.line) || null;
+    }
+
+    /* Not every line is a cast. The eXcelsior Class is five shapes with no directives
+       behind them yet, and Trace Protocols is one persona and three eggs that carry none --
+       picking either would promise a group and deliver a single node. The backend says
+       which lines it can actually pass a question around, rather than this being guessed
+       at here from the catalogue. */
+    function lineCanBePicked(groupName) {
+        return Boolean(flowState && Array.isArray(flowState.lines)
+            && flowState.lines.includes(groupName));
+    }
+
+    /* Releases the picked line unless the avatar being worn is one of its own. Wearing
+       another member of the same cast is not a change of mind about the cast. */
+    function releasePickedLineFor(avatarName) {
+        const line = pickedLine();
+        if (!line) return;
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(avatarName);
+        const group = entry && cat.group(entry.group);
+        if (group && group.name === line) return;
+        setFlowLine(null);
+    }
+
+    async function setFlowLine(name) {
+        let state = null;
+        try {
+            if (IS_TAURI) {
+                state = await tauriInvoke('set_flow_line_rust', { line: name });
+            } else {
+                const resp = await apiFetch('/api/flow/line', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ line: name }),
+                });
+                if (resp.ok) state = await resp.json();
+            }
+        } catch (e) {
+            console.error('Could not change the picked line', e);
+        }
+        if (!state) return;
+        flowState = state;
+        /* Picking a line the operator was standing outside of lands them on its anchor --
+           the cast's generalist -- and the backend has already written that persona. The
+           HUD wears the matching avatar so the hologram agrees with who is answering,
+           greeting included: it is a change of who you are talking to, and a silent one
+           would be the hologram lying about it. */
+        const personaSelect = document.getElementById('setting-persona');
+        const answering = state.persona || (personaSelect && personaSelect.value) || null;
+        if (answering) {
+            const cat = avatarCatalogue();
+            const entry = cat && cat.all.find((a) => a.persona === answering);
+            // Also when the backend moved nobody: the operator can have been inside the
+            // line by persona while wearing a shape from somewhere else, and a hologram
+            // from another cast while this one answers is the confusion the pick exists
+            // to remove.
+            if (entry && entry.id !== currentAvatar) applyAvatar(entry.id, true);
+        }
+        refreshFlowMode();
+        refreshAvatarBrowser();
+    }
+
     function showAvatarStage(name) {
         AVATAR_STAGES.forEach((stage) => {
             document.querySelectorAll(`[data-avatar-stage="${stage}"]`).forEach((el) => {
@@ -736,6 +833,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 count.textContent += ' · wearing one of these';
                 card.classList.add('is-current');
             }
+            // Two different states worth telling apart on the same card: wearing a member
+            // of this line, and having picked the line itself.
+            if (pickedLine() === group.name) {
+                count.textContent += ' · picked as a line';
+                card.classList.add('is-current');
+            } else if (lineCanBePicked(group.name)) {
+                count.textContent += ' · can be picked whole';
+            }
 
             card.append(faces, name, tagline, blurb, count);
             card.addEventListener('click', () => {
@@ -775,7 +880,53 @@ document.addEventListener('DOMContentLoaded', () => {
                 : `${hidden} more members of this line have not turned up yet.`;
         }
 
+        renderLinePick(group);
         showAvatarStage('members');
+    }
+
+    /* The button that picks a line whole, and the sentence explaining what that does. It
+       says the consequence rather than the setting: what changes is who answers the next
+       question, and "flow_group" would mean nothing to the person reading it. */
+    function renderLinePick(group) {
+        const button = document.getElementById('btn-avatar-line');
+        const note = document.getElementById('avatar-line-note');
+        if (!button || !note) return;
+
+        const picked = pickedLine() === group.name;
+        const available = lineCanBePicked(group.name);
+        button.classList.toggle('is-picked', picked);
+        button.disabled = !available;
+
+        if (!available) {
+            const cat = avatarCatalogue();
+            // One persona in the line and one alone is a different thing from none: the
+            // first is a cast that has not grown yet, the second is shapes. Counted from
+            // the catalogue rather than the visible list, so an unlocked egg does not
+            // change the sentence and a locked one is not given away by it.
+            const backed = cat ? cat.inGroup(group.id).filter((a) => a.persona).length : 0;
+            button.textContent = 'Not a cast yet';
+            note.textContent = backed === 1
+                ? 'Only one of these carries a persona so far, so picking the line would be '
+                    + 'the same as wearing that one. Do that instead, for now.'
+                : 'These have shapes but no directives behind them, so there is nobody here '
+                    + 'to hand a question to. Wearing one leaves whoever you had selected '
+                    + 'answering.';
+        } else if (picked) {
+            button.textContent = 'Release this line';
+            note.textContent = `${group.name} is answering. Each question goes to whichever of `
+                + 'them owns the subject, and the one holding it says so before it moves. '
+                + 'Releasing leaves you with whoever is answering at the time.';
+        } else {
+            button.textContent = 'Use this whole line';
+            note.textContent = 'Pick the cast instead of one of its members: the question goes '
+                + `to whichever node of ${group.name} owns it, and the hologram follows. You `
+                + 'can still wear a single one of them below.';
+        }
+
+        button.onclick = () => {
+            voiceEngine.playSFX('click');
+            setFlowLine(picked ? null : group.name);
+        };
     }
 
     function buildAvatarCard(entry) {
@@ -859,7 +1010,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const voiceRow = document.getElementById('avatar-detail-voice-row');
         voiceRow.classList.toggle('hidden', !persona);
-        if (persona) document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+        if (persona) renderAvatarVoice(persona);
 
         const isCurrent = avatarId === currentAvatar;
         const useBtn = document.getElementById('btn-avatar-use');
@@ -920,6 +1071,156 @@ document.addEventListener('DOMContentLoaded', () => {
         return parts.join('  ·  ');
     }
 
+    /* ---- Giving one avatar a voice of your own choosing ---------------------
+       The identity table in genesis.rs is where an avatar's voices come from, and it is the
+       author's taste, not the operator's. This is where they disagree with it: two selects,
+       saved the moment one changes, and a reset that removes the choice rather than writing
+       today's default into it -- so an avatar put back to its own voice follows the table if
+       the table ever changes. Nothing here touches the settings form, so it is safe to save
+       on change even though the window has one Save Changes button. */
+    async function fetchVoicePickerLists() {
+        if (voicePickerLists) return voicePickerLists;
+        const data = IS_TAURI
+            ? await tauriInvoke('voice_pickers_rust')
+            : await (await apiFetch('/api/voice/pickers')).json();
+        voicePickerLists = data;
+        return voicePickerLists;
+    }
+
+    function renderAvatarVoice(persona) {
+        document.getElementById('avatar-detail-voice').textContent = avatarVoiceLine(persona);
+
+        // What it would speak in if you changed nothing, shown only when you have: two
+        // identical lines, one labelled "default", is a pane telling you nothing twice.
+        const defaults = document.getElementById('avatar-detail-voice-default');
+        defaults.classList.toggle('hidden', !persona.voice_customised);
+        if (persona.voice_customised) {
+            const hasOwn = persona.default_voice || persona.default_local_voice;
+            defaults.textContent = hasOwn
+                ? `Its own voice: ${avatarVoiceLine({
+                    voice: persona.default_voice,
+                    local_voice: persona.default_local_voice,
+                })}`
+                : 'This one was written without a voice of its own: reset it and it speaks '
+                    + 'in whatever Voice & Sound says.';
+        }
+
+        const reset = document.getElementById('btn-avatar-voice-reset');
+        reset.classList.toggle('hidden', !persona.voice_customised);
+        reset.onclick = () => {
+            voiceEngine.playSFX('click');
+            saveAvatarVoice(persona.key, null);
+        };
+
+        const note = document.getElementById('avatar-voice-note');
+        const cloud = document.getElementById('avatar-voice-cloud');
+        const local = document.getElementById('avatar-voice-local');
+        note.textContent = '';
+
+        fetchVoicePickerLists().then((lists) => {
+            fillVoiceSelect(cloud, lists.cloud.map((v) => ({
+                value: v.name,
+                label: `${v.name} — ${v.label}`,
+            })), persona.default_voice, persona.voice);
+            fillVoiceSelect(local, lists.local.map((v) => ({
+                value: v.name,
+                // A voice that is not downloaded is still offered: it is a real choice that
+                // needs fetching first, and hiding it would make this picker disagree with
+                // the download list in Voice & Sound.
+                label: `${v.name} — ${v.label}${v.installed ? '' : ' (not downloaded)'}`,
+            })), persona.default_local_voice, persona.local_voice);
+        }).catch((e) => {
+            console.warn('Could not load the voice lists', e);
+            note.textContent = 'The voice lists could not be loaded, so this avatar keeps '
+                + 'the voice it was written with.';
+        });
+
+        cloud.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+        local.onchange = () => saveAvatarVoice(persona.key, {
+            voice: cloud.value,
+            local_voice: local.value,
+        });
+    }
+
+    /* The first option is always "leave it alone", and it says what leaving it alone sounds
+       like -- an avatar with no voice of its own in the identity table speaks in whatever
+       Voice & Sound says, and that is worth reading rather than inferring from a blank. */
+    function fillVoiceSelect(select, options, defaultValue, current) {
+        select.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = defaultValue
+            ? `Its own: ${defaultValue}`
+            : 'Whatever Voice & Sound says';
+        select.appendChild(first);
+        options.forEach((opt) => {
+            const el = document.createElement('option');
+            el.value = opt.value;
+            el.textContent = opt.label;
+            select.appendChild(el);
+        });
+        // `current` is the voice it actually speaks in; it only counts as a *choice* when it
+        // is not simply the default, or the picker would show every avatar as customised.
+        select.value = current && current !== defaultValue ? current : '';
+        if (select.value !== '' && !options.some((o) => o.value === select.value)) {
+            select.value = '';
+        }
+    }
+
+    /* `choice` null resets this avatar; otherwise each half is a voice name or '' for "leave
+       that half at its default". The reply is the whole persona list, so the pane redraws
+       from what was stored rather than from what it hoped would be. */
+    async function saveAvatarVoice(personaKey, choice) {
+        const note = document.getElementById('avatar-voice-note');
+        try {
+            let personas;
+            if (choice === null) {
+                personas = IS_TAURI
+                    ? await tauriInvoke('clear_persona_voice_rust', { persona: personaKey })
+                    : await postJson('/api/personas/voice/reset', { persona: personaKey });
+            } else {
+                const body = {
+                    persona: personaKey,
+                    voice: choice.voice || null,
+                    localVoice: choice.local_voice || null,
+                };
+                personas = IS_TAURI
+                    ? await tauriInvoke('set_persona_voice_rust', body)
+                    : await postJson('/api/personas/voice', {
+                        persona: personaKey,
+                        voice: choice.voice || null,
+                        local_voice: choice.local_voice || null,
+                    });
+            }
+            if (Array.isArray(personas)) {
+                personaRows = new Map(personas.map((p) => [p.key, p]));
+            }
+            // Redrawn first, because redrawing clears the note -- and the note is the only
+            // thing on screen that says the choice reached the database.
+            const row = personaRow(personaKey);
+            if (row) renderAvatarVoice(row);
+            note.textContent = choice === null
+                ? 'Back to the voice it was written with.'
+                : 'Saved. It speaks in this from its next answer.';
+        } catch (e) {
+            console.warn('Could not save the avatar voice', e);
+            note.textContent = `That voice could not be saved: ${e.message || e}`;
+        }
+    }
+
+    async function postJson(path, body) {
+        const resp = await apiFetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(await resp.text() || `${resp.status}`);
+        return resp.json();
+    }
+
     // ---- The live preview ---------------------------------------------------
     function buildAvatarPreview(avatarId) {
         const viewport = document.getElementById('avatar-preview-viewport');
@@ -972,6 +1273,9 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshAvatarEntryCard();
         renderAvatarGroups();
         if (avatarBrowserGroup) {
+            const cat = avatarCatalogue();
+            const group = cat && cat.group(avatarBrowserGroup);
+            if (group) renderLinePick(group);
             const active = document.querySelector('[data-avatar-stage="members"].is-active')
                 || document.querySelector('[data-avatar-stage="detail"].is-active');
             const grid = document.getElementById('avatar-member-grid');
@@ -1038,6 +1342,93 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* ---- Appearance: the pane, and the colour panel behind its theme card -------------
+       The avatar got its own section because there are twenty-two of them with something to
+       say about each. The theme is one decision with a lot of controls, so it stays in
+       Appearance and drills down one level instead. */
+    const APPEARANCE_STAGES = ['main', 'theme'];
+
+    function showAppearanceStage(name) {
+        APPEARANCE_STAGES.forEach((stage) => {
+            document.querySelectorAll(`[data-appearance-stage="${stage}"]`).forEach((el) => {
+                el.classList.toggle('is-active', stage === name);
+            });
+        });
+        const detail = document.getElementById('settings-detail');
+        if (detail) detail.scrollTop = 0;
+    }
+
+    const themeEntryCard = document.getElementById('theme-entry-card');
+    if (themeEntryCard) {
+        themeEntryCard.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showAppearanceStage('theme');
+        });
+    }
+    document.querySelectorAll('[data-appearance-back]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showAppearanceStage(btn.dataset.appearanceBack || 'main');
+        });
+    });
+
+    /* The named palettes, built from the preset list rather than from markup.
+       What a swatch *does* depends on the mode, which is the whole of the change here:
+       in Cyberpunk it is the palette, ground included; in Daylight and Midnight it is the
+       two accents, worn on the shell those modes were designed with. The two flat presets
+       are not offered as swatches -- they are what those modes already are, which is what
+       the mode buttons above and the reset button below already say. */
+    function renderThemePalette(theme) {
+        const grid = document.getElementById('theme-palette-grid');
+        if (!grid) return;
+        const accentOnly = Aether1Theme.groundIsFixed(theme.mode);
+        const list = Aether1Theme.presets().filter((p) => p.mode === 'cyberpunk');
+        if (accentOnly) {
+            // The mode's own accents belong in the row too, or the palette it ships with is
+            // the one thing you cannot pick.
+            const own = Aether1Theme.preset(theme.mode);
+            if (own) list.unshift(own);
+        }
+        grid.innerHTML = '';
+        list.forEach((p) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'theme-palette-btn';
+            btn.dataset.colorTheme = p.id;
+            btn.title = accentOnly
+                ? `${p.label} accents, on the ${Aether1Theme.MODE_LABELS[theme.mode]} shell`
+                : `${p.label}: the whole palette, background included`;
+            const bars = document.createElement('span');
+            bars.className = 'theme-palette-bars';
+            bars.setAttribute('aria-hidden', 'true');
+            // In accent mode the ground bar is the mode's own, not the preset's, so the
+            // swatch shows what pressing it would actually paint.
+            const ground = accentOnly ? theme.colours.background : p.background;
+            [ground, p.main, p.highlight].forEach((hex) => {
+                const bar = document.createElement('span');
+                bar.className = 'theme-palette-bar';
+                bar.style.background = hex;
+                bars.appendChild(bar);
+            });
+            /* A swatch lights up only while the colours still match it exactly -- nudge one
+               picker and nothing is selected, which is the honest state: what is on screen is
+               no longer any of these. Decided here rather than in a later pass, because the
+               grid is rebuilt on every theme change and anything marked afterwards would be
+               marked on nodes about to be replaced. */
+            btn.classList.toggle('is-selected', p.id === theme.colours.preset);
+            const label = document.createElement('span');
+            label.className = 'theme-palette-name';
+            label.textContent = p.label;
+            btn.appendChild(bars);
+            btn.appendChild(label);
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                paintTheme(accentOnly ? Aether1Theme.setAccents(p.id) : Aether1Theme.setPreset(p.id));
+            });
+            grid.appendChild(btn);
+        });
+    }
+
     /* Painting a theme. Purely cosmetic and independent of the avatar shape, which can wear
        any of them. Aether1Theme owns what the theme *is* -- the mode, the three colours, what
        is saved and when -- and everything here is the consequences of it: the page, the 3D
@@ -1063,17 +1454,71 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
         });
 
-        /* A preset button lights up only while the colours still match it exactly. Nudge one
-           picker and nothing is selected, which is the honest state: what is on screen is no
-           longer any of the presets. */
-        document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
-            const val = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            btn.classList.toggle('cyber-btn-active', val === theme.colours.preset);
-        });
-
         Object.keys(themeColourInputs).forEach(slot => {
             const input = themeColourInputs[slot];
             if (input && input.value.toLowerCase() !== theme.colours[slot]) input.value = theme.colours[slot];
+        });
+
+        /* How much of the palette this mode hands over. Cyberpunk is made of its colours and
+           gives you all three; Daylight and Midnight are the light and the dark shell, so the
+           ground is theirs and the accents are yours. The pickers are removed rather than
+           disabled -- a greyed-out background swatch still showing a colour invites the
+           question of why it will not move. */
+        const slots = Aether1Theme.slotsFor(theme.mode);
+        const accentOnly = Aether1Theme.groundIsFixed(theme.mode);
+        ['background', 'main', 'highlight'].forEach(slot => {
+            const row = document.getElementById('theme-colour-row-' + slot);
+            if (row) row.classList.toggle('hidden', slots.indexOf(slot) === -1);
+        });
+        const colourGrid = document.getElementById('theme-colour-grid');
+        if (colourGrid) {
+            colourGrid.classList.toggle('grid-cols-3', slots.length > 2);
+            colourGrid.classList.toggle('grid-cols-2', slots.length === 2);
+        }
+        // The two accents are called Main and Highlight while there is a background beside
+        // them to be the other thing; on their own they are simply the accent and its
+        // companion, which is what they are doing in those two modes.
+        const mainLabel = document.getElementById('theme-colour-label-main');
+        const highlightLabel = document.getElementById('theme-colour-label-highlight');
+        if (mainLabel) mainLabel.textContent = accentOnly ? 'Accent' : 'Main';
+        if (highlightLabel) highlightLabel.textContent = accentOnly ? 'Companion' : 'Highlight';
+
+        const groundNote = document.getElementById('theme-ground-note');
+        if (groundNote) {
+            groundNote.textContent = accentOnly
+                ? `${Aether1Theme.MODE_LABELS[theme.mode]} keeps the page it was designed with, so only the accents are yours here. Depth below still moves how dark that page sits.`
+                : '';
+        }
+
+        const themeStageLede = document.getElementById('theme-stage-lede');
+        if (themeStageLede) {
+            themeStageLede.textContent = accentOnly
+                ? 'The flat window shell, light or dark, with an accent of your choosing.'
+                : 'Neon, scanlines and corner brackets, and every colour of it yours -- the ground included, because in this mode the ground is part of the look.';
+        }
+
+        renderThemePalette(theme);
+
+        /* The card back in the pane. The three swatches are read out of the derived variables
+           rather than off theme.colours, so they are the palette as painted -- tone and all --
+           which is the only version worth previewing. */
+        const themeEntryName = document.getElementById('theme-entry-name');
+        const themeEntryMeta = document.getElementById('theme-entry-meta');
+        if (themeEntryName) themeEntryName.textContent = Aether1Theme.MODE_LABELS[theme.mode] || theme.mode;
+        if (themeEntryMeta) {
+            const named = Aether1Theme.preset(theme.colours.preset);
+            // "Daylight / Daylight accents" says one thing twice. A mode wearing its own
+            // palette is simply untouched, which is worth saying instead.
+            themeEntryMeta.textContent = !named
+                ? 'Colours of your own'
+                : named.id === theme.mode
+                    ? 'As it was designed'
+                    : (accentOnly ? `${named.label} accents` : `${named.label} palette`);
+        }
+        const painted = Aether1Theme.variablesFor(theme.mode, theme.colours);
+        [['main', '--neon-cyan'], ['mid', '--neon-blue'], ['highlight', '--neon-purple']].forEach(([name, variable]) => {
+            const swatch = document.getElementById('theme-entry-swatch-' + name);
+            if (swatch) swatch.style.background = painted[variable];
         });
 
         /* The tone sliders are read back through toneOf rather than straight off the stored
@@ -1386,6 +1831,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.error('Could not read the flow mode setting', e);
         }
+        flowState = state;
+        // Settings' Avatars pane draws the picked line in two places (the line's card and
+        // the button on its members stage), so a change of mode has to reach it too.
+        refreshAvatarBrowser();
         if (!state || !state.group) {
             button.classList.add('hidden');
             return;
@@ -1397,9 +1846,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // labels in identical styling read as a caption rather than a switch that is on.
         button.classList.toggle('flow-on', !!state.enabled);
         button.textContent = state.enabled ? '\u25cf FLOW' : 'STATIC';
+        const picked = state.line
+            ? `${state.group} is picked whole, so the cast answers rather than one of them. `
+            : '';
         button.title = state.enabled
-            ? `The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
-            : `This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
+            ? `${picked}The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
+            : `${picked}This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
     }
 
     function initFlowMode() {
@@ -4256,11 +4708,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function renderDevices(payload) {
-        if (!profileDevicesEl) return;
-        profileDevicesEl.replaceChildren();
+    /* Drawn from one function into whichever pane is asking: Profile shows the devices
+       because that is where an operator looks for their own things, and Remote & LAN
+       shows them because that is where the pairing that created them lives. Two copies
+       of this list would be two chances to disagree about who is paired. */
+    function renderDevices(payload, listEl, revokeAllBtn, refresh) {
+        if (!listEl) return;
+        listEl.replaceChildren();
         const devices = payload.devices || [];
-        btnRevokeAllDevices?.classList.toggle('hidden', devices.length === 0);
+        revokeAllBtn?.classList.toggle('hidden', devices.length === 0);
 
         if (!devices.length) {
             const empty = document.createElement('p');
@@ -4268,9 +4724,9 @@ document.addEventListener('DOMContentLoaded', () => {
             empty.textContent = payload.pairing_set_up
                 ? 'Nothing has paired yet. Run aether1 --serve --lan, then type the pairing '
                   + 'phrase into a browser on another device on your network.'
-                : 'No pairing phrase has been made yet. One is generated the first time you run '
-                  + 'aether1 --serve --lan, and it is printed once — write it down then.';
-            profileDevicesEl.appendChild(empty);
+                : 'No pairing phrase has been made yet. Make one with New phrase in Remote & '
+                  + 'LAN, or run aether1 --serve --lan, which makes one and prints it once.';
+            listEl.appendChild(empty);
             return;
         }
 
@@ -4296,18 +4752,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 revoke.disabled = true;
                 try {
                     await requestRevoke(device.id);
-                    await refreshProfile();
+                    await refresh();
                 } catch (e) {
                     revoke.disabled = false;
                     alert(`Could not revoke that device: ${e.message || e}`);
                 }
             });
             row.append(text, revoke);
-            profileDevicesEl.appendChild(row);
+            listEl.appendChild(row);
         });
     }
 
-    btnRevokeAllDevices?.addEventListener('click', async () => {
+    /* The "revoke everything" press, shared by both panes for the same reason the list
+       is: one confirmation, one call, one consequence, wherever it was pressed from. */
+    async function revokeEveryDevice(refresh) {
         voiceEngine.playSFX('click');
         // Worth spelling out on this one: run from a browser over the LAN, "all" includes
         // the browser doing the revoking, which will be logged out by its own click.
@@ -4315,11 +4773,13 @@ document.addEventListener('DOMContentLoaded', () => {
             + 'on the LAN? The pairing phrase is unchanged, so each can pair again.')) return;
         try {
             await requestRevoke('all');
-            await refreshProfile();
+            await refresh();
         } catch (e) {
             alert(`Could not revoke: ${e.message || e}`);
         }
-    });
+    }
+
+    btnRevokeAllDevices?.addEventListener('click', () => revokeEveryDevice(refreshProfile));
 
     async function refreshProfile() {
         if (!profileStatsEl) return;
@@ -4378,7 +4838,8 @@ document.addEventListener('DOMContentLoaded', () => {
         );
 
         renderModels(report.models || []);
-        renderDevices(report.devices || { devices: [], pairing_set_up: false });
+        renderDevices(report.devices || { devices: [], pairing_set_up: false },
+            profileDevicesEl, btnRevokeAllDevices, refreshProfile);
     }
 
     // Read when the section is opened, and read again on each visit after the first: the
@@ -4386,6 +4847,182 @@ document.addEventListener('DOMContentLoaded', () => {
     // Settings was first opened is worse than one that takes a moment to fill.
     document.addEventListener('aether-settings-section', event => {
         if (event.detail === 'profile') refreshProfile();
+    });
+
+    /* ====================== REMOTE & LAN =================================
+     * Step 45 in the window: start the server, stop the one AETHER1 started, make a
+     * pairing phrase, and see who has used one.
+     *
+     * Native app only. Starting `aether1 --serve --lan` means starting a child process,
+     * which a browser tab cannot do -- and a browser that got here over the LAN is
+     * talking *through* the very server the Stop button would kill. The rail entry is
+     * hidden in the markup and revealed below once IS_TAURI is confirmed, the same way
+     * the sprite and startup sections are.
+     *
+     * Everything the pane knows comes from one read (lan_status_rust). Nothing is
+     * inferred on this side: whether the port is answering, whether the process is one
+     * AETHER1 may stop, and whether a phrase exists are all questions only the Rust side
+     * can answer honestly, and all three change the buttons.
+     */
+
+    const lanStateEl = document.getElementById('lan-state');
+    const lanPhraseStateEl = document.getElementById('lan-phrase-state');
+    const lanNoticeEl = document.getElementById('lan-notice');
+    const lanAddressEl = document.getElementById('lan-address');
+    const lanPortEl = document.getElementById('lan-port');
+    const lanDevicesEl = document.getElementById('lan-devices');
+    const btnLanToggle = document.getElementById('btn-lan-toggle');
+    const btnLanNewPhrase = document.getElementById('btn-lan-new-phrase');
+    const btnLanRevokeAll = document.getElementById('btn-lan-revoke-all');
+    const lanPhraseBox = document.getElementById('lan-phrase-box');
+    const lanPhraseWords = document.getElementById('lan-phrase-words');
+    const lanPhraseNote = document.getElementById('lan-phrase-note');
+
+    // What the last read said, so a button press knows whether it is starting or
+    // stopping without asking again.
+    let lanReport = null;
+
+    /* The dot and the word are one state told twice -- the colour for a glance, the
+       word for anyone who cannot use the colour. The dot is markup and stays; only the
+       text node after it is rewritten. */
+    function setNetState(el, state, label) {
+        if (!el) return;
+        el.dataset.state = state;
+        if (el.lastChild && el.lastChild.nodeType === Node.TEXT_NODE) {
+            el.lastChild.textContent = label;
+        } else {
+            el.append(label);
+        }
+    }
+
+    function renderLan(report) {
+        lanReport = report;
+        if (!lanStateEl) return;
+        const running = report.running === true;
+        const ours = report.managed === true;
+        const starting = report.starting === true;
+        const devices = report.devices || { devices: [], pairing_set_up: false };
+
+        setNetState(lanStateEl, starting ? 'busy' : (running ? 'on' : 'off'),
+            starting ? 'Starting' : (running ? (ours ? 'On' : 'On, started elsewhere') : 'Off'));
+        setNetState(lanPhraseStateEl, devices.pairing_set_up ? 'on' : 'off',
+            devices.pairing_set_up ? 'Set' : 'Not set');
+
+        if (btnLanToggle) {
+            btnLanToggle.textContent = running ? 'Stop' : 'Start';
+            // A server AETHER1 did not start is not AETHER1's to stop -- the Rust side
+            // refuses it, and the button says so rather than offering a press that fails.
+            btnLanToggle.disabled = starting || (running && !ours);
+            btnLanToggle.title = running && !ours
+                ? 'Started outside AETHER1, so AETHER1 will not stop it.'
+                : '';
+        }
+
+        let notice = '';
+        if (!devices.pairing_set_up) {
+            notice = 'Make a pairing phrase before putting this machine on the network — '
+                + 'without one there is nothing for another device to type.';
+        } else if (running && !ours) {
+            notice = `Something is already answering on port ${report.port}. AETHER1 did not `
+                + 'start it, so it will not stop it either.';
+        } else if (running && !devices.devices.length) {
+            notice = 'Nothing has paired yet. Open the address below on the other device and '
+                + 'type the pairing phrase when it asks.';
+        }
+        lanNoticeEl?.classList.toggle('hidden', !notice);
+        if (lanNoticeEl) lanNoticeEl.textContent = notice;
+
+        if (lanAddressEl) {
+            const addresses = report.addresses || [];
+            lanAddressEl.textContent = addresses.length
+                ? addresses.map(ip => `https://${ip}:${report.port}`).join('  ·  ')
+                : 'no network address on this machine';
+        }
+        if (lanPortEl) lanPortEl.textContent = String(report.port ?? 8378);
+
+        renderDevices(devices, lanDevicesEl, btnLanRevokeAll, refreshLan);
+    }
+
+    async function refreshLan() {
+        if (!IS_TAURI || !lanStateEl) return;
+        // The phrase is shown by the press that made it and by nothing else. Leaving it on
+        // screen until Settings closes would put a working credential in front of whoever
+        // walks past next -- so coming back to the pane takes it down.
+        lanPhraseBox?.classList.add('hidden');
+        try {
+            renderLan(await tauriInvoke('lan_status_rust'));
+        } catch (e) {
+            if (lanNoticeEl) {
+                lanNoticeEl.textContent = `Could not read the server's state: ${e.message || e}`;
+                lanNoticeEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    btnLanToggle?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        const stopping = lanReport?.running === true;
+        btnLanToggle.disabled = true;
+        // Said while it happens: starting waits for the child to actually bind the port,
+        // which on a cold start is seconds, and a button that just sat there would read
+        // as a press that did nothing.
+        btnLanToggle.textContent = stopping ? 'Stopping…' : 'Starting…';
+        try {
+            renderLan(await tauriInvoke(stopping ? 'lan_stop_rust' : 'lan_start_rust'));
+        } catch (e) {
+            alert(String(e.message || e));
+            await refreshLan();
+        }
+    });
+
+    btnLanNewPhrase?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        const paired = lanReport?.devices?.devices?.length || 0;
+        const warning = paired
+            ? `This unpairs ${paired === 1 ? 'the one device' : `all ${paired} devices`} `
+              + 'paired with the old phrase. Each can pair again with the new one. Continue?'
+            : 'Make a new pairing phrase? It is shown once and never again.';
+        if (!confirm(warning)) return;
+        btnLanNewPhrase.disabled = true;
+        try {
+            const report = await tauriInvoke('lan_new_phrase_rust');
+            renderLan(report);
+            if (lanPhraseWords) lanPhraseWords.textContent = report.phrase || '';
+            if (lanPhraseNote) {
+                lanPhraseNote.textContent = report.unpaired
+                    ? `${report.unpaired} device${report.unpaired === 1 ? '' : 's'} were unpaired `
+                      + 'by this and will each have to type the new phrase.'
+                    : 'Type it into a browser on the other device when it asks.';
+            }
+            lanPhraseBox?.classList.remove('hidden');
+        } catch (e) {
+            alert(`Could not make a pairing phrase: ${e.message || e}`);
+        } finally {
+            btnLanNewPhrase.disabled = false;
+        }
+    });
+
+    btnLanRevokeAll?.addEventListener('click', () => revokeEveryDevice(refreshLan));
+
+    // The one cross-pane button: "who may come in" and "what may go out" are different
+    // questions, and the card that says so can open the page that answers the other.
+    document.querySelectorAll('[data-settings-goto]').forEach(button => {
+        button.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            showSettingsSection(button.dataset.settingsGoto);
+        });
+    });
+
+    function initRemoteLan() {
+        if (!IS_TAURI) return;
+        revealSettingsSection('lan');
+    }
+    initRemoteLan();
+
+    // Read when the section is opened, and on each visit after: whether a server is up is
+    // a fact about right now, and it can change from a terminal while Settings is open.
+    document.addEventListener('aether-settings-section', event => {
+        if (event.detail === 'lan') refreshLan();
     });
 
     /* ====================== GIVE IT A VOICE =============================
@@ -4700,11 +5337,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderVoiceDownloads(list) {
-        if (!voicePickerDownloads) return;
-        voicePickerDownloads.innerHTML = '';
-        // The same row the model downloads use, so a bar means the same thing in both
-        // places. It reads `model`, so the voice name goes in under that name.
-        for (const d of list) voicePickerDownloads.appendChild(renderDownloadRow({
+        // Two places show the same bars: the wizard, and the Voice & Sound hub in
+        // Settings. One download, drawn wherever it is being watched from -- a bar that
+        // only appeared in the panel the button was pressed in would make a download
+        // started in the hub look like nothing happened.
+        const boxes = [voicePickerDownloads, document.getElementById('vhub-downloads')]
+            .filter(Boolean);
+        if (!boxes.length) return;
+        for (const box of boxes) box.innerHTML = '';
+        for (const box of boxes) for (const d of list) box.appendChild(renderDownloadRow({
             model: d.voice,
             phase: d.phase,
             detail: d.detail,
@@ -4738,6 +5379,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // A voice that just landed changes what the probe would say, so ask it again
             // rather than leaving the verdict above describing the machine as it was.
             const advice = await refreshVoiceAdvice();
+            // The hub's list says "already here" per voice, so it is stale the moment one
+            // lands. Quiet, because this is already inside the poll that noticed.
+            refreshSoundHub({ quiet: true }).catch(() => null);
             if (failed) {
                 setVoiceStatus(`⚠ ${failed.voice}: ${failed.error || 'the download failed'}`, 'bad');
             } else if (done.length) {
@@ -4821,6 +5465,638 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-open-voice-settings')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
         openVoiceWizard();
+    });
+
+    /* ====================== THE VOICE & SOUND HUB =========================
+     * The Brain's hub, applied to the other half of the companion.
+     *
+     * Two tabs, because the pane answers two questions and they had been stirred
+     * together into one column of fields. Voices is *which voice it speaks in*: the
+     * fixed Piper catalogue, with a detail panel instead of a row of download buttons.
+     * Devices is *which speaker and which microphone*, which the app had never asked
+     * about at all -- it used whatever the system handed it, which on a desk with a
+     * headset, an interface and an HDMI monitor is a coin toss, and the symptom is
+     * silence.
+     *
+     * The device list comes from two places at once and neither is sufficient alone:
+     *
+     *   - The operating system, through audio_devices.rs. Always available, names every
+     *     device whether or not this page has been given permission to see them, and is
+     *     the only list the native window can get -- WebKitGTK never answers the media
+     *     permission request there (the microphone bug), so enumerateDevices comes back
+     *     with blank labels.
+     *   - The browser, through enumerateDevices. The only list whose identifiers can
+     *     actually be used: setSinkId and getUserMedia take a browser deviceId and
+     *     nothing else.
+     *
+     * So the choice is stored as an id *and* a label, and resolveAudioDevice matches the
+     * two lists up by label at the moment of use. A stored device that is unplugged
+     * resolves to nothing and the system default is used, which is the right answer and
+     * not an error.
+     */
+
+    const soundHub = {
+        tab: 'voices',
+        search: '',
+        filter: 'all',
+        voices: [],
+        selected: null,
+        system: { outputs: [], inputs: [], source: 'none', note: '' },
+        browser: { outputs: [], inputs: [] },
+        loading: false,
+        loaded: false,
+        // What loadSettings last read, so the selects can be filled before the device
+        // lists arrive and still end up on the right entry once they do.
+        chosen: { output: '', outputLabel: '', input: '', inputLabel: '' },
+    };
+
+    async function fetchAudioDevices() {
+        if (IS_TAURI) return tauriInvoke('audio_devices_rust');
+        const resp = await apiFetch('/api/audio/devices');
+        if (!resp.ok) throw new Error(`device list failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* What this page can see. Labels are blank until something has been granted
+       microphone permission, which is normal rather than broken -- the system list above
+       carries the names in that case. */
+    async function enumerateBrowserDevices() {
+        if (!navigator.mediaDevices?.enumerateDevices) return { outputs: [], inputs: [] };
+        try {
+            const all = await navigator.mediaDevices.enumerateDevices();
+            const pick = (kind) => all
+                .filter(d => d.kind === kind && d.deviceId && d.deviceId !== 'default')
+                .map(d => ({ deviceId: d.deviceId, label: d.label || '' }));
+            return { outputs: pick('audiooutput'), inputs: pick('audioinput') };
+        } catch (e) {
+            return { outputs: [], inputs: [] };
+        }
+    }
+
+    /* The stored choice turned into something the browser will accept, or '' for "let
+       the system decide". The id is tried first because it is exact; the label is the
+       fallback that carries a choice made from the system list across to the browser's
+       own identifiers, which are a different namespace entirely. */
+    function resolveAudioDevice(list, id, label) {
+        if (!id && !label) return '';
+        const exact = list.find(d => d.deviceId === id);
+        if (exact) return exact.deviceId;
+        const want = String(label || '').trim().toLowerCase();
+        if (!want) return '';
+        const loose = list.find(d => {
+            const have = d.label.trim().toLowerCase();
+            return have && (have === want || have.includes(want) || want.includes(have));
+        });
+        return loose ? loose.deviceId : '';
+    }
+
+    /* One select's worth of options: every device the system named, then any the browser
+       can see and the system did not. Each option carries its own label, because that is
+       what gets saved alongside the id. */
+    function audioOptionsFor(direction) {
+        const system = direction === 'input' ? soundHub.system.inputs : soundHub.system.outputs;
+        const browser = direction === 'input' ? soundHub.browser.inputs : soundHub.browser.outputs;
+        const options = system.map(d => ({
+            value: d.id,
+            label: d.label,
+            suffix: d.is_default ? ' — system default' : '',
+        }));
+        for (const d of browser) {
+            if (!d.label) continue;
+            const already = options.some(o => {
+                const have = o.label.trim().toLowerCase();
+                const mine = d.label.trim().toLowerCase();
+                return have === mine || have.includes(mine) || mine.includes(have);
+            });
+            if (!already) options.push({ value: d.deviceId, label: d.label, suffix: '' });
+        }
+        return options;
+    }
+
+    function fillDeviceSelect(id, direction, chosenValue, chosenLabel) {
+        const select = document.getElementById(id);
+        if (!select) return;
+        const options = audioOptionsFor(direction);
+        select.innerHTML = '';
+
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = 'System default';
+        first.dataset.label = '';
+        select.appendChild(first);
+
+        for (const option of options) {
+            const el = document.createElement('option');
+            el.value = option.value;
+            el.textContent = option.label + option.suffix;
+            el.dataset.label = option.label;
+            select.appendChild(el);
+        }
+
+        // A device that was chosen and is now unplugged stays in the list, marked, rather
+        // than silently reverting to the default: "why is it not using my headset" has a
+        // visible answer that way.
+        if (chosenValue && !Array.from(select.options).some(o => o.value === chosenValue)) {
+            const gone = document.createElement('option');
+            gone.value = chosenValue;
+            gone.textContent = `${chosenLabel || chosenValue} — not plugged in`;
+            gone.dataset.label = chosenLabel || '';
+            select.appendChild(gone);
+        }
+        select.value = chosenValue || '';
+    }
+
+    function setSoundHubStatus(message, tone) {
+        const box = document.getElementById('vhub-status');
+        if (!box) return;
+        if (!message) { box.classList.add('hidden'); box.textContent = ''; return; }
+        box.classList.remove('hidden');
+        box.className = 'text-xs font-mono p-2.5 rounded border leading-snug ' + ({
+            good: 'border-green-500/40 bg-green-950/20 text-green-300',
+            bad: 'border-red-500/40 bg-red-950/20 text-red-300',
+            busy: 'border-cyan-500/30 bg-slate-900/80 text-cyan-200',
+        }[tone] || 'border-cyan-500/20 bg-slate-900/80 text-slate-300');
+        box.textContent = message;
+    }
+
+    function renderSoundChips() {
+        const box = document.getElementById('vhub-machine');
+        if (!box) return;
+        box.innerHTML = '';
+        const chip = (value, label, state) => {
+            const el = document.createElement('span');
+            el.className = 'hub-chip';
+            if (state) el.dataset.state = state;
+            const v = document.createElement('span');
+            v.className = 'hub-chip-value';
+            v.textContent = value;
+            const l = document.createElement('span');
+            l.className = 'hub-chip-label';
+            l.textContent = label;
+            el.append(v, l);
+            box.appendChild(el);
+        };
+
+        const installed = soundHub.voices.filter(v => v.installed).length;
+        chip(`${installed}/${soundHub.voices.length}`, 'VOICES', installed ? 'good' : 'warn');
+
+        const named = (direction) => {
+            const chosenLabel = direction === 'input'
+                ? soundHub.chosen.inputLabel : soundHub.chosen.outputLabel;
+            const chosenId = direction === 'input'
+                ? soundHub.chosen.input : soundHub.chosen.output;
+            if (chosenLabel || chosenId) return chosenLabel || chosenId;
+            const list = direction === 'input' ? soundHub.system.inputs : soundHub.system.outputs;
+            const fallback = list.find(d => d.is_default);
+            return fallback ? fallback.label : 'System default';
+        };
+        chip(soundHubShort(named('output')), 'SPEAKER');
+        chip(soundHubShort(named('input')), 'MIC');
+    }
+
+    /* A chip is one line on a narrow window, and a device name can run to forty
+       characters of chipset model. The full name is in the select below it. */
+    function soundHubShort(text) {
+        const value = String(text || '').trim();
+        return value.length > 22 ? `${value.slice(0, 21)}…` : (value || '—');
+    }
+
+    function soundHubVisibleVoices() {
+        const needle = soundHub.search.trim().toLowerCase();
+        return soundHub.voices.filter(voice => {
+            if (soundHub.filter === 'installed' && !voice.installed) return false;
+            if (soundHub.filter === 'missing' && voice.installed) return false;
+            if (!needle) return true;
+            return `${voice.name} ${voice.label}`.toLowerCase().includes(needle);
+        });
+    }
+
+    function renderSoundHubList() {
+        const list = document.getElementById('vhub-list');
+        if (!list) return;
+        list.innerHTML = '';
+        const voices = soundHubVisibleVoices();
+
+        const title = document.getElementById('vhub-list-title');
+        if (title) title.textContent = `Offline voices (${voices.length})`;
+
+        if (!voices.length) {
+            const empty = document.createElement('div');
+            empty.className = 'hub-empty';
+            empty.textContent = soundHub.loaded
+                ? 'No voice here matches that.'
+                : 'Reading the voices folder...';
+            list.appendChild(empty);
+            return;
+        }
+
+        for (const voice of voices) {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'hub-row';
+            row.setAttribute('role', 'option');
+            const selected = voice.name === soundHub.selected;
+            row.classList.toggle('is-selected', selected);
+            row.setAttribute('aria-selected', selected ? 'true' : 'false');
+
+            const glyph = document.createElement('span');
+            glyph.className = 'hub-row-glyph';
+            glyph.textContent = voice.installed ? '◉' : '○';
+            row.appendChild(glyph);
+
+            const body = document.createElement('span');
+            body.className = 'hub-row-body';
+            const name = document.createElement('span');
+            name.className = 'hub-row-name';
+            name.textContent = voice.label;
+            const meta = document.createElement('span');
+            meta.className = 'hub-row-meta';
+            meta.textContent = voice.installed
+                ? `${voice.name} · already here`
+                : `${voice.name} · ${voice.size_hint}`;
+            body.append(name, meta);
+            row.appendChild(body);
+
+            row.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                soundHub.selected = voice.name;
+                renderSoundHubList();
+                renderSoundHubDetail();
+            });
+            list.appendChild(row);
+        }
+    }
+
+    /* Which avatars already speak in this voice. It comes from the backend persona
+       catalogue rather than from anything written here -- the same rows the avatar
+       browser joins on -- so downloading a voice can say who it is for. */
+    function avatarsUsingVoice(name) {
+        return Array.from(personaRows.values())
+            .filter(row => row.local_voice === name)
+            .map(row => row.label || row.key)
+            .filter(Boolean);
+    }
+
+    function renderSoundHubDetail() {
+        const panel = document.getElementById('vhub-detail');
+        if (!panel) return;
+        panel.innerHTML = '';
+
+        const voice = soundHub.voices.find(v => v.name === soundHub.selected);
+        if (!voice) {
+            const empty = document.createElement('div');
+            empty.className = 'hub-empty';
+            empty.textContent = soundHub.voices.length
+                ? 'Pick a voice to see what it is and how big it is.'
+                : 'Nothing to show yet.';
+            panel.appendChild(empty);
+            return;
+        }
+
+        const name = document.createElement('div');
+        name.className = 'hub-detail-name';
+        name.textContent = voice.label;
+        const sub = document.createElement('div');
+        sub.className = 'hub-detail-sub';
+        sub.textContent = voice.name;
+        panel.append(name, sub);
+
+        const tags = document.createElement('div');
+        tags.className = 'hub-tags';
+        const tag = (text, tone) => {
+            const el = document.createElement('span');
+            el.className = 'hub-tag';
+            if (tone) el.dataset.tone = tone;
+            el.textContent = text;
+            tags.appendChild(el);
+        };
+        tag(voice.installed ? 'Downloaded' : 'Not here yet', voice.installed ? 'on' : 'off');
+        tag('Piper · offline', 'pick');
+        panel.appendChild(tags);
+
+        const users = avatarsUsingVoice(voice.name);
+        const blurb = document.createElement('p');
+        blurb.className = 'hub-blurb';
+        blurb.textContent = users.length
+            ? `${users.join(', ')} speak${users.length === 1 ? 's' : ''} in this one, once it is downloaded.`
+            : 'No avatar asks for this voice by name; it is available to the ones that have none of their own.';
+        panel.appendChild(blurb);
+
+        const facts = document.createElement('div');
+        facts.className = 'hub-facts';
+        const fact = (label, value) => {
+            const box = document.createElement('div');
+            box.className = 'hub-fact';
+            const l = document.createElement('div');
+            l.className = 'hub-fact-label';
+            l.textContent = label;
+            const v = document.createElement('div');
+            v.className = 'hub-fact-value';
+            v.textContent = value;
+            box.append(l, v);
+            facts.appendChild(box);
+        };
+        fact('SIZE', voice.installed ? 'on disk' : voice.size_hint);
+        fact('FILE', voice.path ? voice.path.split(/[\\/]/).pop() : `${voice.name}.onnx`);
+        panel.appendChild(facts);
+
+        const action = document.createElement('div');
+        action.className = 'hub-action';
+        const size = document.createElement('span');
+        size.className = 'hub-action-size';
+        // The size is already a fact above, so this line says *where it goes* instead --
+        // the one thing a download decision needs that the row does not carry.
+        size.textContent = voice.path
+            ? (voice.installed ? voice.path : `Downloads to ${voice.path}`)
+            : 'In the voices folder';
+        action.appendChild(size);
+
+        if (voice.installed) {
+            // Fills the Piper voice-file box rather than saving by itself: this panel
+            // shares one Save Changes with every other pane, and a panel that saved on
+            // its own would also commit half-typed edits somewhere else.
+            const use = document.createElement('button');
+            use.type = 'button';
+            use.className = 'cyber-btn cyber-btn-active text-[11px] py-1.5 px-3';
+            use.textContent = '✔ Use this one';
+            use.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                const box = document.getElementById('setting-tts-local-voice');
+                if (box) box.value = voice.path || '';
+                setSoundHubStatus(
+                    `${voice.label} is now the Piper voice file. Press Save Changes to keep it.`,
+                    'good');
+            });
+            action.appendChild(use);
+        } else {
+            const get = document.createElement('button');
+            get.type = 'button';
+            get.className = 'cyber-btn cyber-btn-active text-[11px] py-1.5 px-3';
+            get.textContent = '⬇ Download';
+            get.addEventListener('click', () => startVoiceDownload(voice.name, get));
+            action.appendChild(get);
+        }
+        panel.appendChild(action);
+    }
+
+    function renderSoundHubDevices() {
+        fillDeviceSelect('setting-audio-output', 'output',
+            soundHub.chosen.output, soundHub.chosen.outputLabel);
+        fillDeviceSelect('setting-audio-input', 'input',
+            soundHub.chosen.input, soundHub.chosen.inputLabel);
+
+        const sources = {
+            pactl: 'Read from PipeWire/PulseAudio.',
+            wpctl: 'Read from WirePlumber.',
+            powershell: 'Read from Windows.',
+            system_profiler: 'Read from macOS.',
+            none: 'This computer would not list its devices.',
+        };
+        const note = soundHub.system.note
+            || sources[soundHub.system.source]
+            || '';
+        const blind = !soundHub.browser.outputs.some(d => d.label);
+        const outNote = document.getElementById('vhub-output-note');
+        if (outNote) {
+            // Two different facts, and conflating them is how somebody concludes the
+            // setting does nothing: the device list is read from the system and always
+            // works, but *moving the sound from this window* needs the browser to offer
+            // the same device, which it will not do until it has been given audio
+            // permission. The saved choice still steers `aether1 say` either way.
+            outNote.textContent = blind
+                ? `${soundHub.system.outputs.length} found. ${note} Press "Check the level" once so this window can use them too.`.trim()
+                : `${soundHub.system.outputs.length} found. ${note}`.trim();
+        }
+        const inNote = document.getElementById('vhub-input-note');
+        if (inNote) {
+            inNote.textContent = blind
+                ? `${soundHub.system.inputs.length} found. Names come from the system; this window has not been given microphone access.`
+                : `${soundHub.system.inputs.length} found. ${note}`.trim();
+        }
+    }
+
+    async function refreshSoundHub(options = {}) {
+        if (!document.getElementById('vhub-list') || soundHub.loading) return;
+        soundHub.loading = true;
+        try {
+            const [catalogue, devices, browser] = await Promise.all([
+                fetchVoiceCatalogue().catch(() => null),
+                fetchAudioDevices().catch(() => null),
+                enumerateBrowserDevices(),
+            ]);
+            soundHub.voices = (catalogue && catalogue.voices) || [];
+            if (devices && devices.devices) soundHub.system = devices.devices;
+            soundHub.browser = browser;
+            if (!soundHub.selected && soundHub.voices.length) {
+                soundHub.selected = (soundHub.voices.find(v => v.installed) || soundHub.voices[0]).name;
+            }
+            soundHub.loaded = true;
+        } finally {
+            soundHub.loading = false;
+        }
+        renderSoundChips();
+        renderSoundHubList();
+        renderSoundHubDetail();
+        renderSoundHubDevices();
+        applyAudioDevices();
+        if (!options.quiet) refreshVoiceDownloads().catch(() => null);
+    }
+
+    /* Points the audio engine at the chosen devices. Called after every load, save and
+       device refresh, so the running window follows the setting without a restart. */
+    function applyAudioDevices() {
+        const out = resolveAudioDevice(soundHub.browser.outputs,
+            soundHub.chosen.output, soundHub.chosen.outputLabel);
+        const mic = resolveAudioDevice(soundHub.browser.inputs,
+            soundHub.chosen.input, soundHub.chosen.inputLabel);
+        voiceEngine.setOutputDevice(out);
+        voiceEngine.setInputDevice(mic);
+    }
+
+    /* Reads the two selects into soundHub.chosen. Called from saveSettings, which is what
+       decides what is stored -- this keeps the label beside the id. */
+    function readAudioDeviceChoice() {
+        const read = (id) => {
+            const select = document.getElementById(id);
+            if (!select) return { value: '', label: '' };
+            return {
+                value: select.value || '',
+                label: select.selectedOptions[0]?.dataset.label || '',
+            };
+        };
+        const output = read('setting-audio-output');
+        const input = read('setting-audio-input');
+        soundHub.chosen = {
+            output: output.value,
+            outputLabel: output.label,
+            input: input.value,
+            inputLabel: input.label,
+        };
+        return soundHub.chosen;
+    }
+
+    /* Out loud, on the device that is selected right now -- not on the one that was saved.
+       Choosing a speaker and then finding out at the next answer whether it was the right
+       one is the failure this whole tab exists to end. */
+    async function testOutputDevice() {
+        voiceEngine.playSFX('click');
+        const select = document.getElementById('setting-audio-output');
+        const chosen = select ? select.value : '';
+        const label = select?.selectedOptions[0]?.dataset.label || 'the system default';
+        const resolved = resolveAudioDevice(soundHub.browser.outputs, chosen,
+            select?.selectedOptions[0]?.dataset.label || '');
+
+        if (!chosen) {
+            await voiceEngine.setOutputDevice('');
+            voiceEngine.playSFX('incoming');
+            setSoundHubStatus('Played a sound on whatever this computer picks.', 'good');
+        } else if (!resolved) {
+            // The device is real -- the system named it -- but this window cannot address
+            // it, because the browser has not offered a matching one. Saying "played on
+            // the headset" here would be a lie, and the exact lie somebody would then
+            // spend an evening chasing.
+            await voiceEngine.setOutputDevice('');
+            voiceEngine.playSFX('incoming');
+            setSoundHubStatus(
+                `Played a sound, but on the system default: this window cannot address ` +
+                `${label} itself. The choice is still saved and still used by \`aether1 say\`.`,
+                'bad');
+        } else {
+            const moved = await voiceEngine.setOutputDevice(resolved);
+            voiceEngine.playSFX('incoming');
+            setSoundHubStatus(moved
+                ? `Played a sound on ${label}. Press Save Changes to keep it.`
+                : `Played a sound, but it went to the system default — this window could not ` +
+                  `move it to ${label}. The choice is still saved and still used by ` +
+                  '`aether1 say`.',
+                moved ? 'good' : 'bad');
+        }
+        // Back to what is actually saved, so a test does not leave the window speaking
+        // somewhere nobody chose.
+        applyAudioDevices();
+    }
+
+    /* A live level bar for the selected microphone. Six seconds, then it stops the stream
+       itself -- a settings pane must not leave a recording light on. */
+    let levelStop = null;
+    async function testInputDevice() {
+        voiceEngine.playSFX('click');
+        const bar = document.getElementById('vhub-level');
+        const fill = document.getElementById('vhub-level-fill');
+        if (levelStop) { levelStop(); levelStop = null; }
+        const select = document.getElementById('setting-audio-input');
+        const resolved = resolveAudioDevice(soundHub.browser.inputs, select?.value || '',
+            select?.selectedOptions[0]?.dataset.label || '');
+
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: resolved ? { deviceId: { exact: resolved } } : true,
+            });
+        } catch (e) {
+            setSoundHubStatus(
+                `That microphone could not be opened: ${e.message || e}. In the desktop window ` +
+                'the microphone is still blocked; it works in a browser.', 'bad');
+            return;
+        }
+
+        // Permission granted means the labels exist now, so the list is worth re-reading.
+        soundHub.browser = await enumerateBrowserDevices();
+        renderSoundHubDevices();
+
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioContextCtor();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        bar?.classList.remove('hidden');
+        setSoundHubStatus('Say something — the bar should move.', 'busy');
+
+        let peak = 0;
+        let frame = null;
+        const tick = () => {
+            analyser.getByteTimeDomainData(data);
+            let max = 0;
+            for (const v of data) max = Math.max(max, Math.abs(v - 128));
+            peak = Math.max(peak, max);
+            if (fill) fill.style.width = `${Math.min(100, Math.round((max / 64) * 100))}%`;
+            frame = requestAnimationFrame(tick);
+        };
+        tick();
+
+        levelStop = () => {
+            if (frame) cancelAnimationFrame(frame);
+            stream.getTracks().forEach(track => track.stop());
+            ctx.close().catch(() => null);
+            if (fill) fill.style.width = '0%';
+            bar?.classList.add('hidden');
+            levelStop = null;
+            setSoundHubStatus(peak > 3
+                ? 'That microphone is picking sound up. Press Save Changes to keep it.'
+                : 'Nothing came through on that one — it may be muted, or the wrong device.',
+                peak > 3 ? 'good' : 'bad');
+        };
+        setTimeout(() => { if (levelStop) levelStop(); }, 6000);
+    }
+
+    function initSoundHub() {
+        const search = document.getElementById('vhub-search');
+        if (!search) return;
+        search.addEventListener('input', () => {
+            soundHub.search = search.value;
+            renderSoundHubList();
+        });
+        for (const tab of document.querySelectorAll('[data-vhub-tab]')) {
+            tab.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                soundHub.tab = tab.dataset.vhubTab;
+                document.querySelectorAll('[data-vhub-tab]').forEach(other => {
+                    other.classList.toggle('is-active', other === tab);
+                });
+                document.getElementById('vhub-pane-voices')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'voices');
+                document.getElementById('vhub-pane-devices')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'devices');
+                // The search box only means anything on one of the two tabs, and it is
+                // the wrapper that goes -- hiding the input alone leaves its magnifying
+                // glass sitting on the row with nothing to type into.
+                search.closest('.hub-search')?.classList.toggle('hidden', soundHub.tab !== 'voices');
+                document.getElementById('vhub-filter')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'voices');
+            });
+        }
+        document.getElementById('vhub-filter')?.addEventListener('change', (event) => {
+            soundHub.filter = event.target.value;
+            renderSoundHubList();
+        });
+        document.getElementById('vhub-refresh')?.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            refreshSoundHub();
+        });
+        document.getElementById('vhub-test-output')?.addEventListener('click', testOutputDevice);
+        document.getElementById('vhub-test-input')?.addEventListener('click', testInputDevice);
+        // Choosing a device points the window at it straight away, so the next thing the
+        // companion says comes out of it. Save Changes is what makes it survive a restart.
+        for (const id of ['setting-audio-output', 'setting-audio-input']) {
+            document.getElementById(id)?.addEventListener('change', () => {
+                readAudioDeviceChoice();
+                applyAudioDevices();
+                renderSoundChips();
+            });
+        }
+        // A device plugged in while the window is open changes the list under it.
+        navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+            refreshSoundHub({ quiet: true }).catch(() => null);
+        });
+    }
+
+    initSoundHub();
+
+    // Read when the section is opened, and read again on each visit: a headset plugged in
+    // while AETHER1 was running is the whole reason somebody opens this list.
+    document.addEventListener('aether-settings-section', event => {
+        if (event.detail === 'voice') refreshSoundHub().catch(() => null);
     });
 
     /* The line at the top of The Brain saying what is actually connected. Settings that
@@ -6177,12 +7453,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Desktop Sprite Mode is a transparent/always-on-top native window -- meaningless in the
-    // plain browser flow, so the whole section stays hidden there (mirrors initVersionAndUpdates).
+    // plain browser flow, so its card stays hidden there (mirrors initVersionAndUpdates). It
+    // is a card in the Display section rather than a section of its own, so there is no rail
+    // entry to reveal: on the web Display is simply the panel grid.
     function initSpriteMode() {
         if (!IS_TAURI) return;
         const section = document.getElementById('sprite-mode-section');
         if (section) section.classList.remove('hidden');
-        revealSettingsSection('sprite');
     }
 
     // Reflects Game Mode's current on/off state on its Quick Commands button -- called both
@@ -6513,11 +7790,28 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-tts-local-voice').value = s.tts_local_voice || '';
             document.getElementById('setting-stt-model').value = s.stt_model_path || '';
             document.getElementById('setting-stt-language').value = s.stt_language || 'en';
+            // The device choice is an id and the label that was beside it, because the two
+            // lists it is matched against -- the operating system's and the browser's --
+            // do not share identifiers. See resolveAudioDevice.
+            soundHub.chosen = {
+                output: s.audio_output_device || '',
+                outputLabel: s.audio_output_label || '',
+                input: s.audio_input_device || '',
+                inputLabel: s.audio_input_label || '',
+            };
+            renderSoundHubDevices();
+            renderSoundChips();
+            applyAudioDevices();
             document.getElementById('setting-vault-path').value = s.vault_path || '';
             // Absent means on, matching vault::journal_enabled -- a setting that has never
             // been saved must not read as "off" here when the vault is in fact writing.
             document.getElementById('setting-vault-journal').checked = s.vault_journal !== false;
             document.getElementById('setting-local-only').checked = s.local_only === true;
+            // Remote & LAN. Saved by Save Changes with everything else rather than the
+            // moment the switch moves: Settings has one Save button, and a panel that
+            // committed on its own would also commit half-typed edits on another pane.
+            const lanAutostart = document.getElementById('setting-lan-autostart');
+            if (lanAutostart) lanAutostart.checked = s.lan_autostart === true;
             // After the checkbox is set, not before: loadVoiceStatus is what discovers an
             // environment-forced mode and overrides the saved value on screen.
             loadVoiceStatus();
@@ -6656,7 +7950,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Falls back rather than saving an empty language: transcribe_audio passes
                 // this straight to the recognizer, which wants a code, not nothing.
                 stt_language: document.getElementById('setting-stt-language').value.trim() || 'en',
+                ...(() => {
+                    const chosen = readAudioDeviceChoice();
+                    return {
+                        audio_output_device: chosen.output,
+                        audio_output_label: chosen.outputLabel,
+                        audio_input_device: chosen.input,
+                        audio_input_label: chosen.inputLabel,
+                    };
+                })(),
                 local_only: document.getElementById('setting-local-only').checked,
+                lan_autostart: document.getElementById('setting-lan-autostart')?.checked === true,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 vault_journal: document.getElementById('setting-vault-journal').checked,
                 // Sent only from the native app: the browser fallback has no window for the
@@ -6686,6 +7990,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         autoSpeak = payload.settings.auto_speak;
+        applyAudioDevices();
         applySfx(payload.settings.enable_sfx);
         updateAgentNameDisplay(payload.settings.agent_name);
 
@@ -6748,13 +8053,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    /* Applying a colour preset. Note it can move you between modes: the Daylight and Midnight
-       presets belong to Solar and Eclipse, so picking one from Cyberpunk switches the chrome
-       too -- which is what someone clicking a light preset means. */
-    function applyThemePreset(id) {
-        paintTheme(Aether1Theme.setPreset(id));
-    }
-
     // Mode: the three buttons in Settings and the same three in the top bar's slide-out.
     document.querySelectorAll('.theme-mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -6763,18 +8061,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Colours: the presets...
-    document.querySelectorAll('.color-theme-pill, .color-theme-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const preset = btn.getAttribute('data-color-theme-val') || btn.getAttribute('data-color-theme');
-            if (preset) {
-                voiceEngine.playSFX('click');
-                applyThemePreset(preset);
-            }
-        });
-    });
+    /* Applying a whole named palette, mode included. This is what forging an identity does
+       when the name it lands on has a palette of its own (see the A.R.X. names below), and it
+       is what a Cyberpunk swatch does. It can move you between modes, which is the point when
+       the preset is a light one. The accent-only path in Daylight and Midnight is
+       Aether1Theme.setAccents instead -- see renderThemePalette. */
+    function applyThemePreset(id) {
+        paintTheme(Aether1Theme.setPreset(id));
+    }
 
-    /* ...and the three pickers. 'input' rather than 'change' so the page repaints while the
+    /* The palette swatches are wired as they are built -- see renderThemePalette, which is
+       re-run on every theme change because what a swatch means depends on the mode.
+
+       The pickers, though, are here and permanent. 'input' rather than 'change' so the page repaints while the
        colour is being dragged around -- picking a background you cannot see the effect of is
        guesswork. Each write only touches its own slot, which is what keeps the background
        stable while an accent is being tried. */

@@ -58,6 +58,11 @@ struct LanState {
     limiter: Arc<AttemptLimiter>,
 }
 
+/// The port both modes listen on. Named here because it is the one thing start.sh,
+/// start.bat, the README and `aether1 doctor` all assume; the Remote & LAN pane probes it
+/// to say whether anything is serving, and reads it from here rather than repeating it.
+pub const SERVE_PORT: u16 = 8378;
+
 /// The address the HTTP server listens on.
 ///
 /// Loopback is the default because nothing here needs a password to be safe on it: every
@@ -130,6 +135,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/download", post(start_voice_download))
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
+        .route("/api/audio/devices", get(audio_devices))
         .route("/api/setup/start-server", post(start_local_server))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
@@ -158,7 +164,11 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/stt", post(stt))
         .route("/api/voice/status", get(voice_status))
         .route("/api/personas", get(list_personas))
+        .route("/api/personas/voice", post(set_persona_voice))
+        .route("/api/personas/voice/reset", post(clear_persona_voice))
+        .route("/api/voice/pickers", get(voice_pickers))
         .route("/api/flow", get(flow_mode).post(set_flow_mode))
+        .route("/api/flow/line", post(set_flow_line))
         .route("/api/profile", get(profile_report))
         .route("/api/profile/revoke", post(revoke_device))
         .route("/api/doctor", get(doctor_report))
@@ -583,6 +593,23 @@ async fn set_flow_mode(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
+#[derive(Deserialize)]
+struct FlowLineRequest {
+    /// The line to pick whole, or null to release the one that is picked.
+    line: Option<String>,
+}
+
+/// The browser HUD's counterpart of `set_flow_line_rust`: picking a whole cast from the
+/// Avatars pane rather than one of its members.
+async fn set_flow_line(
+    State(state): State<AppState>,
+    Json(req): Json<FlowLineRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::set_flow_line(&state.engine, req.line)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
 /// The Profile pane, for a browser HUD. Behind the same token as everything else under
 /// `--lan`: it lists the paired devices, which is a list a paired device may see and an
 /// unpaired one may not.
@@ -605,8 +632,48 @@ async fn revoke_device(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
-async fn list_personas() -> Json<Value> {
-    Json(commands::list_personas())
+async fn list_personas(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::list_personas(&state.engine))
+}
+
+/// The voices an avatar can be given, for the browser HUD's avatar pane.
+async fn voice_pickers() -> Json<Value> {
+    Json(commands::voice_pickers())
+}
+
+#[derive(Deserialize)]
+struct PersonaVoiceRequest {
+    persona: String,
+    #[serde(default)]
+    voice: Option<String>,
+    #[serde(default)]
+    local_voice: Option<String>,
+}
+
+/// Both halves of one avatar's voice choice. The reply is the whole persona list again, the
+/// same shape `/api/personas` returns, so the pane redraws from one answer rather than
+/// patching its own copy and hoping it matches what was stored.
+async fn set_persona_voice(
+    State(state): State<AppState>,
+    Json(req): Json<PersonaVoiceRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::set_persona_voice(&state.engine, req.persona, req.voice, req.local_voice)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize)]
+struct PersonaRequest {
+    persona: String,
+}
+
+async fn clear_persona_voice(
+    State(state): State<AppState>,
+    Json(req): Json<PersonaRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::clear_persona_voice(&state.engine, req.persona)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 async fn get_pending_actions(State(state): State<AppState>) -> Json<Vec<llm::ActionRecord>> {
@@ -926,6 +993,14 @@ async fn voice_download_status() -> Json<serde_json::Value> {
 
 async fn forget_voice_download(Query(q): Query<VoiceQuery>) -> Json<serde_json::Value> {
     Json(commands::forget_voice_download(q.voice.unwrap_or_default()))
+}
+
+async fn audio_devices() -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(commands::audio_devices)
+            .await
+            .expect("audio_devices panicked"),
+    )
 }
 
 // Spawns the `ollama` already installed on this machine, with a fixed argument and no
@@ -1362,6 +1437,8 @@ mod bind_tests {
 
     /// The default is the whole point of the flag, so it is asserted rather than assumed.
     /// Someone changing this line should have to change a test that says why.
+    use super::SERVE_PORT;
+
     #[test]
     fn serving_without_lan_listens_only_on_the_loopback_address() {
         assert_eq!(bind_address(false), "127.0.0.1:8378");
@@ -1377,7 +1454,10 @@ mod bind_tests {
     #[test]
     fn both_modes_use_the_documented_port() {
         for address in [bind_address(false), bind_address(true)] {
-            assert!(address.ends_with(":8378"), "unexpected port in {address}");
+            assert!(
+                address.ends_with(&format!(":{SERVE_PORT}")),
+                "unexpected port in {address}"
+            );
         }
     }
 }

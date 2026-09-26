@@ -1107,8 +1107,22 @@ Windows-shell details that replace it.
 `theme.js` derives every property the stylesheet reads from them. That function is the eight
 deleted blocks: they were eight hand-written answers to it. The presets in `palettes.js` are
 now just named bundles of a mode and three colours, so the six neon themes are colour choices
-rather than privileged themes, and three colour pickers in Settings can do anything a preset
-can — including to Solar and Eclipse, which was the point.
+rather than privileged themes, and the colour pickers in Settings can do anything a preset
+can.
+
+**Revised later: how many of the three are yours depends on the mode.** "Including to Solar
+and Eclipse" was the part that did not survive contact. Cyberpunk is *made* of its colours --
+the washes, the grid and the scanlines are all drawn out of the ground -- so all three are
+yours there. Solar and Eclipse are not palettes, they are the light and the dark window
+shell, and letting the ground move in those two only ever produced the broken middle: a
+"light" theme on a grey page, and every light-or-dark decision in `variablesFor()` (all of
+which read the background rather than the mode) quietly flipping with it. So in those two you
+pick the accents and the shell stays as drawn -- `slotsFor()` in `theme.js` is that rule, and
+`normalise()` enforces it on read, so a background stored by an older build is replaced by the
+designed one rather than merely left un-editable. Depth still moves the ground there, because
+it is a bounded adjustment of the designed colour rather than a replacement of it. The two
+modes are also called by the names their presets always had, Daylight and Midnight, since
+those are the words anyone uses for them out loud.
 
 Three things this forced, each worth more than the refactor:
 

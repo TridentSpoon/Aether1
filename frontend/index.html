@@ -11,7 +11,7 @@
          running on your own hardware. See frontend/vendor/README.md. -->
     <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
-    <link rel="stylesheet" href="css/A1theme.css?v=30">
+    <link rel="stylesheet" href="css/A1theme.css?v=31">
     <link rel="stylesheet" href="css/layout.css?v=3">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
@@ -29,7 +29,7 @@
          head rather than with the engine at the foot of the body: loaded down there, the page
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
-    <script src="js/theme.js?v=5"></script>
+    <script src="js/theme.js?v=6"></script>
     <script src="js/avatar-unlocks.js?v=1"></script>
     <script src="js/avatar-catalogue.js?v=1"></script>
     <script>Aether1Theme.apply(document);</script>
@@ -148,8 +148,8 @@
                 </div>
 
                 <div id="theme-menu" class="hud-slideout hud-slideout-narrow hidden" role="menu" aria-labelledby="btn-theme-menu">
-                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="solar" role="menuitem">☀️ Solar</button>
-                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="eclipse" role="menuitem">🌙 Eclipse</button>
+                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="solar" role="menuitem">☀️ Daylight</button>
+                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="eclipse" role="menuitem">🌙 Midnight</button>
                     <button class="theme-mode-btn hud-slideout-action" data-theme-mode="cyberpunk" role="menuitem">⚡ Cyberpunk</button>
                 </div>
             </div>
@@ -826,31 +826,23 @@
                         <span class="settings-nav-icon">👤</span>
                         <span class="settings-nav-text">Profile</span>
                     </button>
-                    <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar theme colour colors persona speciality sprite hologram" data-hint="avatar, colours and which persona answers" title="avatar, colours and which persona answers">
+                    <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar theme colour colors persona speciality hologram" data-hint="avatar, colours and which persona answers" title="avatar, colours and which persona answers">
                         <span class="settings-nav-icon">🎨</span>
                         <span class="settings-nav-text">Appearance</span>
                     </button>
-                    <button type="button" id="settings-nav-avatars" class="settings-nav-item" data-settings-section="avatars" data-keywords="avatar hologram face group class umbrals excelsior trace protocols singular ascended persona voice who" data-hint="every avatar, who it is and what it does" title="every avatar, who it is and what it does">
+                    <button type="button" id="settings-nav-avatars" class="settings-nav-item" data-settings-section="avatars" data-keywords="avatar hologram face group class umbrals excelsior trace protocols singular ascended persona voice who identity name agent name genesis forge" data-hint="every avatar, who it is, and what it is called" title="every avatar, who it is, and what it is called">
                         <span class="settings-nav-icon">🎭</span>
                         <span class="settings-nav-text">Avatars</span>
                     </button>
-                    <button type="button" id="settings-nav-identity" class="settings-nav-item" data-settings-section="identity" data-keywords="name genesis forge agent name" data-hint="what it is called, and forging a name" title="what it is called, and forging a name">
-                        <span class="settings-nav-icon">⚡</span>
-                        <span class="settings-nav-text">Identity</span>
-                    </button>
-                    <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide" data-hint="where the panels sit, and which ones exist" title="where the panels sit, and which ones exist">
+                    <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide desktop sprite float floating always on top hologram window" data-hint="where the avatar lives, and where the panels sit" title="where the avatar lives, and where the panels sit">
                         <span class="settings-nav-icon">🧱</span>
-                        <span class="settings-nav-text">HUD Layout</span>
-                    </button>
-                    <button type="button" id="settings-nav-sprite" class="settings-nav-item hidden" data-settings-section="sprite" data-keywords="desktop sprite floating always on top" data-hint="float the avatar on your desktop" title="float the avatar on your desktop">
-                        <span class="settings-nav-icon">🖥️</span>
-                        <span class="settings-nav-text">Desktop Sprite</span>
+                        <span class="settings-nav-text">Display</span>
                     </button>
                     <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key server ollama openai cloud local provider connections github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
                         <span class="settings-nav-icon">🧠</span>
                         <span class="settings-nav-text">The Brain</span>
                     </button>
-                    <button type="button" id="settings-nav-voice" class="settings-nav-item" data-settings-section="voice" data-keywords="speech piper tts microphone sound beeps sfx mute volume" data-hint="how it speaks, and whether it beeps" title="how it speaks, and whether it beeps">
+                    <button type="button" id="settings-nav-voice" class="settings-nav-item" data-settings-section="voice" data-keywords="speech piper tts microphone sound beeps sfx mute volume speaker output input audio device headset" data-hint="its voice, its speaker and its microphone" title="its voice, its speaker and its microphone">
                         <span class="settings-nav-icon">🗣</span>
                         <span class="settings-nav-text">Voice &amp; Sound</span>
                     </button>
@@ -880,6 +872,13 @@
                         <button type="button" id="settings-nav-network" class="settings-nav-item" data-settings-section="network" data-keywords="internet offline cloud lan proxy leave machine" data-hint="whether anything may leave this machine" title="whether anything may leave this machine">
                             <span class="settings-nav-icon">🌐</span>
                             <span class="settings-nav-text">Network</span>
+                        </button>
+                        <!-- Native app only: the Start button starts a child process, which a
+                             browser tab cannot do. Revealed by initRemoteLan once IS_TAURI is
+                             confirmed, the same way sprite and startup are. -->
+                        <button type="button" id="settings-nav-lan" class="settings-nav-item hidden" data-settings-section="lan" data-keywords="lan remote network serve pair pairing phrase devices token revoke tls certificate port share phone tablet" data-hint="reaching this machine from your other devices" title="reaching this machine from your other devices">
+                            <span class="settings-nav-icon">📡</span>
+                            <span class="settings-nav-text">Remote &amp; LAN</span>
                         </button>
                         <button type="button" id="settings-nav-startup" class="settings-nav-item hidden" data-settings-section="startup" data-keywords="autostart login game mode performance quiet" data-hint="what runs on login, and how to quiet it" title="what runs on login, and how to quiet it">
                             <span class="settings-nav-icon">⚡</span>
@@ -1043,19 +1042,19 @@
             <!-- SECTION: CUSTOMISATION (Avatar, Theme, Persona -- each its own card) -->
             <section class="settings-pane" data-settings-section="appearance">
                 <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">🎨 Appearance</h3>
+                    <h3 class="settings-pane-title">&#127912; Appearance</h3>
                     <p class="settings-pane-hint">avatar, colours and which persona answers</p>
                 </div>
+
+                <!-- Two stages, one shown at a time -- the same drill-down the Avatars pane
+                     uses. The theme used to be a mode row, an eight-button colour row, three
+                     pickers and two sliders all flat in this pane: nine controls for one
+                     decision, in front of somebody who came here to change their persona. It
+                     is one card now that says what you are wearing, and clicking it goes in to
+                     the colours. -->
+                <div class="settings-stage is-active" data-appearance-stage="main">
                 <div class="border border-slate-600/40 rounded-md p-4 space-y-3">
 
-                <!-- The avatar used to be a flat grid of ten buttons here, which was both
-                     wrong and incomplete: wrong because the avatar is the feature this app is
-                     built around and a row of ten-pixel pills says the opposite, incomplete
-                     because there are twenty-two of them and this grid only ever showed ten.
-                     Choosing one now happens in its own section (see data-settings-section
-                     "avatars"), which goes line -> avatar -> who it is. This card is the way
-                     in, and it is also the only thing here that says which one you are
-                     currently wearing. -->
                 <button type="button" id="avatar-entry-card" class="avatar-entry-card">
                     <span class="avatar-entry-face" id="avatar-entry-face" aria-hidden="true">&#127344;&#65039;</span>
                     <span class="avatar-entry-body">
@@ -1066,70 +1065,22 @@
                     <span class="avatar-entry-go" aria-hidden="true">Browse all &rsaquo;</span>
                 </button>
 
-                <!-- Theme: a mode, a set of colours, and the two tone sliders. -->
-                <div class="bg-cyan-950/20 border border-cyan-500/40 p-3 rounded-md space-y-1.5">
-                    <!-- A theme is a mode plus three colours. The mode decides the chrome:
-                         Solar and Eclipse are flat window shells, Cyberpunk keeps the
-                         scanlines, brackets and neon. -->
-                    <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider mt-1.5">🎨 THEME</label>
-                    <div class="grid grid-cols-3 gap-1">
-                        <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="solar">☀️ Solar</button>
-                        <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="eclipse">🌙 Eclipse</button>
-                        <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="cyberpunk">⚡ Cyberpunk</button>
-                    </div>
-                    <p id="theme-mode-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
-
-                    <!-- The same three colours in every mode, so a preset built for Cyberpunk
-                         can be worn by Solar. Each mode remembers its own set. -->
-                    <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider mt-1.5">🖌️ COLOURS</label>
-                    <div class="grid grid-cols-4 gap-1">
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-color-theme="halcy">🔷 Cyan</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-green-400 border-green-400" data-color-theme="nexus">🟢 Green</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-amber-400 border-amber-400" data-color-theme="arx-limes">🔶 Amber</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-pink-400 border-pink-400" data-color-theme="arx-logos">🟣 Magenta</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-red-400 border-red-400" data-color-theme="red">🔴 Crimson</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center font-bold text-yellow-300 border-yellow-300" data-color-theme="night-city">⚠️ Night</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-slate-300 border-slate-400" data-color-theme="solar">☀️ Daylight</button>
-                        <button class="color-theme-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center text-blue-300 border-blue-400" data-color-theme="eclipse">🌙 Midnight</button>
-                    </div>
-
-                    <div class="grid grid-cols-3 gap-2 mt-1.5">
-                        <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1">
-                            Background
-                            <input type="color" id="theme-colour-background" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The ground everything sits on. Changing an accent never moves it.">
-                        </label>
-                        <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1">
-                            Main
-                            <input type="color" id="theme-colour-main" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="Headings, borders, gauges and the avatar itself.">
-                        </label>
-                        <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1">
-                            Highlight
-                            <input type="color" id="theme-colour-highlight" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The companion colour, so the main one is not the only one on screen.">
-                        </label>
-                    </div>
-                    <!-- Two axes, not one. Saturation is how much colour the accents carry;
-                         depth is how dark the ground is. Draining the colour out of a
-                         background moves it toward grey at the same brightness, not toward
-                         black, so "too bright" and "not dark enough" need separate controls. -->
-                    <div class="space-y-1.5 mt-1.5">
-                        <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
-                            <span class="w-20 shrink-0">Saturation</span>
-                            <input type="range" id="theme-saturation" min="0" max="100" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How much colour the accents carry. Lower is calmer; 0 is greyscale. Brightness stays where it is.">
-                            <span id="theme-saturation-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">100%</span>
-                        </label>
-                        <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
-                            <span class="w-20 shrink-0">Depth</span>
-                            <input type="range" id="theme-depth" min="-40" max="40" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How dark the background sits. Left is deeper, right is lighter. It cannot go far enough to turn a light theme dark.">
-                            <span id="theme-depth-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">0</span>
-                        </label>
-                    </div>
-                    <!-- Only shown while the tone is off its default. The swatches above keep
-                         showing the colours as picked rather than as painted, which is what
-                         makes the sliders non-destructive -- but it also means the swatch and
-                         the screen disagree, and that is worth one sentence. -->
-                    <p id="theme-tone-note" class="text-[10px] font-mono text-slate-500 leading-snug"></p>
-                    <button type="button" id="btn-theme-colours-reset" class="cyber-btn text-[10px] leading-tight py-1.5 px-2 justify-center w-full">↺ Reset this mode's colours and tone</button>
-                </div>
+                <!-- The way in to the colours. The three swatches are the palette as it is
+                     actually painted, tone included, so the card previews the theme rather
+                     than only naming it. -->
+                <button type="button" id="theme-entry-card" class="settings-entry-card">
+                    <span class="theme-entry-swatches" aria-hidden="true">
+                        <span class="theme-entry-swatch" id="theme-entry-swatch-main"></span>
+                        <span class="theme-entry-swatch" id="theme-entry-swatch-mid"></span>
+                        <span class="theme-entry-swatch" id="theme-entry-swatch-highlight"></span>
+                    </span>
+                    <span class="settings-entry-body">
+                        <span class="settings-entry-label">&#127912; THEME</span>
+                        <span class="settings-entry-name" id="theme-entry-name">Cyberpunk</span>
+                        <span class="settings-entry-meta" id="theme-entry-meta">Cyan</span>
+                    </span>
+                    <span class="settings-entry-go" aria-hidden="true">Colours &rsaquo;</span>
+                </button>
 
                 <!-- Persona Selector -->
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
@@ -1159,6 +1110,86 @@
                     </div>
                 </div>
                 </div>
+                </div>
+
+                <!-- STAGE 2: the colours. -->
+                <div class="settings-stage" data-appearance-stage="theme">
+                    <button type="button" class="avatar-back" data-appearance-back="main">&lsaquo; Appearance</button>
+                    <h4 class="avatar-stage-title">Theme</h4>
+                    <p class="avatar-stage-lede" id="theme-stage-lede"></p>
+
+                    <div class="border border-slate-600/40 rounded-md p-4 space-y-3">
+                        <!-- A theme is a mode first. The mode decides the chrome -- Daylight and
+                             Midnight are flat window shells, Cyberpunk keeps the scanlines,
+                             brackets and neon -- and it decides how much of the palette is
+                             yours, which is what the rest of this panel reflects. -->
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#127912; MODE</label>
+                            <div class="grid grid-cols-3 gap-1">
+                                <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="solar">&#9728;&#65039; Daylight</button>
+                                <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="eclipse">&#127769; Midnight</button>
+                                <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-0.5 justify-center" data-theme-mode="cyberpunk">&#9889; Cyberpunk</button>
+                            </div>
+                            <p id="theme-mode-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
+                        </div>
+
+                        <!-- The named palettes. Built by renderThemePalette in app.js from the
+                             preset list rather than written out here: there are thirteen of them
+                             and this grid used to show six, which is how a hand-written copy of
+                             a list ends up. In Cyberpunk a swatch is the whole palette; in the
+                             other two it is the accents only. -->
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider" id="theme-palette-label">&#128396;&#65039; PALETTE</label>
+                            <div id="theme-palette-grid" class="theme-palette-grid"></div>
+                        </div>
+
+                        <!-- The pickers. The background one is only here in Cyberpunk; see
+                             slotsFor in js/theme.js for why. -->
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#127752; YOUR OWN</label>
+                            <div id="theme-colour-grid" class="grid grid-cols-3 gap-2">
+                                <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1" id="theme-colour-row-background">
+                                    Background
+                                    <input type="color" id="theme-colour-background" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The ground everything sits on. Changing an accent never moves it.">
+                                </label>
+                                <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1" id="theme-colour-row-main">
+                                    <span id="theme-colour-label-main">Main</span>
+                                    <input type="color" id="theme-colour-main" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="Headings, borders, gauges and the avatar itself.">
+                                </label>
+                                <label class="text-[10px] font-mono text-slate-400 flex flex-col gap-1" id="theme-colour-row-highlight">
+                                    <span id="theme-colour-label-highlight">Highlight</span>
+                                    <input type="color" id="theme-colour-highlight" class="w-full h-7 bg-slate-900 border border-cyan-500/40 rounded cursor-pointer" title="The companion colour, so the main one is not the only one on screen.">
+                                </label>
+                            </div>
+                            <p id="theme-ground-note" class="text-[10px] font-mono text-slate-500 leading-snug"></p>
+                        </div>
+
+                        <!-- Two axes, not one. Saturation is how much colour the accents carry;
+                             depth is how dark the ground is. Draining the colour out of a
+                             background moves it toward grey at the same brightness, not toward
+                             black, so "too bright" and "not dark enough" need separate controls. -->
+                        <div class="space-y-1.5">
+                            <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#127773; TONE</label>
+                            <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                                <span class="w-20 shrink-0">Saturation</span>
+                                <input type="range" id="theme-saturation" min="0" max="100" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How much colour the accents carry. Lower is calmer; 0 is greyscale. Brightness stays where it is.">
+                                <span id="theme-saturation-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">100%</span>
+                            </label>
+                            <label class="text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                                <span class="w-20 shrink-0">Depth</span>
+                                <input type="range" id="theme-depth" min="-40" max="40" step="5" class="flex-1 accent-cyan-400 cursor-pointer" title="How dark the background sits. Left is deeper, right is lighter. It cannot go far enough to turn a light theme dark.">
+                                <span id="theme-depth-value" class="w-10 shrink-0 text-right text-cyan-300 tabular-nums">0</span>
+                            </label>
+                            <!-- Only shown while the tone is off its default. The swatches keep
+                                 showing the colours as picked rather than as painted, which is
+                                 what makes the sliders non-destructive -- but it also means the
+                                 swatch and the screen disagree, and that is worth one sentence. -->
+                            <p id="theme-tone-note" class="text-[10px] font-mono text-slate-500 leading-snug"></p>
+                        </div>
+
+                        <button type="button" id="btn-theme-colours-reset" class="cyber-btn text-[10px] leading-tight py-1.5 px-2 justify-center w-full">&#8634; Reset this mode&rsquo;s colours and tone</button>
+                    </div>
+                </div>
             </section>
 
             <!-- SECTION: AVATARS.
@@ -1176,7 +1207,7 @@
             <section class="settings-pane" data-settings-section="avatars">
                 <div class="settings-pane-head">
                     <h3 class="settings-pane-title">&#127917; Avatars</h3>
-                    <p class="settings-pane-hint">every avatar, who it is and what it does</p>
+                    <p class="settings-pane-hint">every avatar, who it is, and what it is called</p>
                 </div>
 
                 <!-- STAGE 1: the lines. -->
@@ -1187,6 +1218,44 @@
                         covered.
                     </p>
                     <div id="avatar-group-grid" class="avatar-group-grid"></div>
+
+                    <!-- The agent's name lives here rather than in a heading of its own:
+                         who the companion is and what it looks like are one question, and
+                         asking it in two places meant two places to look. Collapsed, so the
+                         lines above stay the first thing on this pane, and on the landing
+                         stage only -- once you are reading one avatar, the name of the whole
+                         companion is not what you came for. Both fields keep their ids, so
+                         loadSettings/saveSettings and forgeIdentity are untouched. -->
+                    <details id="settings-group-identity" class="settings-group settings-group-nested">
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">&#9889; Identity</span>
+                            <span class="settings-group-hint">what it is called, and forging a name</span>
+                        </summary>
+                        <div class="settings-group-body">
+                            <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
+                                <div class="flex items-center justify-end">
+                                    <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME</span>
+                                </div>
+
+                                <div class="space-y-1">
+                                    <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
+                                    <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                </div>
+
+                                <div class="pt-2 border-t border-purple-500/30 space-y-2">
+                                    <label class="text-xs font-mono text-purple-200 block">
+                                        ✨ Or let the AI choose its name based on your mission / tasks:
+                                    </label>
+                                    <div class="flex gap-2">
+                                        <input id="genesis-purpose-input" type="text" placeholder="e.g., 'I want a tactical Reactive Engine Daemon to manage all operations'" class="flex-1 bg-slate-900 border border-purple-500/40 rounded p-2 text-xs text-purple-100 font-mono">
+                                        <button id="btn-forge-identity" class="cyber-btn text-xs py-1.5 px-3 border-purple-400 text-purple-300 hover:bg-purple-900/60">
+                                            ⚡ Forge Identity
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
                 </div>
 
                 <!-- STAGE 2: one line's members. -->
@@ -1194,6 +1263,15 @@
                     <button type="button" class="avatar-back" data-avatar-back="groups">&lsaquo; All lines</button>
                     <h4 id="avatar-members-title" class="avatar-stage-title"></h4>
                     <p id="avatar-members-blurb" class="avatar-stage-lede"></p>
+
+                    <!-- A line can be picked whole, not only one of its members: the cast
+                         answers, and the question goes to whichever node of it owns the
+                         subject. See llm/flow.rs; the button is only the switch. -->
+                    <div class="avatar-line-pick">
+                        <button type="button" id="btn-avatar-line" class="avatar-line-btn"></button>
+                        <p id="avatar-line-note" class="avatar-line-note"></p>
+                    </div>
+
                     <div id="avatar-member-grid" class="avatar-member-grid"></div>
                     <p id="avatar-members-locked" class="avatar-locked-note hidden"></p>
                 </div>
@@ -1229,9 +1307,30 @@
                                 <span class="avatar-fact-label">What it reaches without asking</span>
                                 <p id="avatar-detail-access" class="avatar-fact-body"></p>
                             </div>
+                            <!-- The voice an avatar speaks in is the identity table's choice
+                                 until the operator makes their own here. Both halves are
+                                 offered because they are different questions: the cloud voice
+                                 and the Piper model on this machine. Changing one saves it on
+                                 the spot -- it writes its own settings row and never touches
+                                 the form the Save Changes button commits. -->
                             <div class="avatar-fact" id="avatar-detail-voice-row">
                                 <span class="avatar-fact-label">Voice</span>
                                 <p id="avatar-detail-voice" class="avatar-fact-body"></p>
+                                <p id="avatar-detail-voice-default" class="avatar-fact-sub hidden"></p>
+                                <div class="avatar-voice-picker">
+                                    <label class="avatar-voice-field">
+                                        <span class="avatar-voice-field-label">Cloud voice</span>
+                                        <select id="avatar-voice-cloud" class="avatar-voice-select"></select>
+                                    </label>
+                                    <label class="avatar-voice-field">
+                                        <span class="avatar-voice-field-label">Piper voice</span>
+                                        <select id="avatar-voice-local" class="avatar-voice-select"></select>
+                                    </label>
+                                </div>
+                                <div class="avatar-voice-foot">
+                                    <button type="button" id="btn-avatar-voice-reset" class="cyber-btn text-[10px] py-1 px-2 hidden">&#8634; Back to its own voice</button>
+                                    <span id="avatar-voice-note" class="avatar-voice-note"></span>
+                                </div>
                             </div>
 
                             <div class="avatar-detail-actions">
@@ -1245,13 +1344,36 @@
                 </div>
             </section>
 
-            <!-- SECTION: HUD LAYOUT -->
+            <!-- SECTION: DISPLAY -- where the HUD's panels sit, and whether the avatar is
+                 floating free of the window. These were two rail entries, "HUD Layout" and
+                 "Desktop Sprite", until it was pointed out that they are one question asked
+                 twice: both are about where this thing is drawn on your screen. The sprite
+                 half is native-app only (see initSpriteMode / IS_TAURI), so in a browser tab
+                 the card below stays hidden and this section is just the panel grid. Its
+                 data-settings-section is still "layout" so a remembered choice survives;
+                 "sprite" is aliased onto it in app.js. -->
             <section class="settings-pane" data-settings-section="layout">
                 <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">🧱 HUD Layout</h3>
-                    <p class="settings-pane-hint">where the panels sit, and which ones exist</p>
+                    <h3 class="settings-pane-title">🧱 Display</h3>
+                    <p class="settings-pane-hint">where the avatar lives, and where the panels sit</p>
                 </div>
+
+                <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2 mb-3">
+                    <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🖥️ DESKTOP SPRITE</span>
+                    <!-- The checkbox keeps its id: loadSettings/saveSettings and
+                         setHologramFloating all address it by that and know nothing of how it
+                         is drawn. The input is nested inside its own label rather than paired
+                         by "for", so one click is one toggle. -->
+                    <label class="a1-switch">
+                        <input id="setting-sprite-mode" type="checkbox" class="a1-switch-input">
+                        <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        <span class="a1-switch-text">Float the avatar on your desktop -- a live mirror of this HUD's hologram, drag it anywhere, click it to bring this window back</span>
+                    </label>
+                    <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. The hologram panel goes quiet while it's out there. The switch applies once you click Save Changes below.</span>
+                </div>
+
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">
+                <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🧱 HUD PANELS</span>
                 <span class="text-[11px] font-mono text-slate-400 block">Drag a panel by the dotted strip along its top to move it anywhere on the grid, like rearranging home-screen widgets. Drag the corner handle to resize it. Both are remembered.</span>
                 <button id="btn-reset-layout" type="button" class="cyber-btn text-xs py-1.5 px-3">Reset panels to their default places</button>
 
@@ -1270,52 +1392,6 @@
                 </div>
                 </div>
             </section>
-
-            <!-- SECTION: DESKTOP SPRITE MODE (native desktop app only -- see IS_TAURI below) -->
-            <section class="settings-pane" data-settings-section="sprite">
-                <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">🖥️ Desktop Sprite</h3>
-                    <p class="settings-pane-hint">float the avatar on your desktop</p>
-                </div>
-                <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2">
-                <div class="flex items-center gap-2">
-                    <input id="setting-sprite-mode" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                    <label for="setting-sprite-mode" class="text-xs font-mono text-slate-300">Float the avatar on your desktop -- a live mirror of this HUD's hologram, drag it anywhere, click it to bring this window back</label>
-                </div>
-                <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. The hologram panel above goes quiet while it's out there. Toggle applies once you click Save Changes below.</span>
-                </div>
-            </section>
-
-            <!-- SECTION: AGENT IDENTITY & GENESIS -->
-            <section class="settings-pane" data-settings-section="identity">
-                <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">⚡ Identity</h3>
-                    <p class="settings-pane-hint">what it is called, and forging a name</p>
-                </div>
-                <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
-                    <div class="flex items-center justify-end">
-                        <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME</span>
-                    </div>
-
-                <div class="space-y-1">
-                    <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
-                    <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                </div>
-
-                <div class="pt-2 border-t border-purple-500/30 space-y-2">
-                    <label class="text-xs font-mono text-purple-200 block">
-                        ✨ Or let the AI choose its name based on your mission / tasks:
-                    </label>
-                    <div class="flex gap-2">
-                        <input id="genesis-purpose-input" type="text" placeholder="e.g., 'I want a tactical Reactive Engine Daemon to manage all operations'" class="flex-1 bg-slate-900 border border-purple-500/40 rounded p-2 text-xs text-purple-100 font-mono">
-                        <button id="btn-forge-identity" class="cyber-btn text-xs py-1.5 px-3 border-purple-400 text-purple-300 hover:bg-purple-900/60">
-                            ⚡ Forge Identity
-                        </button>
-                    </div>
-                </div>
-                </div>
-            </section>
-
 
 
             <!-- One pane per heading in the rail: the brain, the voice, the memory, what it
@@ -1673,9 +1749,34 @@
                 <details id="settings-group-voice" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🗣 Voice &amp; Sound</span>
-                    <span class="settings-group-hint">how it speaks, and whether it beeps</span>
+                    <span class="settings-group-hint">how it speaks, what it plays through, and whether it beeps</span>
                 </summary>
                 <div class="settings-group-body">
+
+                    <!-- ---------------------- THE VOICE & SOUND HUB ----------------------
+                         The Brain's hub arrangement, applied to the other half of the
+                         companion, and for the same reason: the pane used to be a column
+                         of engine names and file paths, which is no help to somebody whose
+                         question is "why can I not hear it" or "why is it coming out of the
+                         monitor".
+
+                         Two tabs, because they are two questions. Voices is which voice it
+                         speaks in -- the same fixed Piper catalogue the wizard offers, now
+                         with a detail panel instead of a row of buttons. Devices is which
+                         speaker and which microphone, read from the operating system by
+                         audio_devices.rs and merged with what this page itself can see.
+
+                         Nothing here is fetched from a website except a voice file the
+                         operator asks for by name. The device list is this machine, asked
+                         with a fixed command and never a shell. -->
+                    <div class="hub-head">
+                        <div class="min-w-0">
+                            <div class="hub-title">Voice &amp; Sound hub</div>
+                            <div class="hub-sub">Voices, speakers and microphones, on this computer.</div>
+                        </div>
+                        <div id="vhub-machine" class="hub-chips"></div>
+                    </div>
+
                     <!-- The same offer the brain group makes, for the same reason: a list
                          of engine names is no use to somebody whose companion will not
                          talk, and the wizard is the thing that says why. -->
@@ -1686,6 +1787,89 @@
                         <button id="btn-open-voice-settings" type="button" class="cyber-btn cyber-btn-active text-xs py-2 px-3 whitespace-nowrap">🗣 Test &amp; fix the voice</button>
                     </div>
 
+                    <div class="hub-controls">
+                        <div class="hub-tabs" role="tablist">
+                            <button type="button" id="vhub-tab-voices" class="hub-tab is-active" data-vhub-tab="voices" role="tab">Voices</button>
+                            <button type="button" id="vhub-tab-devices" class="hub-tab" data-vhub-tab="devices" role="tab">Devices</button>
+                        </div>
+                        <div class="hub-search">
+                            <span class="hub-search-icon" aria-hidden="true">🔍</span>
+                            <input id="vhub-search" type="search" placeholder="Search voices" autocomplete="off" aria-label="Search voices">
+                        </div>
+                        <select id="vhub-filter" class="hub-select" aria-label="Which voices to show">
+                            <option value="all">All voices</option>
+                            <option value="installed">Already downloaded</option>
+                            <option value="missing">Not downloaded yet</option>
+                        </select>
+                    </div>
+
+                    <!-- ---- Voices ---- -->
+                    <div id="vhub-pane-voices" class="hub-body">
+                        <div class="hub-list-col">
+                            <div class="hub-list-head">
+                                <span id="vhub-list-title" class="hub-list-title">Offline voices</span>
+                                <button type="button" id="vhub-refresh" class="hub-icon-btn" title="Look at this computer again">&#8635;</button>
+                            </div>
+                            <div id="vhub-list" class="hub-list" role="listbox" aria-label="Voices"></div>
+                        </div>
+                        <!-- One voice at a time, and the Download button lives in here
+                             rather than on every row: same reasoning as the model hub, a
+                             column of Download buttons invites a second sixty-megabyte
+                             download nobody meant to start. -->
+                        <div id="vhub-detail" class="hub-detail"></div>
+                    </div>
+
+                    <!-- ---- Devices ----
+                         A speaker chosen here is not the system's default being changed:
+                         AETHER1 sends its own sound there and leaves the rest of the
+                         machine alone. Empty means "whatever the system picks", which is
+                         what everything did before this existed. -->
+                    <div id="vhub-pane-devices" class="hub-body hub-body-even hidden">
+                        <div class="hub-detail">
+                            <div class="hub-detail-name">🔈 Speaker</div>
+                            <div class="hub-detail-sub">Where the companion's voice comes out.</div>
+                            <select id="setting-audio-output" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <option value="">System default</option>
+                            </select>
+                            <div class="hub-action">
+                                <span id="vhub-output-note" class="hub-action-size">Reading this computer...</span>
+                                <button type="button" id="vhub-test-output" class="cyber-btn text-[10px] py-1 px-2">▶ Test this speaker</button>
+                            </div>
+                            <p class="hub-blurb">
+                                Only Aether1's own sound moves; nothing else on this computer is
+                                changed. Remember to press Save Changes.
+                            </p>
+                        </div>
+                        <div class="hub-detail">
+                            <div class="hub-detail-name">🎤 Microphone</div>
+                            <div class="hub-detail-sub">What it listens on when you hold the talk key.</div>
+                            <select id="setting-audio-input" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                <option value="">System default</option>
+                            </select>
+                            <div class="hub-action">
+                                <span id="vhub-input-note" class="hub-action-size">Reading this computer...</span>
+                                <button type="button" id="vhub-test-input" class="cyber-btn text-[10px] py-1 px-2">🎤 Check the level</button>
+                            </div>
+                            <!-- A level bar rather than a tick: a microphone that is
+                                 selected, permitted and pointed at a muted input reports
+                                 success on every other check there is. -->
+                            <div id="vhub-level" class="hub-level hidden"><div id="vhub-level-fill" class="hub-level-fill"></div></div>
+                        </div>
+                    </div>
+
+                    <div id="vhub-downloads" class="hub-downloads"></div>
+                    <div id="vhub-status" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-500/20"></div>
+
+                    <!-- ------------------- HOW IT SPEAKS -------------------
+                         The fields as they were, with the same ids, behind a heading of
+                         their own: the hub above answers "which voice and out of what",
+                         and this answers "which engine makes it". -->
+                    <details id="settings-group-speech" class="settings-group settings-group-nested" open>
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">How it speaks</span>
+                            <span class="settings-group-hint">the engine, and the switches</span>
+                        </summary>
+                        <div class="settings-group-body">
                     <div class="space-y-1">
                         <label for="setting-tts-engine" class="text-xs font-mono text-cyan-300 block">WHAT DOES THE SPEAKING</label>
                         <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
@@ -1730,6 +1914,8 @@
                         <input id="setting-sfx" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
                         <label for="setting-sfx" class="text-xs font-mono text-slate-300">Interface sound effects (clicks, alerts)</label>
                     </div>
+                        </div>
+                    </details>
 
                     <!-- These three have been saved settings, and read by the backend
                          (voice_status and transcribe_audio), since before there was anywhere
@@ -1817,87 +2003,125 @@
             </section>
 
             <!-- ======================= WHAT IT MAY DO ======================= -->
+            <!-- Laid out with the same cards as Remote & LAN, and for the same reason:
+                 each card is one grant, with its own switch and the settings that only
+                 mean anything while it is on. The two halves stay apart on purpose --
+                 "may my companion read my files" and "may the coding model call gh" are
+                 not one decision. See code_perms.rs. -->
             <section class="settings-pane" data-settings-section="permissions">
-                <details id="settings-group-permissions" class="settings-group">
-                <summary class="settings-group-summary">
-                    <span class="settings-group-title">🔐 What it may do</span>
-                    <span class="settings-group-hint">reading this machine, running programs</span>
-                </summary>
-                <div class="settings-group-body">
-                    <div class="space-y-1">
-                        <div class="flex items-center gap-2">
-                            <input id="setting-tools" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-tools" class="text-xs font-mono text-slate-300">Let it look at this computer (reading only)</label>
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">🔐 What it may do</h3>
+                    <p class="settings-pane-hint">reading this machine, running programs</p>
+                </div>
+
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🔎</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">Looking at this computer</h4>
+                            <p class="net-card-hint">
+                                Lets the AI read files, list directories and check processes to
+                                answer you.
+                                <!-- Named folders are filled in by applyOsWording() in app.js, because
+                                     which ones exist depends on the machine Aether1 is running on --
+                                     see tools/domain.rs::directories(). The wording below is the
+                                     no-JavaScript fallback: true on every platform, specific on none. -->
+                                <span id="tools-readable-roots">Only your home directory and the
+                                system's own log and configuration folders</span>;
+                                never passwords or keys. Every use is recorded in the Activity Log.
+                                Nothing is changed without you approving it first.
+                            </p>
                         </div>
-                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            Lets the AI read files, list directories and check processes to answer you.
-                            <!-- Named folders are filled in by applyOsWording() in app.js, because
-                                 which ones exist depends on the machine Aether1 is running on --
-                                 see tools/domain.rs::directories(). The wording below is the
-                                 no-JavaScript fallback: true on every platform, specific on none. -->
-                            <span id="tools-readable-roots">Only your home directory and the
-                            system's own log and configuration folders</span>;
-                            never passwords or keys. Every use is recorded in the Activity Log.
-                            Nothing is changed without you approving it first.
-                        </p>
-                    </div>
-
-                    <div class="space-y-1 pt-1">
-                        <label for="setting-command-allowlist" class="text-xs font-mono text-cyan-300 block">PROGRAMS IT MAY ASK TO RUN</label>
-                        <!-- The placeholder is replaced per-platform by applyOsWording() in app.js. -->
-                        <input id="setting-command-allowlist" type="text" placeholder="e.g. ping" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Comma separated. Starts with a few programs that can only look at this
-                            machine, never change it &mdash; add your own, or empty the box to allow
-                            nothing. Every run still needs your approval &mdash; this only decides what
-                            it is allowed to ask for. There is no shell: no pipes, redirects or
-                            wildcards.
-                        </p>
-                    </div>
-
-                    <div class="space-y-1 pt-1">
-                        <label for="setting-persona-roots" class="text-xs font-mono text-cyan-300 block">
-                            FOLDERS <span id="persona-roots-who">IT</span> MAY READ WITHOUT ASKING
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-tools" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
                         </label>
-                        <input id="setting-persona-roots" type="text" placeholder="e.g. ~/Projects, ~/Documents" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                        <p id="persona-roots-note" class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Comma separated. Each speciality already reads the folders its job needs;
-                            anything else is asked about every single time. Add a folder here and it
-                            stops asking about that one. This applies to the speciality selected above
-                            and to no other, and it never overrides the list of files that are never
-                            read &mdash; passwords and keys stay off limits regardless.
-                        </p>
                     </div>
 
-                    <!-- The coding panel answers a different question from the avatar and
-                         gets its own switches for the same reason: "may my companion read
-                         my files" and "may the coding model call gh" are not one decision.
-                         See code_perms.rs. -->
-                    <div class="space-y-1 pt-3 border-t border-cyan-500/20">
-                        <label class="text-xs font-mono text-cyan-300 block">AETHER CODE MAY LOOK AT</label>
-                        <div class="flex items-center gap-2">
-                            <input id="setting-code-perm-system" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-code-perm-system" class="text-xs font-mono text-slate-300">This machine &mdash; your files and what the hardware is</label>
+                    <div class="net-row net-row-stacked">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Programs it may ask to run</p>
+                            <!-- The placeholder is replaced per-platform by applyOsWording() in app.js. -->
+                            <p class="net-row-hint">
+                                Comma separated. Starts with a few programs that can only look at this
+                                machine, never change it &mdash; add your own, or empty the box to allow
+                                nothing. Every run still needs your approval &mdash; this only decides what
+                                it is allowed to ask for. There is no shell: no pipes, redirects or
+                                wildcards.
+                            </p>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <input id="setting-code-perm-github" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-code-perm-github" class="text-xs font-mono text-slate-300">GitHub, through the <span class="font-mono">gh</span> command</label>
+                    </div>
+                    <div class="net-field">
+                        <label for="setting-command-allowlist" class="sr-only">Programs it may ask to run</label>
+                        <input id="setting-command-allowlist" type="text" placeholder="e.g. ping" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+
+                    <div class="net-row net-row-stacked">
+                        <div class="net-row-text">
+                            <p class="net-row-title">
+                                Folders <span id="persona-roots-who">it</span> may read without asking
+                            </p>
+                            <p id="persona-roots-note" class="net-row-hint">
+                                Comma separated. Each speciality already reads the folders its job needs;
+                                anything else is asked about every single time. Add a folder here and it
+                                stops asking about that one. This applies to the speciality selected in
+                                Appearance and to no other, and it never overrides the list of files that
+                                are never read &mdash; passwords and keys stay off limits regardless.
+                            </p>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <input id="setting-code-perm-internet" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-code-perm-internet" class="text-xs font-mono text-slate-300">The internet, for documentation it needs</label>
-                        </div>
-                        <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            All three only read. The coding model cannot edit a file, commit, merge or
-                            install anything &mdash; <span class="font-mono">gh pr view</span> runs,
-                            <span class="font-mono">gh pr merge</span> is refused. When the next step
-                            would change something it writes the command out instead, and that command
-                            becomes a button that types it into your terminal. Nothing enters your
-                            terminal but your own Return key.
-                        </p>
+                    </div>
+                    <div class="net-field">
+                        <label for="setting-persona-roots" class="sr-only">Folders it may read without asking</label>
+                        <input id="setting-persona-roots" type="text" placeholder="e.g. ~/Projects, ~/Documents" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
-                </details>
+
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">⌨️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">AETHER CODE may look at</h4>
+                            <p class="net-card-hint">
+                                All three only read. The coding model cannot edit a file, commit, merge or
+                                install anything &mdash; <span class="font-mono">gh pr view</span> runs,
+                                <span class="font-mono">gh pr merge</span> is refused. When the next step
+                                would change something it writes the command out instead, and that command
+                                becomes a button that types it into your terminal. Nothing enters your
+                                terminal but your own Return key.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">This machine</p>
+                            <p class="net-row-hint">Your files, and what the hardware is.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-perm-system" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">GitHub</p>
+                            <p class="net-row-hint">Through the <span class="font-mono">gh</span> command, reading only.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-perm-github" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">The internet</p>
+                            <p class="net-row-hint">For the documentation it needs.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-perm-internet" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                </div>
             </section>
 
             <!-- ======================= NETWORK ======================= -->
@@ -1928,6 +2152,137 @@
                     </div>
                 </div>
                 </details>
+            </section>
+
+            <!-- ======================= REMOTE & LAN ======================= -->
+            <!-- Step 45 in the window. `aether1 --serve --lan`, `aether1 pair`,
+                 `aether1 devices` and `aether1 revoke <id>` all already existed; what was
+                 missing was an operator who never opens a terminal. See src-tauri/src/lan.rs
+                 for the two rules this pane rests on: AETHER1 only ever stops a server it
+                 started itself, and opening this pane never mints a pairing phrase.
+
+                 Laid out as cards rather than the app's usual stack of fields because each
+                 card is one capability -- it is either on or off, it has a switch of its
+                 own, and the rows beneath it only make sense in its company. -->
+            <section class="settings-pane" data-settings-section="lan">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">📡 Remote &amp; LAN</h3>
+                    <p class="settings-pane-hint">reaching this AETHER1 from your other devices, over your own network</p>
+                </div>
+
+                <!-- CARD 1: the server itself. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🛰️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">
+                                LAN access
+                                <span id="lan-state" class="net-state" data-state="off"><i aria-hidden="true"></i>Off</span>
+                            </h4>
+                            <p class="net-card-hint">
+                                Use AETHER1 from a phone, a tablet or another computer on your
+                                Wi-Fi or wired network. Traffic is encrypted, and every request
+                                needs a token the device earns by typing the pairing phrase once.
+                            </p>
+                        </div>
+                        <button type="button" id="btn-lan-toggle" class="net-card-action">Start</button>
+                    </div>
+                    <p id="lan-notice" class="net-notice hidden"></p>
+
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Address</p>
+                            <p class="net-row-hint">What to type into a browser on the other device. The certificate is this machine's own, so the browser will ask once whether you trust it.</p>
+                        </div>
+                        <p id="lan-address" class="net-row-value">&mdash;</p>
+                    </div>
+
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Port</p>
+                            <p class="net-row-hint">Fixed. start.sh, start.bat, the README and <span class="font-mono">aether1 doctor</span> all assume this port, so it is a fact about AETHER1 rather than a setting.</p>
+                        </div>
+                        <p id="lan-port" class="net-row-value">8378</p>
+                    </div>
+
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Start automatically</p>
+                            <p class="net-row-hint">Put this machine on the network each time AETHER1 starts. Stopping LAN access now will not turn this off. Game Mode holds it back, like everything else it quiets.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-lan-autostart" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- CARD 2: local auth. The phrase is the entry credential; the tokens it
+                     hands out are what every later request actually carries. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🔑</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">
+                                Pairing phrase
+                                <span id="lan-phrase-state" class="net-state" data-state="off"><i aria-hidden="true"></i>Not set</span>
+                            </h4>
+                            <p class="net-card-hint">
+                                Twelve words, typed once into each device you want to let in.
+                                It is never stored and never sent over the network &mdash; what
+                                is kept is the hash of a token derived from it, so a copied
+                                settings file hands out nothing usable.
+                            </p>
+                        </div>
+                        <button type="button" id="btn-lan-new-phrase" class="net-card-action net-card-action-quiet">New phrase</button>
+                    </div>
+
+                    <!-- Shown exactly once, by the press that made it: nothing stores the
+                         phrase, so there is no second chance to read it. -->
+                    <div id="lan-phrase-box" class="net-phrase hidden">
+                        <p class="net-phrase-label">Write this down now &mdash; it is not shown again</p>
+                        <p id="lan-phrase-words" class="net-phrase-words"></p>
+                        <p id="lan-phrase-note" class="net-row-hint"></p>
+                    </div>
+
+                    <div class="net-row net-row-stacked">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Paired devices</p>
+                            <p class="net-row-hint">Each one carries a token of its own, so taking one away leaves the rest alone. The same list is in Profile.</p>
+                        </div>
+                        <button type="button" id="btn-lan-revoke-all" class="cyber-btn text-[10px] py-1 px-2 border-red-400 text-red-400 hover:bg-red-900/40 hidden">Revoke all</button>
+                    </div>
+                    <div id="lan-devices" class="profile-devices"></div>
+                </div>
+
+                <!-- CARD 3: what needs no pairing at all, and why that is safe. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🖥️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">Access from this machine</h4>
+                            <p class="net-card-hint">
+                                <span class="font-mono">aether1 --serve</span> without
+                                <span class="font-mono">--lan</span> binds 127.0.0.1, which the
+                                operating system itself refuses every remote connection to.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">No pairing needed</p>
+                            <p class="net-row-hint">Reaching 127.0.0.1 already means being a program on this computer, so there is nothing a phrase would add.</p>
+                        </div>
+                        <p class="net-row-value">http://localhost:8378</p>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Whether anything may leave this machine</p>
+                            <p class="net-row-hint">A separate question from who may come in, and it has its own page.</p>
+                        </div>
+                        <button type="button" class="net-card-action net-card-action-quiet" data-settings-goto="network">Open Network</button>
+                    </div>
+                </div>
             </section>
 
             <!-- ======================= STARTUP & PERFORMANCE ======================= -->
@@ -2117,12 +2472,12 @@
          being repeated in this page, sprite.html and avatar-lab.html. -->
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=39"></script>
-    <script src="js/voice.js?v=17"></script>
+    <script src="js/voice.js?v=18"></script>
     <script src="js/notes-graph.js?v=1"></script>
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
-    <script src="js/app.js?v=56"></script>
+    <script src="js/app.js?v=57"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>
