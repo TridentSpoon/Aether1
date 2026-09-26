@@ -1466,6 +1466,53 @@ body {
     color: var(--text-dim);
 }
 
+/* The avatar's own voice pickers. Two columns where there is room and one where there is
+   not, because the settings window is narrow enough on a laptop that two 220px selects
+   would push the detail pane into a horizontal scroll. */
+.avatar-voice-picker {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+}
+
+.avatar-voice-field { display: flex; flex-direction: column; gap: 0.15rem; }
+
+.avatar-voice-field-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+/* Colour is left to the panel-wide field rule ([data-theme] :is(input, select, textarea)),
+   which is mixed for the settings panel this sits on -- the cyber-select treatment is for
+   the dark projection bay and would put cyan-on-pale here under Solar. */
+.avatar-voice-select {
+    width: 100%;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.25rem;
+    padding: 0.3rem 0.35rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+}
+
+.avatar-voice-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+}
+
+.avatar-voice-note {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
 .avatar-detail-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.2rem; }
 
 .avatar-detail-current {
