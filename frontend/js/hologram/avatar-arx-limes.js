@@ -22,16 +22,20 @@ HologramAvatar.prototype.buildArxLimesAvatar = function() {
     // to read as a solid absence, not a faint haze) ringed by a fixed hot "event
     // horizon" rim that -- like every other avatar's one hot accent -- never retints
     // with the theme, plus a swirling accretion disc standing in for infalling matter.
-    // Geodesic (icosahedron, subdivided once) reads as a rounder, more eye-lens-like
-    // gem than a plain 8-face octahedron, while still staying faceted rather than smooth.
+    // A faceted "rounded" cube (see roundedCubeGeometry): a cube with its edges and
+    // corners cut back into facets, so the void reads as a cut block of nothing rather
+    // than a gem. Squarer than the geodesic that sat here before, which was the faceted
+    // crystal core at a smaller size; the flat facets still catch the rim line.
     this.arxLimesHubFillMat = new THREE.MeshBasicMaterial({
         color: 0x040209, side: THREE.DoubleSide, transparent: true, opacity: 0.94
     });
     this.arxLimesHubRimMat = new THREE.LineBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.95 });
-    const hubGeom = new THREE.IcosahedronGeometry(9, 1);
-    this.arxLimesHubMesh = new THREE.Mesh(hubGeom, this.arxLimesHubFillMat);
-    const hubEdges = new THREE.EdgesGeometry(hubGeom, 12);
-    this.arxLimesHubOutline = new THREE.LineSegments(hubEdges, this.arxLimesHubRimMat);
+    const hub = this.buildRoundedCube(11, 3, 0.45);
+    this.arxLimesHubMesh = new THREE.Mesh(hub.geometry, this.arxLimesHubFillMat);
+    // The facet grid comes back with the shape rather than from EdgesGeometry -- no
+    // single edge threshold draws both the shallow facets on a face and the sharp ones
+    // at a corner. See buildRoundedCube.
+    this.arxLimesHubOutline = new THREE.LineSegments(hub.edges, this.arxLimesHubRimMat);
     this.arxLimesGroup.add(this.arxLimesHubMesh);
     this.arxLimesGroup.add(this.arxLimesHubOutline);
 
