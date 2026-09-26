@@ -2127,12 +2127,15 @@ of forking shells forever, and `clamp_size` bounds rows and columns to 1..2000 b
 reaches a `TIOCSWINSZ` — a size is a number that arrives from the page, and a number that
 arrives from the page gets clamped where it lands, not where it is used.
 
-**Browser mode removes the panel rather than disabling it.** `app.js` deletes the
-`data-panel="terminal"` element outright when it is not running under Tauri. There is no
-route behind it there, and a terminal that looks like it works is worse than no terminal; it
-also keeps it out of the module-switch list, which is built from the DOM. Switching panels
-now dispatches `aether1:panels-changed`, which is what tells xterm to re-fit when the
-terminal is switched back on.
+**Browser mode removes it rather than disabling it.** `app.js` deletes the
+`#chat-view-terminal` element and the `#tab-chat-terminal` button outright when it is not
+running under Tauri. There is no route behind it there, and a terminal that looks like it
+works is worse than no terminal. Switching panels dispatches `aether1:panels-changed`, which
+is what tells xterm to re-fit when its panel comes back on.
+
+**Where it lives, since the tab (below).** It was a panel of its own in the left column until
+the conversation panel took it as a third tab; the isolation above is untouched by that -- it
+is the same `terminal.js`, the same four commands and the same script asserting it.
 
 **A leak that predated the terminal, closed with it.** The home folder is a readable root for
 `fs_guard`, and shell history files were not on any deny list — so the companion could read
@@ -3178,3 +3181,37 @@ is working and repair the ground it stands on when told to.
 
 Steps 15–18 (agent handoff, MCP, packaging, memory sync) are now specs rather than sketches,
 settled in that order and written up in full above.
+
+---
+
+### The terminal, folded into the Neural Dialogue Stream
+
+It was a panel of its own in the bottom third of the left column, and it was the wrong place
+for it twice over. A shell wants height, and the left column is the narrow one. And the only
+thing that ever puts text in it that the operator did not type is AETHER CODE's `⌨ To
+terminal` button -- which sat on the opposite side of the window, so pressing it meant
+looking away from the panel you pressed it in to see what arrived.
+
+It is now the third tab of the conversation panel, beside CONVERSATION and AETHER CODE, in
+the full-height right-hand column. The state line and the start button are one thin header
+above the shell, in the same shape as AETHER CODE's model line, rather than a titled panel
+head. Nothing else moved: the same `terminal.js`, the same four commands in `main.rs`, the
+same `check_terminal_isolation.sh`.
+
+**Two things had to follow it.** `sendToTerminal` now calls `switchChatTab('terminal')` before
+it types, because a command typed into a hidden view is a command the operator cannot see --
+and their Return key is the entire consent model for running it. And a hidden tab has no
+layout box, so xterm measures zero there exactly as it does in a switched-off panel; the tab
+switch calls a `onTerminalTabShown` hook that re-fits the shell on the next frame, which is
+the same fix one level down from `aether1:panels-changed`.
+
+**The left column reflows into the space.** Model performance takes rows 1--24 and the quick
+commands 25--37. Nothing in the layout code needed a change: panels carry their own
+`data-grid-*` defaults, the module switch list is built from the DOM, and a stored layout
+naming a panel that no longer exists is ignored -- so the terminal's saved box disappears
+with it, and no reset is needed.
+
+**Why not a native terminal instead.** Trident's own framing when he asked for this: the
+operator can always open one natively. That is the argument for the terminal being a tab and
+not a panel -- it does not have to be the thing that is always in view to be worth having in
+the window.
