@@ -830,13 +830,9 @@
                         <span class="settings-nav-icon">🎨</span>
                         <span class="settings-nav-text">Appearance</span>
                     </button>
-                    <button type="button" id="settings-nav-avatars" class="settings-nav-item" data-settings-section="avatars" data-keywords="avatar hologram face group class umbrals excelsior trace protocols singular ascended persona voice who" data-hint="every avatar, who it is and what it does" title="every avatar, who it is and what it does">
+                    <button type="button" id="settings-nav-avatars" class="settings-nav-item" data-settings-section="avatars" data-keywords="avatar hologram face group class umbrals excelsior trace protocols singular ascended persona voice who identity name agent name genesis forge" data-hint="every avatar, who it is, and what it is called" title="every avatar, who it is, and what it is called">
                         <span class="settings-nav-icon">🎭</span>
                         <span class="settings-nav-text">Avatars</span>
-                    </button>
-                    <button type="button" id="settings-nav-identity" class="settings-nav-item" data-settings-section="identity" data-keywords="name genesis forge agent name" data-hint="what it is called, and forging a name" title="what it is called, and forging a name">
-                        <span class="settings-nav-icon">⚡</span>
-                        <span class="settings-nav-text">Identity</span>
                     </button>
                     <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide desktop sprite float floating always on top hologram window" data-hint="where the avatar lives, and where the panels sit" title="where the avatar lives, and where the panels sit">
                         <span class="settings-nav-icon">🧱</span>
@@ -1187,7 +1183,7 @@
             <section class="settings-pane" data-settings-section="avatars">
                 <div class="settings-pane-head">
                     <h3 class="settings-pane-title">&#127917; Avatars</h3>
-                    <p class="settings-pane-hint">every avatar, who it is and what it does</p>
+                    <p class="settings-pane-hint">every avatar, who it is, and what it is called</p>
                 </div>
 
                 <!-- STAGE 1: the lines. -->
@@ -1198,6 +1194,44 @@
                         covered.
                     </p>
                     <div id="avatar-group-grid" class="avatar-group-grid"></div>
+
+                    <!-- The agent's name lives here rather than in a heading of its own:
+                         who the companion is and what it looks like are one question, and
+                         asking it in two places meant two places to look. Collapsed, so the
+                         lines above stay the first thing on this pane, and on the landing
+                         stage only -- once you are reading one avatar, the name of the whole
+                         companion is not what you came for. Both fields keep their ids, so
+                         loadSettings/saveSettings and forgeIdentity are untouched. -->
+                    <details id="settings-group-identity" class="settings-group settings-group-nested">
+                        <summary class="settings-group-summary">
+                            <span class="settings-group-title">&#9889; Identity</span>
+                            <span class="settings-group-hint">what it is called, and forging a name</span>
+                        </summary>
+                        <div class="settings-group-body">
+                            <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
+                                <div class="flex items-center justify-end">
+                                    <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME</span>
+                                </div>
+
+                                <div class="space-y-1">
+                                    <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
+                                    <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                </div>
+
+                                <div class="pt-2 border-t border-purple-500/30 space-y-2">
+                                    <label class="text-xs font-mono text-purple-200 block">
+                                        ✨ Or let the AI choose its name based on your mission / tasks:
+                                    </label>
+                                    <div class="flex gap-2">
+                                        <input id="genesis-purpose-input" type="text" placeholder="e.g., 'I want a tactical Reactive Engine Daemon to manage all operations'" class="flex-1 bg-slate-900 border border-purple-500/40 rounded p-2 text-xs text-purple-100 font-mono">
+                                        <button id="btn-forge-identity" class="cyber-btn text-xs py-1.5 px-3 border-purple-400 text-purple-300 hover:bg-purple-900/60">
+                                            ⚡ Forge Identity
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
                 </div>
 
                 <!-- STAGE 2: one line's members. -->
@@ -1334,37 +1368,6 @@
                 </div>
                 </div>
             </section>
-
-            <!-- SECTION: AGENT IDENTITY & GENESIS -->
-            <section class="settings-pane" data-settings-section="identity">
-                <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">⚡ Identity</h3>
-                    <p class="settings-pane-hint">what it is called, and forging a name</p>
-                </div>
-                <div class="bg-purple-950/30 border border-purple-500/40 p-4 rounded-md space-y-3">
-                    <div class="flex items-center justify-end">
-                        <span class="text-[10px] font-mono text-purple-400">DYNAMIC NAME</span>
-                    </div>
-
-                <div class="space-y-1">
-                    <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
-                    <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                </div>
-
-                <div class="pt-2 border-t border-purple-500/30 space-y-2">
-                    <label class="text-xs font-mono text-purple-200 block">
-                        ✨ Or let the AI choose its name based on your mission / tasks:
-                    </label>
-                    <div class="flex gap-2">
-                        <input id="genesis-purpose-input" type="text" placeholder="e.g., 'I want a tactical Reactive Engine Daemon to manage all operations'" class="flex-1 bg-slate-900 border border-purple-500/40 rounded p-2 text-xs text-purple-100 font-mono">
-                        <button id="btn-forge-identity" class="cyber-btn text-xs py-1.5 px-3 border-purple-400 text-purple-300 hover:bg-purple-900/60">
-                            ⚡ Forge Identity
-                        </button>
-                    </div>
-                </div>
-                </div>
-            </section>
-
 
 
             <!-- One pane per heading in the rail: the brain, the voice, the memory, what it
