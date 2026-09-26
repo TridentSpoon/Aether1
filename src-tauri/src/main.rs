@@ -29,6 +29,7 @@ mod discovery;
 mod doctor;
 mod downloads;
 mod github_auth;
+mod graft;
 mod gpu;
 mod hotkey;
 mod installs;
@@ -1377,6 +1378,44 @@ fn vault_search_rust(engine: tauri::State<LlmEngine>, query: String) -> serde_js
     commands::vault_search(&engine, &query)
 }
 
+/// Detect projects with Graft available
+#[tauri::command(async)]
+fn graft_detect_projects_rust() -> Result<serde_json::Value, String> {
+    commands::graft_detect_projects()
+}
+
+/// Build Graft graph for a selected project
+#[tauri::command(async)]
+fn graft_build_graph_rust(
+    engine: tauri::State<LlmEngine>,
+    project_path: String,
+) -> Result<serde_json::Value, String> {
+    commands::graft_build_graph(&engine, project_path)
+}
+
+/// Select a project for code analysis
+#[tauri::command(async)]
+fn graft_select_project_rust(
+    engine: tauri::State<LlmEngine>,
+    project_path: String,
+) -> Result<serde_json::Value, String> {
+    commands::graft_select_project(&engine, project_path)
+}
+
+/// Get the currently selected Graft project
+#[tauri::command(async)]
+fn graft_get_selected_project_rust(
+    engine: tauri::State<LlmEngine>,
+) -> Result<serde_json::Value, String> {
+    commands::graft_get_selected_project(&engine)
+}
+
+/// Get Graft version information
+#[tauri::command(async)]
+fn graft_version_rust() -> Result<serde_json::Value, String> {
+    commands::graft_version()
+}
+
 /// Rust-native equivalent of GET /api/settings (backend/main.py) -- same default-filling
 /// behavior, so a fresh install (no settings rows yet) still gets sensible values.
 #[tauri::command(async)]
@@ -2328,6 +2367,11 @@ fn main() {
             vault_note_rust,
             vault_graph_rust,
             vault_search_rust,
+            graft_detect_projects_rust,
+            graft_build_graph_rust,
+            graft_select_project_rust,
+            graft_get_selected_project_rust,
+            graft_version_rust,
             get_settings_rust,
             save_settings_rust,
             generate_speech_rust,

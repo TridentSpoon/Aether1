@@ -1051,6 +1051,10 @@ impl LlmEngine {
         let telem = Telemetry::snapshot();
         let mut system_prompt = self.system_prompt(&config, &telem);
 
+        // Inject Graft code graph context if a project is selected
+        let graft_context = crate::graft::prime(&self.db, prompt);
+        system_prompt.push_str(&graft_context);
+
         // Tools are off by default and the catalog can be empty, in which case the prompt
         // says nothing about tools and the turn is exactly what it was before they existed.
         let registry = crate::tools::registry();

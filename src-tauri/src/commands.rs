@@ -1161,6 +1161,66 @@ pub fn handover_json(handover: &llm::flow::Handover) -> Value {
     })
 }
 
+/// Get the list of detected projects and their Graft status
+pub fn graft_detect_projects() -> Result<Value, String> {
+    let projects = crate::graft::detect_projects();
+    let projects_json: Vec<Value> = projects
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "path": p.path.to_string_lossy().to_string(),
+                "name": p.name,
+                "graft_status": p.graft_status.to_string(),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!(projects_json))
+}
+
+/// Build the Graft graph for a project
+pub fn graft_build_graph(engine: &LlmEngine, project_path: String) -> Result<Value, String> {
+    let path = PathBuf::from(&project_path);
+    crate::graft::build_graph(&path)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "message": format!("Graft graph built for {}", path.display()),
+    }))
+}
+
+/// Select a project for code analysis
+pub fn graft_select_project(
+    engine: &LlmEngine,
+    project_path: String,
+) -> Result<Value, String> {
+    let path = PathBuf::from(&project_path);
+    crate::graft::set_selected_project(engine.db(), &path)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "message": format!("Selected project: {}", path.display()),
+    }))
+}
+
+/// Get the currently selected project
+pub fn graft_get_selected_project(engine: &LlmEngine) -> Result<Value, String> {
+    match crate::graft::get_selected_project(engine.db()) {
+        Some(path) => Ok(serde_json::json!({
+            "path": path.to_string_lossy().to_string(),
+        })),
+        None => Ok(serde_json::json!({
+            "path": serde_json::Value::Null,
+        })),
+    }
+}
+
+/// Get Graft version information
+pub fn graft_version() -> Result<Value, String> {
+    let version = crate::graft::get_graft_version()?;
+    Ok(serde_json::json!({
+        "version": version,
+        "installed": true,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
