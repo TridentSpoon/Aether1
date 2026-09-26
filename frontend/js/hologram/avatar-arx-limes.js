@@ -32,41 +32,49 @@ HologramAvatar.prototype.buildArxLimesAvatar = function() {
     this.arxLimesHubRimMat = new THREE.LineBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.95 });
     const hub = this.buildRoundedCube(14, 3, 0.45);
     this.arxLimesHubMesh = new THREE.Mesh(hub.geometry, this.arxLimesHubFillMat);
+    // Drawn after the accretion glow (renderOrder -1 below), so the void stays a void:
+    // the glow's own depth test is off, and without an order the two would sort by
+    // distance and the bloom would wash straight over the hub.
+    this.arxLimesHubMesh.renderOrder = 1;
     // The facet grid comes back with the shape rather than from EdgesGeometry -- no
     // single edge threshold draws both the shallow facets on a face and the sharp ones
     // at a corner. See buildRoundedCube.
     this.arxLimesHubOutline = new THREE.LineSegments(hub.edges, this.arxLimesHubRimMat);
+    this.arxLimesHubOutline.renderOrder = 2;
     this.arxLimesGroup.add(this.arxLimesHubMesh);
     this.arxLimesGroup.add(this.arxLimesHubOutline);
 
-    // --- Accretion disc: two soft glowing bands tilted off-axis around the hub, plus a
-    // handful of bright hotspots orbiting the inner one so the disc visibly swirls rather
-    // than just glowing in place. Flat RingGeometry annuli textured with a soft radial-fade
-    // gradient (createRadialBandTexture), not solid-shaded TorusGeometry tubes -- an unlit
-    // tube reads as painted plastic, while a feathered gradient band reads as actual light.
-    // Real mesh geometry, not sprites -- a Sprite always faces the camera regardless of its
-    // parent's rotation, so it can't be tilted; the tilt is the whole point here. A fixed
-    // hot-accent colour like the rim, not theme-tinted -- it's meant to read as glowing
-    // infalling matter, not a UI element. ---
+    // --- Accretion glow: the disc is a soft radial bloom around the hub now rather than
+    // two banded annuli, the same treatment as the kit's eye-lens core -- a sprite of a
+    // radial gradient, additive and depth-test off so it bleeds past the hub's silhouette
+    // on every side instead of being cut in half by it. Two of them, a tight hot one and a
+    // wider faint one, so the falloff has a shoulder rather than reading as one blob. The
+    // hotspots stay, still orbiting on the old tilted plane, because they are what makes
+    // the glow swirl rather than just sit there. A fixed hot accent, not theme-tinted --
+    // it reads as infalling matter, not a UI element. ---
     this.arxLimesAccretionGroup = new THREE.Group();
     this.arxLimesAccretionGroup.rotation.x = 1.15;
     this.arxLimesGroup.add(this.arxLimesAccretionGroup);
 
-    this.arxLimesAccretionBandTexture = this.createRadialBandTexture();
-
-    this.arxLimesAccretionRing1Mat = new THREE.MeshBasicMaterial({
-        map: this.arxLimesAccretionBandTexture, color: 0xffb347, side: THREE.DoubleSide,
-        transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false
+    this.arxLimesAccretionRing1Mat = new THREE.SpriteMaterial({
+        map: this.createRadialGlowTexture(256, 'rgba(255,205,125,0.8)', 'rgba(255,105,20,0.26)'),
+        transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending,
+        depthWrite: false, depthTest: false
     });
-    this.arxLimesAccretionRing1 = new THREE.Mesh(new THREE.RingGeometry(13, 19, 64), this.arxLimesAccretionRing1Mat);
-    this.arxLimesAccretionGroup.add(this.arxLimesAccretionRing1);
+    this.arxLimesAccretionRing1 = new THREE.Sprite(this.arxLimesAccretionRing1Mat);
+    this.arxLimesAccretionRing1.renderOrder = -1;
+    this.arxLimesAccretionRing1.scale.setScalar(52);
+    this.arxLimesGroup.add(this.arxLimesAccretionRing1);
 
-    this.arxLimesAccretionRing2Mat = new THREE.MeshBasicMaterial({
-        map: this.arxLimesAccretionBandTexture, color: 0xff6a1a, side: THREE.DoubleSide,
-        transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false
+    this.arxLimesAccretionRing2Mat = new THREE.SpriteMaterial({
+        map: this.createRadialGlowTexture(256, 'rgba(255,130,50,0.5)', 'rgba(255,55,0,0.14)'),
+        transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending,
+        depthWrite: false, depthTest: false
     });
-    this.arxLimesAccretionRing2 = new THREE.Mesh(new THREE.RingGeometry(18.5, 26, 64), this.arxLimesAccretionRing2Mat);
-    this.arxLimesAccretionGroup.add(this.arxLimesAccretionRing2);
+    this.arxLimesAccretionRing2 = new THREE.Sprite(this.arxLimesAccretionRing2Mat);
+    this.arxLimesAccretionRing2.renderOrder = -1;
+    this.arxLimesAccretionRing2.scale.setScalar(86);
+    this.arxLimesGroup.add(this.arxLimesAccretionRing2);
 
     this.arxLimesAccretionHotspotsMat = new THREE.MeshBasicMaterial({
         color: 0xfff2c0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false

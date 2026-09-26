@@ -584,9 +584,9 @@ HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity,
         }
     }
 
-    // The accretion disc: two static tilted rings (a torus is rotationally symmetric, so
-    // spinning it changes nothing) that brighten with speech/thought, plus a handful of
-    // hotspots actually orbiting the inner ring so the disc visibly swirls.
+    // The accretion glow: two camera-facing blooms around the hub that brighten with
+    // speech/thought, plus a handful of hotspots orbiting on the old tilted plane so the
+    // glow visibly swirls rather than just sitting there.
     if (this.arxLimesAccretionRing1) {
         let glow = 1.0;
         if (isSpeaking) {
@@ -595,10 +595,15 @@ HologramAvatar.prototype.animateArxLimes = function(elapsedTime, audioIntensity,
             glow = 1.0 + Math.abs(Math.sin(elapsedTime * 10)) * 0.3;
         }
         glow += clickPulse * 0.5;
-        this.arxLimesAccretionRing1Mat.opacity = Math.min(0.75 * glow, 1);
-        this.arxLimesAccretionRing2Mat.opacity = Math.min(0.45 * glow, 1);
+        this.arxLimesAccretionRing1Mat.opacity = Math.min(0.62 * glow, 1);
+        this.arxLimesAccretionRing2Mat.opacity = Math.min(0.38 * glow, 1);
+        // The blooms hang off the avatar group rather than the tilted hotspot plane, so
+        // a click has to reach both -- and a sprite's scale is its size, so it is set
+        // outright from the base rather than multiplied in.
         const discScale = 1 + clickPulse * 0.15;
         this.arxLimesAccretionGroup.scale.set(discScale, discScale, discScale);
+        this.arxLimesAccretionRing1.scale.setScalar(52 * discScale * (0.94 + glow * 0.08));
+        this.arxLimesAccretionRing2.scale.setScalar(86 * discScale * (0.94 + glow * 0.08));
 
         this.arxLimesAccretionHotspots.forEach((h) => {
             h.angle += h.speed;
