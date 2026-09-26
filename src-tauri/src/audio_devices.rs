@@ -127,12 +127,7 @@ fn linux_scan() -> DeviceReport {
         let sources = run("pactl", &["list", "sources"]).unwrap_or_default();
         let default_sink = run("pactl", &["get-default-sink"]).unwrap_or_default();
         let default_source = run("pactl", &["get-default-source"]).unwrap_or_default();
-        let mut report = parse_pactl(
-            &sinks,
-            &sources,
-            default_sink.trim(),
-            default_source.trim(),
-        );
+        let mut report = parse_pactl(&sinks, &sources, default_sink.trim(), default_source.trim());
         if report.outputs.is_empty() && report.inputs.is_empty() {
             report.note =
                 "The sound server answered but listed nothing. Aether1 will use whatever \
@@ -438,7 +433,9 @@ pub fn parse_system_profiler(text: &str) -> DeviceReport {
                 }
                 continue;
             }
-            let Some(dev) = current.as_mut() else { continue };
+            let Some(dev) = current.as_mut() else {
+                continue;
+            };
             if indent <= dev.indent {
                 continue;
             }
@@ -585,7 +582,10 @@ Video
         assert_eq!(r.outputs.len(), 2);
         assert_eq!(r.inputs.len(), 2);
         assert!(r.outputs.iter().all(|d| !d.is_default));
-        assert!(!r.note.is_empty(), "the panel has to say why none is marked");
+        assert!(
+            !r.note.is_empty(),
+            "the panel has to say why none is marked"
+        );
     }
 
     #[test]

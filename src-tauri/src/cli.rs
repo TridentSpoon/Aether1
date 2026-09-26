@@ -1359,7 +1359,10 @@ fn run_say(text: Option<String>, voice: Option<String>, play: bool) -> Result<St
     let voice = voice.or_else(|| Some(engine.db().get_setting_string("voice_name", DEFAULT_VOICE)));
     let path = commands::synthesize_speech(&engine, &text, voice.as_deref())?;
     if play {
-        play_audio(&path, &engine.db().get_setting_string("audio_output_device", ""))?;
+        play_audio(
+            &path,
+            &engine.db().get_setting_string("audio_output_device", ""),
+        )?;
         Ok(String::new())
     } else {
         Ok(path.display().to_string())
