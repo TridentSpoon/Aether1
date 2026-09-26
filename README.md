@@ -772,8 +772,21 @@ unnecessary. It never crosses between lines -- you picked a cast, not a characte
 avatar belonging to no line (A1, *Model's Own*, your own design) never flows at all, which is
 why the switch hides itself there.
 
-At the command line, `aether1 flow` reports the mode and the line it can move within, and
-`aether1 flow on` / `aether1 flow off` sets it.
+**A line can also be picked whole**, instead of one of its members. Settings → Avatars →
+a line → **Use this whole line** turns flow mode on and makes that cast the thing you
+picked: the question goes to whichever node of it owns the subject, the hologram follows
+whoever is answering, and the pick survives every hand-off — where wearing one member of a
+line means the line to move within is only ever that member's own. Picking a line you were
+standing outside of lands you on its generalist (A.R.X.LOCAS, hAlcy) so the first ordinary
+question has somebody to answer it. Wearing a single avatar from another line releases the
+pick, because picking one character is a decision against the cast. Only a line with more
+than one persona behind it can be picked: the eXcelsior Class is shapes so far, and Trace
+Protocols is The Nexus and three avatars that carry no directive of their own.
+
+At the command line, `aether1 flow` reports the mode, the line it can move within and
+whether that line is picked whole; `aether1 flow on` / `aether1 flow off` sets the mode, and
+`aether1 flow line umbrals` / `aether1 flow line clear` picks or releases a line (any part of
+its name will do).
 
 ### What each persona reaches without asking
 

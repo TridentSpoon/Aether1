@@ -278,6 +278,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let avatarBrowserSelection = null;  // which avatar stage 3 is showing
     let avatarPreviewEngine = null;
     let avatarBrowserBuilt = false;
+    /* The last answer from /api/flow: whether hand-offs are on, the line they may move
+       within, the line picked whole if there is one, and which lines have personas behind
+       them at all. The browser draws from this copy rather than awaiting a fetch in the
+       middle of a render; refreshFlowMode is what keeps it current. */
+    let flowState = null;
 
     /* The persona catalogue's rows themselves, not just the <option>s built from them: the
        avatar browser wants a persona's speciality, access and voice beside its avatar, and
@@ -441,6 +446,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Avatar Engine Handler (3D shape + optional linked persona identity)
     function applyAvatar(avatarName, updatePersona = false) {
+        // Picking one character is a decision against the cast: a line picked whole
+        // outranks whoever is on screen (see llm/flow.rs), so leaving it in force here
+        // would send the next question back into the old line the moment it matched.
+        // Only a real pick counts -- a restored avatar at startup is not one.
+        if (updatePersona) releasePickedLineFor(avatarName);
         currentAvatar = avatarName;
         localStorage.setItem('aether_avatar', avatarName);
         setHologramAvatar(avatarName);
@@ -659,6 +669,76 @@ document.addEventListener('DOMContentLoaded', () => {
         return cat ? cat.inGroup(groupId).filter(avatarIsVisible) : [];
     }
 
+    /* ---- A whole line as the pick ------------------------------------------
+       An avatar is a character; a line is a cast. Picking the cast means the question goes
+       to whichever of its nodes owns the subject, and the one on screen is whoever is
+       holding it at that moment -- so the pick survives every hand-off, which wearing a
+       member of the line does not. The rule itself is llm/flow.rs; these three are the
+       state it is drawn from. */
+    function pickedLine() {
+        return (flowState && flowState.line) || null;
+    }
+
+    /* Not every line is a cast. The eXcelsior Class is five shapes with no directives
+       behind them yet, and Trace Protocols is one persona and three eggs that carry none --
+       picking either would promise a group and deliver a single node. The backend says
+       which lines it can actually pass a question around, rather than this being guessed
+       at here from the catalogue. */
+    function lineCanBePicked(groupName) {
+        return Boolean(flowState && Array.isArray(flowState.lines)
+            && flowState.lines.includes(groupName));
+    }
+
+    /* Releases the picked line unless the avatar being worn is one of its own. Wearing
+       another member of the same cast is not a change of mind about the cast. */
+    function releasePickedLineFor(avatarName) {
+        const line = pickedLine();
+        if (!line) return;
+        const cat = avatarCatalogue();
+        const entry = cat && cat.get(avatarName);
+        const group = entry && cat.group(entry.group);
+        if (group && group.name === line) return;
+        setFlowLine(null);
+    }
+
+    async function setFlowLine(name) {
+        let state = null;
+        try {
+            if (IS_TAURI) {
+                state = await tauriInvoke('set_flow_line_rust', { line: name });
+            } else {
+                const resp = await apiFetch('/api/flow/line', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ line: name }),
+                });
+                if (resp.ok) state = await resp.json();
+            }
+        } catch (e) {
+            console.error('Could not change the picked line', e);
+        }
+        if (!state) return;
+        flowState = state;
+        /* Picking a line the operator was standing outside of lands them on its anchor --
+           the cast's generalist -- and the backend has already written that persona. The
+           HUD wears the matching avatar so the hologram agrees with who is answering,
+           greeting included: it is a change of who you are talking to, and a silent one
+           would be the hologram lying about it. */
+        const personaSelect = document.getElementById('setting-persona');
+        const answering = state.persona || (personaSelect && personaSelect.value) || null;
+        if (answering) {
+            const cat = avatarCatalogue();
+            const entry = cat && cat.all.find((a) => a.persona === answering);
+            // Also when the backend moved nobody: the operator can have been inside the
+            // line by persona while wearing a shape from somewhere else, and a hologram
+            // from another cast while this one answers is the confusion the pick exists
+            // to remove.
+            if (entry && entry.id !== currentAvatar) applyAvatar(entry.id, true);
+        }
+        refreshFlowMode();
+        refreshAvatarBrowser();
+    }
+
     function showAvatarStage(name) {
         AVATAR_STAGES.forEach((stage) => {
             document.querySelectorAll(`[data-avatar-stage="${stage}"]`).forEach((el) => {
@@ -716,6 +796,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 count.textContent += ' · wearing one of these';
                 card.classList.add('is-current');
             }
+            // Two different states worth telling apart on the same card: wearing a member
+            // of this line, and having picked the line itself.
+            if (pickedLine() === group.name) {
+                count.textContent += ' · picked as a line';
+                card.classList.add('is-current');
+            } else if (lineCanBePicked(group.name)) {
+                count.textContent += ' · can be picked whole';
+            }
 
             card.append(faces, name, tagline, blurb, count);
             card.addEventListener('click', () => {
@@ -755,7 +843,53 @@ document.addEventListener('DOMContentLoaded', () => {
                 : `${hidden} more members of this line have not turned up yet.`;
         }
 
+        renderLinePick(group);
         showAvatarStage('members');
+    }
+
+    /* The button that picks a line whole, and the sentence explaining what that does. It
+       says the consequence rather than the setting: what changes is who answers the next
+       question, and "flow_group" would mean nothing to the person reading it. */
+    function renderLinePick(group) {
+        const button = document.getElementById('btn-avatar-line');
+        const note = document.getElementById('avatar-line-note');
+        if (!button || !note) return;
+
+        const picked = pickedLine() === group.name;
+        const available = lineCanBePicked(group.name);
+        button.classList.toggle('is-picked', picked);
+        button.disabled = !available;
+
+        if (!available) {
+            const cat = avatarCatalogue();
+            // One persona in the line and one alone is a different thing from none: the
+            // first is a cast that has not grown yet, the second is shapes. Counted from
+            // the catalogue rather than the visible list, so an unlocked egg does not
+            // change the sentence and a locked one is not given away by it.
+            const backed = cat ? cat.inGroup(group.id).filter((a) => a.persona).length : 0;
+            button.textContent = 'Not a cast yet';
+            note.textContent = backed === 1
+                ? 'Only one of these carries a persona so far, so picking the line would be '
+                    + 'the same as wearing that one. Do that instead, for now.'
+                : 'These have shapes but no directives behind them, so there is nobody here '
+                    + 'to hand a question to. Wearing one leaves whoever you had selected '
+                    + 'answering.';
+        } else if (picked) {
+            button.textContent = 'Release this line';
+            note.textContent = `${group.name} is answering. Each question goes to whichever of `
+                + 'them owns the subject, and the one holding it says so before it moves. '
+                + 'Releasing leaves you with whoever is answering at the time.';
+        } else {
+            button.textContent = 'Use this whole line';
+            note.textContent = 'Pick the cast instead of one of its members: the question goes '
+                + `to whichever node of ${group.name} owns it, and the hologram follows. You `
+                + 'can still wear a single one of them below.';
+        }
+
+        button.onclick = () => {
+            voiceEngine.playSFX('click');
+            setFlowLine(picked ? null : group.name);
+        };
     }
 
     function buildAvatarCard(entry) {
@@ -952,6 +1086,9 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshAvatarEntryCard();
         renderAvatarGroups();
         if (avatarBrowserGroup) {
+            const cat = avatarCatalogue();
+            const group = cat && cat.group(avatarBrowserGroup);
+            if (group) renderLinePick(group);
             const active = document.querySelector('[data-avatar-stage="members"].is-active')
                 || document.querySelector('[data-avatar-stage="detail"].is-active');
             const grid = document.getElementById('avatar-member-grid');
@@ -1366,6 +1503,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.error('Could not read the flow mode setting', e);
         }
+        flowState = state;
+        // Settings' Avatars pane draws the picked line in two places (the line's card and
+        // the button on its members stage), so a change of mode has to reach it too.
+        refreshAvatarBrowser();
         if (!state || !state.group) {
             button.classList.add('hidden');
             return;
@@ -1377,9 +1518,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // labels in identical styling read as a caption rather than a switch that is on.
         button.classList.toggle('flow-on', !!state.enabled);
         button.textContent = state.enabled ? '\u25cf FLOW' : 'STATIC';
+        const picked = state.line
+            ? `${state.group} is picked whole, so the cast answers rather than one of them. `
+            : '';
         button.title = state.enabled
-            ? `The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
-            : `This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
+            ? `${picked}The question can move to any node of ${state.group}, and whoever is holding it says so first. Click for STATIC.`
+            : `${picked}This avatar answers everything. Click for FLOW, and the question moves to whichever node of ${state.group} it belongs to.`;
     }
 
     function initFlowMode() {

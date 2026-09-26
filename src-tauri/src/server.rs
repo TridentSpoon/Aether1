@@ -159,6 +159,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/status", get(voice_status))
         .route("/api/personas", get(list_personas))
         .route("/api/flow", get(flow_mode).post(set_flow_mode))
+        .route("/api/flow/line", post(set_flow_line))
         .route("/api/profile", get(profile_report))
         .route("/api/profile/revoke", post(revoke_device))
         .route("/api/doctor", get(doctor_report))
@@ -580,6 +581,23 @@ async fn set_flow_mode(
 ) -> Result<StatusCode, (StatusCode, String)> {
     commands::set_flow_mode(&state.engine, req.enabled)
         .map(|()| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize)]
+struct FlowLineRequest {
+    /// The line to pick whole, or null to release the one that is picked.
+    line: Option<String>,
+}
+
+/// The browser HUD's counterpart of `set_flow_line_rust`: picking a whole cast from the
+/// Avatars pane rather than one of its members.
+async fn set_flow_line(
+    State(state): State<AppState>,
+    Json(req): Json<FlowLineRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::set_flow_line(&state.engine, req.line)
+        .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 

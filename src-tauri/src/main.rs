@@ -995,6 +995,15 @@ fn set_flow_mode_rust(engine: tauri::State<LlmEngine>, enabled: bool) -> Result<
     commands::set_flow_mode(&engine, enabled)
 }
 
+/// Pick a whole line to flow within, or release it with `line: null`.
+#[tauri::command(async)]
+fn set_flow_line_rust(
+    engine: tauri::State<LlmEngine>,
+    line: Option<String>,
+) -> Result<serde_json::Value, String> {
+    commands::set_flow_line(&engine, line)
+}
+
 #[tauri::command(async)]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
@@ -2139,6 +2148,7 @@ fn main() {
             set_speciality_model_rust,
             flow_mode_rust,
             set_flow_mode_rust,
+            set_flow_line_rust,
             doctor_report_rust,
             doctor_repair_rust,
             setup_advice_rust,

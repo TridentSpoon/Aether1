@@ -700,14 +700,43 @@ pub fn set_persona_access(engine: &LlmEngine, paths: Vec<String>) -> Result<Valu
 pub fn flow_mode(engine: &LlmEngine) -> Value {
     let db = engine.db();
     let persona = llm::Persona::from_key(&db.get_setting_string("persona_type", "default"));
+    let picked = llm::flow::line(db);
     serde_json::json!({
         "enabled": llm::flow::enabled(db),
-        "group": persona.group(),
+        // The line hand-offs may move within: the one picked whole if there is one, and
+        // otherwise the one the selected avatar belongs to.
+        "group": picked.or_else(|| persona.group()),
+        // Which of those two it is. `line` is what the Avatars pane draws as picked, and
+        // it is what survives a hand-off -- `group` follows the avatar once it moves.
+        "line": picked,
+        // The lines that can be picked whole, so the pane offers the ones that can
+        // actually pass a question around rather than every cast in the catalogue. The
+        // eXcelsior Class (no personas yet) and Trace Protocols (one) are not in here.
+        "lines": llm::Persona::flow_lines(),
     })
 }
 
 pub fn set_flow_mode(engine: &LlmEngine, enabled: bool) -> Result<(), String> {
     llm::flow::set_enabled(engine.db(), enabled)
+}
+
+/// Pick a whole line, or release it with `None`, and report the state the chin bar and the
+/// Avatars pane should now show. `persona` is set when picking moved the operator to the
+/// line's anchor, so the HUD knows to wear that avatar; it is null when they were already
+/// standing inside the line.
+pub fn set_flow_line(engine: &LlmEngine, line: Option<String>) -> Result<Value, String> {
+    let db = engine.db();
+    let moved = llm::flow::set_line(db, line.as_deref())?;
+    let mut state = flow_mode(engine);
+    state["persona"] = match &moved {
+        Some(p) => Value::String(p.key().to_string()),
+        None => Value::Null,
+    };
+    state["agent_name"] = match &moved {
+        Some(p) => Value::String(p.avatar().unwrap_or("AETHER").to_string()),
+        None => Value::Null,
+    };
+    Ok(state)
 }
 
 /// Shared by the Tauri `generate_speech_rust` command and the axum server's TTS-bundling
