@@ -1,8 +1,31 @@
 **The Aether1 Platform**
 
-A basic project for self-hosted or API connected AI companions with a sleek holographic presence, built in the spirit of the the future we saw in Sci-Fi growing up.
+An AI companion that lives on your own machine, with a holographic presence, built in the
+spirit of the future we saw in Sci-Fi growing up.
 
-Built for Linux and Windows as peer platforms -- developed on Linux, installed on both, and a capability is not finished until it works on each -- with macOS to follow if the hardware ever does. It features real-time system and AI relevant telemetry, an interactive 3D holographic avatar, with speech capabilities, a local persistent memory, and a system tray companion in or hovering next to your notification bar.
+**It runs on your hardware and your network, and that is the whole point.** The model can be
+one on this computer or one on the old box under your desk. The memory is a file on your own
+disk. There is no Aether1 server anywhere, no account to make, and nothing is uploaded for
+"improving the service", because there is no service. Cloud providers are supported and are
+entirely your choice: point it at one deliberately, or never, and **Settings -> Network ->
+Local only** makes that a switch you can throw rather than a promise you have to take on
+trust. What it closes off is the internet, not your LAN -- reaching a model server on the
+machine in the next room is the point, not a leak.
+
+Where it does cross the network, it crosses *your* network, and it is treated like it
+matters: serving the HUD to a phone or another computer (`aether1 --serve --lan`) runs over
+TLS, and the certificate's fingerprint is printed when it starts and stays the same run to
+run, so you can check it against the one your browser shows you. Each device gets its own
+token, and any one of them can be cut off on its own with `aether1 revoke <id>`.
+
+Built for Linux and Windows as peer platforms -- developed on Linux, installed on both, and a
+capability is not finished until it works on each -- with macOS to follow if the hardware ever
+does. It features real-time system and AI relevant telemetry, an interactive 3D holographic
+avatar, with speech capabilities, a local persistent memory, and a system tray companion in or
+hovering next to your notification bar.
+
+The longer version of what this is for, and what it deliberately is not, is in
+[docs/GOALS.md](docs/GOALS.md).
 
 Intended features
 
@@ -1053,31 +1076,48 @@ rights needed, and it takes effect in new terminals):
 `prompt` shares one conversation history and one memory store with the HUD, so anything
 you tell it from a script is there next time you open the window.
 
-## Updates, and why it asks you to sign in to GitHub
+## Updates, and the optional GitHub sign-in
 
 A copy built from a checkout updates itself the way you would: `git pull`, rebuild, relaunch.
 That is what the tray's **Check for Updates** does, and there is nothing to sign in to.
 
 A copy **installed** from a bundle has no checkout and no toolchain, so its update is a new
-bundle from this project's releases -- and the repository is private, which means the releases
-are too. Rather than hide a credential inside the app, where anyone could read it back out,
-AETHER1 asks you to sign in as yourself: Settings -> **The Brain** -> **Connections** ->
-**Sign in**, or `aether1 signin`. It shows a short code, you type it in at
-`github.com/login/device`, and that is the whole of it. AETHER1 never sees a password, and the
-token it receives can do exactly one thing -- read the contents of repositories the app is
-installed on.
+bundle from this project's releases. Checking for one needs no account: the releases are
+public and AETHER1 reads them anonymously.
 
-That makes access a real list rather than a guess: whoever the owner has added to the
-repository can see the releases, and whoever is removed cannot. Your token is kept in your
-operating system's keychain (Credential Manager, Keychain, libsecret or kwallet). On a machine
-with no keychain service running -- a headless box, usually -- it goes in a file only you can
-read instead, and the app says so rather than pretending otherwise.
+Signing in is still offered, and does two things. It raises GitHub's rate limit for this
+machine from sixty requests an hour to five thousand, which matters on a shared or
+office connection where sixty is spent by lunchtime. And it is what lets a copy check a
+release that is *not* public -- a fork kept private, or this project before it was opened up.
+Settings -> **The Brain** -> **Connections** -> **Sign in**, or `aether1 signin`. It shows a
+short code, you type it in at `github.com/login/device`, and that is the whole of it. AETHER1
+never sees a password, and the token it receives can do exactly one thing -- read the contents
+of repositories the app is installed on.
 
-Connections is also where you can see whether the **GitHub CLI** (`gh`) is on this computer,
-which is a different thing entirely: that is the program AETHER CODE runs read-only commands
-through (`gh pr view`, `gh run list`). Signing in above does not install it, it is not needed for
-updates, and installing it from [cli.github.com](https://cli.github.com) is still worth doing if
-you want AETHER CODE to be able to look at a repository.
+Your token is kept in your operating system's keychain (Credential Manager, Keychain,
+libsecret or kwallet). On a machine with no keychain service running -- a headless box,
+usually -- it goes in a file only you can read instead, and the app says so rather than
+pretending otherwise.
+
+Whether you sign in or not, **a download is checked before it is installed.** Every release
+asset is signed with minisign in the release pipeline, the public key is compiled into this
+binary, and a bundle whose signature does not verify is deleted rather than installed. That
+is the guarantee that matters, and it never depended on the releases being hard to reach.
+
+### The GitHub CLI is a separate thing, and AETHER CODE needs it
+
+Connections also shows whether the **GitHub CLI** (`gh`) is on this computer. This is not the
+sign-in above and does not share anything with it: `gh` is the program AETHER CODE runs
+read-only commands through (`gh pr view`, `gh run list`), and it carries its own login, made
+with `gh auth login` in a terminal. AETHER1 never reads that login -- `gh auth token` is one of
+the commands the read-only classifier refuses outright, precisely so a credential cannot be
+printed into a conversation that gets stored.
+
+So the two are independent in both directions. Signing in above does not install `gh` or log
+it in, and it is not what gives AETHER CODE its GitHub access. Equally, the update check going
+anonymous changes nothing for AETHER CODE: it was never using the app's sign-in. Install `gh`
+from [cli.github.com](https://cli.github.com) and run `gh auth login` if you want AETHER CODE
+to be able to look at a repository.
 
 **Declining costs you nothing but the update notice.** Press *Not now, and stop asking* and
 AETHER1 remembers; the check stops running and nothing else changes. Signing in later is the
@@ -1134,3 +1174,31 @@ to generate a new phrase and revoke the old one.
 ## Project goals
 
 Where this is headed, and why: [docs/GOALS.md](docs/GOALS.md).
+
+## Licence, and what a fork owes you
+
+Aether1 is **GPL-3.0-only**. The full text is in [LICENSE](LICENSE).
+
+In plain terms, for the two questions people actually have:
+
+**Can I use it?** Yes. Run it, on as many machines as you like, for anything you like,
+including at work. Nothing to ask, nothing to pay, nothing to sign.
+
+**Can I fork it?** Yes — and three things come with that, which is the entire reason this
+licence was chosen:
+
+1. **A fork stays open.** If you distribute a modified Aether1, you distribute its source
+   under this same licence. Nobody takes this, closes it, and sells it back.
+2. **A fork says where it came from.** The copyright notices stay, and the GPL requires a
+   modified version to carry prominent notices saying that you changed it and when. Someone
+   handed your fork can trace it back here.
+3. **A fork is not Aether1.** The licence covers the code. It does not grant the *name* —
+   "Aether1", "AETHER1", the eXcelsior avatars and the logos are not yours to use in a way
+   that suggests your version is this project or endorsed by it. Fork it and call it
+   something of your own.
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Anything you submit is
+under the same licence, which is the only way the promises above stay true for the next
+person.
+
+Copyright (C) 2026 TridentSpoon.

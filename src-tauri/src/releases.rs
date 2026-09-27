@@ -7,8 +7,16 @@
 //! difference its only answer was `git pull` in a checkout that an installed copy does not
 //! have.
 //!
-//! So: the check reads `/repos/{owner}/{repo}/releases/latest` with the signed-in token (see
-//! `github_auth`), and the fetch pulls the release asset for this platform.
+//! So: the check reads `/repos/{owner}/{repo}/releases/latest` and the fetch pulls the release
+//! asset for this platform.
+//!
+//! **Signing in is an option, not a gate.** Where this project's releases are public, an
+//! anonymous request reads them perfectly well; a token, when `github_auth` has one, is sent
+//! anyway because it raises GitHub's rate limit from sixty requests an hour to five thousand,
+//! and because it is what makes a private repository's releases visible at all. Requiring one
+//! unconditionally was right while this repository was private and wrong the moment it was
+//! not -- it turned a sign-in the operator had no reason to do into the price of finding out
+//! whether they were up to date.
 //!
 //! **Authentication proves who may download; a signature proves what was downloaded.** They
 //! are different questions and both get asked. A token can be stolen, a release asset can be
@@ -123,11 +131,15 @@ pub enum ReleaseError {
     /// Nobody is signed in and `gh` is not standing in for them either. The one failure with
     /// an obvious next step, so the callers offer it specifically.
     NotSignedIn,
-    /// Signed in, but GitHub will not show this repository's releases -- which for a private
-    /// repository means this account is not a collaborator on it. Distinguished from
-    /// `NotSignedIn` because the fix is completely different: ask the owner, do not sign in
-    /// again.
-    NoAccess,
+    /// GitHub will not show this repository's releases. What to do about it depends entirely
+    /// on whether a token was sent, which is why that is carried here rather than inferred:
+    /// signed in, the account is not a collaborator and the fix is to ask the owner; not
+    /// signed in, the releases may simply be private and signing in may reveal them. GitHub
+    /// answers 404 either way -- it hides a private repository rather than admitting it
+    /// exists -- so the two cases are indistinguishable from the response alone.
+    NoAccess {
+        signed_in: bool,
+    },
     /// The repository has no published release yet.
     NoRelease,
     Network(String),
@@ -138,13 +150,18 @@ impl ReleaseError {
     pub fn message(&self) -> String {
         match self {
             ReleaseError::NotSignedIn => {
-                "sign in to GitHub to check for new versions -- AETHER1's releases are on a \
-                 private repository, so it has to be you asking for them"
+                "the GitHub sign-in stored here is no longer accepted -- sign in again to \
+                 check for new versions"
                     .to_string()
             }
-            ReleaseError::NoAccess => {
+            ReleaseError::NoAccess { signed_in: true } => {
                 "signed in, but this GitHub account cannot see AETHER1's releases -- ask the \
                  project's owner to add you to the repository"
+                    .to_string()
+            }
+            ReleaseError::NoAccess { signed_in: false } => {
+                "AETHER1's releases are not visible from here -- if they are private, signing \
+                 in to GitHub as somebody the owner has added will show them"
                     .to_string()
             }
             ReleaseError::NoRelease => {
@@ -191,27 +208,35 @@ fn pick_asset(assets: &[RawAsset]) -> Option<Asset> {
 /// Ask GitHub for the newest published release of the update repository. Blocking; never call
 /// it on the main thread.
 pub fn latest(repo: &str, agent_label: &str) -> Result<Release, ReleaseError> {
-    let token = github_auth::token_for_requests().ok_or(ReleaseError::NotSignedIn)?;
+    // Sent when there is one, not required. See the note on signing in at the top of this
+    // module: public releases read fine anonymously, and a token is worth attaching anyway
+    // for the rate limit.
+    let token = github_auth::token_for_requests();
+    let signed_in = token.is_some();
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let response = ureq::get(&url)
+    let mut request = ureq::get(&url)
         .config()
         .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
-        .header("Authorization", format!("Bearer {token}"))
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        .header("User-Agent", agent_label)
-        .call()
-        .map_err(|e| match &e {
-            // GitHub hides a private repository behind a 404 rather than a 403, so a token
-            // that is valid but not a collaborator's looks identical to a repository that
-            // does not exist. Given the token got this far, "you are not on the list" is the
-            // honest reading.
-            ureq::Error::StatusCode(404) => ReleaseError::NoAccess,
-            ureq::Error::StatusCode(401) => ReleaseError::NotSignedIn,
-            ureq::Error::StatusCode(403) => ReleaseError::NoAccess,
-            _ => ReleaseError::Network(e.to_string()),
-        })?;
+        .header("User-Agent", agent_label);
+    if let Some(token) = &token {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    let response = request.call().map_err(|e| match &e {
+        // GitHub hides a repository it will not show behind a 404 rather than a 403, so
+        // this one status covers three different situations: a private repository the
+        // caller cannot see, a public one with no published release, and a repository
+        // that does not exist. `signed_in` is what lets the message say something true
+        // about which -- it is the only thing here that distinguishes them.
+        ureq::Error::StatusCode(404) => ReleaseError::NoAccess { signed_in },
+        // A token that GitHub itself rejects: expired, revoked, or malformed. Only
+        // reachable when one was sent, so it genuinely does mean sign in again.
+        ureq::Error::StatusCode(401) => ReleaseError::NotSignedIn,
+        ureq::Error::StatusCode(403) => ReleaseError::NoAccess { signed_in },
+        _ => ReleaseError::Network(e.to_string()),
+    })?;
 
     let raw: RawRelease = response
         .into_body()
@@ -269,7 +294,6 @@ pub enum FetchError {
     BadSignature {
         deleted: bool,
     },
-    NotSignedIn,
     Network(String),
     Disk(String),
 }
@@ -299,7 +323,6 @@ impl FetchError {
                  been left where it is; nothing here will install it."
                     .to_string()
             }
-            FetchError::NotSignedIn => ReleaseError::NotSignedIn.message(),
             FetchError::Network(e) => format!("the download failed: {e}"),
             FetchError::Disk(e) => e.clone(),
         }
@@ -318,16 +341,18 @@ fn asset_url(repo: &str, id: u64) -> String {
 }
 
 fn fetch_asset_bytes(repo: &str, id: u64, agent_label: &str) -> Result<Vec<u8>, FetchError> {
-    let token = github_auth::token_for_requests().ok_or(FetchError::NotSignedIn)?;
-    let response = ureq::get(asset_url(repo, id))
+    let mut request = ureq::get(asset_url(repo, id))
         .config()
         .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
-        .header("Authorization", format!("Bearer {token}"))
         // Without this the endpoint answers with the asset's JSON metadata rather than the
         // asset, which reads as a corrupt download rather than as the wrong request.
         .header("Accept", "application/octet-stream")
-        .header("User-Agent", agent_label)
+        .header("User-Agent", agent_label);
+    if let Some(token) = github_auth::token_for_requests() {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    let response = request
         .call()
         .map_err(|e| FetchError::Network(e.to_string()))?;
     let mut bytes = Vec::new();
@@ -371,16 +396,18 @@ pub fn download_and_verify(
         .map_err(|e| FetchError::Disk(format!("could not make somewhere to download to: {e}")))?;
     let path = dir.join(&asset.name);
 
-    let token = github_auth::token_for_requests().ok_or(FetchError::NotSignedIn)?;
-    let response = ureq::get(asset_url(repo, asset.id))
+    let mut request = ureq::get(asset_url(repo, asset.id))
         .config()
         // No global timeout on this one: a global deadline on a half-gigabyte download over a
         // slow line is a timeout on the size of the file, not on anything being wrong.
         .timeout_global(None)
         .build()
-        .header("Authorization", format!("Bearer {token}"))
         .header("Accept", "application/octet-stream")
-        .header("User-Agent", agent_label)
+        .header("User-Agent", agent_label);
+    if let Some(token) = github_auth::token_for_requests() {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    let response = request
         .call()
         .map_err(|e| FetchError::Network(e.to_string()))?;
 
@@ -545,11 +572,45 @@ mod tests {
         assert_eq!(is_newer("Ver 0.4.140", "0.4.152"), Some(true));
     }
 
+    /// The two refusals GitHub cannot tell apart have to be told apart here, because the
+    /// next move is the opposite in each: sign in, or ask the owner. Written as a test
+    /// because both are one `NoAccess` and a later edit could easily collapse them back.
+    #[test]
+    fn being_refused_reads_differently_depending_on_whether_anyone_signed_in() {
+        let anonymous = ReleaseError::NoAccess { signed_in: false }.message();
+        let signed_in = ReleaseError::NoAccess { signed_in: true }.message();
+        assert_ne!(anonymous, signed_in);
+        // Anonymous: signing in is the thing to try.
+        assert!(anonymous.contains("signing in"));
+        // Signed in: it is not, and saying so would send someone round the same loop again.
+        assert!(!signed_in.contains("sign in to"));
+        assert!(signed_in.contains("owner"));
+    }
+
+    /// Nothing states this project's releases are private any more. They were, the messages
+    /// said so as a fact about the world, and a repository going public turned every one of
+    /// them into a lie the operator had no way to check.
+    #[test]
+    fn no_message_asserts_the_releases_are_private() {
+        for message in [
+            ReleaseError::NotSignedIn.message(),
+            ReleaseError::NoAccess { signed_in: true }.message(),
+            ReleaseError::NoAccess { signed_in: false }.message(),
+            ReleaseError::NoRelease.message(),
+        ] {
+            assert!(
+                !message.contains("are on a private"),
+                "still claims the releases are private: {message}"
+            );
+        }
+    }
+
     #[test]
     fn every_failure_says_what_to_do_about_it() {
         for message in [
             ReleaseError::NotSignedIn.message(),
-            ReleaseError::NoAccess.message(),
+            ReleaseError::NoAccess { signed_in: true }.message(),
+            ReleaseError::NoAccess { signed_in: false }.message(),
             ReleaseError::NoRelease.message(),
             FetchError::NoPublicKey.message(),
             FetchError::Unsigned.message(),
