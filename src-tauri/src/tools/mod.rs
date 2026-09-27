@@ -20,6 +20,7 @@ pub(crate) mod fs_guard;
 pub mod mutating;
 mod notes;
 pub mod protocol;
+pub(crate) mod selfcheck;
 
 use std::sync::LazyLock;
 
@@ -253,6 +254,10 @@ pub fn registry() -> &'static Registry {
             Box::new(builtin::SearchMemory),
             Box::new(builtin::SearchWeb),
             Box::new(eventlog::ReadEventLog),
+            // AETHER1's own two diagnostic records, so "why did that break?" has an
+            // answer that is not the system log pasted into the conversation.
+            Box::new(selfcheck::RecentCrashes),
+            Box::new(selfcheck::SelfCheck),
             // Everything below changes something, so everything below goes through the
             // consent path -- proposed to the operator, never run from a conversation.
             Box::new(mutating::WriteFile),

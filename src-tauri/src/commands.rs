@@ -912,7 +912,7 @@ pub fn synthesize_speech(
 /// behind it. `facts` carries what only the caller knows -- the desktop process fills it in,
 /// a browser-served HUD passes what it can and the report says which rows nobody could answer.
 pub fn doctor_report(engine: &LlmEngine, facts: crate::doctor::Facts) -> Value {
-    let (observation, health) = crate::doctor::report(engine, &facts);
+    let (observation, health) = crate::doctor::report(engine.db(), &facts);
     serde_json::json!({ "health": health, "observation": observation })
 }
 
@@ -934,7 +934,7 @@ pub fn doctor_repair(
 
     // The repair the report offered for this check, recomputed from a fresh probe: a button
     // pressed ten minutes after the panel was drawn must not act on what was true then.
-    let (observation, _) = crate::doctor::report(engine, &crate::doctor::Facts::default());
+    let (observation, _) = crate::doctor::report(engine.db(), &crate::doctor::Facts::default());
     let offered = crate::doctor::repair_for(check_id, &observation);
     match offered {
         Some(offered) if offered.id == repair_id => {}
@@ -950,6 +950,22 @@ pub fn doctor_repair(
 
     let outcome = crate::doctor::apply_with(engine, check_id, repair_id, in_app)?;
     serde_json::to_value(outcome).map_err(|e| e.to_string())
+}
+
+/// Fixes everything AETHER1 can fix about itself, because somebody pressed the one button
+/// that says so.
+///
+/// The button rather than the switch: this is the attended path, and pressing it is the
+/// go-ahead for the whole pass in the same way pressing one repair is the go-ahead for that
+/// repair. The unattended path is `SELF_REPAIR_SETTING` and lives in main.rs's startup
+/// thread; it reaches the same `doctor::attend`, so there is one behaviour and not two.
+pub fn doctor_attend(
+    engine: &LlmEngine,
+    facts: crate::doctor::Facts,
+    in_app: Option<crate::doctor::InAppRepair>,
+) -> Result<Value, String> {
+    let attended = crate::doctor::attend(engine, &facts, in_app);
+    serde_json::to_value(attended).map_err(|e| e.to_string())
 }
 
 /// Runs diagnostics and returns a structured report with simplified output.

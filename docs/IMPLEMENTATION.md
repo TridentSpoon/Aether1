@@ -3441,3 +3441,98 @@ appearing is itself how the operator learns the key.
 Escape hushes *and stops there* when it silenced something: a press that cuts off a long answer
 should not also close the panel being read. When nothing is being spoken it is the menu key it
 always was. The button plays no click sound, it being the button you press to stop the noise.
+
+---
+
+#### Follow-up: AETHER CODE can change one folder
+
+Trident, 2026-09-27: *"I need the code side able to access the system and function similar to
+the likes of Claude Code, Google Antigravity or GPT Codex."*
+
+The coding panel could look and nothing else. Five tools, every one a read, three tool rounds
+per question, and any request to change something came back as a refusal telling the model to
+put the command in a fenced block, where a button types it into the operator's terminal and
+their Return key runs it. That is a defensible place to stand and it is not what a coding
+agent is: every one of them is the same loop -- read a file, change it, run the tests, read
+what broke, change it again -- and a panel that cannot take the second step of that loop can
+only narrate it.
+
+**What moved.** `code_workspace.rs` is the whole of the new capability, and it states five
+rules it holds itself to. One nominated folder (`code_workspace_root`, falling back to the
+project already selected for Graft). Paths canonicalised -- the parent when the file does not
+exist yet -- so a symlink out of the project resolves to where it really goes and is refused,
+with `fs_guard` checked as well, not instead. No shell anywhere: `run` is given an argv and
+spawns the program directly, so a pipe or a `;` in an argument is a literal string. A program
+must be on the operator's own list, and `git` additionally must not be one of the fifteen
+subcommands that leave the folder or destroy uncommitted work. Both new grants default off.
+
+**Three tools:** `edit_file` (exact text, and it must match *exactly once* -- a line range
+edits the wrong line silently when the model's picture of the file is stale, and an ambiguous
+match is refused with the count and told to include more context), `create_file`, and `run`
+(exit status, stdout and stderr, middle cut out of long output, killed at its timeout). A
+non-zero exit is a *result*, not an `Err`: a model told a red test suite was an error
+apologises instead of reading it.
+
+**The loop budget follows the capability.** Three rounds is right for looking -- a small model
+that has not answered after three reads is looping on a file it cannot find. An edit-and-test
+loop cannot reach the end of one in three, so with either changing grant on it gets 25.
+
+**What did not move.** The terminal isolation rule is untouched and
+`scripts/check_terminal_isolation.sh` passes unchanged: nothing here types into the operator's
+terminal or reads from it. There is still no way to write outside the nominated folder, no way
+to run a program they have not listed, and no shell. `git commit` runs; `git push` is still
+written out as a button.
+
+**Measured, not assumed.** A failing Python project in a temp folder, driven through
+`code_tools::call` exactly as a model's tool block is: `run` reported the AssertionError,
+`read_file` showed `return a - b`, `edit_file` changed it to `a + b`, and the test passed. One
+real-world trap worth knowing: the second run still failed because CPython had cached a `.pyc`
+whose source was the same length and same-second mtime. The edit had landed. It is Python's
+cache, not the tool -- but a model in that loop will see it too.
+
+---
+
+#### Follow-up: attending to what is broken, rather than reporting it
+
+Trident, 2026-09-27: *"I don't want the diagnostic for ME to work on it. I want it to be
+checked locally similar to Omarchy as that is the level I want diagnostics at."*
+
+Step 47 built the ladder and stopped one rung short of this on purpose. The startup self-check
+ran the whole list and then only *said* what it found, with a comment giving the reason: a fix
+nobody agreed to is not a fix. That reasoning is about **agreement, not timing**, and the
+thing that was missing was a way to agree once rather than per repair.
+
+**`doctor::attend`** is that pass: every failing check that has a repair AETHER1 can make
+itself, made, each one re-probed, then a list of what is still wrong with the exact command
+for the parts it will never run. Three properties it holds:
+
+- **Nothing needing root, ever.** A `RepairKind::HandOver` is not attempted at all; it comes
+  back in `remaining` with its command written out. `RepairKind::InApp` is skipped when the
+  caller has no window — `aether1 doctor --heal` in a terminal cannot register a hotkey, and
+  recording that as a failed repair would be a lie about the machine. Both rules live in
+  `to_attempt`, which is pure and is what the tests drive.
+- **One attempt each.** It calls `apply_with`, so rung 3's one-repair-per-session rule is
+  unchanged. A switch left on does not become a retry loop.
+- **The re-check decides.** A repair whose check is still broken afterwards is recorded as
+  failed, whatever the thing it ran said about itself. `Attended::headline` counts what
+  worked, not what ran, which is why "Tried 1 repair(s); none of them worked" is a sentence
+  it can say.
+
+**Four ways in, one behaviour.** The "Fix what you can" button in Diagnostics; the
+`doctor_self_repair` switch beside it, which makes the startup pass repair rather than report;
+`aether1 doctor --heal`, which is the button for a machine whose window will not open; and
+`POST /api/doctor/attend` for the browser HUD. All four reach the same function. `--fix` and
+`--heal` together are refused rather than guessed at: one asks about each repair, the other
+makes them all.
+
+**And the half that needs a model.** What deterministic repair cannot reach is offered to the
+companion, which since this same PR has `self_check` and `recent_crashes` and can read the
+logs behind them. An offer under the panel rather than an automatic question: asking a local
+model costs the operator's own graphics card for a minute, and a panel that starts doing that
+by itself is one people stop pressing buttons in.
+
+**Run here, for real:** `aether1 doctor --heal` on this container tried the one repair it had
+(the Piper voice download), reported it as not having worked because the re-check still said
+nothing can speak, and listed the other five with their reasons — including the `python3 -m
+venv` line for faster-whisper, which it will not run for you.
+

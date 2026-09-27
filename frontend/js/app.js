@@ -4454,6 +4454,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const doctorChecks = document.getElementById('doctor-checks');
     const doctorStatus = document.getElementById('doctor-status');
     const btnDoctorRun = document.getElementById('btn-doctor-run');
+    const btnDoctorHeal = document.getElementById('btn-doctor-heal');
 
     function setDoctorStatus(text, tone = 'info') {
         if (!doctorStatus) return;
@@ -4476,6 +4477,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (IS_TAURI) return tauriInvoke('run_diagnostics_rust');
         const resp = await apiFetch('/api/diagnostics');
         if (!resp.ok) throw new Error(`diagnostics failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* Every repair it can make, in one press. The same call the startup pass makes when the
+       switch above is on, so what the button does and what the switch does cannot drift. */
+    async function requestDoctorAttend() {
+        if (IS_TAURI) return tauriInvoke('doctor_attend_rust');
+        const resp = await apiFetch('/api/doctor/attend', { method: 'POST' });
+        if (!resp.ok) throw new Error(await resp.text());
         return resp.json();
     }
 
@@ -4590,6 +4600,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrap;
     }
 
+    /* One line under the panel offering the model the things repair could not fix. An
+       offer rather than an automatic question: asking a local model costs the operator's
+       own graphics card for a minute, and a panel that starts doing that on its own is a
+       panel people stop pressing buttons in. */
+    function doctorOfferToAsk(attended) {
+        if (!doctorChecks) return;
+        const row = document.createElement('div');
+        row.className = 'pt-2';
+        const ask = document.createElement('button');
+        ask.className = 'cyber-btn text-xs py-1 px-3 text-cyan-300';
+        ask.textContent = `💬 Ask ${currentAgentName.toUpperCase()} about the rest`;
+        ask.onclick = () => {
+            ask.disabled = true;
+            const left = (attended.remaining || []).map(r => `${r.title}: ${r.detail}`).join('\n');
+            handleSendMessage(
+                'AETHER1 just repaired what it could of itself and these are still wrong. '
+                + 'Look into them and tell me what to do:\n\n' + left,
+            );
+        };
+        row.appendChild(ask);
+        doctorChecks.appendChild(row);
+    }
+
     async function refreshDoctor({ quiet = false } = {}) {
         if (!doctorChecks) return;
         if (!quiet) setDoctorStatus('Checking every part of AETHER1...', 'busy');
@@ -4621,6 +4654,39 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     btnDoctorRun?.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshDoctor(); });
+
+    btnDoctorHeal?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        btnDoctorHeal.disabled = true;
+        setDoctorStatus('Fixing what it can...', 'busy');
+        try {
+            const attended = await requestDoctorAttend();
+            // The headline is the honest summary -- including "tried three, none worked",
+            // which is the outcome most worth showing rather than hiding behind a refresh.
+            setDoctorStatus(attended.headline || 'Done.', (attended.remaining || []).length ? 'info' : 'good');
+            await refreshDoctor({ quiet: true });
+            // What deterministic repair could not reach goes to the companion, which has
+            // self_check and recent_crashes and can read the logs behind them. The pass
+            // above is the half that needs no model; this is the half that needs one.
+            if ((attended.remaining || []).length) doctorOfferToAsk(attended);
+        } catch (e) {
+            setDoctorStatus(`⚠ ${e.message || e}`, 'bad');
+        } finally {
+            btnDoctorHeal.disabled = false;
+        }
+    });
+
+    /* The startup pass, when the switch is on, reports what it did. It arrives whether or
+       not Settings is open, so it lands in the conversation rather than in a panel nobody
+       is looking at -- and only when it actually attempted something. */
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('self-repair-done', (event) => {
+            const payload = (event && event.payload) || {};
+            const attended = payload.attended || {};
+            if (!(attended.outcomes || []).length) return;
+            appendMessage('agent', `🛠 ${payload.headline}\n\n${payload.report || ''}`);
+        });
+    }
 
     // Checked when the group is opened, not when Settings is: the probe spawns processes and
     // opens connections, and most visits to Settings are not about this. Same reason the
@@ -7720,6 +7786,85 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.__TAURI__.core.invoke(cmd, args);
     }
 
+    /* Step 13's last mile. The crash watcher has been finding crashes and the tray has been
+       going amber since it shipped, and the notification it raises says "AETHER1 has the
+       details. Open it to look into this together" -- but nothing in the HUD listened for
+       the event carrying those details, so opening it showed an ordinary chat window with
+       nothing in it. The promise in that notification is what this keeps.
+
+       It is a card rather than a message from the companion: no model has seen this yet, and
+       a line in AETHER1's own voice saying something crashed would be the app putting words
+       in its mouth. The card states the fact and offers the one thing worth doing next. */
+    function appendCrashCard(payload) {
+        const headline = String(payload.headline || 'Something stopped unexpectedly');
+        const context = String(payload.context || '');
+        const program = String((payload.crash && payload.crash.program) || '').trim();
+
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm leading-relaxed self-start mr-8 '
+            + 'border border-amber-500/40 bg-amber-950/20';
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 '
+            + 'border-b border-amber-500/20 text-xs font-mono text-amber-400/90';
+        const what = document.createElement('span');
+        what.textContent = '⚠ CRASH DETECTED';
+        header.appendChild(what);
+        const when = document.createElement('span');
+        when.textContent = new Date().toLocaleTimeString();
+        header.appendChild(when);
+        card.appendChild(header);
+
+        const line = document.createElement('p');
+        line.className = 'text-amber-100/90';
+        line.textContent = headline;
+        card.appendChild(line);
+
+        /* The log tail is behind a fold. It is the most useful thing here and the least
+           readable -- a wall of frames pasted into the conversation is exactly the thing
+           that made this unreadable in the first place. */
+        if (context) {
+            const fold = document.createElement('details');
+            fold.className = 'mt-2';
+            const summary = document.createElement('summary');
+            summary.className = 'text-[11px] font-mono text-amber-400/70 cursor-pointer';
+            summary.textContent = 'what it wrote before it stopped';
+            fold.appendChild(summary);
+            const pre = document.createElement('pre');
+            pre.className = 'mt-1 text-[10px] font-mono text-slate-300 whitespace-pre-wrap '
+                + 'max-h-48 overflow-y-auto';
+            pre.textContent = context;
+            fold.appendChild(pre);
+            card.appendChild(fold);
+        }
+
+        const ask = document.createElement('button');
+        ask.className = 'mt-2 text-xs font-mono text-amber-200 hover:text-amber-50 '
+            + 'border border-amber-500/40 px-2 py-0.5 rounded bg-amber-950/40 cursor-pointer';
+        ask.textContent = 'Ask ' + currentAgentName.toUpperCase() + ' about this';
+        ask.onclick = () => {
+            ask.disabled = true;
+            // The question, not the evidence: recent_crashes and self_check are in every
+            // persona's domain, so it fetches the crash itself and whatever else is wrong
+            // with the install -- which is the difference between a diagnosis and a paste.
+            handleSendMessage(program
+                ? `${program} just crashed on this machine. Look into what happened and what I should do about it.`
+                : 'Something just crashed on this machine. Look into what happened and what I should do about it.');
+        };
+        card.appendChild(ask);
+
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('crash-detected', (event) => {
+            const payload = (event && event.payload) || {};
+            if (!payload.headline) return;
+            appendCrashCard(payload);
+        });
+    }
+
     // Step 48: another copy of AETHER1 is installed somewhere on this machine. The startup
     // scan in main.rs finds them; this is where the operator is asked, because nothing is
     // ever removed without being asked and an uninstall cannot be taken back.
@@ -8803,6 +8948,18 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-code-perm-system').checked = s.code_perm_system !== false;
             document.getElementById('setting-code-perm-github').checked = s.code_perm_github !== false;
             document.getElementById('setting-code-perm-internet').checked = s.code_perm_internet !== false;
+            // And the mirror of that rule for the two that change things: absent means
+            // OFF, matching Grant::default_on. A switch that reads as on before anybody
+            // touched it would be the one dishonest control on this page.
+            // Absent means off, matching doctor::self_repair_enabled: repairing itself
+            // unattended is something the operator switches on, never a default.
+            document.getElementById('setting-doctor-self-repair').checked = s.doctor_self_repair === true;
+            document.getElementById('setting-code-perm-edit').checked = s.code_perm_edit === true;
+            document.getElementById('setting-code-perm-run').checked = s.code_perm_run === true;
+            document.getElementById('setting-code-workspace-root').value =
+                typeof s.code_workspace_root === 'string' ? s.code_workspace_root : '';
+            document.getElementById('setting-code-run-allowlist').value =
+                Array.isArray(s.code_run_allowlist) ? s.code_run_allowlist.join(', ') : '';
             document.getElementById('setting-command-allowlist').value =
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             loadPersonaAccess();
@@ -8952,6 +9109,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 code_perm_system: document.getElementById('setting-code-perm-system').checked,
                 code_perm_github: document.getElementById('setting-code-perm-github').checked,
                 code_perm_internet: document.getElementById('setting-code-perm-internet').checked,
+                doctor_self_repair: document.getElementById('setting-doctor-self-repair').checked,
+                code_perm_edit: document.getElementById('setting-code-perm-edit').checked,
+                code_perm_run: document.getElementById('setting-code-perm-run').checked,
+                code_workspace_root: document.getElementById('setting-code-workspace-root').value.trim(),
+                code_run_allowlist: document.getElementById('setting-code-run-allowlist').value
+                    .split(',').map(p => p.trim()).filter(Boolean),
                 command_allowlist: document.getElementById('setting-command-allowlist').value
                     .split(',').map(p => p.trim()).filter(Boolean),
                 auto_speak: document.getElementById('setting-autospeak').checked,

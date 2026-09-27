@@ -78,9 +78,15 @@ USAGE:
                                    conversation the HUD's Aether Code tab keeps
     aether1 code conventions       Print the house rules for a coding model to follow;
                                    redirect it into an AGENTS.md at the top of your project
-    aether1 code perms             What AETHER CODE is allowed to look at (the system,
-                                   the GitHub CLI, the internet) -- all of it read-only
-    aether1 code perms <n> on|off  Turn one of those three on or off
+    aether1 doctor --heal          Make every repair AETHER1 can make to itself, without
+                                   asking about each one. Never anything needing root.
+    aether1 code perms             What AETHER CODE is allowed to do: read the system,
+                                   the GitHub CLI, the internet, and -- off until you say
+                                   otherwise -- edit and run inside one project folder
+    aether1 code perms <n> on|off  Turn one of those on or off
+    aether1 code workspace [path]  The project folder it may change; prints the current one
+    aether1 code run-allow <prog>  Let it run that program in the project folder
+    aether1 code run-deny <prog>   Take that program back off the list
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -146,6 +152,9 @@ pub enum Invocation {
         /// Offer the repairs. Each one is still asked about individually at the moment of
         /// acting; this flag only decides whether they are offered at all.
         fix: bool,
+        /// Make every repair AETHER1 can make, without asking about each one. Typing this
+        /// is the go-ahead for the pass -- see `doctor::attend`.
+        heal: bool,
         json: bool,
         /// Where to write the pasteable report. `Some(None)` is --report with no path, which
         /// picks one under the temp directory and prints it.
@@ -168,6 +177,16 @@ pub enum Invocation {
         /// Which one, when the operator is changing it rather than reading the list.
         grant: Option<String>,
         on: Option<bool>,
+    },
+    /// `code workspace`: the project folder AETHER CODE may change, printed or set.
+    CodeWorkspace {
+        path: Option<String>,
+    },
+    /// `code run-allow`: the programs it may run inside that folder, printed or added to.
+    CodeRunAllow {
+        program: Option<String>,
+        /// True for `run-allow <p>`, false for `run-deny <p>`.
+        add: bool,
     },
     /// `models`: which local model each speciality runs on, and with two arguments, the
     /// setting of one. See llm/routing.rs for why the key is the speciality.
@@ -319,6 +338,7 @@ fn parse_discover(rest: Vec<String>) -> Result<Invocation, String> {
 /// path, `--report` takes an optional one, and the two flags that take nothing are order-free.
 fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
     let mut fix = false;
+    let mut heal = false;
     let mut json = false;
     let mut report: Option<Option<String>> = None;
     let mut replay: Option<String> = None;
@@ -326,6 +346,7 @@ fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--fix" => fix = true,
+            "--heal" => heal = true,
             "--json" => json = true,
             "--replay" => match iter.next() {
                 Some(path) => replay = Some(path.clone()),
@@ -346,22 +367,33 @@ fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
             other => {
                 return Err(format!(
                     "doctor does not take {other:?} -- it takes --fix, --json, --report [FILE] \
-                     or --replay <FILE>"
+                     --heal, --json, --report [FILE] or --replay <FILE>"
                 ))
             }
         }
     }
-    if replay.is_some() && fix {
+    if heal && fix {
+        // Two different things: --fix asks about each repair, --heal makes them all. Asked
+        // for together, which one the operator meant is genuinely unclear, and guessing
+        // wrong means either a prompt they did not want or a repair they did not approve.
+        return Err(
+            "--fix asks about each repair and --heal makes them all, so they cannot both be \
+             meant -- pick one"
+                .into(),
+        );
+    }
+    if replay.is_some() && (fix || heal) {
         // The observation came from another machine. Repairing this one from it would be
         // acting on a fault nobody here has.
         return Err(
             "--replay judges an observation from somewhere else, so there is nothing here to \
-             fix -- run `aether1 doctor --fix` on the machine that recorded it"
+             fix -- run it on the machine that recorded it"
                 .into(),
         );
     }
     Ok(Invocation::Doctor {
         fix,
+        heal,
         json,
         report,
         replay,
@@ -476,6 +508,31 @@ pub fn parse(argv: &[String]) -> Invocation {
                         .to_string(),
                 ),
             },
+            // The project folder. With no path it prints the one in force, which is the
+            // question an operator asks before they trust any of this.
+            Some("workspace") => match &rest[1..] {
+                [] => Ok(Invocation::CodeWorkspace { path: None }),
+                [path] => Ok(Invocation::CodeWorkspace {
+                    path: Some(path.to_string()),
+                }),
+                _ => Err(
+                    "code workspace takes one path, or nothing to print the current one"
+                        .to_string(),
+                ),
+            },
+            Some(verb @ ("run-allow" | "run-deny")) => {
+                let add = verb == "run-allow";
+                match &rest[1..] {
+                    [] if add => Ok(Invocation::CodeRunAllow { program: None, add }),
+                    [program] => Ok(Invocation::CodeRunAllow {
+                        program: Some(program.to_string()),
+                        add,
+                    }),
+                    _ => Err(format!(
+                        "code {verb} takes one program name -- for example `code {verb} cargo`"
+                    )),
+                }
+            }
             _ => free_text(rest).and_then(|extra| match extra.as_deref() {
                 None => Ok(Invocation::Code {
                     conventions: false,
@@ -989,7 +1046,8 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
         let Some(grant) = Grant::from_key(&name.to_lowercase()) else {
             let known: Vec<&str> = code_perms::ALL.iter().map(|g| g.key()).collect();
             return Err(format!(
-                "there is no permission called {name:?}. There are three: {}",
+                "there is no permission called {name:?}. There are {}: {}",
+                code_perms::ALL.len(),
                 known.join(", ")
             ));
         };
@@ -1014,13 +1072,108 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
             grant.description()
         ));
     }
-    out.push_str(
-        "\n  Change one with `aether1 code perms <name> on` or `... off`.\n\n\
-         Every one of these only reads. Nothing AETHER CODE can call changes a file, a\n\
-         repository or a setting -- a command that would is written into your terminal for\n\
-         you to run, and nothing enters it but your own Return key.\n",
-    );
+    out.push_str("\n  Change one with `aether1 code perms <name> on` or `... off`.\n\n");
+    if code_perms::granted(db, Grant::Edit) || code_perms::granted(db, Grant::Run) {
+        let where_it_is = match crate::code_workspace::root(db) {
+            Ok(root) => root.display().to_string(),
+            Err(_) => "not set yet -- `aether1 code workspace <path>`".to_string(),
+        };
+        out.push_str(&format!(
+            "  It can change things, inside one folder and nowhere else: {where_it_is}\n\
+             Programs it may run there: {}\n\
+             Everything outside that folder is still written into your terminal for you to\n\
+             run, and nothing enters it but your own Return key.\n",
+            match crate::code_workspace::allowlist(db) {
+                list if list.is_empty() => "none".to_string(),
+                list => list.join(", "),
+            }
+        ));
+    } else {
+        out.push_str(
+            "  Everything switched on only reads. Nothing AETHER CODE can call changes a\n\
+             file, a repository or a setting -- a command that would is written into your\n\
+             terminal for you to run, and nothing enters it but your own Return key.\n",
+        );
+    }
     Ok(out)
+}
+
+/// `aether1 code workspace [path]` -- the one folder AETHER CODE may change.
+///
+/// Setting it validates it immediately rather than at the first edit: a path that is a
+/// typo, or is the home directory, is worth hearing about while the operator is still
+/// looking at the terminal they typed it into.
+fn run_code_workspace(path: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let Some(path) = path {
+        db.set_setting(
+            crate::code_workspace::ROOT_SETTING,
+            &serde_json::json!(path.trim()),
+        )
+        .map_err(|e| format!("cannot save the project folder: {e}"))?;
+        let root = crate::code_workspace::root(db)?;
+        return Ok(format!(
+            "AETHER CODE's project folder is {}.\n\nIt cannot change anything until you \
+             also turn the permissions on:\n  aether1 code perms edit on\n  aether1 code \
+             perms run on\n",
+            root.display()
+        ));
+    }
+
+    match crate::code_workspace::root(db) {
+        Ok(root) => Ok(format!("{}\n", root.display())),
+        Err(why) => Ok(format!(
+            "No project folder is set.\n\n{why}\n\nSet one with `aether1 code workspace \
+             /path/to/project`.\n"
+        )),
+    }
+}
+
+/// `aether1 code run-allow|run-deny <program>` -- the programs it may spawn in that folder.
+fn run_code_run_allow(program: Option<String>, add: bool) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let mut list = crate::code_workspace::allowlist(db);
+
+    let Some(program) = program else {
+        return Ok(if list.is_empty() {
+            "AETHER CODE may run nothing in the project folder.\n".to_string()
+        } else {
+            format!(
+                "AETHER CODE may run these in the project folder:\n\n  {}\n",
+                list.join("\n  ")
+            )
+        });
+    };
+    let program = program.trim().to_string();
+    if program.contains('/') || program.contains('\\') {
+        return Err("name the program, not a path to it -- the list matches names".to_string());
+    }
+
+    let held = list.iter().any(|entry| entry == &program);
+    if add && held {
+        return Ok(format!("{program} was already on the list.\n"));
+    }
+    if !add && !held {
+        return Ok(format!("{program} was not on the list.\n"));
+    }
+    if add {
+        list.push(program.clone());
+        list.sort();
+    } else {
+        list.retain(|entry| entry != &program);
+    }
+    db.set_setting(
+        crate::code_workspace::ALLOWLIST_SETTING,
+        &serde_json::json!(list),
+    )
+    .map_err(|e| format!("cannot save the list: {e}"))?;
+    Ok(format!(
+        "AETHER CODE may {} run {program} in the project folder.\n",
+        if add { "now" } else { "no longer" }
+    ))
 }
 
 fn run_code(conventions: bool, ask: Option<String>) -> String {
@@ -1241,6 +1394,7 @@ fn run_models(persona: Option<String>, model: Option<String>) -> Result<String, 
 /// have offered.
 fn run_doctor(
     fix: bool,
+    heal: bool,
     json: bool,
     report: Option<Option<String>>,
     replay: Option<String>,
@@ -1270,7 +1424,7 @@ fn run_doctor(
     // Facts::default(): the window, the tray registration and the watcher's poll are facts
     // about the running desktop process, and this is not it. The report says so per check
     // rather than guessing.
-    let (observation, health) = doctor::report(&engine, &doctor::Facts::default());
+    let (observation, health) = doctor::report(engine.db(), &doctor::Facts::default());
 
     if json {
         let bundle = serde_json::json!({ "observation": observation, "health": health });
@@ -1293,13 +1447,24 @@ fn run_doctor(
         ));
     }
 
+    if heal {
+        // Typing `--heal` is the go-ahead, which is why nothing is asked here. A terminal is
+        // also the one place this can be asked for on a machine whose window will not open,
+        // which is a fair part of why it exists.
+        let attended = doctor::attend(&engine, &doctor::Facts::default(), None);
+        return Ok(format!(
+            "AETHER1 -- fixing what it can\n\n{}",
+            attended.as_report()
+        ));
+    }
+
     let mut out = render_health(&health);
     if fix {
         out.push_str(&run_doctor_fixes(&engine, &health));
     } else if health.checks.iter().any(|check| check.repair.is_some()) {
         out.push_str(
             "\nSome of this AETHER1 can repair itself. Run `aether1 doctor --fix` to be asked \
-             about each one.\n",
+             about each one, or `aether1 doctor --heal` to have it make them all.\n",
         );
     }
     Ok(out)
@@ -1931,12 +2096,15 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Crashes => run_crashes(),
         Invocation::Doctor {
             fix,
+            heal,
             json,
             report,
             replay,
-        } => run_doctor(fix, json, report, replay),
+        } => run_doctor(fix, heal, json, report, replay),
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
+        Invocation::CodeWorkspace { path } => run_code_workspace(path),
+        Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),
         Invocation::Words {
@@ -1999,6 +2167,7 @@ mod tests {
             doctor(&[]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: None,
                 replay: None,
@@ -2008,6 +2177,7 @@ mod tests {
             doctor(&["--json", "--fix"]),
             Invocation::Doctor {
                 fix: true,
+                heal: false,
                 json: true,
                 report: None,
                 replay: None,
@@ -2021,6 +2191,7 @@ mod tests {
             doctor(&["--report"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: Some(None),
                 replay: None,
@@ -2030,6 +2201,7 @@ mod tests {
             doctor(&["--report", "/tmp/out.txt"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: Some(Some("/tmp/out.txt".to_string())),
                 replay: None,
@@ -2041,6 +2213,7 @@ mod tests {
             doctor(&["--report", "--fix"]),
             Invocation::Doctor {
                 fix: true,
+                heal: false,
                 json: false,
                 report: Some(None),
                 replay: None,
@@ -2058,6 +2231,7 @@ mod tests {
             doctor(&["--replay", "/tmp/obs.json"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: None,
                 replay: Some("/tmp/obs.json".to_string()),
