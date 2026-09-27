@@ -113,7 +113,7 @@ pub fn cached() -> &'static [Gpu] {
 pub fn detect() -> Vec<Gpu> {
     #[cfg(target_os = "linux")]
     {
-        detect_linux(std::path::Path::new("/sys/class/drm"))
+        detect_linux(std::path::Path::new("/sys/class/drm"), pci_ids().as_deref())
     }
     #[cfg(target_os = "windows")]
     {
@@ -138,13 +138,75 @@ const VENDOR_AMD: &str = "0x1002";
 const VENDOR_NVIDIA: &str = "0x10de";
 const VENDOR_INTEL: &str = "0x8086";
 
+/// The system's PCI id database, which is what `lspci` reads to turn ids into names.
+///
+/// Shipped by `hwdata` (or `pciutils` on some distributions) and present on essentially any
+/// desktop Linux. Read rather than bundled on purpose: a table compiled into this binary
+/// would be a list of graphics cards that stops gaining new ones the day it is built, and
+/// the machine already has one that its package manager keeps current. `None` when the file
+/// is not installed, which costs nothing -- the vendor string still stands.
+///
+/// Only reached when a card publishes no `product_name`, and `gpu::cached` reads the
+/// adapters once for the life of the process, so this is at most one file read at startup.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn pci_ids() -> Option<String> {
+    ["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids"]
+        .iter()
+        .find_map(|path| std::fs::read_to_string(path).ok())
+}
+
+/// The model name a vendor and device id resolve to in the PCI id database.
+///
+/// The format is indentation-significant and has been for thirty years: a vendor at the
+/// left margin, its devices one tab in, and each device's subsystems two tabs in. So the
+/// parser has to respect depth rather than just search for the id -- a device id is only
+/// four hex digits and collides freely with a subsystem id under some other vendor. It
+/// takes the first device line under the right vendor and stops at the next vendor.
+///
+/// Ids arrive from sysfs as `0x1002` and are written in the file as `1002`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn name_from_pci_ids(db: &str, vendor: &str, device: &str) -> Option<String> {
+    let vendor = vendor.trim_start_matches("0x").to_ascii_lowercase();
+    let device = device.trim_start_matches("0x").to_ascii_lowercase();
+    let mut in_vendor = false;
+
+    for line in db.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        // A class section (`C 03  Display controller`) ends the vendor list entirely.
+        if !line.starts_with('\t') {
+            if in_vendor {
+                return None;
+            }
+            in_vendor = line
+                .split_once("  ")
+                .is_some_and(|(id, _)| id.trim().eq_ignore_ascii_case(&vendor));
+            continue;
+        }
+        if !in_vendor || line.starts_with("\t\t") {
+            continue;
+        }
+        let entry = line.trim_start_matches('\t');
+        if let Some((id, name)) = entry.split_once("  ") {
+            if id.trim().eq_ignore_ascii_case(&device) {
+                let name = name.trim();
+                return (!name.is_empty()).then(|| name.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Walks the DRM tree and reports what each card says about itself.
 ///
 /// Takes the root as an argument rather than reaching for `/sys` directly, which is what
 /// lets `a_discrete_card_and_an_apu_are_told_apart` build both cases in a temp directory and
-/// check them on a machine that has neither.
+/// check them on a machine that has neither. `pci_ids` is the contents of the system PCI id
+/// database, passed in for the same reason: a test that read the real file would pass or
+/// fail depending on whether the machine running it happens to have `hwdata` installed.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub(crate) fn detect_linux(drm_root: &std::path::Path) -> Vec<Gpu> {
+pub(crate) fn detect_linux(drm_root: &std::path::Path, pci_ids: Option<&str>) -> Vec<Gpu> {
     let nvidia = nvidia_smi_gpus();
     let mut found = Vec::new();
 
@@ -186,8 +248,18 @@ pub(crate) fn detect_linux(drm_root: &std::path::Path) -> Vec<Gpu> {
             .and_then(|s| s.parse::<u64>().ok())
             .map(bytes_to_gb);
 
+        // Three sources, best first. `product_name` is the card introducing itself and is
+        // what a marketing name would come from -- but amdgpu leaves it empty on plenty of
+        // machines, which is how a 6800 XT came to be reported as "AMD graphics". The PCI
+        // device id next to it is always there, and the system's own PCI id database turns
+        // it into a model name. Only when neither answers does the vendor string stand, and
+        // it stands as a last resort rather than as the usual outcome.
         let name = read("product_name")
             .filter(|s| !s.is_empty())
+            .or_else(|| {
+                let device = read("device")?;
+                name_from_pci_ids(pci_ids?, &vendor, &device)
+            })
             .unwrap_or_else(|| match vendor.as_str() {
                 VENDOR_AMD => "AMD graphics".to_string(),
                 VENDOR_INTEL => "Intel graphics".to_string(),
@@ -427,7 +499,7 @@ mod tests {
                 ],
             ),
         ]);
-        let gpus = detect_linux(tree.path());
+        let gpus = detect_linux(tree.path(), None);
         assert_eq!(gpus.len(), 2);
         assert_eq!(gpus[0].vram_gb, Some(16.0));
         assert!(!gpus[0].integrated);
@@ -449,7 +521,7 @@ mod tests {
             ("card0-DP-1", &[("vendor", "0x1002")]),
             ("card0-HDMI-A-1", &[("vendor", "0x1002")]),
         ]);
-        assert_eq!(detect_linux(tree.path()).len(), 1);
+        assert_eq!(detect_linux(tree.path(), None).len(), 1);
     }
 
     /// Intel's integrated graphics publish no memory file at all. That is not zero, and the
@@ -457,12 +529,83 @@ mod tests {
     #[test]
     fn an_adapter_with_no_memory_file_is_named_and_marked_shared() {
         let tree = drm_tree(&[("card0", &[("vendor", "0x8086")])]);
-        let gpus = detect_linux(tree.path());
+        let gpus = detect_linux(tree.path(), None);
         assert_eq!(gpus.len(), 1);
         assert_eq!(gpus[0].name, "Intel graphics");
         assert_eq!(gpus[0].vram_gb, None);
         assert!(gpus[0].integrated);
         assert_eq!(dedicated(&gpus).and_then(|gpu| gpu.vram_gb), None);
+    }
+
+    /// A slice of the real pci.ids, with the shape that matters: tab-indented devices under
+    /// a vendor, two-tab subsystems under those, and a second vendor after.
+    const PCI_IDS: &str = "\
+# comment at the left margin
+1002  Advanced Micro Devices, Inc. [AMD/ATI]
+\t73bf  Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]
+\t\t1002 0e3a  Radeon RX 6900 XT
+\t73ff  Navi 23 [Radeon RX 6600/6600 XT/6600M]
+8086  Intel Corporation
+\t73bf  A device that merely shares an id with the card above
+C 03  Display controller
+\t00  VGA compatible controller
+";
+
+    /// The bug Trident caught: amdgpu leaves `product_name` empty on plenty of machines, and
+    /// a 16 GB 6800 XT was reported as "AMD graphics". The device id beside it is always
+    /// there, and the system's own database knows what it is.
+    #[test]
+    fn a_card_with_no_product_name_is_named_from_its_pci_id() {
+        let tree = drm_tree(&[(
+            "card0",
+            &[
+                ("vendor", "0x1002"),
+                ("device", "0x73bf"),
+                ("mem_info_vram_total", "17179869184"),
+            ],
+        )]);
+        let gpus = detect_linux(tree.path(), Some(PCI_IDS));
+        assert_eq!(gpus[0].name, "Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]");
+        assert_eq!(gpus[0].vram_gb, Some(16.0));
+    }
+
+    /// The card's own name outranks the database when it has one -- a marketing name from
+    /// the driver reads better than a codename from a table.
+    #[test]
+    fn product_name_wins_over_the_pci_id_database() {
+        let tree = drm_tree(&[(
+            "card0",
+            &[
+                ("vendor", "0x1002"),
+                ("device", "0x73bf"),
+                ("product_name", "Radeon RX 6800 XT"),
+            ],
+        )]);
+        assert_eq!(
+            detect_linux(tree.path(), Some(PCI_IDS))[0].name,
+            "Radeon RX 6800 XT"
+        );
+    }
+
+    /// Without the vendor above it a device id is four hex digits that collide freely. This
+    /// same id sits under two vendors in the fixture, and under a subsystem line as well.
+    #[test]
+    fn a_device_id_is_only_read_under_its_own_vendor() {
+        assert_eq!(
+            name_from_pci_ids(PCI_IDS, "0x8086", "0x73bf").as_deref(),
+            Some("A device that merely shares an id with the card above")
+        );
+        assert_eq!(name_from_pci_ids(PCI_IDS, "0x1002", "0x0e3a"), None);
+        assert_eq!(name_from_pci_ids(PCI_IDS, "0x10de", "0x73bf"), None);
+    }
+
+    /// The database is not installed everywhere, and a machine without it must still get a
+    /// row -- the vendor string, exactly as before this lookup existed.
+    #[test]
+    fn no_database_leaves_the_vendor_string_standing() {
+        let tree = drm_tree(&[("card0", &[("vendor", "0x1002"), ("device", "0x73bf")])]);
+        assert_eq!(detect_linux(tree.path(), None)[0].name, "AMD graphics");
+        assert_eq!(name_from_pci_ids(PCI_IDS, "0x1002", "0xffff"), None);
     }
 
     /// sysfs has nothing to say about an NVIDIA card under the proprietary driver, so
@@ -471,7 +614,7 @@ mod tests {
     #[test]
     fn an_nvidia_card_is_not_reported_from_sysfs() {
         let tree = drm_tree(&[("card0", &[("vendor", "0x10de")])]);
-        assert!(detect_linux(tree.path()).is_empty());
+        assert!(detect_linux(tree.path(), None).is_empty());
     }
 
     #[test]
