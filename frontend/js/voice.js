@@ -495,8 +495,22 @@ class VoiceAudioEngine {
                 if (this.settleCurrent === finish) this.settleCurrent = null;
                 if (this.currentAudio === audio) {
                     this.currentAudio = null;
-                    this.releaseCurrentSource();
                 }
+                /* The source node is deliberately *not* released here.
+
+                   `ended` says the element has handed its last sample to the graph, not that
+                   the last sample has been heard -- and on some backends it is optimistic
+                   about even that. Disconnecting the node at that moment takes the element's
+                   only output away while the tail of the sentence is still on its way to the
+                   speakers, so the clip audibly stops short of its last word. Nothing else in
+                   this file could cut a clip that the version before it played in full, which
+                   is what made this the thing to undo.
+
+                   It is released instead by the next playClip, through cutCurrentClip below,
+                   by which point this clip is paused or long finished. That bounds what is
+                   left connected to one node rather than one per sentence, which is all the
+                   leak fix needed; a node that has stopped being pulled costs a summed zero,
+                   and the silence cost a sentence. */
                 // Mid-queue, the next clip is about to start: staying SPEAKING keeps the
                 // avatar steady across the seam. enqueueTTS emits IDLE when it drains.
                 if (!this.ttsQueue.length) {

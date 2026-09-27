@@ -3323,6 +3323,29 @@ the overlap goes, and so does every reply after it. That is the failure the note
 above was written about. The claim keeps the clip from ever starting, which is why it does not
 have this second half.
 
+**Undone the same day: releasing the source node when the clip ends.** Trident, on the build
+above: "Voice now cuts of before it finishes. but no longer overlaps." `ended` says the element
+has handed its last sample to the *graph*, not that the last sample has been *heard*, and a
+`MediaElementAudioSourceNode` is the element's only output -- so disconnecting it at that moment
+takes the audio away while the end of the sentence is still on its way to the speakers. Where the
+backend fires `ended` optimistically, which WebKitGTK appears to, what is lost is a word rather
+than a few milliseconds. Of everything in that change this is the only part that could silence
+audio the version before it played in full, which is what made it the thing to undo rather than
+the thing to tune.
+
+The node is released by the *next* `playClip` instead, through `cutCurrentClip`, by which point
+the clip is paused or long finished. That still bounds what stays connected to one node rather
+than one per sentence, which is all the leak needed: a node nothing pulls sums to zero, and the
+silence cost a sentence.
+
+**And the reply's tail falls back to `pending` rather than being dropped.** Checking
+`reply.startsWith(spoken)` and speaking nothing when it fails was the wrong half of the choice.
+`takeSpeakableChunk` needs `MIN_SPEAKABLE` characters before it will cut, so a reply's last
+sentence is usually still sitting in `pending` and this is the line that finishes every answer.
+`pending` is by construction exactly the text no chunk has taken, so it cannot be misaligned --
+it only misses a delta that never arrived, which is the narrower failure. The authoritative slice
+when the offset lines up, `pending` when it does not.
+
 ### How to say a word
 
 Trident, having just updated to test the voice: "Will it be possible to have the equivalent of

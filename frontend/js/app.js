@@ -3243,15 +3243,20 @@ document.addEventListener('DOMContentLoaded', () => {
             attachConsultedNotes(replyDiv, data.notes);
             voiceEngine.playSFX('incoming');
 
-            /* Speak whatever never reached a sentence boundary (the tail of the reply).
-               `spoken` is an offset into the streamed deltas, and the authoritative reply is
-               only the same string as long as every delta arrived and none was rewritten --
-               so the offset is checked against this text rather than trusted. When it does
-               not line up, the tail would be an arbitrary slice of the reply, and the words
-               it happens to start at are ones the operator has already heard: a sentence
-               spoken twice at the end of every answer. Better to say nothing than to say
-               part of it again. */
-            const tail = reply.startsWith(spoken) ? reply.slice(spoken.length) : '';
+            /* Speak whatever never reached a sentence boundary. There is almost always
+               something: takeSpeakableChunk needs MIN_SPEAKABLE characters before it will cut,
+               so a reply's last sentence is usually still sitting in `pending` -- which makes
+               this the line that finishes every answer, not an edge case.
+
+               Two sources for it, and the fallback is the point. `reply` is authoritative and
+               repairs a delta that never arrived, but slicing it at `spoken.length` is only
+               right while it really does start with what was said; when it does not, that
+               slice begins mid-word somewhere in the middle of the answer. `pending` cannot
+               be wrong -- it is, by construction, exactly the text no chunk has taken -- but
+               it only knows about deltas that arrived. So: the authoritative tail when the
+               offset lines up, and the text we know was never spoken when it does not.
+               Dropping it was tried and it truncates the reply, which is worse than both. */
+            const tail = reply.startsWith(spoken) ? reply.slice(spoken.length) : pending;
             if (tail.trim()) await speakChunk(tail);
 
             await refreshPendingApprovals();
@@ -5060,8 +5065,8 @@ document.addEventListener('DOMContentLoaded', () => {
             notice = `Something is already answering on port ${report.port}. AETHER1 did not `
                 + 'start it, so it will not stop it either.';
         } else if (running && !devices.devices.length) {
-            notice = 'Nothing has paired yet. Open the address below on the other device and '
-                + 'type the pairing phrase when it asks.';
+            notice = 'Nothing has paired yet. Pair a device walks through it, or open the '
+                + 'address below on the other device and type the phrase when it asks.';
         }
         lanNoticeEl?.classList.toggle('hidden', !notice);
         if (lanNoticeEl) lanNoticeEl.textContent = notice;
@@ -5193,6 +5198,271 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    /* ---- The pairing sequence ---------------------------------------------------------
+     *
+     * The cards below it are the same settings as facts, which is right for changing one
+     * and wrong for doing the job. Pairing a phone used to mean: read three cards, work out
+     * that New phrase is the button, press it and unpair every device already in, copy
+     * twelve words off the screen before they vanish, then type an address by hand into a
+     * phone browser. Each of those is defensible on its own and together they are a puzzle.
+     *
+     * So the sequence does the parts that belong to this machine itself, and asks for the
+     * two that can only happen on the other one. Two things make that possible:
+     *
+     * - **A one-time code, not the phrase.** The phrase is shown by the press that replaces
+     *   it, because nothing stores it -- which made "let one more device in" and "cut every
+     *   device off" the same button. The code costs nothing: it expires by itself, is spent
+     *   by the first device that uses it, and leaves the phrase and every paired device
+     *   alone. The phrase is still there for anyone who wants one thing to keep.
+     * - **A QR code.** Typing `https://192.168.1.44:8378` into a phone is where this was
+     *   actually being lost, and a camera does not mistype.
+     *
+     * The last step is the one that was missing entirely: it watches, and says the device
+     * is in. Before this the only way to know pairing had worked was that the other screen
+     * stopped refusing.
+     */
+
+    const pairSequence = document.getElementById('pair-sequence');
+    const btnPairStart = document.getElementById('btn-pair-start');
+    const btnPairDone = document.getElementById('btn-pair-done');
+    const btnPairNewCode = document.getElementById('btn-pair-new-code');
+    const pairQrEl = document.getElementById('pair-qr');
+    const pairAddressEl = document.getElementById('pair-address');
+    const pairCodeEl = document.getElementById('pair-code');
+    const pairCodeLifeEl = document.getElementById('pair-code-life');
+    const pairOutcomeEl = document.getElementById('pair-outcome');
+    const pairStep1Note = document.getElementById('pair-step-1-note');
+
+    // The ids paired when the sequence opened. A device is "the one that just arrived" only
+    // against this: revoking from another window, or a second device pairing off the same
+    // code, would otherwise both read as the arrival being waited for.
+    let pairKnownIds = null;
+    let pairWatch = null;
+    let pairCountdown = null;
+    let pairCodeExpiresAt = 0;
+    // The machine's clock minus this browser's, so a countdown is against the clock that set
+    // the expiry. They are the same machine here, but the arithmetic should say what it means.
+    let pairClockSkew = 0;
+
+    function setPairStep(step, state) {
+        document.getElementById(`pair-step-${step}`)?.setAttribute('data-state', state);
+    }
+
+    function setPairOutcome(text, tone = 'waiting') {
+        if (!pairOutcomeEl) return;
+        pairOutcomeEl.textContent = text;
+        pairOutcomeEl.dataset.tone = tone;
+    }
+
+    /* Drawn as SVG rather than a canvas: it scales to whatever the panel is, prints, and
+       survives a theme change without being redrawn. */
+    function drawPairQr(text) {
+        if (!pairQrEl) return;
+        pairQrEl.innerHTML = '';
+        if (!text || typeof qrcode !== 'function') return;
+        // Type 0 lets the library pick the smallest version the text fits; M correction is
+        // the usual choice for a code read off a screen rather than off a parcel.
+        const code = qrcode(0, 'M');
+        code.addData(text);
+        code.make();
+        const count = code.getModuleCount();
+        let path = '';
+        for (let row = 0; row < count; row++) {
+            for (let col = 0; col < count; col++) {
+                if (code.isDark(row, col)) path += `M${col} ${row}h1v1h-1z`;
+            }
+        }
+        pairQrEl.innerHTML =
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${count} ${count}" `
+            + `shape-rendering="crispEdges"><path d="${path}" fill="#000000"/></svg>`;
+    }
+
+    function pairAddressFor(report) {
+        const addresses = report?.addresses || [];
+        return addresses.length ? `https://${addresses[0]}:${report.port ?? 8378}` : '';
+    }
+
+    function formatPairCode(code) {
+        // Halved for reading, the way every code of this length is shown. The server strips
+        // the dash again, so it makes no difference to what gets typed.
+        return code && code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : (code || '');
+    }
+
+    function stopPairTimers() {
+        if (pairWatch) { clearInterval(pairWatch); pairWatch = null; }
+        if (pairCountdown) { clearInterval(pairCountdown); pairCountdown = null; }
+    }
+
+    function renderPairCountdown() {
+        if (!pairCodeLifeEl) return;
+        if (!pairCodeExpiresAt) { pairCodeLifeEl.textContent = ''; return; }
+        const left = Math.round(pairCodeExpiresAt - (Date.now() / 1000 + pairClockSkew));
+        if (left <= 0) {
+            pairCodeLifeEl.textContent = 'This code has run out. Press New code for another.';
+            if (pairCodeEl) pairCodeEl.textContent = '—';
+            pairCodeExpiresAt = 0;
+            return;
+        }
+        const minutes = Math.floor(left / 60);
+        const seconds = String(left % 60).padStart(2, '0');
+        pairCodeLifeEl.textContent = `Works for another ${minutes}:${seconds}.`;
+    }
+
+    /* Asks for a code and puts it on screen. Separate from opening the sequence because
+       "New code" is the same act, and because a code that ran out while the operator was
+       walking to the other room should cost one press, not a restart. */
+    async function issuePairCode() {
+        if (btnPairNewCode) btnPairNewCode.disabled = true;
+        try {
+            const report = await tauriInvoke('lan_new_pairing_code_rust');
+            renderLan(report);
+            pairClockSkew = (report.now || 0) - Math.floor(Date.now() / 1000);
+            pairCodeExpiresAt = report.code_expires_at || 0;
+            if (pairCodeEl) pairCodeEl.textContent = formatPairCode(report.code);
+            setPairStep(3, 'doing');
+            renderPairCountdown();
+            return true;
+        } catch (e) {
+            if (pairCodeEl) pairCodeEl.textContent = '—';
+            setPairOutcome(String(e.message || e), 'bad');
+            return false;
+        } finally {
+            if (btnPairNewCode) btnPairNewCode.disabled = false;
+        }
+    }
+
+    /* Step 1, which is the machine's own to do. Starting the server is the slow part, so it
+       is said while it happens; a phrase is made only when there is none, and that is free
+       precisely because nothing can be paired yet when it is true. */
+    async function pairPrepareMachine() {
+        let report = lanReport;
+        if (!report?.devices?.pairing_set_up) {
+            if (pairStep1Note) pairStep1Note.textContent = 'Making this machine a pairing phrase…';
+            report = await tauriInvoke('lan_new_phrase_rust');
+            renderLan(report);
+        }
+        if (!report?.running) {
+            if (pairStep1Note) pairStep1Note.textContent = 'Starting the server…';
+            report = await tauriInvoke('lan_start_rust');
+            renderLan(report);
+        }
+        return report;
+    }
+
+    async function openPairSequence() {
+        if (!pairSequence) return;
+        voiceEngine.playSFX('click');
+        pairSequence.classList.remove('hidden');
+        if (btnPairStart) btnPairStart.disabled = true;
+        stopPairTimers();
+        setPairStep(1, 'doing');
+        setPairStep(2, 'todo');
+        setPairStep(3, 'todo');
+        setPairOutcome('Waiting for a device…', 'waiting');
+        if (pairCodeEl) pairCodeEl.textContent = '—';
+        if (pairCodeLifeEl) pairCodeLifeEl.textContent = '';
+        if (btnPairNewCode) btnPairNewCode.textContent = 'New code';
+
+        let report;
+        try {
+            report = await pairPrepareMachine();
+        } catch (e) {
+            setPairStep(1, 'doing');
+            if (pairStep1Note) pairStep1Note.textContent = String(e.message || e);
+            setPairOutcome('This machine is not on the network, so nothing can pair yet.', 'bad');
+            if (btnPairStart) btnPairStart.disabled = false;
+            return;
+        }
+
+        pairKnownIds = new Set((report.devices?.devices || []).map(d => d.id));
+        const address = pairAddressFor(report);
+        setPairStep(1, 'done');
+        if (pairStep1Note) {
+            pairStep1Note.textContent = address
+                ? 'Done — this machine is answering on your network.'
+                : 'The server is up, but this machine has no network address, so nothing on '
+                  + 'your network can reach it.';
+        }
+        setPairStep(2, address ? 'doing' : 'todo');
+        if (pairAddressEl) pairAddressEl.textContent = address || '—';
+        drawPairQr(address);
+
+        if (!address) {
+            setPairOutcome('No network address on this machine — check its Wi-Fi or cable.', 'bad');
+            if (btnPairStart) btnPairStart.disabled = false;
+            return;
+        }
+
+        if (!await issuePairCode()) {
+            if (btnPairStart) btnPairStart.disabled = false;
+            return;
+        }
+
+        pairCountdown = setInterval(renderPairCountdown, 1000);
+        // Three seconds is under the time it takes to look up from the phone, and the read
+        // is a status call on loopback, so the cost of asking is not worth economising on.
+        pairWatch = setInterval(watchForPairedDevice, 3000);
+    }
+
+    async function watchForPairedDevice() {
+        let report;
+        try {
+            report = await tauriInvoke('lan_status_rust');
+        } catch (e) {
+            return; // A read that failed says nothing; the next one in three seconds might.
+        }
+        renderLan(report);
+        const arrived = (report.devices?.devices || []).find(d => !pairKnownIds.has(d.id));
+        if (!arrived) {
+            // The code being spent with nothing new on the list means the device paired and
+            // was revoked, or the code ran out. Either way the sequence should stop implying
+            // something is still on its way.
+            if (!report.code_expires_at && !pairCodeExpiresAt) {
+                setPairOutcome('No code is live. Press New code to try again.', 'bad');
+            }
+            return;
+        }
+        stopPairTimers();
+        pairKnownIds.add(arrived.id);
+        setPairStep(2, 'done');
+        setPairStep(3, 'done');
+        setPairOutcome(`Paired — ${arrived.label}. It stays paired until you revoke it.`, 'good');
+        if (pairCodeEl) pairCodeEl.textContent = '—';
+        if (pairCodeLifeEl) pairCodeLifeEl.textContent = 'The code has been used and no longer works.';
+        // The same button, renamed to what pressing it would now mean: one code is one
+        // device, so a second device is a second code rather than a second sequence.
+        if (btnPairNewCode) btnPairNewCode.textContent = 'Pair another';
+        voiceEngine.playSFX('click');
+    }
+
+    /* Closing takes the code down with it, here and on disk. A code still working after the
+       screen showing it is gone is an invitation nobody can see to withdraw. */
+    async function closePairSequence() {
+        stopPairTimers();
+        pairCodeExpiresAt = 0;
+        pairSequence?.classList.add('hidden');
+        if (btnPairStart) btnPairStart.disabled = false;
+        try {
+            renderLan(await tauriInvoke('lan_clear_pairing_code_rust'));
+        } catch (e) {
+            /* The pane is closing either way; a code that outlives it expires by itself. */
+        }
+    }
+
+    btnPairStart?.addEventListener('click', openPairSequence);
+    btnPairDone?.addEventListener('click', () => { voiceEngine.playSFX('click'); closePairSequence(); });
+    btnPairNewCode?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        setPairOutcome('Waiting for a device…', 'waiting');
+        setPairStep(2, 'doing');
+        setPairStep(3, 'doing');
+        if (!await issuePairCode()) return;
+        // Watching stopped when the last device arrived, so a fresh code needs it back.
+        stopPairTimers();
+        pairCountdown = setInterval(renderPairCountdown, 1000);
+        pairWatch = setInterval(watchForPairedDevice, 3000);
+    });
+
     btnLanRevokeAll?.addEventListener('click', () => revokeEveryDevice(refreshLan));
 
     // The LAN cards live inside Network & Remote, and only the native app can start or
@@ -5207,7 +5477,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Read when the section is opened, and on each visit after: whether a server is up is
     // a fact about right now, and it can change from a terminal while Settings is open.
     document.addEventListener('aether-settings-section', event => {
-        if (event.detail === 'network' && IS_TAURI) refreshLan();
+        if (!IS_TAURI) return;
+        if (event.detail === 'network') {
+            refreshLan();
+        } else if (pairSequence && !pairSequence.classList.contains('hidden')) {
+            // Walking away from the pane ends the sequence, for the same reason closing it
+            // does: the code should not outlive the screen that was showing it.
+            closePairSequence();
+        }
     });
 
     /* ====================== GIVE IT A VOICE =============================

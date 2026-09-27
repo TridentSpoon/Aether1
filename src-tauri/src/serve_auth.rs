@@ -137,6 +137,8 @@ pub struct ServeAuth {
     /// What the hash file looked like when `phrase_hash` was read from it.
     hash_stamp: Mutex<Option<Stamp>>,
     hash_file: PathBuf,
+    /// Where the one-time pairing code lives, when there is one.
+    code_file: PathBuf,
     devices: Mutex<Vec<Device>>,
     /// What the device file looked like when the list in memory was read from it. `aether1
     /// revoke` runs in a separate process from `aether1 --serve`, so without this the server
@@ -172,6 +174,25 @@ impl ServeAuth {
         devices.iter().fold(false, |found, device| {
             constant_time_eq(presented.as_bytes(), device.token_hash.as_bytes()) | found
         })
+    }
+
+    /// Whether this is the live one-time pairing code.
+    ///
+    /// Read from disk on every call rather than held: the code is minted by the window
+    /// process while this one serves, and one `stat` and a short read on a path that is
+    /// rate limited to five attempts a minute is not worth caching around.
+    pub fn code_matches(&self, presented: &str) -> bool {
+        let Some(stored) = read_pairing_code(&self.code_file) else {
+            return false;
+        };
+        let presented = hash_token(&normalise_code(presented));
+        constant_time_eq(presented.as_bytes(), stored.hash.as_bytes())
+    }
+
+    /// Spends the code, so it lets exactly one device in. A code that could be typed twice
+    /// is a password with a short life, which is not what it was offered as.
+    pub fn spend_code(&self) {
+        let _ = std::fs::remove_file(&self.code_file);
     }
 
     /// Whether this is the token the pairing phrase derives to -- the one thing the phrase is
@@ -439,6 +460,12 @@ fn load_or_create_at(path: &Path, devices_file: &Path) -> Result<(ServeAuth, Set
             phrase_hash: Mutex::new(phrase_hash),
             hash_stamp: Mutex::new(stamp(path)),
             hash_file: path.to_path_buf(),
+            // Beside the device list rather than fetched from `pair_code_path`, so a
+            // ServeAuth built on temporary paths keeps its code there too.
+            code_file: devices_file
+                .parent()
+                .map(|dir| dir.join("serve_pair_code.json"))
+                .unwrap_or_else(pair_code_path),
             devices: Mutex::new(devices),
             stamp: Mutex::new(stamp(devices_file)),
             devices_file: devices_file.to_path_buf(),
@@ -495,6 +522,112 @@ fn adopt_at(path: &Path, devices_file: &Path, phrase: &str) -> Result<usize, Str
     let count = load_devices(devices_file).len();
     save_devices(devices_file, &[])?;
     Ok(count)
+}
+
+/// How long a pairing code is good for. Long enough to walk to another room and get a
+/// browser open, short enough that a code left on a screen is not a standing invitation.
+pub const PAIRING_CODE_TTL: u64 = 600;
+
+/// How many characters a pairing code has. Eight from a 32-symbol alphabet is 40 bits --
+/// against five attempts a minute and a ten-minute life, guessing one is not a strategy,
+/// and it is short enough to read off a screen and type on a phone without a mistake.
+const CODE_LENGTH: usize = 8;
+
+/// No I, L, O or U: the first three are the characters people confuse with 1 and 0 when
+/// copying by eye, and the fourth is left out so a code cannot spell an unfortunate word.
+const CODE_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+fn pair_code_path() -> PathBuf {
+    crate::project_root()
+        .join("backend")
+        .join("serve_pair_code.json")
+}
+
+/// A code as typed, reduced to what it means. Case, the dash the screen shows it with, and
+/// any spaces are presentation; and since I, L and O are not in the alphabet, someone who
+/// types them plainly meant the 1 or the 0 they look like.
+fn normalise_code(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| match c.to_ascii_uppercase() {
+            'I' | 'L' => '1',
+            'O' => '0',
+            other => other,
+        })
+        .collect()
+}
+
+/// A pairing code on disk: its hash and when it stops working.
+///
+/// On disk rather than in the server's memory because the two are different processes --
+/// the window mints the code and the `--serve --lan` child is the one that has to honour
+/// it, exactly the split that made the phrase hash need re-reading.
+#[derive(Serialize, Deserialize)]
+struct PairingCode {
+    hash: String,
+    expires_at: u64,
+}
+
+fn read_pairing_code(path: &Path) -> Option<PairingCode> {
+    let code: PairingCode = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())?;
+    // An expired code is the same as no code. Returned as None rather than deleted, because
+    // the process asking is often the server, and a read should not write.
+    (code.expires_at > now_seconds()).then_some(code)
+}
+
+/// Makes a code that will let exactly one device pair, and says when it stops working.
+///
+/// A second call replaces the first: there is one code at a time, so a code read out loud
+/// and then re-made cannot still be sitting there working.
+pub fn mint_pairing_code() -> Result<(String, u64), String> {
+    mint_pairing_code_at(&pair_code_path())
+}
+
+fn mint_pairing_code_at(path: &Path) -> Result<(String, u64), String> {
+    let mut bytes = [0u8; CODE_LENGTH];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| format!("could not read randomness to make a pairing code: {e}"))?;
+    // Rejection-free because the alphabet is exactly 32 symbols and 256 is a multiple of it,
+    // so every byte maps to a symbol with no bias.
+    let code: String = bytes
+        .iter()
+        .map(|b| CODE_ALPHABET[(*b as usize) % CODE_ALPHABET.len()] as char)
+        .collect();
+    let expires_at = now_seconds() + PAIRING_CODE_TTL;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    let record = PairingCode {
+        hash: hash_token(&code),
+        expires_at,
+    };
+    let json = serde_json::to_string(&record)
+        .map_err(|e| format!("could not write out the pairing code: {e}"))?;
+    std::fs::write(path, json)
+        .map_err(|e| format!("could not save the pairing code to {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok((code, expires_at))
+}
+
+/// When the live pairing code stops working, or nothing when there is none. What the pane
+/// counts down from, and the only thing about a code that can be asked twice -- the code
+/// itself is shown by the press that made it, like the phrase.
+pub fn pairing_code_expiry() -> Option<u64> {
+    read_pairing_code(&pair_code_path()).map(|code| code.expires_at)
+}
+
+/// Throws the live code away. Called when a device has used it and when the operator leaves
+/// the sequence, so a code outlives neither the pairing it was for nor the screen it was on.
+pub fn clear_pairing_code() {
+    let _ = std::fs::remove_file(pair_code_path());
 }
 
 /// Loads the device list on its own, for `aether1 devices` and `aether1 revoke`, which have
@@ -816,6 +949,80 @@ mod tests {
         assert!(!auth.phrase_matches("not the token at all"));
 
         let _ = std::fs::remove_file(&devices_file);
+    }
+
+    /// A code is good once. The whole reason it can be shown on a screen and read across a
+    /// room is that using it takes it out of circulation.
+    #[test]
+    fn a_pairing_code_lets_one_device_in_and_then_stops() {
+        let (hash_file, devices_file) = temp_paths("code_once");
+        let (auth, _setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let code_file = devices_file.parent().unwrap().join("serve_pair_code.json");
+
+        let (code, expires_at) = mint_pairing_code_at(&code_file).unwrap();
+        assert_eq!(code.len(), CODE_LENGTH);
+        assert!(
+            expires_at > now_seconds(),
+            "a fresh code should be in the future"
+        );
+        assert!(auth.code_matches(&code));
+        // How it is shown and how it is typed are not how it is stored.
+        assert!(auth.code_matches(&format!("{}-{}", &code[..4], &code[4..]).to_lowercase()));
+
+        auth.spend_code();
+        assert!(
+            !auth.code_matches(&code),
+            "a spent code must not work twice"
+        );
+
+        let _ = std::fs::remove_file(&hash_file);
+        let _ = std::fs::remove_file(&devices_file);
+        let _ = std::fs::remove_file(&code_file);
+    }
+
+    /// A code left on a screen stops being an invitation by itself, with nothing having to
+    /// remember to take it away.
+    #[test]
+    fn a_pairing_code_stops_working_when_it_runs_out() {
+        let (hash_file, devices_file) = temp_paths("code_expiry");
+        let (auth, _setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let code_file = devices_file.parent().unwrap().join("serve_pair_code.json");
+
+        let (code, _) = mint_pairing_code_at(&code_file).unwrap();
+        assert!(auth.code_matches(&code));
+
+        // Written back with an expiry in the past, which is what waiting ten minutes does.
+        let expired = serde_json::to_string(&PairingCode {
+            hash: hash_token(&code),
+            expires_at: now_seconds() - 1,
+        })
+        .unwrap();
+        std::fs::write(&code_file, expired).unwrap();
+        assert!(
+            !auth.code_matches(&code),
+            "an expired code must not let anyone in"
+        );
+        assert!(!auth.code_matches("anything else at all"));
+
+        let _ = std::fs::remove_file(&hash_file);
+        let _ = std::fs::remove_file(&devices_file);
+        let _ = std::fs::remove_file(&code_file);
+    }
+
+    /// The characters left out of the alphabet are the ones people mistake for others, so
+    /// what they plainly meant is what is read -- but nothing beyond that is forgiven.
+    #[test]
+    fn a_code_is_read_as_typed_not_as_it_looks() {
+        assert_eq!(normalise_code("abcd-efgh"), "ABCDEFGH");
+        assert_eq!(normalise_code(" IL O 1234 "), "110".to_string() + "1234");
+        assert_ne!(normalise_code("ABCDEFGH"), normalise_code("ABCDEFGJ"));
+        for symbol in CODE_ALPHABET {
+            let c = *symbol as char;
+            assert!(
+                !"ILOU".contains(c),
+                "{c} is too easy to misread to be in a code"
+            );
+        }
     }
 
     #[test]

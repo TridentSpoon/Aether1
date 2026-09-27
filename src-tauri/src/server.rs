@@ -377,6 +377,10 @@ async fn require_lan_token(
 
 #[derive(Deserialize)]
 struct PairRequest {
+    /// The twelve-word phrase, or the eight-character code the pairing sequence put on
+    /// screen. One field for both because a device is answering one question -- "what did
+    /// the other machine tell you" -- and which kind of secret it is, is for this end to
+    /// work out, not for the person typing.
     phrase: String,
     /// What to call this device in the list. Optional: a browser will not send one, so the
     /// User-Agent stands in, and an operator can always tell one entry from another by when
@@ -423,22 +427,33 @@ async fn pair(
     if let Some(wait) = lan.limiter.retry_after(ip) {
         return too_many_attempts(wait);
     }
-    // A phrase that isn't valid BIP-39 counts as a failure too: it is still a guess, and
-    // letting malformed ones through free would make the budget trivial to avoid.
-    let Ok(token) = serve_auth::derive_token_from_phrase(&req.phrase) else {
-        lan.limiter.record_failure(ip);
-        return (
-            StatusCode::BAD_REQUEST,
-            "that doesn't look like a valid pairing phrase".to_string(),
-        )
-            .into_response();
-    };
-    if !lan.auth.phrase_matches(&token) {
-        lan.limiter.record_failure(ip);
-        return (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response();
+    // The one-time code is tried first, and a code that works ends the matter. It is the
+    // shorter of the two and cannot be mistaken for a mnemonic, so there is no case where
+    // one secret has to be told apart from the other.
+    let by_code = lan.auth.code_matches(&req.phrase);
+    if !by_code {
+        // A phrase that isn't valid BIP-39 counts as a failure too: it is still a guess, and
+        // letting malformed ones through free would make the budget trivial to avoid.
+        let Ok(token) = serve_auth::derive_token_from_phrase(&req.phrase) else {
+            lan.limiter.record_failure(ip);
+            return (
+                StatusCode::BAD_REQUEST,
+                "that is not the pairing code or the pairing phrase".to_string(),
+            )
+                .into_response();
+        };
+        if !lan.auth.phrase_matches(&token) {
+            lan.limiter.record_failure(ip);
+            return (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response();
+        }
     }
 
     lan.limiter.record_success(ip);
+    // Spent on the way in, so the code lets exactly one device through. The phrase is not
+    // spent: it is the standing credential, and each device that types it gets its own token.
+    if by_code {
+        lan.auth.spend_code();
+    }
     // The phrase is spent the moment it is checked: what goes back is a token minted for
     // this device alone, so revoking it later takes access from this machine and no other.
     let label = req
