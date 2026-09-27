@@ -1030,6 +1030,13 @@ fn doctor_repair_rust(
     commands::doctor_repair(&engine, &check, &repair, Some(&in_app))
 }
 
+/// Runs diagnostics with simplified output: voice-over, status, filtered metrics, and
+/// deduplicated error logs.
+#[tauri::command(async)]
+fn run_diagnostics_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::run_diagnostics_rust(&engine)
+}
+
 /// Flow mode's state, for the chin bar's toggle. Reports the line the current avatar
 /// belongs to as well, because FLOW with no line to move within does nothing and a toggle
 /// that claimed otherwise would be lying.
@@ -2357,6 +2364,7 @@ fn main() {
             set_flow_line_rust,
             doctor_report_rust,
             doctor_repair_rust,
+            run_diagnostics_rust,
             setup_advice_rust,
             pull_model_rust,
             start_download_rust,
