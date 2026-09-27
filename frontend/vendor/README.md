@@ -19,6 +19,7 @@ These are local copies. Nothing here is fetched at runtime.
 | `xterm/xterm.css` | Its stylesheet | `@xterm/xterm` 5.5.0 | npm, `css/xterm.css`, unmodified |
 | `xterm/addon-fit.js` | Works out how many rows and columns fit the panel | `@xterm/addon-fit` 0.10.0 | npm, `lib/addon-fit.js`, unmodified |
 | `xterm/LICENSE` | The MIT licence those three are published under | — | npm, unmodified |
+| `qrcode/qrcode.js` | Draws the QR code the pairing sequence shows, so a phone can reach this machine by scanning rather than typing an address | `qrcode-generator` 1.4.4 | npm, `qrcode.js`, unmodified (MIT, notice in the file) |
 
 `three r128` is the version the code was written against; the avatar code uses APIs that
 later releases changed, so this is a deliberate pin rather than a stale one.

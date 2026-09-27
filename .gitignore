@@ -21,3 +21,6 @@ src-tauri/gen/
 .idea/
 .claude/
 backend/serve_devices.json
+# The one-time pairing code the sequence puts on screen. Short-lived, and no more
+# committable than the token hash beside it.
+backend/serve_pair_code.json

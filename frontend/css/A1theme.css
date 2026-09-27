@@ -3103,6 +3103,117 @@ select,
     .net-field-row .net-card-action { width: 100%; }
 }
 
+/* ---- The pairing sequence -------------------------------------------------------------
+   Three numbered things in the order they are done, one of them on this machine and two on
+   the other. The rail is not decoration: someone standing with a phone in one hand needs to
+   know which of the three they are on, and the marks say so without reading the prose. */
+.pair-seq {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    padding: 0 0.875rem 0.875rem;
+}
+
+.pair-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.pair-step { display: flex; gap: 0.75rem; align-items: flex-start; }
+
+/* The number, until the step is done, and then a tick. A step still to come is dimmed
+   rather than hidden: the whole point of a sequence is seeing what is coming. */
+.pair-step-mark {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 999px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    background: var(--bg-panel);
+}
+
+.pair-step[data-state="doing"] .pair-step-mark { border-color: var(--text-accent); color: var(--text-accent); }
+.pair-step[data-state="done"] .pair-step-mark {
+    border-color: var(--neon-green, var(--text-accent));
+    color: var(--neon-green, var(--text-accent));
+}
+.pair-step[data-state="todo"] { opacity: 0.55; }
+
+.pair-step-text { flex: 1 1 auto; min-width: 0; }
+.pair-step-title { margin: 0.15rem 0 0.2rem; font-size: 0.72rem; color: var(--text-main); }
+.pair-step-note { margin: 0; font-size: 0.6rem; line-height: 1.5; color: var(--text-dim); }
+
+/* The square and the address sit together because they are one instruction offered two
+   ways -- scan it, or type it -- and a phone camera wants the square large. */
+.pair-open {
+    display: flex;
+    gap: 0.875rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 0.6rem;
+}
+
+/* White quiet zone regardless of theme: a QR code read off a dark panel is a QR code that
+   half the phones in the house will not see. */
+.pair-qr {
+    flex: 0 0 auto;
+    padding: 0.5rem;
+    background: #ffffff;
+    border-radius: 0.375rem;
+    line-height: 0;
+}
+
+.pair-qr svg { display: block; width: 132px; height: 132px; }
+
+.pair-address {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--text-accent);
+    word-break: break-all;
+}
+
+/* Read across a room and typed on a phone, so it is the largest thing in the pane. */
+.pair-code {
+    margin: 0.6rem 0 0.3rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.5rem;
+    letter-spacing: 0.22em;
+    color: var(--text-accent);
+}
+
+.pair-outcome {
+    margin: 0;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.375rem;
+    background: var(--bg-panel);
+    font-size: 0.65rem;
+    color: var(--text-dim);
+}
+
+.pair-outcome[data-tone="good"] {
+    border-color: var(--neon-green, var(--text-accent));
+    color: var(--neon-green, var(--text-accent));
+}
+.pair-outcome[data-tone="bad"] { border-color: var(--neon-amber); color: var(--neon-amber); }
+
+.pair-seq-foot { display: flex; gap: 0.5rem; justify-content: flex-end; }
+
+@media (max-width: 620px) {
+    .pair-seq-foot { flex-direction: column; }
+    .pair-seq-foot .net-card-action { width: 100%; }
+}
+
 /* ---- Appearance: the pane and the colour panel behind it -------------------------------
    The theme is one decision with nine controls, so it drills down one level out of the pane
    rather than lying flat in it. Same mechanic as the avatar stages, one level deep. */

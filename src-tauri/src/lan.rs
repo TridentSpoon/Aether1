@@ -135,7 +135,20 @@ pub fn status(engine: &LlmEngine, managed: &ManagedServer) -> Value {
         "hostname": sysinfo::System::host_name().unwrap_or_else(|| "this machine".to_string()),
         "addresses": lan_addresses(),
         "devices": devices_payload(),
+        // When the live pairing code stops working, so the sequence can count down without
+        // holding the code itself anywhere. Null when there is none, or it has run out.
+        "code_expires_at": serve_auth::pairing_code_expiry(),
+        "now": now_seconds(),
     })
+}
+
+/// This machine's clock, sent with every status so the pane counts down against the clock
+/// that set the expiry rather than the browser's, which can be minutes out.
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default()
 }
 
 /// The addresses another device on the network would type. Read off this machine's own
@@ -264,6 +277,28 @@ pub fn set_phrase(
     let mut report = status(engine, managed);
     report["unpaired"] = json!(unpaired);
     Ok(report)
+}
+
+/// Makes the one-time code the pairing sequence puts on screen, and hands it back to be
+/// shown for as long as that screen is up.
+///
+/// Unlike `new_phrase` this costs nothing: no device is unpaired, the standing phrase is
+/// untouched, and the code stops working by itself. That is the whole reason it exists --
+/// the phrase could only ever be shown by the press that replaced it, which made "add one
+/// more device" and "cut every device off" the same button.
+pub fn new_pairing_code(engine: &LlmEngine, managed: &ManagedServer) -> Result<Value, String> {
+    let (code, expires_at) = serve_auth::mint_pairing_code()?;
+    let mut report = status(engine, managed);
+    report["code"] = json!(code);
+    report["code_expires_at"] = json!(expires_at);
+    Ok(report)
+}
+
+/// Throws the live code away, called when the sequence is closed. A code that outlived the
+/// screen it was on would be a standing invitation nobody could see.
+pub fn clear_pairing_code(engine: &LlmEngine, managed: &ManagedServer) -> Value {
+    serve_auth::clear_pairing_code();
+    status(engine, managed)
 }
 
 /// Starts the server at launch when the operator has asked for that, and otherwise does
