@@ -143,17 +143,16 @@
                 <h1 style="margin:0 0 6px;font-size:1.05rem;letter-spacing:0.04em;
                            text-transform:uppercase;color:#7dd3fc">Pair this device</h1>
                 <p style="margin:0 0 16px;font-size:0.85rem;line-height:1.5;color:#94a3b8">
-                    This AETHER1 is reachable over your network, and every request needs a
-                    token of its own. Type the twelve-word pairing phrase from the machine
-                    running it &mdash; Settings, Network &amp; Remote &mdash; and this device
-                    gets a token of its own to keep.
+                    Type the code the other machine is showing you &mdash; Settings, Network
+                    &amp; Remote, Pair a device &mdash; and this one is in. The twelve-word
+                    pairing phrase works here too, if that is what you have.
                 </p>
                 <label for="lan-pair-phrase" style="display:block;margin-bottom:6px;
                        font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;
-                       color:#64748b">Pairing phrase</label>
-                <textarea id="lan-pair-phrase" rows="3" autocomplete="off"
-                    spellcheck="false" autocapitalize="none"
-                    placeholder="twelve words, separated by spaces"
+                       color:#64748b">Pairing code or phrase</label>
+                <textarea id="lan-pair-phrase" rows="2" autocomplete="off"
+                    spellcheck="false" autocapitalize="characters"
+                    placeholder="the code, or twelve words"
                     style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;
                            border:1px solid rgba(148,163,184,0.35);background:rgba(2,6,12,0.8);
                            color:#e2e8f0;font-size:0.9rem;resize:vertical"></textarea>

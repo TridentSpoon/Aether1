@@ -29,7 +29,7 @@
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
-    <script src="js/lan-auth.js?v=1"></script>
+    <script src="js/lan-auth.js?v=2"></script>
     <script src="js/hologram/palettes.js?v=19"></script>
     <script src="js/theme.js?v=6"></script>
     <script src="js/avatar-unlocks.js?v=1"></script>
@@ -2303,6 +2303,66 @@
                      confirmed -- the page itself is always in the rail, because local-only
                      mode above is a question everywhere. -->
                 <div id="remote-lan-cards" class="hidden">
+                    <!-- CARD 0: the sequence. Everything below this card is the same
+                         settings laid out as facts, for someone who wants to see or change
+                         one of them. This card is for the actual job -- "get my phone on
+                         this" -- which used to mean reading three cards, pressing New
+                         phrase (which unpaired everything), copying twelve words and typing
+                         an address by hand. It is first because it is what the pane is for. -->
+                    <div class="net-card">
+                        <div class="net-card-head">
+                            <span class="net-card-icon" aria-hidden="true">📲</span>
+                            <div class="net-card-heading">
+                                <h4 class="net-card-title">Pair a device</h4>
+                                <p class="net-card-hint">
+                                    Puts this machine on the network, shows the other device
+                                    where to go and a code to type, and tells you the moment
+                                    it is in. Nothing already paired is disturbed.
+                                </p>
+                            </div>
+                            <button type="button" id="btn-pair-start" class="net-card-action">Start</button>
+                        </div>
+
+                        <div id="pair-sequence" class="pair-seq hidden">
+                            <ol class="pair-steps">
+                                <li class="pair-step" id="pair-step-1" data-state="doing">
+                                    <span class="pair-step-mark" aria-hidden="true">1</span>
+                                    <div class="pair-step-text">
+                                        <p class="pair-step-title">Put this machine on the network</p>
+                                        <p class="pair-step-note" id="pair-step-1-note">Checking&hellip;</p>
+                                    </div>
+                                </li>
+                                <li class="pair-step" id="pair-step-2" data-state="todo">
+                                    <span class="pair-step-mark" aria-hidden="true">2</span>
+                                    <div class="pair-step-text">
+                                        <p class="pair-step-title">Open this on the other device</p>
+                                        <p class="pair-step-note">Point its camera at the square, or type the address into a browser. The certificate is this machine's own, so it will ask once whether you trust it &mdash; say yes.</p>
+                                        <div class="pair-open">
+                                            <div id="pair-qr" class="pair-qr" role="img" aria-label="QR code for this machine's address"></div>
+                                            <p id="pair-address" class="pair-address">&mdash;</p>
+                                        </div>
+                                    </div>
+                                </li>
+                                <li class="pair-step" id="pair-step-3" data-state="todo">
+                                    <span class="pair-step-mark" aria-hidden="true">3</span>
+                                    <div class="pair-step-text">
+                                        <p class="pair-step-title">Type the code when it asks</p>
+                                        <p class="pair-step-note">Good for one device, then it stops working. The twelve-word phrase still works too, if you would rather use that.</p>
+                                        <p id="pair-code" class="pair-code">&mdash;</p>
+                                        <p id="pair-code-life" class="pair-step-note"></p>
+                                    </div>
+                                </li>
+                            </ol>
+
+                            <p id="pair-outcome" class="pair-outcome" data-tone="waiting">Waiting for a device&hellip;</p>
+
+                            <div class="pair-seq-foot">
+                                <button type="button" id="btn-pair-new-code" class="net-card-action net-card-action-quiet">New code</button>
+                                <button type="button" id="btn-pair-done" class="net-card-action net-card-action-quiet">Close</button>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- CARD 1: the server itself. -->
                     <div class="net-card">
                         <div class="net-card-head">
@@ -2644,7 +2704,8 @@
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=2"></script>
-    <script src="js/app.js?v=60"></script>
+    <script src="vendor/qrcode/qrcode.js?v=1"></script>
+    <script src="js/app.js?v=61"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

@@ -516,6 +516,25 @@ fn lan_set_phrase_rust(
     lan::set_phrase(&engine, &managed, &phrase)
 }
 
+/// The one-time code the pairing sequence shows. Cheap and consequence-free, unlike a new
+/// phrase, which is why the sequence uses it.
+#[tauri::command(async)]
+fn lan_new_pairing_code_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+) -> Result<serde_json::Value, String> {
+    lan::new_pairing_code(&engine, &managed)
+}
+
+/// Closing the sequence takes the code down with it.
+#[tauri::command(async)]
+fn lan_clear_pairing_code_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+) -> serde_json::Value {
+    lan::clear_pairing_code(&engine, &managed)
+}
+
 #[tauri::command(async)]
 fn connections_rust() -> serde_json::Value {
     let gh = which::which("gh").ok();
@@ -2457,6 +2476,8 @@ fn main() {
             lan_stop_rust,
             lan_new_phrase_rust,
             lan_set_phrase_rust,
+            lan_new_pairing_code_rust,
+            lan_clear_pairing_code_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,
