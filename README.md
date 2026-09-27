@@ -171,6 +171,15 @@ Check which state you are in under **Windows Security → App & browser control 
 Control settings**. There are three: **On**, **Off**, and **Evaluation** (Windows is still
 deciding, and will pick one for you). If it already says Off, none of this applies to you.
 
+**It can also stop the build, not just the finished app.** Cargo compiles small helper
+programs -- build scripts -- into `src-tauri\target\` and runs them as part of compiling, and
+those are unsigned and seconds old, which is exactly what these policies refuse. The build
+then fails with `error 4551, "An Application Control policy has blocked this file"` naming a
+file under `target\release\build\`. It is not a problem with Rust: moving `RUSTUP_HOME` or
+`CARGO_HOME` somewhere Windows trusts more does not help, because the blocked files are the
+ones this project just built. On a managed PC, what IT has to allow is the Rust toolchain
+*and* this checkout's `src-tauri\target` directory.
+
 Switching install methods does not help: the clone-and-`setup.bat` path produces an unsigned
 `aether1.exe` of its own and hits exactly the same wall, and so does `start.bat --browser`,
 since the browser fallback still runs that same executable. What is left is:
