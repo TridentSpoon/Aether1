@@ -11,6 +11,12 @@
  * the operator's voice on someone else's server.
  */
 
+/**
+ * The pause left between two sentences of one reply. Long enough to hear as the end of a
+ * sentence rather than a dropout, short enough that a paragraph does not drag.
+ */
+const SENTENCE_GAP_MS = 140;
+
 class VoiceAudioEngine {
     constructor() {
         this.audioCtx = null;
@@ -25,6 +31,15 @@ class VoiceAudioEngine {
         this.ttsQueue = [];
         this.isDrainingQueue = false;
         this.sfxEnabled = true;
+        // Who owns the speaker. Claimed synchronously by playClip and bumped by every cut,
+        // so a clip that is still getting ready can tell it has been superseded and stay
+        // silent rather than starting on top of whatever took its place. See playClip.
+        this.playClaim = 0;
+        this.settleCurrent = null;
+        // The graph node the playing element feeds the analyser through, kept so it can be
+        // disconnected when the clip is done instead of being left live for the life of the
+        // page (one per sentence spoken adds up over a conversation).
+        this.currentSource = null;
 
         this.onStateChange = null;
         this.onAudioFrequency = null;
@@ -102,13 +117,42 @@ class VoiceAudioEngine {
         try {
             while (this.ttsQueue.length) {
                 const url = this.ttsQueue.shift();
-                await this.playClip(url);
-                VoiceAudioEngine.releaseClip(url);
+                let outcome = null;
+                try {
+                    outcome = await this.playClip(url);
+                } catch (e) {
+                    // playClip resolves rather than rejects for anything that happens to the
+                    // audio itself, so this is the surrounding machinery failing -- a
+                    // suspended context refusing to resume, most likely. Letting it out of
+                    // here would leave the rest of the reply sitting in the queue to be
+                    // spoken by whichever later reply next starts a drain loop, in among its
+                    // sentences. Drop the clip and carry on with this reply's own.
+                    console.warn('a sentence could not be played', e);
+                } finally {
+                    VoiceAudioEngine.releaseClip(url);
+                }
+                // Something else is on the speaker right now (a Replay button, the voice
+                // test, an avatar tap): the rest of this reply is no longer what should be
+                // heard, and starting the next sentence would put it over the top of that
+                // clip. A cut that left the speaker *free* is stopSpeech dropping an old
+                // turn, and anything queued after it belongs to the new one -- so the test
+                // is whether something is actually playing, not merely that a cut happened.
+                if (outcome && outcome.superseded && this.currentAudio) break;
+                // A beat between sentences. Piper and edge-tts both end a clip on the last
+                // sample of the last word, so playing the next one the instant `ended` fires
+                // runs two sentences together with no breath between them -- which is what
+                // "not giving it time to finish a sentence" sounds like from the outside.
+                if (this.ttsQueue.length) await VoiceAudioEngine.wait(SENTENCE_GAP_MS);
             }
         } finally {
             this.isDrainingQueue = false;
-            if (this.onStateChange) this.onStateChange('IDLE');
-            if (this.onAudioFrequency) this.onAudioFrequency(new Uint8Array(64));
+            // Only if the speaker is actually free. A drain loop that stopped because
+            // something else took the clip off it would otherwise drop the avatar to IDLE
+            // while that something is still talking.
+            if (!this.currentAudio) {
+                if (this.onStateChange) this.onStateChange('IDLE');
+                if (this.onAudioFrequency) this.onAudioFrequency(new Uint8Array(64));
+            }
         }
     }
 
@@ -120,13 +164,44 @@ class VoiceAudioEngine {
      * its turn back. See the note on `finish` in playTTSAudio.
      */
     cutCurrentClip() {
+        // Bumping the claim first is what stops a clip that is still in playClip's setup --
+        // awaiting the context's resume, with no element built yet -- from starting after
+        // this cut and being unstoppable, because nothing here can reach an element that
+        // does not exist. That check is on the far side of the await in playClip.
+        this.playClaim += 1;
         if (this.currentAudio) {
             this.currentAudio.pause();
         }
+        this.releaseCurrentSource();
         const settle = this.settleCurrent;
         this.settleCurrent = null;
         this.currentAudio = null;
         if (settle) settle();
+    }
+
+    /**
+     * Takes the finished clip's element back out of the audio graph.
+     *
+     * A MediaElementAudioSourceNode cannot be reused and cannot be garbage collected while
+     * it is connected, so a connected node per sentence means every clip a conversation ever
+     * spoke is still in the graph, with its decoded element behind it. It is silent -- a
+     * paused element feeds zeroes -- but the analyser still sums all of them on every render
+     * quantum, and that cost grows for as long as the window stays open.
+     */
+    releaseCurrentSource() {
+        if (!this.currentSource) return;
+        try {
+            this.currentSource.disconnect();
+        } catch (e) {
+            // Already disconnected, or a context that has gone away -- either way there is
+            // nothing left to release.
+        }
+        this.currentSource = null;
+    }
+
+    /** A plain delay, used for the beat between two sentences of one reply. */
+    static wait(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
     /** Drops anything queued but not yet played (a new turn supersedes the old one). */
@@ -302,14 +377,38 @@ class VoiceAudioEngine {
         return this.playClip(audioUrl, opts);
     }
 
-    /** Plays one clip, pre-empting the current one but leaving the queue alone. */
+    /**
+     * Plays one clip, pre-empting the current one but leaving the queue alone.
+     *
+     * Getting the speaker ready is not instant -- a suspended context has to be resumed
+     * first, and that is an await -- so this claims the speaker *before* it yields and
+     * checks the claim is still its own before it starts anything. Without that, two
+     * callers that both reach here while the context is suspended (the reply being spoken
+     * and a Replay button, the start-up self-test and the first answer) each cut a current
+     * clip that does not exist yet, and then both build an element and play it: two voices,
+     * and only the second one reachable by any later cut, so nothing can stop the first.
+     * A claim that has moved on means some other clip is the one that should be heard, and
+     * this one reports itself superseded instead of joining it.
+     */
     async playClip(audioUrl, opts = {}) {
         const audible = opts.audible !== false;
 
         this.cutCurrentClip();
+        const claim = this.playClaim;
 
         if (this.audioCtx && this.audioCtx.state === 'suspended') {
-            await this.audioCtx.resume();
+            try {
+                await this.audioCtx.resume();
+            } catch (e) {
+                // A context that will not resume plays nothing, and saying so is more use
+                // than throwing: the caller has a queue to get through, and a clip that
+                // could not be heard is not a reason to abandon the rest of the reply.
+                console.warn('the audio context would not resume', e);
+            }
+        }
+
+        if (claim !== this.playClaim) {
+            return { played: false, error: 'superseded', signalDetected: null, superseded: true };
         }
 
         if (this.gainNode) {
@@ -347,6 +446,7 @@ class VoiceAudioEngine {
                 try {
                     const source = this.audioCtx.createMediaElementSource(audio);
                     source.connect(this.analyser);
+                    this.currentSource = source;
                 } catch (e) {
                     // Only thrown when this element already has a source node -- a fresh
                     // Audio is created per clip above, so this is unreachable in practice.
@@ -391,7 +491,10 @@ class VoiceAudioEngine {
                 if (settled) return;
                 settled = true;
                 if (this.settleCurrent === finish) this.settleCurrent = null;
-                this.currentAudio = null;
+                if (this.currentAudio === audio) {
+                    this.currentAudio = null;
+                    this.releaseCurrentSource();
+                }
                 // Mid-queue, the next clip is about to start: staying SPEAKING keeps the
                 // avatar steady across the seam. enqueueTTS emits IDLE when it drains.
                 if (!this.ttsQueue.length) {
@@ -402,6 +505,10 @@ class VoiceAudioEngine {
                     played: !playbackError,
                     error: playbackError,
                     signalDetected: this.analyser ? signalDetected : null,
+                    // Settled by a cut rather than by the clip running out: whoever is
+                    // working through a queue should stop instead of playing the next
+                    // sentence over the clip that just took the speaker.
+                    superseded: claim !== this.playClaim,
                 });
             };
 
