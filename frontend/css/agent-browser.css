@@ -61,10 +61,11 @@
 /* Hero section with title and stats */
 .agent-hero-section {
     padding: 2rem;
-    background: linear-gradient(135deg, rgba(0, 255, 200, 0.1) 0%, rgba(0, 150, 255, 0.1) 100%);
+    /* No backdrop blur: at these alphas it was imperceptible and it is one of the most
+       expensive things a WebKit compositor can be asked for. The gradient carries it. */
+    background: linear-gradient(135deg, rgba(0, 255, 200, 0.14) 0%, rgba(0, 150, 255, 0.14) 100%);
     border: 1px solid rgba(0, 255, 200, 0.3);
     border-radius: 12px;
-    backdrop-filter: blur(8px);
 }
 
 .agent-hero {

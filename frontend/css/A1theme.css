@@ -10,6 +10,8 @@
 :root {
   --bg-core: #040711;
   --bg-panel: rgba(8, 15, 30, 0.75);
+  /* The HUD panels only. See .hud-panel: this stands in for a backdrop blur. */
+  --bg-panel-solid: rgba(8, 15, 30, 0.9);
   --bg-panel-hover: rgba(14, 25, 48, 0.85);
   --border-neon: rgba(0, 240, 255, 0.35);
   --border-neon-bright: #00f0ff;
@@ -565,10 +567,15 @@ select,
 }
 
 .hud-panel {
-  background: var(--bg-panel);
+  /* Was --bg-panel (0.75 alpha) behind a 12px backdrop blur. The blur's whole job was
+     stopping you reading what sits behind the panel, and on a dark background at that
+     opacity it was doing very little of it -- while costing WebKit a snapshot of the
+     backdrop and a two-pass blur, per panel, every time anything underneath changed. A
+     slightly more opaque panel does the same job for nothing. It is its own token rather
+     than a change to --bg-panel, which some fifty other surfaces share and which are not
+     blurred and do not want moving. */
+  background: var(--bg-panel-solid);
   border: 1px solid var(--border-neon);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   position: relative;
   /* Only the two properties that actually change on hover. `all` also covered width,
      height and the grid placement -- so every panel drag and every seam drag animated
@@ -628,10 +635,9 @@ select,
     to bottom,
     rgba(0, 0, 0, 0) 0px,
     rgba(0, 0, 0, 0) 1px,
-    rgba(0, 0, 0, 0.35) 2px,
-    rgba(0, 0, 0, 0.35) 3px
+    rgba(0, 0, 0, 0.22) 2px,
+    rgba(0, 0, 0, 0.22) 3px
   );
-  mix-blend-mode: overlay;
   animation: crtFlicker 3.2s infinite steps(24);
 }
 
@@ -656,10 +662,13 @@ select,
   inset: 0;
   pointer-events: none;
   z-index: 5;
+  /* The dark scanline layer this used to carry was invisible: screen(backdrop, black)
+     is the backdrop, so under the old `mix-blend-mode: screen` it contributed nothing at
+     any alpha. Dropping the blend mode without dropping that layer would have made it
+     appear for the first time, so it goes with it, and the channel-split edges -- the
+     part you could actually see -- are raised to carry the effect on their own. */
   background:
-    repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.28) 3px, rgba(0,0,0,0.28) 4px),
-    linear-gradient(90deg, rgba(255,0,60,0.05) 0%, transparent 2%, transparent 98%, rgba(0,229,255,0.05) 100%);
-  mix-blend-mode: screen;
+    linear-gradient(90deg, rgba(255,0,60,0.09) 0%, transparent 2%, transparent 98%, rgba(0,229,255,0.09) 100%);
   animation: glitchFlicker 2.6s infinite steps(20);
 }
 
@@ -3494,4 +3503,30 @@ select,
   background: #b3202b;
   border-color: #d9333f;
   color: #fff;
+}
+
+/* ---- The lite tier ---------------------------------------------------------------
+   Set as data-render="lite" on <html> by the hologram engine (see core.js's quality
+   tiers), either because the operator asked for it or because this machine was measured
+   failing to hold a frame rate under load.
+
+   Everything below is garnish over the whole window: a fixed, full-viewport layer that
+   every repaint underneath has to be composited through, costing a machine with onboard
+   graphics more than the avatar itself. None of it carries information. The layout, the
+   colours, the panels, the avatar and its motion are untouched -- somebody on an Atom
+   gets the same HUD, without the film grain over it. */
+:root[data-render="lite"] .scanlines,
+:root[data-render="lite"] .vignette,
+:root[data-render="lite"] #hologram-viewport.crt-active::after,
+:root[data-render="lite"] #hologram-viewport.glitch-active::after {
+  display: none;
+}
+
+/* The decorative loops specifically. The typing cursor keeps blinking however slow the
+   machine is -- it is the only thing on screen saying a reply is still arriving, and a
+   still cursor on a slow machine reads as the app having hung, which is the exact wrong
+   message to send on the hardware this tier exists for. */
+:root[data-render="lite"] .pulse-badge,
+:root[data-render="lite"] .setup-bar-fill[data-state="unknown"] {
+  animation: none;
 }
