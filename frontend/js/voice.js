@@ -159,8 +159,17 @@ class VoiceAudioEngine {
     // is sent anywhere -- which is the difference between this and the Web Speech API
     // above, which in most browsers is a cloud service wearing a local-looking API.
 
-    async startCapture() {
+    /**
+     * Opens the microphone and starts collecting audio.
+     *
+     * `options.onLevel` is called with the RMS level of every buffer as it arrives. Push to
+     * talk has no use for it -- a held key already says when the sentence ended -- but
+     * hands-free listening has nothing else to go on, so it watches the level to tell
+     * talking from the silence after it (see listenHandsFree in js/app.js).
+     */
+    async startCapture(options = {}) {
         if (this.capture) return true;
+        const onLevel = typeof options.onLevel === 'function' ? options.onLevel : null;
         try {
             // `exact` rather than a preference: a chosen microphone that has been
             // unplugged should fail here and say so, not quietly record the laptop lid
@@ -178,7 +187,13 @@ class VoiceAudioEngine {
             const chunks = [];
 
             processor.onaudioprocess = (event) => {
-                chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+                const samples = event.inputBuffer.getChannelData(0);
+                chunks.push(new Float32Array(samples));
+                if (onLevel) {
+                    let sum = 0;
+                    for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+                    onLevel(Math.sqrt(sum / samples.length));
+                }
             };
             source.connect(processor);
             processor.connect(ctx.destination);

@@ -304,6 +304,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentAgentName = "HALCY";
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
 
+    /* The operator's own name, as the profile knows it -- kept here once it has been read
+       (loadOperatorNameAndGreeting) so that anything else wanting to address them by name
+       does not fetch the profile again. Declared beside currentAvatar for the same reason
+       the avatar browser's state is: it is read from code that runs earlier in the session
+       than the function that fills it. */
+    let operatorDisplayName = '';
+
     /* The avatar browser's state, declared up here with the avatar it follows rather than
        down beside its own functions: the first applyAvatar of the session runs before that
        point, and it asks the browser to redraw. A `let` further down would still be in its
@@ -2453,6 +2460,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function startTalking() {
         if (talkHeld || isWaitingForResponse) return;
+        cancelHandsFreeListen(); // a held key takes the microphone over; see listenHandsFree
         talkHeld = true;
         supersedeSpeech(); // talking over the companion interrupts it
         setAvatarState('LISTENING');
@@ -2469,7 +2477,13 @@ document.addEventListener('DOMContentLoaded', () => {
         talkHeld = false;
         const wav = voiceEngine.stopCapture();
         if (!wav) return;
+        await transcribeAndSend(wav);
+    }
 
+    /* The half of a recording that has nothing to do with how it was started: transcribe it
+       locally and send what came back as a message. Shared by push-to-talk above and by the
+       hands-free listen below, so the two cannot drift apart. */
+    async function transcribeAndSend(wav) {
         try {
             const text = IS_TAURI
                 ? await tauriInvoke('transcribe_rust', { wav: Array.from(new Uint8Array(await wav.arrayBuffer())) })
@@ -2486,6 +2500,75 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             appendMessage(currentAgentName, `⚠️ Could not make that out: ${e.message || e}`);
         }
+    }
+
+    // --- Hands-free listening -------------------------------------------------------
+    // One recording, opened by the app rather than by a held key: the avatar has just asked
+    // what you want, so something other than your finger has to decide when your answer
+    // ended. The level of the incoming audio does it -- wait for talking to start, then for
+    // it to stay quiet. Still one recording and still a deliberate act on your part (you
+    // clicked the avatar); this is not an always-on microphone, for the reasons in the push
+    // to talk note above.
+    const HANDS_FREE_SPEECH_LEVEL = 0.02;   // RMS above this counts as somebody talking
+    const HANDS_FREE_WAIT_FOR_SPEECH_MS = 6000;  // nothing said at all -> close it again
+    const HANDS_FREE_TRAILING_SILENCE_MS = 1200; // quiet this long after speech -> that was it
+    const HANDS_FREE_MAX_MS = 20000;        // a hard ceiling, whatever the level is doing
+    const HANDS_FREE_OPEN_TIMEOUT_MS = 6000;
+
+    let handsFreeListening = false;
+
+    /* Push to talk wins: a key held while the hands-free mic is open takes the microphone
+       over rather than fighting it for the one capture the engine supports. */
+    function cancelHandsFreeListen() {
+        if (!handsFreeListening) return;
+        handsFreeListening = false;
+        voiceEngine.stopCapture();
+    }
+
+    async function listenHandsFree() {
+        if (handsFreeListening || talkHeld || isWaitingForResponse) return;
+        handsFreeListening = true;
+
+        let level = 0;
+        // In the native window WebKitGTK can simply never answer the permission request (the
+        // microphone bug -- see the Sound hub note), and an await that never returns would
+        // leave this locked on for the rest of the session. Bounded, and the stream released
+        // if the answer turns up afterwards.
+        const opening = voiceEngine.startCapture({ onLevel: (rms) => { level = rms; } });
+        const started = await Promise.race([
+            opening,
+            new Promise((resolve) => setTimeout(() => resolve('timeout'), HANDS_FREE_OPEN_TIMEOUT_MS)),
+        ]);
+        if (started !== true) {
+            handsFreeListening = false;
+            if (started === 'timeout') opening.then(() => voiceEngine.stopCapture()).catch(() => {});
+            appendMessage(currentAgentName, '⚠️ No microphone available.');
+            return;
+        }
+
+        setAvatarState('LISTENING');
+        const openedAt = Date.now();
+        let heardSpeech = false;
+        let lastLoudAt = 0;
+        await new Promise((resolve) => {
+            const timer = setInterval(() => {
+                if (!handsFreeListening) { clearInterval(timer); resolve(); return; }
+                const now = Date.now();
+                if (level >= HANDS_FREE_SPEECH_LEVEL) { heardSpeech = true; lastLoudAt = now; }
+                const done = now - openedAt > HANDS_FREE_MAX_MS
+                    || (!heardSpeech && now - openedAt > HANDS_FREE_WAIT_FOR_SPEECH_MS)
+                    || (heardSpeech && now - lastLoudAt > HANDS_FREE_TRAILING_SILENCE_MS);
+                if (done) { clearInterval(timer); resolve(); }
+            }, 100);
+        });
+
+        if (!handsFreeListening) return;  // taken over by push to talk, which owns the mic now
+        handsFreeListening = false;
+        const wav = voiceEngine.stopCapture();
+        setAvatarState('IDLE');
+        // Silence is an answer too: nothing was said, so nothing is sent and nothing is said
+        // about it either.
+        if (wav && heardSpeech) await transcribeAndSend(wav);
     }
 
     // Held anywhere except a text field, where space is a space.
@@ -4523,6 +4606,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const profile = await fetchProfile();
             const operatorName = profile?.operator?.name || '';
+            operatorDisplayName = operatorName;
             if (operatorName) {
                 // Display operator name in the HUD (if element exists)
                 const operatorDisplay = document.getElementById('hud-operator-name');
@@ -7136,6 +7220,46 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* The start-up check, kept so its result can be said once in the chat as well as drawn
+       in the Settings panel nobody has open at launch. Null in a browser tab, where this
+       whole feature is hidden -- a tab cannot update this installation. */
+    let startupUpdateCheck = null;
+    let startupUpdateAnnounced = false;
+
+    /* "On start-up, if the platform is capable, check the update status." The check itself
+       has always run from initVersionAndUpdates; what was missing was anybody being told.
+       Said in the chat, after the history has loaded (loadChatHistory empties the container,
+       so anything appended beside it is erased), and only once per launch.
+
+       Quiet about the one case that is neither news nor a fault: an operator who declined to
+       sign in is not asked again every launch -- the Settings panel keeps the offer. */
+    async function announceStartupUpdateStatus() {
+        if (!IS_TAURI || !startupUpdateCheck || startupUpdateAnnounced) return;
+        startupUpdateAnnounced = true;
+        const status = await startupUpdateCheck;
+        if (!status) {
+            appendMessage(currentAgentName, '⚠️ I could not check for updates at start-up. Settings → Updates has the detail.');
+            return;
+        }
+        if (!status.checked) {
+            if (status.declined) return;
+            const why = status.error || 'the check could not be made.';
+            const how = status.needs_sign_in && status.sign_in_available
+                ? ' Settings → The Brain → Connections can sign in for it.'
+                : ' Settings → Updates has the detail.';
+            appendMessage(currentAgentName, `⚠️ Update check: ${why}${how}`);
+            return;
+        }
+        if (status.up_to_date) {
+            const against = status.latest_tag ? ` with ${status.latest_tag}` : '';
+            appendMessage(currentAgentName, `✔ Up to date${against} (${status.version}).`);
+            return;
+        }
+        const latest = status.latest_tag
+            || (status.latest_commit ? `build ${status.latest_commit.slice(0, 7)}` : 'a newer build');
+        appendMessage(currentAgentName, `⬆ ${latest} is available; you are running ${status.version}. Settings → Updates can fetch it.`);
+    }
+
     // The polling loop for a sign-in in progress, so a second click cannot start a second one
     // and closing the panel does not leave one running forever.
     let githubSignInPoll = null;
@@ -7155,6 +7279,9 @@ document.addEventListener('DOMContentLoaded', () => {
             .forEach((btn) => btn && btn.classList.add('hidden'));
     }
 
+    /* Returns the status it drew, or null if the check could not be made at all -- the
+       start-up announcement (announceStartupUpdateStatus) reads the same result rather than
+       asking GitHub a second time for it. */
     async function handleCheckForUpdate() {
         if (versionBadge) versionBadge.classList.add('animate-pulse');
         if (updateStatusBox) {
@@ -7191,7 +7318,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (status.declined && status.sign_in_available && btnGithubSignIn) {
                     btnGithubSignIn.classList.remove('hidden');
                 }
-                return;
+                return status;
             }
 
             if (status.up_to_date) {
@@ -7239,10 +7366,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (btnApplyUpdate) btnApplyUpdate.classList.remove('hidden');
             }
+            return status;
         } catch (e) {
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-red-400">Update check failed: ${e.message || e}</div>`;
             }
+            return null;
         } finally {
             if (versionBadge) versionBadge.classList.remove('animate-pulse');
         }
@@ -7537,7 +7666,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (versionBadge) versionBadge.classList.replace('hidden', 'inline-flex');
         if (updateSection) updateSection.classList.remove('hidden');
         loadVersionInfo();
-        handleCheckForUpdate();
+        // Kept rather than dropped: announceStartupUpdateStatus says the result of this very
+        // check in the chat once the history has loaded, instead of asking GitHub again.
+        startupUpdateCheck = handleCheckForUpdate();
         // Connections is Tauri-only for the same reason the rest of this section is: a browser tab
         // has no keychain of this machine's and no `gh` on it.
         document.getElementById('settings-group-connections')?.classList.remove('hidden');
@@ -7730,6 +7861,97 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // The floating notice that replaces the hologram panel's live content while the avatar
     // is out on the desktop -- clicking it is the way back, short of reopening Settings.
+    /* ---- Clicking the avatar ------------------------------------------------------
+     * A tap on the hologram -- not a drag; core.js tells the two apart and calls onTap only
+     * for the taps -- is the one gesture the avatar had no answer for. Now it says who it
+     * is, and when this machine has a microphone it asks what is wanted and opens it, so
+     * the whole exchange can happen without touching the keyboard.
+     *
+     * The name is the companion's own (whatever identity is loaded, forged or picked), with
+     * the avatar it is wearing named beside it when the two are different things -- the
+     * avatar and the identity are separate choices, and an operator looking at LOREGENDA
+     * while HALCY answers is entitled to hear both.
+     */
+
+    // Whether this machine has a microphone at all. Probed once per launch and cached: the
+    // answer is a property of the machine, and both lists behind it cost a round trip.
+    let microphonePresenceProbe = null;
+
+    function microphonePresent() {
+        if (!navigator.mediaDevices?.getUserMedia) return Promise.resolve(false);
+        if (!microphonePresenceProbe) {
+            microphonePresenceProbe = (async () => {
+                // The system list first: it names every input whether or not this page has
+                // been granted permission to see them, and in the native window it is the
+                // only one of the two that ever has anything in it (see the Sound hub note
+                // about WebKitGTK and enumerateDevices).
+                try {
+                    const devices = await fetchAudioDevices();
+                    if (Array.isArray(devices?.inputs) && devices.inputs.length) return true;
+                } catch (e) {
+                    /* Fall through to the browser's own list rather than concluding there is
+                       no microphone because one of the two ways of asking failed. */
+                }
+                const browser = await enumerateBrowserDevices();
+                return browser.inputs.length > 0;
+            })();
+        }
+        return microphonePresenceProbe;
+    }
+
+    /* Two names for the same thing, or two different things? Compared on letters and digits
+       only, so "A.R.X.LOGOS" and "arx-logos" are recognised as one name rather than read out
+       twice in the same sentence. */
+    function namesMatch(a, b) {
+        const plain = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        return plain(a) === plain(b);
+    }
+
+    let avatarIntroductionBusy = false;
+
+    async function introduceAvatar() {
+        // Mid-answer, mid-recording or already introducing itself: a tap is not worth
+        // talking over any of those.
+        if (avatarIntroductionBusy || isWaitingForResponse || talkHeld || handsFreeListening) return;
+        avatarIntroductionBusy = true;
+        try {
+            const entry = window.Aether1Avatars?.get(currentAvatar) || null;
+            const name = (currentAgentName || '').trim() || entry?.label || 'AETHER1';
+            const avatarLabel = entry?.label || '';
+            const introduction = avatarLabel && !namesMatch(avatarLabel, name)
+                ? `I am ${name}, on the ${avatarLabel} avatar.`
+                : `I am ${name}.`;
+
+            const mic = await microphonePresent();
+            const addressed = operatorDisplayName ? `, ${operatorDisplayName}` : '';
+            const spoken = mic
+                ? `${introduction} How can I help${addressed}?`
+                : introduction;
+
+            // On screen as well as out loud: the voice is off for some operators and missing
+            // on some machines, and a tap that produces nothing at all is indistinguishable
+            // from a tap that missed.
+            appendMessage(currentAgentName, spoken);
+
+            if (autoSpeak) {
+                const url = await synthesizeSpeechUrl(spoken, null);
+                // playTTSAudio drives the SPEAKING state and the waveform itself; a failed
+                // synthesis has already shown its own card.
+                if (url) await voiceEngine.playTTSAudio(url);
+            }
+
+            // Only after it has finished asking -- an open microphone during the question
+            // records the question.
+            if (mic) await listenHandsFree();
+        } finally {
+            avatarIntroductionBusy = false;
+        }
+    }
+
+    function initAvatarTapIntroduction() {
+        hologram.onTap = () => { introduceAvatar(); };
+    }
+
     function initHologramFloatingNotice() {
         const notice = document.getElementById('hologram-floating-notice');
         if (!notice) return;
@@ -9439,7 +9661,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // erased from the screen while the action stays pending in the database.
     // Strictly after the approvals, for the same reason they come after the history: the
     // banner is appended to the chat container, and loadChatHistory empties it.
-    loadChatHistory().then(refreshPendingApprovals).then(announceIfNoBrain).then(loadOperatorNameAndGreeting);
+    loadChatHistory().then(refreshPendingApprovals).then(announceIfNoBrain).then(loadOperatorNameAndGreeting)
+        .then(announceStartupUpdateStatus);
     connectTelemetry();
     initWindowChrome();
     initVersionAndUpdates();
@@ -9450,6 +9673,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initPanelUndock();
     initAvatarFullscreen();
     initHologramFloatingNotice();
+    initAvatarTapIntroduction();
     initSpecialityModel();
     initFlowMode();
     initSpriteListenBridge();

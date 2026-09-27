@@ -3124,6 +3124,51 @@ appearing on a machine that has either.
 
 ---
 
+### Step 50: the avatar answers a tap, and start-up says whether this copy is current -- **shipped**
+
+Three things the operator asked for, all of them about the app speaking first rather than
+being asked.
+
+**Clicking the avatar makes it introduce itself.** `js/hologram/core.js` already told a tap
+apart from a drag -- it needed to, so that a short drag still spun the view and a tap only
+pulsed the avatar -- so the tap gained an `onTap` hook rather than the page gaining a `click`
+listener that could not tell the two apart. `initAvatarTapIntroduction` in `app.js` wires it
+to `introduceAvatar`, which says `I am <name>.` -- the companion's own name, with the avatar
+it is wearing named beside it when the two are different things, because the identity and the
+avatar are separate choices and an operator looking at LOREGENDA while HALCY answers is
+entitled to hear both. The line is appended to the chat as well as spoken: the voice is off
+for some operators and missing on some machines, and a tap that produces nothing at all is
+indistinguishable from a tap that missed.
+
+**If there is a microphone, it asks what is wanted and opens it.** `microphonePresent()`
+probes once per launch and caches the answer, asking the system list (`audio_devices.rs`)
+before the browser's own -- in the native window that is the only one of the two that ever
+has anything in it. When there is one, the spoken line ends `How can I help, <operator>?`
+using the profile's operator name, and `listenHandsFree()` then opens the microphone. Unlike
+push to talk there is no key being held, so the level of the incoming audio decides when the
+sentence ended: `startCapture` now takes an `onLevel` callback, and the listen closes on 1.2s
+of quiet after speech, after 6s if nothing was said at all, and after 20s regardless. Nothing
+said means nothing sent and nothing reported. It is still one recording, opened by a
+deliberate click -- not an always-on microphone, for the same reason push to talk was chosen
+in the first place. A held key takes the microphone over (`cancelHandsFreeListen`), since the
+engine supports one capture at a time, and the open is bounded by a timeout because WebKitGTK
+can simply never answer the permission request.
+
+**Start-up says whether this copy is current.** The check itself already ran at launch, but
+into the Updates panel in Settings, which nobody has open then. `handleCheckForUpdate` now
+returns the status it drew and `announceStartupUpdateStatus` says it once in the chat --
+up to date, a newer release with where to get it, or why the check could not be made. It runs
+after `loadChatHistory`, which empties the chat container, and is quiet about the one case
+that is neither news nor a fault: an operator who declined to sign in is not asked again every
+launch. Native app only, since a browser tab cannot update this installation.
+
+**Not verifiable in a container:** the spoken half (no voice), a real microphone, and the
+start-up update line (native app only). Verified in a real browser: the tap introduces, a
+drag does not, a second tap mid-introduction does not stack a second one, the microphone is
+opened exactly once and closes itself when nothing is said, and a machine with no input
+listed gets the name without the question.
+
+
 ## Where this stands
 
 *Rewritten. The list below had gone stale: it still named the consent path, local voice and
