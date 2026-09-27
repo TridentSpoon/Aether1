@@ -8796,10 +8796,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    document.getElementById('btn-conversations')?.addEventListener('click', () => {
-        voiceEngine.playSFX('click');
-        switchChatTab('history');
-    });
     document.getElementById('btn-session-new')?.addEventListener('click', async () => {
         voiceEngine.playSFX('click');
         try {
@@ -8905,10 +8901,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    document.getElementById('btn-notes')?.addEventListener('click', () => {
-        voiceEngine.playSFX('click');
-        switchChatTab('notes');
-    });
     document.getElementById('btn-read-notes')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
         openNotesReader();
@@ -9143,10 +9135,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (noteGraph) noteGraph.stop();
     }
 
-    document.getElementById('btn-activity')?.addEventListener('click', () => {
-        voiceEngine.playSFX('click');
-        switchChatTab('activity');
-    });
     document.getElementById('btn-activity-refresh')?.addEventListener('click', () => {
         voiceEngine.playSFX('click');
         loadActivityLog();
