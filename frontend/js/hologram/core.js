@@ -46,6 +46,9 @@ class HologramAvatar {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.state = 'IDLE'; // IDLE, LISTENING, THINKING, SPEAKING
+        // Set while the GPU has taken the WebGL context away; see the
+        // webglcontextlost handler in init(). Nothing is drawn until it is back.
+        this.contextLost = false;
         this.currentAvatar = 'a1'; // a1, halcy, arx-limes, nexus, red, arx-logos, alt
         this.currentColorTheme = 'halcy'; // halcy, nexus, arx-limes, arx-logos, red, night-city
         this.activePalette = THEME_PALETTES.halcy;
@@ -277,11 +280,51 @@ class HologramAvatar {
         obsidianHighlight.position.set(90, 130, 220);
         this.scene.add(obsidianHighlight);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        /* What this machine is asked to draw, decided before the context exists.
+
+           `powerPreference: 'low-power'` asks for the integrated GPU on a laptop with two.
+           An avatar of a few thousand triangles has no use for a discrete card, and on the
+           hybrid-graphics machines this project runs on the discrete path is also the
+           fragile one: WebKitGTK's DMABUF renderer is where WebKitWebProcess tends to die.
+           A machine with one GPU is unaffected, since there is nothing to choose between.
+
+           MSAA cannot be turned on or off later -- it is fixed when the context is made --
+           so it is the one decision that has to be taken up front, from the quality tier
+           this machine settled on last time it ran. */
+        const dpr = HologramAvatar.pixelRatioFor(HologramAvatar.quality());
+        this.renderer = new THREE.WebGLRenderer({
+            antialias: HologramAvatar.quality() === 'full' && dpr < 1.5,
+            alpha: true,
+            powerPreference: 'low-power',
+        });
         this.renderer.setSize(width, height);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(dpr);
         this.container.innerHTML = '';
         this.container.appendChild(this.renderer.domElement);
+        HologramAvatar.applyQualityToDocument();
+
+        /* A lost WebGL context is not a crash and should not look like one. The driver
+           drops it when the GPU resets, when the compositor takes the window away, or when
+           WebKit decides it is holding too many; without this the canvas simply goes black
+           and stays black for the rest of the session, which reads to anyone watching as
+           the avatar having died. Preventing the default on the loss event is what makes
+           the browser promise a restore event at all -- without it the restore never
+           comes. On restore the scene is rebuilt from scratch, because every buffer and
+           texture the old context held is gone. */
+        this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            this.contextLost = true;
+            console.warn('hologram: WebGL context lost, waiting for the driver to restore it');
+        });
+        this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+            this.contextLost = false;
+            console.warn('hologram: WebGL context restored, rebuilding the avatar');
+            try {
+                this.setAvatar(this.currentAvatar);
+            } catch (err) {
+                console.error('hologram: could not rebuild after a context restore', err);
+            }
+        });
 
         this.clock = new THREE.Clock();
 
@@ -951,3 +994,82 @@ function disposeObject3D(root) {
 }
 
 window.HologramAvatar = HologramAvatar;
+
+/* ---- Quality tiers --------------------------------------------------------------
+   AETHER1 is meant to run on whatever the operator already owns, down to an Atom with
+   onboard graphics. A HUD that is beautiful on a 6800 XT and unusable on that machine has
+   simply failed on that machine, so the drawing is fitted to the hardware rather than to
+   the design.
+
+   Two tiers, not a slider. A slider is a question the operator cannot answer without
+   running the thing twice, and every extra tier is a combination nobody ever looks at:
+
+   - `full`   -- everything: up to 1.5 device pixels per CSS pixel, MSAA on a 1x display,
+                 the CRT and glitch overlays, the page scanlines and the vignette.
+   - `lite`   -- one device pixel, no MSAA, no full-screen overlays, and the frame rate
+                 capped at 30 even while speaking. The avatar, its motion, the colours and
+                 the whole layout are unchanged: what goes is the garnish that costs a
+                 full-window composite per frame and adds nothing you would miss on a
+                 machine that is struggling to draw the face at all.
+
+   The tier is chosen once and remembered. `auto` (the default) means: start at `full`,
+   watch the real frame rate while the avatar is actually working, and drop to `lite` if
+   this machine plainly cannot hold it -- then write that down, so next launch starts
+   there instead of spending its first minute discovering the same thing. The step is
+   deliberately one-way within a session: a tier that flipped back and forth on every
+   passing stall would read as the app glitching rather than adapting.
+
+   An operator who wants to decide for themselves sets `aether_render_quality` to `full`
+   or `lite`, and neither the measurement nor the write-back touches it again. */
+HologramAvatar.QUALITY_KEY = 'aether_render_quality';
+HologramAvatar.QUALITY_AUTO_KEY = 'aether_render_quality_auto';
+
+/** The tier in force: the operator's choice if they made one, else what auto settled on. */
+HologramAvatar.quality = function() {
+    const chosen = HologramAvatar.readStore(HologramAvatar.QUALITY_KEY);
+    if (chosen === 'full' || chosen === 'lite') return chosen;
+    return HologramAvatar.readStore(HologramAvatar.QUALITY_AUTO_KEY) === 'lite' ? 'lite' : 'full';
+};
+
+/** True when the tier is ours to move -- i.e. the operator has not pinned one. */
+HologramAvatar.qualityIsAuto = function() {
+    const chosen = HologramAvatar.readStore(HologramAvatar.QUALITY_KEY);
+    return chosen !== 'full' && chosen !== 'lite';
+};
+
+HologramAvatar.pixelRatioFor = function(tier) {
+    /* 1.5 rather than the 2 this used to allow. Past about 1.5 the extra fragments are
+       paying for a sharpness nobody reports seeing on a glowing wireframe, and the cost is
+       quadratic: 2x is nearly twice the fragment work of 1.5x. `lite` drops to 1, which on
+       a HiDPI panel is the single largest saving available anywhere in the renderer. */
+    if (tier === 'lite') return 1;
+    return Math.min(window.devicePixelRatio || 1, 1.5);
+};
+
+/* Reading localStorage throws outright in some embedded webviews and in a page served
+   with site data blocked, and this runs before anything else in the engine -- so a
+   refusal has to mean "no preference", never a HUD that fails to start. */
+HologramAvatar.readStore = function(key) {
+    try {
+        return window.localStorage.getItem(key);
+    } catch (e) {
+        return null;
+    }
+};
+
+HologramAvatar.writeStore = function(key, value) {
+    try {
+        window.localStorage.setItem(key, value);
+    } catch (e) {
+        // Nothing to recover: the tier simply gets re-measured next launch.
+    }
+};
+
+/* The one place the tier becomes visible. Everything `lite` removes is removed by CSS off
+   this attribute, so there is a single switch rather than a rule per effect, and the
+   sprite and face windows -- which load their own stylesheets but this same engine -- get
+   it for free. */
+HologramAvatar.applyQualityToDocument = function() {
+    if (typeof document === 'undefined' || !document.documentElement) return;
+    document.documentElement.dataset.render = HologramAvatar.quality();
+};

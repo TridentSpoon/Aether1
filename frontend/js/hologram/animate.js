@@ -38,6 +38,10 @@ HologramAvatar.prototype.animate = function() {
     if (canvas && canvas.offsetParent === null &&
         getComputedStyle(canvas).position !== 'fixed') return;
 
+    // The driver has taken the context away. Drawing into it does nothing but throw, and
+    // the webglcontextrestored handler in core.js rebuilds the scene when it comes back.
+    if (this.contextLost) return;
+
     const elapsedTime = this.clock.getElapsedTime();
 
     let audioSum = 0;
@@ -62,6 +66,36 @@ HologramAvatar.prototype.animate = function() {
             : 1;
         clickPulse = decay * rise;
     }
+
+    /* Half rate while there is genuinely nothing happening.
+
+       At rest an avatar is a slow drift -- a ring turning, a core breathing -- and every
+       one of those motions is driven by `elapsedTime`, which is wall time and keeps
+       counting whether or not a frame was drawn. So a skipped frame does not slow the
+       motion down or make it stutter; it draws the same drift with half as many samples,
+       which at these speeds is not something an eye can pick out. The moment anything is
+       actually moving -- a reply being spoken, the agent thinking, a click still ringing,
+       a drag still coasting -- this steps straight back to the full rate, and those are
+       exactly the moments where the extra frames are worth paying for.
+
+       This is the single largest saving available in the loop: the HUD sits idle for most
+       of its life, and idle used to cost exactly as much as speaking. */
+    const lite = HologramAvatar.quality() === 'lite';
+    const IDLE_FRAME_INTERVAL = 1 / 30;
+    const busy = this.state === 'SPEAKING' || this.state === 'THINKING' ||
+        clickPulse > 0 || audioIntensity > 0.01 || this.isDraggingView || this.viewSpinVelocity;
+    // On the lite tier even a working avatar is held to 30: a machine that cannot draw
+    // this at 60 does not produce 60 smooth frames by being asked for them, it produces
+    // 40 uneven ones and starves everything else in the window -- the chat, the typing,
+    // the audio callbacks -- while it tries. A steady 30 looks better than that and
+    // leaves the CPU for the parts of the app the operator is actually using.
+    const interval = busy ? (lite ? 1 / 30 : 0) : IDLE_FRAME_INTERVAL;
+    if (interval) {
+        if (elapsedTime - (this.lastGatedFrame || 0) < interval) return;
+        this.lastGatedFrame = elapsedTime;
+    }
+
+    if (busy) this.sampleFrameRate(elapsedTime);
 
     // A registered avatar animates itself and nothing built-in runs -- see core.js.
     // A throw here would kill the whole render loop for every avatar, so the failing
@@ -895,3 +929,54 @@ HologramAvatar.prototype.animateAlt = function(elapsedTime, audioIntensity, clic
 // registered through HologramAvatar.registerAvatar() like any other avatar file (see
 // avatar-a1.js and js/hologram/README.md), so its own animate() runs via the plugin path
 // at the top of animate() above instead of an animateX() branch in this list.
+
+/* ---- Is this machine keeping up? -----------------------------------------------
+   Watches the frame rate only while the avatar is actually working, because that is the
+   only time the number means anything: an idle avatar is deliberately drawing at 30 and
+   would look like a struggling one to any measurement that could not tell the difference.
+
+   A window is two seconds long. One slow window proves nothing -- a window can be slow
+   because the operator dragged another application across the screen, because a model
+   just finished loading, or because the compositor was busy elsewhere -- so it takes
+   three consecutive slow windows before the tier moves. That is six seconds of sustained
+   failure to hold the frame rate, which no passing stall produces and a genuinely
+   underpowered machine produces immediately.
+
+   The drop is one-way for the life of the page, and written down so the next launch
+   starts where this one ended up. */
+HologramAvatar.prototype.sampleFrameRate = function(elapsedTime) {
+    if (!HologramAvatar.qualityIsAuto() || HologramAvatar.quality() === 'lite') return;
+
+    const WINDOW_SECONDS = 2;
+    const SLOW_FPS = 20;
+    const WINDOWS_BEFORE_DROP = 3;
+
+    if (this.fpsWindowStart === undefined) {
+        this.fpsWindowStart = elapsedTime;
+        this.fpsWindowFrames = 0;
+        this.fpsSlowWindows = 0;
+        return;
+    }
+    this.fpsWindowFrames++;
+    const age = elapsedTime - this.fpsWindowStart;
+    if (age < WINDOW_SECONDS) return;
+
+    const fps = this.fpsWindowFrames / age;
+    this.fpsWindowStart = elapsedTime;
+    this.fpsWindowFrames = 0;
+
+    if (fps >= SLOW_FPS) {
+        // One good window is enough to forgive the bad ones: what is being looked for is
+        // a machine that cannot do this at all, not one that had a rough few seconds.
+        this.fpsSlowWindows = 0;
+        return;
+    }
+    if (++this.fpsSlowWindows < WINDOWS_BEFORE_DROP) return;
+
+    console.warn(`hologram: ${fps.toFixed(1)} fps under load over ${WINDOWS_BEFORE_DROP} windows -- dropping to the lite tier`);
+    HologramAvatar.writeStore(HologramAvatar.QUALITY_AUTO_KEY, 'lite');
+    HologramAvatar.applyQualityToDocument();
+    // The pixel ratio is the half of it that can change without a new context; MSAA
+    // cannot, so it stays as it is until the next launch, which now starts lite.
+    this.renderer.setPixelRatio(HologramAvatar.pixelRatioFor('lite'));
+};

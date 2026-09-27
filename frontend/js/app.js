@@ -2434,12 +2434,58 @@ document.addEventListener('DOMContentLoaded', () => {
             playBtn.innerHTML = '▶ Replay Voice';
             playBtn.onclick = () => voiceEngine.playTTSAudio(audioUrl);
             msgDiv.appendChild(playBtn);
+            // Held so trimChatHistory can free the decoded clip when this message
+            // eventually scrolls out of the kept window. On the native transport this is
+            // a blob of the whole sentence's audio, and the Replay button is the only
+            // reason it is still alive.
+            rememberClip(msgDiv, audioUrl);
         }
 
         chatContainer.appendChild(msgDiv);
         chatContainer.scrollTop = chatContainer.scrollHeight;
         msgDiv.bodyDiv = bodyDiv;
+        trimChatHistory();
         return msgDiv;
+    }
+
+    /* How many messages stay in the page. Everything older is dropped from the DOM.
+
+       The transcript itself is not lost -- it is on disk, and the History tab reads it
+       from there -- so this is only about what the renderer is asked to hold. What it was
+       asked to hold before was everything: a session that ran all day accumulated every
+       message node, every formatted-markdown subtree, and, for every reply that was
+       spoken, the decoded audio of that reply behind its Replay button. None of it is
+       reachable by scrolling in any way a person actually does, and all of it is renderer
+       memory that only ever goes up. WebKitWebProcess is the process that pays, and when
+       it runs out it does not degrade -- it dies, and takes the window with it.
+
+       200 is far past anything anyone scrolls back through by hand and still bounds the
+       page to something flat. */
+    const CHAT_HISTORY_LIMIT = 200;
+
+    /** Notes a clip URL on its message so trimming can revoke it. */
+    function rememberClip(msgDiv, url) {
+        if (typeof url !== 'string' || !url.startsWith('blob:')) return;
+        (msgDiv.clipUrls || (msgDiv.clipUrls = [])).push(url);
+    }
+
+    /* Drops the oldest messages once the log is over the limit, freeing any audio they
+       were keeping alive on the way out. Cheap to call on every append: over the limit it
+       removes one node, and under it does nothing at all. */
+    function trimChatHistory() {
+        if (!chatContainer) return;
+        while (chatContainer.children.length > CHAT_HISTORY_LIMIT) {
+            const oldest = chatContainer.firstElementChild;
+            if (!oldest) break;
+            (oldest.clipUrls || []).forEach((url) => {
+                try {
+                    URL.revokeObjectURL(url);
+                } catch (e) {
+                    // Already revoked, or a page with no URL support -- nothing to recover.
+                }
+            });
+            oldest.remove();
+        }
     }
 
     /* Which notes went into the answer, written under it.
@@ -2489,6 +2535,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!cachedUrl) {
                     playBtn.innerHTML = '⋯ Synthesizing';
                     cachedUrl = await synthesizeSpeechUrl(text);
+                    // Synthesized on demand, and then kept for as long as the message is
+                    // on screen -- so it is the message's to free, like a clip that came
+                    // with the reply.
+                    rememberClip(msgDiv, cachedUrl);
                 }
                 playBtn.innerHTML = '▶ Replay Voice';
                 if (cachedUrl) await voiceEngine.playTTSAudio(cachedUrl);
