@@ -4326,6 +4326,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return resp.json();
     }
 
+    async function fetchDiagnostics() {
+        if (IS_TAURI) return tauriInvoke('run_diagnostics_rust');
+        const resp = await apiFetch('/api/diagnostics');
+        if (!resp.ok) throw new Error(`diagnostics failed: ${resp.status}`);
+        return resp.json();
+    }
+
     async function requestDoctorRepair(check, repair) {
         if (IS_TAURI) return tauriInvoke('doctor_repair_rust', { check, repair });
         const resp = await apiFetch('/api/doctor/repair', {
@@ -4508,6 +4515,40 @@ document.addEventListener('DOMContentLoaded', () => {
         const resp = await apiFetch('/api/profile');
         if (!resp.ok) throw new Error(`profile request failed: ${resp.status}`);
         return resp.json();
+    }
+
+    // Load operator name and show personalized greeting
+    async function loadOperatorNameAndGreeting() {
+        try {
+            const profile = await fetchProfile();
+            const operatorName = profile?.operator?.name || '';
+            if (operatorName) {
+                // Display operator name in the HUD (if element exists)
+                const operatorDisplay = document.getElementById('hud-operator-name');
+                if (operatorDisplay) {
+                    operatorDisplay.textContent = operatorName;
+                    operatorDisplay.classList.remove('hidden');
+                }
+
+                // Show personalized greeting once per day
+                const today = new Date().toISOString().split('T')[0];
+                const lastGreetingDate = localStorage.getItem('last_greeting_date');
+                if (lastGreetingDate !== today) {
+                    localStorage.setItem('last_greeting_date', today);
+                    const greetings = [
+                        `Welcome back, ${operatorName}. I read this machine.`,
+                        `${operatorName}, systems are standing by.`,
+                        `Good to see you, ${operatorName}. What shall we explore today?`,
+                        `${operatorName}, I have been waiting. What would you like to know?`,
+                    ];
+                    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+                    appendMessage(currentAgentName, greeting);
+                }
+            }
+        } catch (e) {
+            // Silently fail - operator name is optional
+            console.debug('Could not load operator name:', e);
+        }
     }
 
     async function requestRevoke(id) {
@@ -9403,7 +9444,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // erased from the screen while the action stays pending in the database.
     // Strictly after the approvals, for the same reason they come after the history: the
     // banner is appended to the chat container, and loadChatHistory empties it.
-    loadChatHistory().then(refreshPendingApprovals).then(announceIfNoBrain);
+    loadChatHistory().then(refreshPendingApprovals).then(announceIfNoBrain).then(loadOperatorNameAndGreeting);
     connectTelemetry();
     initWindowChrome();
     initVersionAndUpdates();

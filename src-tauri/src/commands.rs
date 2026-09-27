@@ -921,6 +921,98 @@ pub fn doctor_repair(
     serde_json::to_value(outcome).map_err(|e| e.to_string())
 }
 
+/// Runs diagnostics and returns a structured report with simplified output.
+/// Includes:
+/// - Simplified voice-over format
+/// - Status (NOMINAL|WARNING|CRITICAL)
+/// - Filtered metrics (only those >75% usage/load)
+/// - Deduplicated error logs with counts
+/// - Flag for repair agent availability
+pub fn run_diagnostics_rust(engine: &LlmEngine) -> Value {
+    use std::collections::HashMap;
+
+    let db = engine.db();
+    let telemetry = llm::Telemetry::snapshot();
+    let machine_nickname = db.get_setting_string("machine_nickname", "");
+    let machine = crate::profile::machine_description(db);
+
+    // Simplified voice-over
+    let voice_over = if !machine_nickname.is_empty() {
+        format!("Diagnostics for {}", machine_nickname)
+    } else {
+        format!("Diagnostics for {}", machine)
+    };
+
+    // Determine status based on telemetry
+    let status = if telemetry.cpu_percent > 85.0 || telemetry.ram_percent > 90.0 {
+        if telemetry.cpu_percent > 95.0 || telemetry.ram_percent > 95.0 {
+            "CRITICAL"
+        } else {
+            "WARNING"
+        }
+    } else {
+        "NOMINAL"
+    };
+
+    // Filter metrics - only show those >75%
+    let mut filtered_metrics = serde_json::json!({});
+
+    if telemetry.cpu_percent > 75.0 {
+        filtered_metrics["cpu_percent"] = serde_json::json!(format!("{:.1}%", telemetry.cpu_percent));
+    }
+
+    if telemetry.ram_percent > 75.0 {
+        filtered_metrics["ram_percent"] = serde_json::json!(format!("{:.1}%", telemetry.ram_percent));
+    }
+
+    if telemetry.disk_percent > 75.0 {
+        filtered_metrics["disk_percent"] = serde_json::json!(format!("{:.1}%", telemetry.disk_percent));
+    }
+
+    // Get and deduplicate error logs
+    let error_logs = crate::watchers::events::sweep().unwrap_or_default();
+    let mut deduplicated_errors: HashMap<String, usize> = HashMap::new();
+    let mut first_error_per_message: HashMap<String, crate::watchers::events::Event> = HashMap::new();
+
+    for event in error_logs {
+        let count = deduplicated_errors.entry(event.text.clone()).or_insert(0);
+        *count += 1;
+        first_error_per_message.entry(event.text.clone()).or_insert(event);
+    }
+
+    let deduplicated: Vec<Value> = deduplicated_errors
+        .iter()
+        .map(|(text, count)| {
+            if let Some(event) = first_error_per_message.get(text) {
+                serde_json::json!({
+                    "when": event.when,
+                    "source": event.source,
+                    "text": text,
+                    "count": count,
+                })
+            } else {
+                serde_json::json!({
+                    "text": text,
+                    "count": count,
+                })
+            }
+        })
+        .collect();
+
+    let suggest_repair_agent = !deduplicated.is_empty();
+
+    serde_json::json!({
+        "voice_over": voice_over,
+        "status": status,
+        "machine_name": machine,
+        "machine_nickname": machine_nickname,
+        "metrics": filtered_metrics,
+        "error_logs": deduplicated,
+        "suggest_repair_agent": suggest_repair_agent,
+        "uptime": telemetry.uptime,
+    })
+}
+
 pub fn voice_advice(engine: &LlmEngine) -> crate::voice_setup::VoiceAdvice {
     let db = engine.db();
     let local_only = crate::local_only::enabled(db);
