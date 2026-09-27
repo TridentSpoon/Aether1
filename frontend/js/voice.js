@@ -25,6 +25,7 @@ class VoiceAudioEngine {
         this.ttsQueue = [];
         this.isDrainingQueue = false;
         this.sfxEnabled = true;
+        this.currentSource = null;
 
         this.onStateChange = null;
         this.onAudioFrequency = null;
@@ -122,6 +123,10 @@ class VoiceAudioEngine {
     cutCurrentClip() {
         if (this.currentAudio) {
             this.currentAudio.pause();
+        }
+        if (this.currentSource) {
+            this.currentSource.disconnect();
+            this.currentSource = null;
         }
         const settle = this.settleCurrent;
         this.settleCurrent = null;
@@ -345,7 +350,14 @@ class VoiceAudioEngine {
 
             if (this.audioCtx && this.analyser) {
                 try {
+                    // Disconnect previous source to prevent overlap
+                    if (this.currentSource) {
+                        this.currentSource.disconnect();
+                        this.currentSource = null;
+                    }
+
                     const source = this.audioCtx.createMediaElementSource(audio);
+                    this.currentSource = source;
                     source.connect(this.analyser);
                 } catch (e) {
                     // Only thrown when this element already has a source node -- a fresh
