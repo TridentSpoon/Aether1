@@ -5087,7 +5087,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchVoiceAdvice() {
         if (IS_TAURI) return tauriInvoke('voice_advice_rust');
         const resp = await apiFetch('/api/voice/advice');
-        if (!resp.ok) throw new Error(`voice check failed: ${resp.status}`);
+        if (!resp.ok) throw new Error(`platform initialization failed: ${resp.status}`);
         return resp.json();
     }
 
@@ -7657,7 +7657,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // failure to load settings; this self-test isn't the place to repeat it.
         }
 
-        const url = await synthesizeSpeechUrl('Voice check.', null);
+        const url = await synthesizeSpeechUrl('Welcome to the Aether1 Platform.', null);
         if (!url) return; // synthesizeSpeechUrl already showed showVoiceFailedCard on failure
 
         const result = await voiceEngine.playTTSAudio(url, { audible });

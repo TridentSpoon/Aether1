@@ -1133,7 +1133,7 @@ pub fn code_chat_clear(engine: &LlmEngine) -> Result<(), String> {
 /// The sentence the voice test speaks. Short enough to be quick, long enough that a voice
 /// which is technically producing audio but producing rubbish is audibly rubbish.
 pub const VOICE_TEST_SENTENCE: &str =
-    "Voice check. If you can hear this, speech is working correctly.";
+    "Welcome to the Aether1 Platform. Speech is working correctly.";
 
 /// Actually says something out loud, and reports every engine it tried on the way.
 ///
