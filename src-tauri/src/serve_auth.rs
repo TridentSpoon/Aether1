@@ -333,12 +333,20 @@ fn generate_and_save_at(path: &Path) -> Result<(String, String), String> {
         .map_err(|e| format!("could not generate a pairing phrase: {e}"))?;
     let phrase = mnemonic.to_string();
     let hash = hash_token(&derive_token(&mnemonic));
+    save_hash_at(path, &hash)?;
+    Ok((phrase, hash))
+}
 
+/// Writes the stored token hash, locked down as far as the filesystem allows. Shared by the
+/// phrase this machine generates for itself and the one it is given from another machine --
+/// both end as the same single hash on disk, which is the whole point: nothing downstream
+/// can tell, or needs to, where the phrase came from.
+fn save_hash_at(path: &Path, hash: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    std::fs::write(path, &hash).map_err(|e| {
+    std::fs::write(path, hash).map_err(|e| {
         format!(
             "could not save the pairing token to {}: {e}",
             path.display()
@@ -351,7 +359,7 @@ fn generate_and_save_at(path: &Path) -> Result<(String, String), String> {
         // mounts) still has a working token on it, just not one this can lock down further.
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
-    Ok((phrase, hash))
+    Ok(())
 }
 
 fn load_or_create_at(path: &Path, devices_file: &Path) -> Result<(ServeAuth, Setup), String> {
@@ -415,6 +423,38 @@ pub fn rotate() -> Result<(String, usize), String> {
     Ok((phrase, count))
 }
 
+/// Takes a phrase made somewhere else and makes it this machine's phrase too.
+///
+/// The mirror of `rotate`: same one hash on disk at the end, and the same consequence for
+/// devices paired under whatever phrase was there before. It exists because a household with
+/// two AETHER1s otherwise has two phrases to keep, and the pane could only ever mint a new
+/// one -- there was no way to say "use the words I already have".
+///
+/// The phrase is validated as a BIP-39 mnemonic before anything is written, so a typo cannot
+/// leave the machine with a token nobody can reproduce. Adopting the phrase that is already
+/// stored here is a no-op rather than a mass unpairing: the hash would be identical, so every
+/// paired device's token still works and taking them away would be a lie about what changed.
+pub fn adopt(phrase: &str) -> Result<usize, String> {
+    adopt_at(&hash_path(), &devices_path(), phrase)
+}
+
+fn adopt_at(path: &Path, devices_file: &Path, phrase: &str) -> Result<usize, String> {
+    let hash = hash_token(&derive_token(&derive_token_from_phrase_inner(phrase)?));
+
+    let unchanged = std::fs::read_to_string(path)
+        .ok()
+        .map(|found| found.trim().to_string())
+        .is_some_and(|found| found == hash);
+    if unchanged {
+        return Ok(0);
+    }
+
+    save_hash_at(path, &hash)?;
+    let count = load_devices(devices_file).len();
+    save_devices(devices_file, &[])?;
+    Ok(count)
+}
+
 /// Loads the device list on its own, for `aether1 devices` and `aether1 revoke`, which have
 /// no server running and no phrase to check.
 pub fn open_devices() -> Result<ServeAuth, String> {
@@ -471,8 +511,13 @@ pub fn revoke_all_paired_devices() -> Result<usize, String> {
 /// `ServeAuth::accepts` would check -- this is what `/api/pair` calls to answer "does this
 /// phrase work," without ever exposing the stored hash itself to the network.
 pub fn derive_token_from_phrase(phrase: &str) -> Result<String, String> {
-    Mnemonic::parse_normalized(phrase)
-        .map(|m| derive_token(&m))
+    derive_token_from_phrase_inner(phrase).map(|m| derive_token(&m))
+}
+
+/// The parse on its own, so `adopt` can hash the same token this derives without going
+/// through a string and back.
+fn derive_token_from_phrase_inner(phrase: &str) -> Result<Mnemonic, String> {
+    Mnemonic::parse_normalized(phrase.trim())
         .map_err(|_| "that doesn't look like a valid pairing phrase".to_string())
 }
 
@@ -672,6 +717,90 @@ mod tests {
         let token = derive_token_from_phrase(phrase).unwrap();
         assert!(auth.phrase_matches(&token), "the phrase should be accepted");
         auth.add_device(label).unwrap()
+    }
+
+    #[test]
+    fn a_phrase_from_another_machine_is_adopted_and_unpairs_what_was_there() {
+        let (hash_file, devices_file) = temp_paths("adopt");
+
+        // The other machine's phrase, made the way that machine would have made it.
+        let (elsewhere, other_file) = temp_paths("adopt_elsewhere");
+        let (their_phrase, their_hash) = generate_and_save_at(&elsewhere).unwrap();
+        let _ = std::fs::remove_file(&other_file);
+
+        // This machine starts with a phrase of its own and a device paired to it.
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let mine = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+        pair(&auth, &mine, "laptop");
+
+        let unpaired = adopt_at(&hash_file, &devices_file, &their_phrase).unwrap();
+        assert_eq!(
+            unpaired, 1,
+            "the device on the old phrase should be cut off"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&hash_file).unwrap(),
+            their_hash,
+            "the stored hash should be the one the other machine's phrase derives"
+        );
+
+        // And the adopted phrase is now the one that opens the door here.
+        let (auth, _) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        assert!(auth.phrase_matches(&derive_token_from_phrase(&their_phrase).unwrap()));
+        assert!(!auth.phrase_matches(&derive_token_from_phrase(&mine).unwrap()));
+        assert!(auth.list_devices().is_empty());
+
+        let _ = std::fs::remove_file(&hash_file);
+        let _ = std::fs::remove_file(&devices_file);
+        let _ = std::fs::remove_file(&elsewhere);
+    }
+
+    #[test]
+    fn adopting_the_phrase_already_stored_here_leaves_paired_devices_alone() {
+        let (hash_file, devices_file) = temp_paths("adopt_same");
+
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let mine = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+        let token = pair(&auth, &mine, "phone");
+
+        // Typing in the words this machine already answers to changes nothing, so it must not
+        // be reported or acted on as a rotation.
+        assert_eq!(adopt_at(&hash_file, &devices_file, &mine).unwrap(), 0);
+        let (auth, _) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        assert!(
+            auth.accepts(&token),
+            "the paired device should still be let in"
+        );
+
+        let _ = std::fs::remove_file(&hash_file);
+        let _ = std::fs::remove_file(&devices_file);
+    }
+
+    #[test]
+    fn a_phrase_that_is_not_a_mnemonic_is_refused_before_anything_is_written() {
+        let (hash_file, devices_file) = temp_paths("adopt_bad");
+
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let mine = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+        let token = pair(&auth, &mine, "tablet");
+        let before = std::fs::read_to_string(&hash_file).unwrap();
+
+        assert!(adopt_at(&hash_file, &devices_file, "not twelve real words at all").is_err());
+        assert_eq!(std::fs::read_to_string(&hash_file).unwrap(), before);
+        let (auth, _) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        assert!(auth.accepts(&token), "a refused phrase must cut nobody off");
+
+        let _ = std::fs::remove_file(&hash_file);
+        let _ = std::fs::remove_file(&devices_file);
     }
 
     #[test]

@@ -2385,6 +2385,30 @@
                             <button type="button" id="btn-lan-revoke-all" class="cyber-btn text-[10px] py-1 px-2 border-red-400 text-red-400 hover:bg-red-900/40 hidden">Revoke all</button>
                         </div>
                         <div id="lan-devices" class="profile-devices"></div>
+
+                        <!-- The other direction from New phrase: a phrase made on another
+                             AETHER1, typed in here so both machines answer to the same words.
+                             It sits under the paired devices because that is where the
+                             question is asked -- this is how a device gets on the list. -->
+                        <div class="net-row net-row-stacked">
+                            <div class="net-row-text">
+                                <p class="net-row-title">Use a phrase from another AETHER1</p>
+                                <p class="net-row-hint">
+                                    Paste the twelve words another copy showed you and this machine
+                                    will answer to them too &mdash; one phrase to keep rather than one
+                                    per machine. Whatever is paired with this machine's current phrase
+                                    will have to pair again.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="net-field net-field-row">
+                            <label for="lan-phrase-input" class="sr-only">Pairing phrase from another AETHER1</label>
+                            <input id="lan-phrase-input" type="text" autocomplete="off" spellcheck="false"
+                                   placeholder="twelve words, separated by spaces"
+                                   class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <button type="button" id="btn-lan-use-phrase" class="net-card-action net-card-action-quiet" disabled>Use phrase</button>
+                        </div>
+                        <p id="lan-phrase-input-note" class="net-field-note hidden"></p>
                     </div>
 
                     <!-- CARD 3: what needs no pairing at all, and why that is safe. -->

@@ -505,6 +505,17 @@ fn lan_new_phrase_rust(
     lan::new_phrase(&engine, &managed)
 }
 
+/// A phrase from another AETHER1, typed into this one so the two share it. Validated on the
+/// Rust side; a phrase that is not a real mnemonic is refused before anything is written.
+#[tauri::command(async)]
+fn lan_set_phrase_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+    phrase: String,
+) -> Result<serde_json::Value, String> {
+    lan::set_phrase(&engine, &managed, &phrase)
+}
+
 #[tauri::command(async)]
 fn connections_rust() -> serde_json::Value {
     let gh = which::which("gh").ok();
@@ -2445,6 +2456,7 @@ fn main() {
             lan_start_rust,
             lan_stop_rust,
             lan_new_phrase_rust,
+            lan_set_phrase_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,
