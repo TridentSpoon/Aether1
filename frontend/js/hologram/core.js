@@ -341,6 +341,19 @@ class HologramAvatar {
             if (this.dragDistance < DRAG_CLICK_THRESHOLD) {
                 this.viewSpinVelocity = 0; // a tap shouldn't also fling the view
                 this.lastClickTime = this.clock.getElapsedTime();
+                // A tap is also a gesture the page can answer -- the HUD uses it to have the
+                // avatar say who it is (see initAvatarTapIntroduction in js/app.js). Set
+                // here rather than as a plain 'click' listener on the viewport, because only
+                // this code knows which pointer sequences were drags and which were taps.
+                if (typeof this.onTap === 'function') {
+                    try {
+                        this.onTap();
+                    } catch (err) {
+                        // Whatever the page does with a tap is never worth breaking the
+                        // orbit controls over.
+                        console.warn('Avatar tap handler failed', err);
+                    }
+                }
             }
         };
         this.renderer.domElement.addEventListener('pointerup', endDrag);
