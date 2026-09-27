@@ -3082,6 +3082,27 @@ select,
    without shrinking to something unusable. */
 .net-field { padding: 0 0.875rem 0.875rem; }
 
+/* A field whose button belongs to it rather than to the card: the press acts on
+   what was just typed, so it stands beside the box and not up in the head. */
+.net-field-row { display: flex; align-items: stretch; gap: 0.5rem; }
+.net-field-row .net-card-action { flex: 0 0 auto; align-self: stretch; }
+
+/* What the press did, said under the box that caused it. Amber for a refusal,
+   the dim body colour for a plain success -- set from app.js. */
+.net-field-note {
+    margin: -0.4rem 0 0;
+    padding: 0 0.875rem 0.875rem;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+.net-field-note[data-tone="bad"] { color: var(--neon-amber); }
+
+@media (max-width: 620px) {
+    .net-field-row { flex-direction: column; }
+    .net-field-row .net-card-action { width: 100%; }
+}
+
 /* ---- Appearance: the pane and the colour panel behind it -------------------------------
    The theme is one decision with nine controls, so it drills down one level out of the pane
    rather than lying flat in it. Same mechanic as the avatar stages, one level deep. */

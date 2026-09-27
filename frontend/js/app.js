@@ -4986,6 +4986,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const lanPhraseBox = document.getElementById('lan-phrase-box');
     const lanPhraseWords = document.getElementById('lan-phrase-words');
     const lanPhraseNote = document.getElementById('lan-phrase-note');
+    const lanPhraseInput = document.getElementById('lan-phrase-input');
+    const btnLanUsePhrase = document.getElementById('btn-lan-use-phrase');
+    const lanPhraseInputNote = document.getElementById('lan-phrase-input-note');
 
     // What the last read said, so a button press knows whether it is starting or
     // stopping without asking again.
@@ -5058,6 +5061,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // screen until Settings closes would put a working credential in front of whoever
         // walks past next -- so coming back to the pane takes it down.
         lanPhraseBox?.classList.add('hidden');
+        // A phrase half-typed and left in the box is the same credential sitting on screen,
+        // so coming back to the pane starts the field empty as well.
+        if (lanPhraseInput) lanPhraseInput.value = '';
+        setUsePhraseNote('');
+        if (btnLanUsePhrase) btnLanUsePhrase.disabled = true;
         try {
             renderLan(await tauriInvoke('lan_status_rust'));
         } catch (e) {
@@ -5108,6 +5116,58 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(`Could not make a pairing phrase: ${e.message || e}`);
         } finally {
             btnLanNewPhrase.disabled = false;
+        }
+    });
+
+    /* The line under the box, which is the only report the press gets: nothing is shown
+       once here, because the operator already had the phrase before they typed it. */
+    function setUsePhraseNote(text, tone) {
+        if (!lanPhraseInputNote) return;
+        lanPhraseInputNote.textContent = text;
+        if (tone) lanPhraseInputNote.dataset.tone = tone;
+        else delete lanPhraseInputNote.dataset.tone;
+        lanPhraseInputNote.classList.toggle('hidden', !text);
+    }
+
+    // Empty is the only thing checked here. Whether twelve words are *the* twelve words is a
+    // question only the Rust side can answer, and a guess on this side would either refuse a
+    // valid phrase or promise a bad one.
+    lanPhraseInput?.addEventListener('input', () => {
+        if (btnLanUsePhrase) btnLanUsePhrase.disabled = !lanPhraseInput.value.trim();
+    });
+    lanPhraseInput?.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !btnLanUsePhrase?.disabled) btnLanUsePhrase?.click();
+    });
+
+    btnLanUsePhrase?.addEventListener('click', async () => {
+        const phrase = lanPhraseInput?.value.trim();
+        if (!phrase) return;
+        voiceEngine.playSFX('click');
+        const paired = lanReport?.devices?.devices?.length || 0;
+        if (paired && !confirm(
+            `Answering to this phrase instead unpairs ${paired === 1 ? 'the one device' : `all ${paired} devices`} `
+            + 'paired with this machine\'s current phrase. Each can pair again with the new one. Continue?'
+        )) return;
+        btnLanUsePhrase.disabled = true;
+        setUsePhraseNote('');
+        try {
+            const report = await tauriInvoke('lan_set_phrase_rust', { phrase });
+            renderLan(report);
+            // A phrase kept on screen is a working credential kept on screen, and this one
+            // was typed rather than shown, so there is nothing to read back.
+            lanPhraseInput.value = '';
+            lanPhraseBox?.classList.add('hidden');
+            setUsePhraseNote(report.unpaired
+                ? 'This machine now answers to that phrase. '
+                  + (report.unpaired === 1
+                      ? 'The one device paired with the old phrase will have to pair again.'
+                      : `All ${report.unpaired} devices paired with the old phrase will have `
+                        + 'to pair again.')
+                : 'This machine now answers to that phrase. Nothing was paired, so nothing '
+                  + 'was cut off.');
+        } catch (e) {
+            setUsePhraseNote(String(e.message || e), 'bad');
+            btnLanUsePhrase.disabled = !lanPhraseInput.value.trim();
         }
     });
 

@@ -251,6 +251,21 @@ pub fn new_phrase(engine: &LlmEngine, managed: &ManagedServer) -> Result<Value, 
     Ok(report)
 }
 
+/// Adopts a phrase made on another AETHER1, so both machines answer to the same words.
+///
+/// Nothing comes back but the count of devices the swap unpaired: the phrase was already in
+/// the operator's hands before they typed it, so there is nothing to show them once.
+pub fn set_phrase(
+    engine: &LlmEngine,
+    managed: &ManagedServer,
+    phrase: &str,
+) -> Result<Value, String> {
+    let unpaired = serve_auth::adopt(phrase)?;
+    let mut report = status(engine, managed);
+    report["unpaired"] = json!(unpaired);
+    Ok(report)
+}
+
 /// Starts the server at launch when the operator has asked for that, and otherwise does
 /// nothing at all. Mirrors `background_services::start_ollama_if_needed`: safe to call
 /// speculatively, silent about every reason it might decline.
