@@ -37,7 +37,7 @@ const AgentBrowser = (() => {
                 agents = result;
             } else {
                 // HTTP fallback
-                const response = await fetch(`${API_BASE || ''}/api/agents`);
+                const response = await apiFetch('/api/agents');
                 if (!response.ok) throw new Error('Failed to fetch agents');
                 agents = await response.json();
             }
@@ -110,7 +110,7 @@ const AgentBrowser = (() => {
                 const { invoke } = await import('https://cdn.jsdelivr.net/npm/@tauri-apps/api@next/index.js');
                 await invoke('set_agent_selection_rust', { selectedIds });
             } else {
-                await fetch(`${API_BASE || ''}/api/agents/selection`, {
+                await apiFetch('/api/agents/selection', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ selected_ids: selectedIds })

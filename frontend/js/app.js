@@ -49,8 +49,23 @@ function matchAvatarTrigger(text) {
 const IS_TAURI = typeof window.__TAURI_INTERNALS__ !== 'undefined';
 const API_BASE = IS_TAURI ? 'http://localhost:8378' : '';
 
+/* Every request to the backend goes through here, which is what makes one pairing gate
+ * enough: under `--serve --lan` the server refuses anything without a per-device token, and
+ * this is the single place a token can be attached and a refusal noticed. lan-auth.js is a
+ * no-op on loopback and in the desktop shell, so nothing changes for either. */
 function apiFetch(path, options) {
-    return fetch(API_BASE + path, options);
+    const auth = window.LanAuth;
+    return fetch(API_BASE + path, auth ? auth.authorize(options) : options)
+        .then(response => {
+            if (auth && auth.isUnauthorized(response)) auth.onUnauthorized();
+            return response;
+        });
+}
+
+/* The same credential for the `/ws/*` routes, which take it as `?token=` because a browser
+ * cannot put a header on a WebSocket handshake. */
+function apiWsUrl(url) {
+    return window.LanAuth ? window.LanAuth.wsUrl(url) : url;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1917,7 +1932,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(apiWsUrl(wsUrl));
 
         ws.onmessage = (event) => {
             try {
@@ -2970,7 +2985,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // plumbing already exists here for telemetry (see /ws/chat in server.rs).
         return await new Promise((resolve, reject) => {
             const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
-            const socket = new WebSocket(`${wsBase}/ws/chat`);
+            const socket = new WebSocket(apiWsUrl(`${wsBase}/ws/chat`));
             socket.onopen = () => socket.send(JSON.stringify({
                 message: text, session_id: sessionId, generate_voice: false
             }));

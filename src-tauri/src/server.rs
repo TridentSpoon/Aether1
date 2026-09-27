@@ -352,13 +352,22 @@ async fn require_lan_token(
             lan.limiter.record_success(ip);
             next.run(request).await
         }
-        // A request with no credential at all is counted the same as a wrong one. It is
-        // indistinguishable from the first step of someone probing, and treating it as
-        // innocent would leave a way to keep guessing for free by alternating.
-        _ => {
+        // A token that is wrong is a guess, and guesses are what the budget is for.
+        Some(_) => {
             lan.limiter.record_failure(ip);
             unauthorized()
         }
+        // A request carrying no credential at all is *not* counted, which is a change from
+        // how this started out. The original reasoning was that a bare request looks like
+        // the first step of someone probing -- true, but it made pairing from a browser
+        // impossible in practice: an unpaired page load fires a dozen API calls before the
+        // operator can type anything, so the device locked itself out of `/api/pair` on
+        // arrival, every time, and the phrase never got a chance to be wrong. Nothing is
+        // given away by not counting it either: a request with no credential carries no
+        // guess, so there is nothing to learn from repeating it, and every actual guess --
+        // a wrong token here, a wrong phrase at `/api/pair` -- is still counted against the
+        // same budget.
+        None => unauthorized(),
     }
 }
 
