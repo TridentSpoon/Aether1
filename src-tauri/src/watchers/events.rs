@@ -16,6 +16,11 @@ use std::process::Command;
 /// read and to put in front of a model with a small context.
 const SWEEP_LINES: usize = 60;
 
+/// How many distinct lines the report prints. `SWEEP_LINES` bounds what journalctl is asked
+/// for, which is not the same thing: one journal entry can be a hundred lines of stack trace,
+/// and a report is read by a person and spoken aloud.
+const REPORT_LINES: usize = 40;
+
 /// One noteworthy line from the system's log, already reduced to something readable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Event {
@@ -98,6 +103,16 @@ pub fn parse_journal_short_iso(raw: &str) -> Vec<Event> {
         .filter_map(|line| {
             let mut parts = line.splitn(3, ' ');
             let when = parts.next()?.to_string();
+            /* A journal *entry* can be many lines -- a coredump carries the stack of every
+            thread -- and journalctl prints them all under one `--lines` budget. Those
+            continuation lines have no timestamp and no unit, so parsed as entries they
+            became hundreds of events attributed to "the system", each one a frame address.
+            Asking for 60 lines returned 1388 of them, and the companion read every one out
+            loud. A line that does not begin with a timestamp is a continuation of the line
+            above, so it belongs to an entry that is already in the list. */
+            if !looks_like_timestamp(&when) {
+                return None;
+            }
             let _hostname = parts.next()?;
             let rest = parts.next()?;
             let (source, text) = match rest.split_once(": ") {
@@ -112,6 +127,20 @@ pub fn parse_journal_short_iso(raw: &str) -> Vec<Event> {
             Some(Event { when, source, text })
         })
         .collect()
+}
+
+/// Whether a token is the `2026-09-20T14:03:11+0000` a `short-iso` line starts with. Only
+/// the shape is checked, not the calendar: this separates an entry from a continuation line,
+/// and a frame address or a `#3` never looks like this by accident.
+fn looks_like_timestamp(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    bytes.len() >= 19
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+        && bytes[10] == b'T'
 }
 
 /// `sshd[1234]` is the same source as `sshd`, and the pid is noise in a summary.
@@ -145,6 +174,50 @@ pub fn parse_two_space_lines(raw: &str) -> Vec<Event> {
         .collect()
 }
 
+/// The same error, logged four hundred times, is one thing that is wrong with the machine and
+/// not four hundred. Events with the same source and the same text collapse into one line
+/// carrying a count and the time it was last seen, in the order they were first seen. What
+/// this deliberately does not do is normalise the text: two lines differing only in a pid or
+/// an address stay two kinds, because guessing which digits are incidental is how a summary
+/// starts lying about what the log said.
+fn collapse(events: &[Event]) -> Vec<String> {
+    let mut order: Vec<(String, String)> = Vec::new();
+    // first seen, last seen, how many.
+    let mut seen: std::collections::HashMap<(String, String), (String, String, usize)> =
+        std::collections::HashMap::new();
+    for event in events {
+        let key = (event.source.clone(), event.text.clone());
+        match seen.get_mut(&key) {
+            Some((_, last, count)) => {
+                last.clone_from(&event.when);
+                *count += 1;
+            }
+            None => {
+                seen.insert(key.clone(), (event.when.clone(), event.when.clone(), 1));
+                order.push(key);
+            }
+        }
+    }
+    order
+        .into_iter()
+        .map(|key| {
+            let (first, last, count) = &seen[&key];
+            let (source, text) = &key;
+            let once = Event {
+                when: first.clone(),
+                source: source.clone(),
+                text: text.clone(),
+            }
+            .one_line();
+            if *count == 1 {
+                once
+            } else {
+                format!("{once}  (x{count}, last at {last})")
+            }
+        })
+        .collect()
+}
+
 /// The sweep as it appears under `aether1 status --events`, including the two cases that
 /// are not a list of problems: a log that could not be read, and a machine with nothing
 /// wrong with it. Both are said plainly, because a blank space where a report should be
@@ -157,10 +230,28 @@ pub fn report() -> String {
                 .to_string()
         }
         Ok(events) => {
-            let mut out = format!("Recent system errors ({} since boot)\n", events.len());
-            for event in &events {
+            let total = events.len();
+            let lines = collapse(&events);
+            let shown = lines.len().min(REPORT_LINES);
+            let mut out = if lines.len() == total {
+                format!("Recent system errors ({total} since boot)\n")
+            } else {
+                // Both numbers, because "9 kinds" and "1388 lines" are different facts about
+                // the same morning and a reader wants the second one to not be hidden.
+                format!(
+                    "Recent system errors ({} kinds, {total} in all, since boot)\n",
+                    lines.len()
+                )
+            };
+            for line in lines.iter().take(shown) {
                 out.push_str("\n    ");
-                out.push_str(&event.one_line());
+                out.push_str(line);
+            }
+            if lines.len() > shown {
+                out.push_str(&format!(
+                    "\n\n    ... and {} more kinds. `aether1 status --events` prints the log itself.",
+                    lines.len() - shown
+                ));
             }
             out
         }
@@ -195,6 +286,101 @@ mod tests {
     fn a_pid_is_dropped_from_the_source() {
         let events = parse_journal_short_iso(JOURNAL);
         assert_eq!(events[1].source, "sshd", "sshd[1234] is still just sshd");
+    }
+
+    /// The coredump case that made "diagnostics" read a stack trace out loud: journalctl
+    /// prints every line of a multi-line entry under one `--lines` budget, and the
+    /// continuation lines carry neither a timestamp nor a unit.
+    #[test]
+    fn the_continuation_lines_of_one_entry_are_not_separate_events() {
+        let raw = "\
+2026-09-26T20:44:37+0200 norberta systemd-coredump[4]: Process 415397 dumped core.
+                                 Stack trace of thread 415397:
+                                 #0  0x00007f71a854c86d syscall (libc.so.6 + 0x14c86d)
+                                 #1  0x00007f71a493287c g_cond_wait_until (libglib-2.0.so.0)
+2026-09-26T20:45:51+0200 norberta kioworker: Cannot load metadata from file
+";
+        let events = parse_journal_short_iso(raw);
+        assert_eq!(events.len(), 2, "got {events:#?}");
+        assert!(events[0].text.contains("dumped core"));
+        assert_eq!(events[1].source, "kioworker");
+    }
+
+    /// A frame number is not a date, and neither is an address.
+    #[test]
+    fn only_a_timestamp_starts_an_entry() {
+        assert!(looks_like_timestamp("2026-09-26T20:44:37+0200"));
+        assert!(!looks_like_timestamp("#3"));
+        assert!(!looks_like_timestamp("0x00007f71a854c86d"));
+        assert!(!looks_like_timestamp("Stack"));
+    }
+
+    /// The other half of what he reported: the same line, hundreds of times.
+    #[test]
+    fn the_same_error_many_times_over_is_one_line_with_a_count() {
+        let mut events = Vec::new();
+        for i in 0..5 {
+            events.push(Event {
+                when: format!("2026-09-26T20:4{i}:00+0200"),
+                source: "kioworker".to_string(),
+                text: "Cannot load metadata from file".to_string(),
+            });
+        }
+        events.push(Event {
+            when: "2026-09-26T21:00:00+0200".to_string(),
+            source: "kernel".to_string(),
+            text: "bad block".to_string(),
+        });
+        let lines = collapse(&events);
+        assert_eq!(lines.len(), 2, "got {lines:#?}");
+        assert!(
+            lines[0].contains("(x5, last at 2026-09-26T20:44:00+0200)"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[0].starts_with("2026-09-26T20:40:00+0200"),
+            "first seen leads the line"
+        );
+        assert!(
+            !lines[1].contains("(x"),
+            "one occurrence carries no count: {}",
+            lines[1]
+        );
+    }
+
+    /// Two lines differing by a pid stay two kinds. Collapsing them would need a guess about
+    /// which digits are incidental, and a summary that guesses is a summary that misreports.
+    #[test]
+    fn two_errors_that_merely_look_alike_are_not_collapsed() {
+        let events = vec![
+            Event {
+                when: "2026-09-26T20:40:00+0200".to_string(),
+                source: "sshd".to_string(),
+                text: "connection from 10.0.0.1 closed".to_string(),
+            },
+            Event {
+                when: "2026-09-26T20:41:00+0200".to_string(),
+                source: "sshd".to_string(),
+                text: "connection from 10.0.0.2 closed".to_string(),
+            },
+        ];
+        assert_eq!(collapse(&events).len(), 2);
+    }
+
+    #[test]
+    fn a_report_of_many_kinds_is_cut_short_and_says_so() {
+        let events: Vec<Event> = (0..REPORT_LINES + 7)
+            .map(|i| Event {
+                when: "2026-09-26T20:40:00+0200".to_string(),
+                source: "kernel".to_string(),
+                text: format!("distinct problem {i}"),
+            })
+            .collect();
+        let lines = collapse(&events);
+        assert_eq!(lines.len(), REPORT_LINES + 7);
+        // The report itself is what caps; collapse reports everything it found.
+        assert!(lines.len() > REPORT_LINES);
     }
 
     #[test]

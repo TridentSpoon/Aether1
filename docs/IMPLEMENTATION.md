@@ -3402,3 +3402,42 @@ half-filled row should not take the other nine with it.
 `aether1 words` is the same list from a terminal, and earns its place beyond symmetry: adding a
 word there and running `aether1 say` is the only way to check the substitution on a machine with
 no window, which is every machine this was built on.
+
+### Enough
+
+Trident, having asked a fresh build for `diagnostics`: "I need a way to stop the talking once it
+starts. This was painful with many duplicates."
+
+Two separate faults, and the transcript he sent carries both. The answer ran to fourteen hundred
+lines, most of them frame addresses from a coredump; and there was no way to stop it being read
+out other than asking something else or holding the talk key, which are both ways of *starting*
+something.
+
+**Why the answer was fourteen hundred lines.** The sweep asks journalctl for sixty lines and gets
+sixty *entries* -- and one entry can be a coredump carrying the stack of every thread in the
+process. Those continuation lines have no timestamp and no unit prefix, so the parser, which took
+the first token as a time and fell back to `the system` when it found no `unit: `, read each one
+as an error of its own. `#3` became a timestamp. `Stack trace of thread 415397:` became an error
+attributed to `the system`, which is where `Stack the system: of thread` in his transcript comes
+from. So a line is now an entry only if its first token has the shape of a date; anything else is
+a continuation of the line above it, which is already in the list.
+
+**And the duplicates.** The same error four hundred times is one thing wrong with the machine, so
+events with the same source and the same text collapse into one line with a count and the time it
+was last seen. What that deliberately does not do is normalise the text: two lines differing only
+in a pid or an address stay two kinds, because deciding which digits are incidental is how a
+summary starts misreporting what the log said. The header then carries both numbers -- the kinds
+and the total -- since "nine kinds" and "1388 lines" are different facts about the same morning
+and the second should not disappear. The report caps at forty kinds and says how many it left,
+because `SWEEP_LINES` bounds what is asked for, not what comes back.
+
+**Stopping the talking.** Everything needed was already there: `stopSpeech()` drops the queue and
+cuts the clip, and the turn counter stops the sentences still inside the synthesizer from queueing
+themselves a moment later. What was missing was a way to ask for it that does not start something
+else. Escape does it, and a button appears beside Send while there is something to stop -- hidden
+otherwise, because a dead control next to the one you press every time is clutter, and because its
+appearing is itself how the operator learns the key.
+
+Escape hushes *and stops there* when it silenced something: a press that cuts off a long answer
+should not also close the panel being read. When nothing is being spoken it is the menu key it
+always was. The button plays no click sound, it being the button you press to stop the noise.
