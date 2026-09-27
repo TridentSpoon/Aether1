@@ -8622,6 +8622,15 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-code-perm-system').checked = s.code_perm_system !== false;
             document.getElementById('setting-code-perm-github').checked = s.code_perm_github !== false;
             document.getElementById('setting-code-perm-internet').checked = s.code_perm_internet !== false;
+            // And the mirror of that rule for the two that change things: absent means
+            // OFF, matching Grant::default_on. A switch that reads as on before anybody
+            // touched it would be the one dishonest control on this page.
+            document.getElementById('setting-code-perm-edit').checked = s.code_perm_edit === true;
+            document.getElementById('setting-code-perm-run').checked = s.code_perm_run === true;
+            document.getElementById('setting-code-workspace-root').value =
+                typeof s.code_workspace_root === 'string' ? s.code_workspace_root : '';
+            document.getElementById('setting-code-run-allowlist').value =
+                Array.isArray(s.code_run_allowlist) ? s.code_run_allowlist.join(', ') : '';
             document.getElementById('setting-command-allowlist').value =
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             loadPersonaAccess();
@@ -8771,6 +8780,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 code_perm_system: document.getElementById('setting-code-perm-system').checked,
                 code_perm_github: document.getElementById('setting-code-perm-github').checked,
                 code_perm_internet: document.getElementById('setting-code-perm-internet').checked,
+                code_perm_edit: document.getElementById('setting-code-perm-edit').checked,
+                code_perm_run: document.getElementById('setting-code-perm-run').checked,
+                code_workspace_root: document.getElementById('setting-code-workspace-root').value.trim(),
+                code_run_allowlist: document.getElementById('setting-code-run-allowlist').value
+                    .split(',').map(p => p.trim()).filter(Boolean),
                 command_allowlist: document.getElementById('setting-command-allowlist').value
                     .split(',').map(p => p.trim()).filter(Boolean),
                 auto_speak: document.getElementById('setting-autospeak').checked,

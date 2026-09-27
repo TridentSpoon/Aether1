@@ -2199,7 +2199,7 @@
                         <div class="net-card-heading">
                             <h4 class="net-card-title">AETHER CODE may look at</h4>
                             <p class="net-card-hint">
-                                All three only read. The coding model cannot edit a file, commit, merge or
+                                These three only read. The coding model cannot edit a file, commit, merge or
                                 install anything &mdash; <span class="font-mono">gh pr view</span> runs,
                                 <span class="font-mono">gh pr merge</span> is refused. When the next step
                                 would change something it writes the command out instead, and that command
@@ -2237,6 +2237,68 @@
                             <input id="setting-code-perm-internet" type="checkbox" class="a1-switch-input">
                             <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
                         </label>
+                    </div>
+                </div>
+
+                <!-- The other half of the coding panel's permissions, and the only place in
+                     AETHER1 where a model can write or run something. Its own card rather
+                     than two more rows above, because "may it read my code" and "may it
+                     change my code" are not the same question and should not be answered
+                     by the same glance. Both switches start off. See code_workspace.rs for
+                     the five rules that bound them. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🛠️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">AETHER CODE may change</h4>
+                            <p class="net-card-hint">
+                                Off until you say otherwise. With these on it works the way a coding agent
+                                does &mdash; read a file, make an edit, run the tests, read what broke, go
+                                again &mdash; but only inside the one project folder you name below, and
+                                only with the programs on the list. Nothing outside that folder, nothing
+                                that leaves this machine: <span class="font-mono">git commit</span> runs,
+                                <span class="font-mono">git push</span> is still written out as a button
+                                for your terminal.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Project folder</p>
+                            <p class="net-row-hint">The one folder it may change. Leave it empty and it changes nothing.</p>
+                        </div>
+                    </div>
+                    <div class="px-3 pb-3">
+                        <input id="setting-code-workspace-root" type="text" placeholder="e.g. ~/Projects/aether1" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Edit files</p>
+                            <p class="net-row-hint">Change and create files inside that folder.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-perm-edit" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Run commands</p>
+                            <p class="net-row-hint">Build and test, in that folder, from the list below.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-perm-run" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Programs it may run</p>
+                            <p class="net-row-hint">Names, comma separated. A program that is not here is refused.</p>
+                        </div>
+                    </div>
+                    <div class="px-3 pb-3">
+                        <input id="setting-code-run-allowlist" type="text" placeholder="cargo, npm, git" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
             </section>

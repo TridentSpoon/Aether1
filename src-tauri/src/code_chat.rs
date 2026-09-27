@@ -73,6 +73,11 @@ const MAX_COMMANDS: usize = 10;
 /// spends the context window confirming that.
 const MAX_TOOL_ROUNDS: usize = 3;
 
+/// The budget once it can edit and run. Enough for a real loop -- read, change, build, read
+/// the failure, change again, build again -- and short enough that a model going in circles
+/// stops within one cup of tea rather than overnight.
+const ACTING_TOOL_ROUNDS: usize = 25;
+
 /// A language tag on a fenced block that means "this is for a shell".
 ///
 /// `console` and `shell-session` are included because that is what a model trained on
@@ -125,7 +130,7 @@ pub fn system_prompt(db: &MemoryDb, os: &str, model: &str) -> String {
     );
 
     let capabilities = if code_tools::any_granted(db) {
-        tool_instructions(&code_tools::catalog(db))
+        tool_instructions(db, &code_tools::catalog(db))
     } else {
         // Every permission off. The old sentence, which was true of the whole panel before
         // there were any tools and is true again whenever the operator says so.
@@ -148,8 +153,46 @@ pub fn system_prompt(db: &MemoryDb, os: &str, model: &str) -> String {
 /// tool support among them is uneven, and a fenced block is something every one of them can
 /// produce. `code_tools::call` is the only thing that acts on what comes back, so a model
 /// that invents a tool gets a refusal rather than an effect.
-fn tool_instructions(catalog: &[&'static str]) -> String {
+fn tool_instructions(db: &MemoryDb, catalog: &[&'static str]) -> String {
     let tools: Vec<String> = catalog.iter().map(|line| format!("- {line}")).collect();
+
+    // The closing paragraph is the one part of these instructions that is not the same
+    // every time, because what it says has to be *true*: with both changing grants off
+    // this panel still cannot alter anything, and telling a model otherwise is how it ends
+    // up claiming to have edited a file it never touched.
+    let acting = if can_act(db) {
+        let where_it_works = match crate::code_workspace::root(db) {
+            Ok(root) => format!(
+                "The project folder is {}. Paths you give are relative to it.",
+                root.display()
+            ),
+            Err(_) => "No project folder is set yet, so edit_file, create_file and run will \
+                       refuse until the operator sets one. Tell them that is what you need."
+                .to_string(),
+        };
+        format!(
+            "\n         - You can change files and run commands, but only inside one folder. \
+             {where_it_works}\n\
+             - Work the way a developer does: read what is there, make one small edit, run \
+             the build or the tests, read what came back, go again. Do not write a large \
+             file blind.\n\
+             - A command that exits non-zero is a result, not a failure of yours. Read its \
+             output and fix the cause.\n\
+             - Anything outside that folder, and anything that leaves this machine -- \
+             pushing, installing system packages, changing settings -- is still refused. \
+             Write those in a ```bash block instead and the operator presses Return."
+        )
+    } else {
+        "\n         - Everything above only reads. Nothing you can call changes a file, a \
+         repository, a setting or a process, and asking for one that does will be \
+         refused.\n\
+         - So when the next step would change something -- editing, committing, merging, \
+         installing, running a build -- write the command in a ```bash block instead. It \
+         becomes a button that types the command into the operator's terminal, and they \
+         press Return. That is the only way anything on this machine changes."
+            .to_string()
+    };
+
     format!(
         "\n\n[WHAT YOU CAN LOOK AT]\n\
          You can look at things on this machine by calling a tool:\n\n{tools}\n\n\
@@ -161,15 +204,30 @@ fn tool_instructions(catalog: &[&'static str]) -> String {
          - The results come back as [TOOL RESULTS]. Then answer the operator normally.\n\
          - Call a tool only when you need what it returns. Most questions need none.\n\
          - Never invent a tool or an argument that isn't listed above.\n\
-         - Never claim you looked at something you did not call a tool for.\n\
-         - Everything above only reads. Nothing you can call changes a file, a repository, \
-         a setting or a process, and asking for one that does will be refused.\n\
-         - So when the next step would change something -- editing, committing, merging, \
-         installing, running a build -- write the command in a ```bash block instead. It \
-         becomes a button that types the command into the operator's terminal, and they \
-         press Return. That is the only way anything on this machine changes.",
+         - Never claim you looked at something you did not call a tool for.{acting}",
         tools = tools.join("\n")
     )
+}
+
+/// Whether this panel may change anything at all right now.
+pub fn can_act(db: &MemoryDb) -> bool {
+    crate::code_perms::granted(db, crate::code_perms::Grant::Edit)
+        || crate::code_perms::granted(db, crate::code_perms::Grant::Run)
+}
+
+/// How many rounds this question gets.
+///
+/// Three was right while every tool was a read: a small model that has not answered after
+/// looking three times is looping on a file it cannot find, and a fourth round spends the
+/// context window confirming that. An edit-and-test loop is a different shape -- read,
+/// change, build, read the error, change again -- and three rounds cannot reach the end of
+/// one. So the budget follows the capability rather than being one number for both.
+fn max_rounds(db: &MemoryDb) -> usize {
+    if can_act(db) {
+        ACTING_TOOL_ROUNDS
+    } else {
+        MAX_TOOL_ROUNDS
+    }
 }
 
 /// The shell commands in a reply, in order, ready to be typed one at a time.
@@ -279,7 +337,7 @@ pub fn ask(
     let mut visible = String::new();
     let mut current_prompt = prompt.to_string();
 
-    for _round in 0..MAX_TOOL_ROUNDS {
+    for _round in 0..max_rounds(db) {
         let ctx = ChatContext {
             system_prompt: &system,
             history: &history,

@@ -3322,3 +3322,51 @@ session. Measured in Chromium by tapping the gain node and watching for both ton
 the overlap goes, and so does every reply after it. That is the failure the note on `finish`
 above was written about. The claim keeps the clip from ever starting, which is why it does not
 have this second half.
+
+---
+
+#### Follow-up: AETHER CODE can change one folder
+
+Trident, 2026-09-27: *"I need the code side able to access the system and function similar to
+the likes of Claude Code, Google Antigravity or GPT Codex."*
+
+The coding panel could look and nothing else. Five tools, every one a read, three tool rounds
+per question, and any request to change something came back as a refusal telling the model to
+put the command in a fenced block, where a button types it into the operator's terminal and
+their Return key runs it. That is a defensible place to stand and it is not what a coding
+agent is: every one of them is the same loop -- read a file, change it, run the tests, read
+what broke, change it again -- and a panel that cannot take the second step of that loop can
+only narrate it.
+
+**What moved.** `code_workspace.rs` is the whole of the new capability, and it states five
+rules it holds itself to. One nominated folder (`code_workspace_root`, falling back to the
+project already selected for Graft). Paths canonicalised -- the parent when the file does not
+exist yet -- so a symlink out of the project resolves to where it really goes and is refused,
+with `fs_guard` checked as well, not instead. No shell anywhere: `run` is given an argv and
+spawns the program directly, so a pipe or a `;` in an argument is a literal string. A program
+must be on the operator's own list, and `git` additionally must not be one of the fifteen
+subcommands that leave the folder or destroy uncommitted work. Both new grants default off.
+
+**Three tools:** `edit_file` (exact text, and it must match *exactly once* -- a line range
+edits the wrong line silently when the model's picture of the file is stale, and an ambiguous
+match is refused with the count and told to include more context), `create_file`, and `run`
+(exit status, stdout and stderr, middle cut out of long output, killed at its timeout). A
+non-zero exit is a *result*, not an `Err`: a model told a red test suite was an error
+apologises instead of reading it.
+
+**The loop budget follows the capability.** Three rounds is right for looking -- a small model
+that has not answered after three reads is looping on a file it cannot find. An edit-and-test
+loop cannot reach the end of one in three, so with either changing grant on it gets 25.
+
+**What did not move.** The terminal isolation rule is untouched and
+`scripts/check_terminal_isolation.sh` passes unchanged: nothing here types into the operator's
+terminal or reads from it. There is still no way to write outside the nominated folder, no way
+to run a program they have not listed, and no shell. `git commit` runs; `git push` is still
+written out as a button.
+
+**Measured, not assumed.** A failing Python project in a temp folder, driven through
+`code_tools::call` exactly as a model's tool block is: `run` reported the AssertionError,
+`read_file` showed `return a - b`, `edit_file` changed it to `a + b`, and the test passed. One
+real-world trap worth knowing: the second run still failed because CPython had cached a `.pyc`
+whose source was the same length and same-second mtime. The edit had landed. It is Python's
+cache, not the tool -- but a model in that loop will see it too.

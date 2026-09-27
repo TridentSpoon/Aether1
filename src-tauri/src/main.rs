@@ -25,6 +25,7 @@ mod code_chat;
 mod code_perms;
 mod code_setup;
 mod code_tools;
+mod code_workspace;
 mod commands;
 mod discovery;
 mod doctor;
@@ -2296,6 +2297,10 @@ fn build_llm_engine() -> LlmEngine {
             // Likewise once, on the first run only: the programs the companion may ask to
             // run. See STARTER_ALLOWLIST for why the list is short and what keeps it safe.
             tools::mutating::seed_starter_allowlist(&db);
+            // And the coding panel's own list, which is a different question with a
+            // different answer -- build and test tools, confined to one project folder,
+            // and inert until the operator turns the `run` permission on.
+            code_workspace::seed_starter_allowlist(&db);
             LlmEngine::new(db)
         }
         Err(e) => {
