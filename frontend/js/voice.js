@@ -444,6 +444,8 @@ class VoiceAudioEngine {
 
             if (this.audioCtx && this.analyser) {
                 try {
+                    // Nothing to disconnect first: cutCurrentClip above has already released
+                    // the outgoing clip's node, and it is the only thing that ever holds one.
                     const source = this.audioCtx.createMediaElementSource(audio);
                     source.connect(this.analyser);
                     this.currentSource = source;

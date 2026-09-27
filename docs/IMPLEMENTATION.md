@@ -3311,3 +3311,14 @@ sliced at `spoken.length`, which is an offset into the streamed deltas -- the sa
 only as long as every delta arrived unrewritten. When it does not line up, that slice starts
 in the middle of words already spoken, which is a sentence repeated at the end of the answer;
 it is now checked with `startsWith` and skipped rather than guessed at.
+
+**On the disconnect-only fix this merged with.** `8754dbd` on main reached for the same
+symptom by disconnecting the previous source node before building the next one, and it does
+silence the second voice -- a MediaElementAudioSourceNode is the element's only output, so an
+element whose node is disconnected is inaudible. But it is still *playing*, with nothing
+pulling it, so it never reaches its end and never fires `ended`: its `finish` never settles,
+the drain loop never gets its turn back, and the window speaks nothing for the rest of the
+session. Measured in Chromium by tapping the gain node and watching for both tones at once:
+the overlap goes, and so does every reply after it. That is the failure the note on `finish`
+above was written about. The claim keeps the clip from ever starting, which is why it does not
+have this second half.
