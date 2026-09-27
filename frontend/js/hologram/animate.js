@@ -38,6 +38,10 @@ HologramAvatar.prototype.animate = function() {
     if (canvas && canvas.offsetParent === null &&
         getComputedStyle(canvas).position !== 'fixed') return;
 
+    // The driver has taken the context away. Drawing into it does nothing but throw, and
+    // the webglcontextrestored handler in core.js rebuilds the scene when it comes back.
+    if (this.contextLost) return;
+
     const elapsedTime = this.clock.getElapsedTime();
 
     let audioSum = 0;
@@ -61,6 +65,27 @@ HologramAvatar.prototype.animate = function() {
             ? Math.sin((clickAge / CLICK_RISE_DURATION) * (Math.PI / 2))
             : 1;
         clickPulse = decay * rise;
+    }
+
+    /* Half rate while there is genuinely nothing happening.
+
+       At rest an avatar is a slow drift -- a ring turning, a core breathing -- and every
+       one of those motions is driven by `elapsedTime`, which is wall time and keeps
+       counting whether or not a frame was drawn. So a skipped frame does not slow the
+       motion down or make it stutter; it draws the same drift with half as many samples,
+       which at these speeds is not something an eye can pick out. The moment anything is
+       actually moving -- a reply being spoken, the agent thinking, a click still ringing,
+       a drag still coasting -- this steps straight back to the full rate, and those are
+       exactly the moments where the extra frames are worth paying for.
+
+       This is the single largest saving available in the loop: the HUD sits idle for most
+       of its life, and idle used to cost exactly as much as speaking. */
+    const IDLE_FRAME_INTERVAL = 1 / 30;
+    const busy = this.state === 'SPEAKING' || this.state === 'THINKING' ||
+        clickPulse > 0 || audioIntensity > 0.01 || this.isDraggingView || this.viewSpinVelocity;
+    if (!busy) {
+        if (elapsedTime - (this.lastIdleFrame || 0) < IDLE_FRAME_INTERVAL) return;
+        this.lastIdleFrame = elapsedTime;
     }
 
     // A registered avatar animates itself and nothing built-in runs -- see core.js.

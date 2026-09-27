@@ -46,6 +46,9 @@ class HologramAvatar {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.state = 'IDLE'; // IDLE, LISTENING, THINKING, SPEAKING
+        // Set while the GPU has taken the WebGL context away; see the
+        // webglcontextlost handler in init(). Nothing is drawn until it is back.
+        this.contextLost = false;
         this.currentAvatar = 'a1'; // a1, halcy, arx-limes, nexus, red, arx-logos, alt
         this.currentColorTheme = 'halcy'; // halcy, nexus, arx-limes, arx-logos, red, night-city
         this.activePalette = THEME_PALETTES.halcy;
@@ -277,11 +280,51 @@ class HologramAvatar {
         obsidianHighlight.position.set(90, 130, 220);
         this.scene.add(obsidianHighlight);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        /* Two cheap choices here, both invisible on screen and both worth real frames.
+
+           MSAA buys nothing you can see once there are two device pixels per CSS pixel --
+           the downsample is already doing the smoothing -- but it still costs a
+           multisampled buffer the size of the viewport and a resolve on every frame. So it
+           is asked for only where it actually shows: a display at or below 1.5x.
+
+           `powerPreference: 'low-power'` asks for the integrated GPU on a laptop with two.
+           An avatar of a few thousand triangles has no use for a discrete card, and on the
+           hybrid-graphics machines this project runs on the discrete path is also the
+           fragile one: WebKitGTK's DMABUF renderer is where WebKitWebProcess tends to die.
+           A machine with one GPU is unaffected, since there is nothing to choose between. */
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        this.renderer = new THREE.WebGLRenderer({
+            antialias: dpr <= 1.5,
+            alpha: true,
+            powerPreference: 'low-power',
+        });
         this.renderer.setSize(width, height);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(dpr);
         this.container.innerHTML = '';
         this.container.appendChild(this.renderer.domElement);
+
+        /* A lost WebGL context is not a crash and should not look like one. The driver
+           drops it when the GPU resets, when the compositor takes the window away, or when
+           WebKit decides it is holding too many; without this the canvas simply goes black
+           and stays black for the rest of the session, which reads to anyone watching as
+           the avatar having died. Preventing the default on the loss event is what makes
+           the browser promise a restore event at all -- without it the restore never
+           comes. On restore the scene is rebuilt from scratch, because every buffer and
+           texture the old context held is gone. */
+        this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            this.contextLost = true;
+            console.warn('hologram: WebGL context lost, waiting for the driver to restore it');
+        });
+        this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+            this.contextLost = false;
+            console.warn('hologram: WebGL context restored, rebuilding the avatar');
+            try {
+                this.setAvatar(this.currentAvatar);
+            } catch (err) {
+                console.error('hologram: could not rebuild after a context restore', err);
+            }
+        });
 
         this.clock = new THREE.Clock();
 

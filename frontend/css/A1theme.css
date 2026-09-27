@@ -570,7 +570,13 @@ select,
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   position: relative;
-  transition: all 0.25s ease;
+  /* Only the two properties that actually change on hover. `all` also covered width,
+     height and the grid placement -- so every panel drag and every seam drag animated
+     its own geometry over a quarter of a second, forcing a layout and a repaint on each
+     frame of the drag while the pointer was already somewhere else. The handle felt like
+     it was being dragged through treacle for no visual gain: nothing in the design ever
+     wanted a panel to ease into its new size. */
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
 }
 
