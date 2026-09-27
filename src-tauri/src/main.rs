@@ -17,6 +17,7 @@
     windows_subsystem = "windows"
 )]
 
+mod agents;
 mod audio_devices;
 mod background_services;
 mod cli;
@@ -1027,6 +1028,13 @@ fn doctor_repair_rust(
         hotkey::reregister_from_settings(&handle).map(|()| "re-registered the hotkey".to_string())
     };
     commands::doctor_repair(&engine, &check, &repair, Some(&in_app))
+}
+
+/// Runs diagnostics with simplified output: voice-over, status, filtered metrics, and
+/// deduplicated error logs.
+#[tauri::command(async)]
+fn run_diagnostics_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::run_diagnostics_rust(&engine)
 }
 
 /// Flow mode's state, for the chin bar's toggle. Reports the line the current avatar
@@ -2202,6 +2210,32 @@ fn keep_other_installs_rust(engine: tauri::State<'_, LlmEngine>) -> Result<(), S
         .map_err(|e| format!("could not save that: {e}"))
 }
 
+/// Retrieves all available agents, optionally filtered by type or capability
+#[tauri::command(async)]
+fn get_agents_rust(engine: tauri::State<'_, LlmEngine>) -> Result<Vec<agents::Agent>, String> {
+    // Retrieve persisted selection state from settings
+    let selected_ids: Option<Vec<String>> = engine
+        .db()
+        .get_setting("selected_agent_ids")
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_value(v).ok());
+
+    Ok(agents::get_agents(selected_ids))
+}
+
+/// Updates the selection state of agents and persists it
+#[tauri::command(async)]
+fn set_agent_selection_rust(
+    engine: tauri::State<'_, LlmEngine>,
+    selected_ids: Vec<String>,
+) -> Result<(), String> {
+    engine
+        .db()
+        .set_setting("selected_agent_ids", &serde_json::json!(selected_ids))
+        .map_err(|e| format!("could not save selection: {e}"))
+}
+
 fn build_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
     // The native path creates backend/ as a side effect of setting up the audio cache in
@@ -2330,6 +2364,7 @@ fn main() {
             set_flow_line_rust,
             doctor_report_rust,
             doctor_repair_rust,
+            run_diagnostics_rust,
             setup_advice_rust,
             pull_model_rust,
             start_download_rust,
@@ -2420,7 +2455,9 @@ fn main() {
             window_is_maximized_rust,
             close_window_rust,
             start_window_resize_rust,
-            set_game_mode_rust
+            set_game_mode_rust,
+            get_agents_rust,
+            set_agent_selection_rust
         ])
         .on_window_event(|window, event| {
             // Closing the main HUD window hides it to the tray rather than exiting. AETHER1
