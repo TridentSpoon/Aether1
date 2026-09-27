@@ -7937,7 +7937,18 @@ document.addEventListener('DOMContentLoaded', () => {
             await tauriInvoke('apply_update_rust');
         } catch (e) {
             if (updateStatusBox) {
-                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ Update failed: ${e.message || e}. See the terminal/tray for details.</div>`;
+                // The message is git's own now (see perform_update_core), and it is the
+                // only place an operator will ever read it: a windowed build has no
+                // terminal to be pointed at, which is what the old "see the terminal"
+                // line amounted to on Windows. Shown whole, wrapped, and selectable.
+                // Built as a node rather than interpolated: this string is git's stderr,
+                // which contains branch names, paths and remote URLs, and none of that
+                // belongs in innerHTML.
+                const detail = String(e && e.message ? e.message : e);
+                const line = document.createElement('div');
+                line.className = 'text-red-400 whitespace-pre-wrap break-words select-all';
+                line.textContent = `⚠ Update failed: ${detail}`;
+                updateStatusBox.replaceChildren(line);
             }
             if (btnApplyUpdate) btnApplyUpdate.disabled = false;
             if (btnCheckUpdate) btnCheckUpdate.disabled = false;
