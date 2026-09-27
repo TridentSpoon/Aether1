@@ -958,26 +958,32 @@ pub fn run_diagnostics_rust(engine: &LlmEngine) -> Value {
     let mut filtered_metrics = serde_json::json!({});
 
     if telemetry.cpu_percent > 75.0 {
-        filtered_metrics["cpu_percent"] = serde_json::json!(format!("{:.1}%", telemetry.cpu_percent));
+        filtered_metrics["cpu_percent"] =
+            serde_json::json!(format!("{:.1}%", telemetry.cpu_percent));
     }
 
     if telemetry.ram_percent > 75.0 {
-        filtered_metrics["ram_percent"] = serde_json::json!(format!("{:.1}%", telemetry.ram_percent));
+        filtered_metrics["ram_percent"] =
+            serde_json::json!(format!("{:.1}%", telemetry.ram_percent));
     }
 
     if telemetry.disk_percent > 75.0 {
-        filtered_metrics["disk_percent"] = serde_json::json!(format!("{:.1}%", telemetry.disk_percent));
+        filtered_metrics["disk_percent"] =
+            serde_json::json!(format!("{:.1}%", telemetry.disk_percent));
     }
 
     // Get and deduplicate error logs
     let error_logs = crate::watchers::events::sweep().unwrap_or_default();
     let mut deduplicated_errors: HashMap<String, usize> = HashMap::new();
-    let mut first_error_per_message: HashMap<String, crate::watchers::events::Event> = HashMap::new();
+    let mut first_error_per_message: HashMap<String, crate::watchers::events::Event> =
+        HashMap::new();
 
     for event in error_logs {
         let count = deduplicated_errors.entry(event.text.clone()).or_insert(0);
         *count += 1;
-        first_error_per_message.entry(event.text.clone()).or_insert(event);
+        first_error_per_message
+            .entry(event.text.clone())
+            .or_insert(event);
     }
 
     let deduplicated: Vec<Value> = deduplicated_errors
