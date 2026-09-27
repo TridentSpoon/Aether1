@@ -134,6 +134,7 @@ pub fn search_agents(agents: &[Agent], query: &str) -> Vec<Agent> {
 }
 
 /// Applies multiple filters in sequence
+#[allow(dead_code)]
 pub fn apply_filters(
     agents: &[Agent],
     type_filter: Option<&AgentType>,
@@ -158,6 +159,7 @@ pub fn apply_filters(
 }
 
 /// Returns all unique capabilities across all agents
+#[allow(dead_code)]
 pub fn all_capabilities() -> Vec<String> {
     let agents = built_in_agents();
     let mut capabilities: Vec<String> = agents
@@ -170,6 +172,7 @@ pub fn all_capabilities() -> Vec<String> {
 }
 
 /// Returns all agent types
+#[allow(dead_code)]
 pub fn all_types() -> Vec<AgentType> {
     vec![AgentType::Collector, AgentType::Reviewer, AgentType::Planner]
 }
@@ -194,7 +197,7 @@ mod tests {
     fn test_search_agents() {
         let agents = built_in_agents();
         let results = search_agents(&agents, "code");
-        assert!(results.len() > 0);
+        assert!(!results.is_empty());
         assert!(results.iter().any(|a| a.name.contains("Reviewer")));
     }
 
