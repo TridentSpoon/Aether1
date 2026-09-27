@@ -375,6 +375,12 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
                     </button>
                     <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <!-- Hush. Hidden until there is something to stop, because a dead
+                         button beside the one you press every time is clutter, and because
+                         its appearing is itself the sign that Escape will work. -->
+                    <button id="btn-hush" class="cyber-btn px-3 py-2 text-sm rounded hidden" title="Stop talking (Esc)">
+                        <span aria-hidden="true">&#9632;</span><span class="sr-only">Stop talking</span>
+                    </button>
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
                     </button>
@@ -1863,6 +1869,7 @@
                         <div class="hub-tabs" role="tablist">
                             <button type="button" id="vhub-tab-voices" class="hub-tab is-active" data-vhub-tab="voices" role="tab">Voices</button>
                             <button type="button" id="vhub-tab-devices" class="hub-tab" data-vhub-tab="devices" role="tab">Devices</button>
+                            <button type="button" id="vhub-tab-words" class="hub-tab" data-vhub-tab="words" role="tab">Words</button>
                         </div>
                         <div class="hub-search">
                             <span class="hub-search-icon" aria-hidden="true">🔍</span>
@@ -1926,6 +1933,33 @@
                                  selected, permitted and pointed at a muted input reports
                                  success on every other check there is. -->
                             <div id="vhub-level" class="hub-level hidden"><div id="vhub-level-fill" class="hub-level-fill"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- ------------------- WORDS -------------------
+                         Say this, as that. The list only ever reaches the synthesizer: what
+                         is on screen keeps the spelling it was written with, which is why
+                         this can be as phonetic as it needs to be without making the
+                         conversation unreadable. -->
+                    <div id="vhub-pane-words" class="hub-body hub-body-even hidden">
+                        <div class="hub-detail">
+                            <div class="hub-detail-name">🗣 How to say a word</div>
+                            <div class="hub-detail-sub">
+                                For the ones the voice gets wrong. Spell it the way it should
+                                sound — only the voice hears this, the chat keeps the real spelling.
+                            </div>
+                            <div id="words-rows" class="words-rows"></div>
+                            <div class="hub-action">
+                                <span id="words-note" class="hub-action-size">Nothing yet.</span>
+                                <button type="button" id="btn-words-add" class="cyber-btn text-[10px] py-1 px-2">+ Add a word</button>
+                                <button type="button" id="btn-words-test" class="cyber-btn text-[10px] py-1 px-2">▶ Hear the list</button>
+                            </div>
+                            <p class="hub-blurb">
+                                Whole words only, and case does not matter — "nginx" catches
+                                "NGINX" too. The replacement is said exactly as you type it, so
+                                keep it lower case: a voice handed capitals may spell them out.
+                                Saved as you go.
+                            </p>
                         </div>
                     </div>
 
@@ -2785,7 +2819,7 @@
          being repeated in this page, sprite.html and avatar-lab.html. -->
     <script src="js/hologram/avatar-loader.js?v=1"></script>
     <script src="js/hologram/animate.js?v=41"></script>
-    <script src="js/voice.js?v=19"></script>
+    <script src="js/voice.js?v=20"></script>
     <script src="js/notes-graph.js?v=1"></script>
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>

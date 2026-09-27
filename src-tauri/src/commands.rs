@@ -534,6 +534,30 @@ pub fn set_persona_voice(
     Ok(list_personas(engine))
 }
 
+/// How this machine says the words it keeps getting wrong.
+pub fn pronunciations(engine: &LlmEngine) -> Value {
+    serde_json::json!({
+        "words": crate::speech_words::all(engine.db()),
+        "max_entries": crate::speech_words::MAX_ENTRIES,
+        "max_length": crate::speech_words::MAX_LEN,
+    })
+}
+
+/// Stores the whole list at once rather than one row at a time.
+///
+/// The pane edits a table, and a table has no stable identity per row -- a save per keystroke
+/// on a row whose word is half typed would store `Aeth` as a rule. The reply is the list as
+/// stored, which is what the pane redraws from: it has been trimmed and de-duplicated on the
+/// way in, so a pane that trusted its own copy would be showing something speech disagrees
+/// with.
+pub fn set_pronunciations(
+    engine: &LlmEngine,
+    words: Vec<crate::speech_words::Say>,
+) -> Result<Value, String> {
+    crate::speech_words::set(engine.db(), words)?;
+    Ok(pronunciations(engine))
+}
+
 /// Puts one avatar back to the voices it was written with.
 pub fn clear_persona_voice(engine: &LlmEngine, persona: String) -> Result<Value, String> {
     crate::persona_voice::clear(engine.db(), &persona)?;
@@ -856,12 +880,19 @@ pub fn synthesize_speech(
     let tts_engine =
         llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
 
+    // How the operator says the words, applied on the way to whichever engine speaks. It is
+    // read here, per clip, rather than held anywhere: the list is edited in Settings while
+    // the app is running, and the loop this feature lives or dies by is type it, press the
+    // test, listen.
+    let speller = crate::speech_words::speller(db);
+
     llm::generate_speech_with(
         &cache_dir,
         text,
         tts_engine,
         Some(&persona_voice),
         Some(&local_voice),
+        &speller,
     )
     .map_err(|why| {
         if local_only {
@@ -1173,12 +1204,17 @@ pub fn test_speech(engine: &LlmEngine) -> Result<(PathBuf, Value), Value> {
     let tts_engine =
         llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
 
+    // The test sentence goes through the operator's list like anything else. A test that
+    // took a different route through this function would be proving the wrong route works.
+    let speller = crate::speech_words::speller(db);
+
     match llm::generate_speech_reporting(
         &cache_dir,
         VOICE_TEST_SENTENCE,
         tts_engine,
         Some(&configured_voice),
         Some(&local_voice),
+        &speller,
     ) {
         Ok(speech) => {
             let report = serde_json::json!({

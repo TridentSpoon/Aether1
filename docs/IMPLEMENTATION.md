@@ -3323,6 +3323,125 @@ the overlap goes, and so does every reply after it. That is the failure the note
 above was written about. The claim keeps the clip from ever starting, which is why it does not
 have this second half.
 
+**Undone the same day: releasing the source node when the clip ends.** Trident, on the build
+above: "Voice now cuts of before it finishes. but no longer overlaps." `ended` says the element
+has handed its last sample to the *graph*, not that the last sample has been *heard*, and a
+`MediaElementAudioSourceNode` is the element's only output -- so disconnecting it at that moment
+takes the audio away while the end of the sentence is still on its way to the speakers. Where the
+backend fires `ended` optimistically, which WebKitGTK appears to, what is lost is a word rather
+than a few milliseconds. Of everything in that change this is the only part that could silence
+audio the version before it played in full, which is what made it the thing to undo rather than
+the thing to tune.
+
+The node is released by the *next* `playClip` instead, through `cutCurrentClip`, by which point
+the clip is paused or long finished. That still bounds what stays connected to one node rather
+than one per sentence, which is all the leak needed: a node nothing pulls sums to zero, and the
+silence cost a sentence.
+
+**And the reply's tail falls back to `pending` rather than being dropped.** Checking
+`reply.startsWith(spoken)` and speaking nothing when it fails was the wrong half of the choice.
+`takeSpeakableChunk` needs `MIN_SPEAKABLE` characters before it will cut, so a reply's last
+sentence is usually still sitting in `pending` and this is the line that finishes every answer.
+`pending` is by construction exactly the text no chunk has taken, so it cannot be misaligned --
+it only misses a delta that never arrived, which is the narrower failure. The authoritative slice
+when the offset lines up, `pending` when it does not.
+
+### How to say a word
+
+Trident, having just updated to test the voice: "Will it be possible to have the equivalent of
+a spell check in a pronunciation check list? There are a few words that I find hard to discern
+when not using my local pronunciations."
+
+A list of *say this, as that*, applied to the text on its way to the synthesizer and to nothing
+else. What is on screen keeps the spelling it was written with -- the operator writes `Aether1`
+and reads `Aether1`; only the voice hears `eether one`. That separation is what lets an entry be
+as phonetic as it needs to be without making the conversation unreadable.
+
+**Why a respelling rather than a phoneme.** IPA or eSpeak phonemes are the obvious answer and
+they do not survive contact with the three engines: Piper takes plain text and phonemizes it
+itself with no escape hatch, the cloud engine wants SSML `<phoneme>`, and the OS engine wants
+neither. A respelling is the one instruction all three understand, because it is just words. It
+is also the thing the operator can author without notation -- "say L'KEMI as elle kemmy" -- and
+the pane's own button says immediately whether it worked. What it cannot express is stress, or a
+vowel English spelling has no letters for; when that day comes an optional phoneme field can sit
+beside this one for the engines that take it, without changing what is stored.
+
+**One place to apply it, because there is one place the text is prepared.**
+`tts::generate_speech_reporting` already sanitized every string every engine speaks, so the
+speller goes in beside `sanitize_text` -- markdown out first, then the respellings, because they
+are written against the words the operator *hears*, not against the punctuation the answer
+arrived wrapped in. It is a parameter rather than a lookup inside that function, so the compiler
+names every caller that would otherwise have quietly skipped it. The result is what feeds the
+cache key, so editing the list makes the next clip a new one and nothing has to know to throw
+the old one away.
+
+**Three decisions in the matching.**
+- *Whole words, ignoring case.* That is what "a word is said wrong" means. But `\b` on both ends
+  never matches between two non-word characters, which would make `C++`, `.NET` and `L'KEMI`
+  unmatchable -- and those are exactly the entries worth having. So a boundary is added only on
+  an end that has a word character to sit against.
+- *The replacement is inserted exactly as written, never recapitalised to match what it
+  replaced.* An engine handed `NGINX` may spell it out letter by letter, so `engine ex` has to
+  stay lower case even where it replaced a shout.
+- *Longest first.* A rule for a phrase has to beat a rule for a word inside it, rather than
+  losing to whichever branch of the alternation happened to be tried first.
+
+The regex is compiled per clip rather than cached in a static: the list is edited while the app
+is running, and a cached one would keep saying the old thing until a restart -- which for a
+feature whose whole loop is type it, press the button, listen, is the one behaviour that makes it
+feel broken. One small compile against a synthesis measured in hundreds of milliseconds is not a
+cost worth that.
+
+**The pane stores the whole list at once.** A row being typed has no identity of its own, so a
+save per keystroke would store `Aeth` as a rule; it saves on blur and on remove. Rust trims,
+drops the empty row every editor leaves behind, and collapses entries differing only in case,
+then returns the list *as stored* -- which is what the pane redraws from, so the pane and the
+voice cannot end up disagreeing. A refused save leaves the rows exactly as typed, because one
+half-filled row should not take the other nine with it.
+
+`aether1 words` is the same list from a terminal, and earns its place beyond symmetry: adding a
+word there and running `aether1 say` is the only way to check the substitution on a machine with
+no window, which is every machine this was built on.
+
+### Enough
+
+Trident, having asked a fresh build for `diagnostics`: "I need a way to stop the talking once it
+starts. This was painful with many duplicates."
+
+Two separate faults, and the transcript he sent carries both. The answer ran to fourteen hundred
+lines, most of them frame addresses from a coredump; and there was no way to stop it being read
+out other than asking something else or holding the talk key, which are both ways of *starting*
+something.
+
+**Why the answer was fourteen hundred lines.** The sweep asks journalctl for sixty lines and gets
+sixty *entries* -- and one entry can be a coredump carrying the stack of every thread in the
+process. Those continuation lines have no timestamp and no unit prefix, so the parser, which took
+the first token as a time and fell back to `the system` when it found no `unit: `, read each one
+as an error of its own. `#3` became a timestamp. `Stack trace of thread 415397:` became an error
+attributed to `the system`, which is where `Stack the system: of thread` in his transcript comes
+from. So a line is now an entry only if its first token has the shape of a date; anything else is
+a continuation of the line above it, which is already in the list.
+
+**And the duplicates.** The same error four hundred times is one thing wrong with the machine, so
+events with the same source and the same text collapse into one line with a count and the time it
+was last seen. What that deliberately does not do is normalise the text: two lines differing only
+in a pid or an address stay two kinds, because deciding which digits are incidental is how a
+summary starts misreporting what the log said. The header then carries both numbers -- the kinds
+and the total -- since "nine kinds" and "1388 lines" are different facts about the same morning
+and the second should not disappear. The report caps at forty kinds and says how many it left,
+because `SWEEP_LINES` bounds what is asked for, not what comes back.
+
+**Stopping the talking.** Everything needed was already there: `stopSpeech()` drops the queue and
+cuts the clip, and the turn counter stops the sentences still inside the synthesizer from queueing
+themselves a moment later. What was missing was a way to ask for it that does not start something
+else. Escape does it, and a button appears beside Send while there is something to stop -- hidden
+otherwise, because a dead control next to the one you press every time is clutter, and because its
+appearing is itself how the operator learns the key.
+
+Escape hushes *and stops there* when it silenced something: a press that cuts off a long answer
+should not also close the panel being read. When nothing is being spoken it is the menu key it
+always was. The button plays no click sound, it being the button you press to stop the noise.
+
 ---
 
 #### Follow-up: AETHER CODE can change one folder
@@ -3416,3 +3535,4 @@ by itself is one people stop pressing buttons in.
 (the Piper voice download), reported it as not having worked because the re-check still said
 nothing can speak, and listed the other five with their reasons — including the `python3 -m
 venv` line for faster-whisper, which it will not run for you.
+
