@@ -1053,25 +1053,33 @@ rights needed, and it takes effect in new terminals):
 `prompt` shares one conversation history and one memory store with the HUD, so anything
 you tell it from a script is there next time you open the window.
 
-## Updates, and why it asks you to sign in to GitHub
+## Updates, and the optional GitHub sign-in
 
 A copy built from a checkout updates itself the way you would: `git pull`, rebuild, relaunch.
 That is what the tray's **Check for Updates** does, and there is nothing to sign in to.
 
 A copy **installed** from a bundle has no checkout and no toolchain, so its update is a new
-bundle from this project's releases -- and the repository is private, which means the releases
-are too. Rather than hide a credential inside the app, where anyone could read it back out,
-AETHER1 asks you to sign in as yourself: Settings -> **The Brain** -> **Connections** ->
-**Sign in**, or `aether1 signin`. It shows a short code, you type it in at
-`github.com/login/device`, and that is the whole of it. AETHER1 never sees a password, and the
-token it receives can do exactly one thing -- read the contents of repositories the app is
-installed on.
+bundle from this project's releases. Checking for one needs no account: the releases are
+public and AETHER1 reads them anonymously.
 
-That makes access a real list rather than a guess: whoever the owner has added to the
-repository can see the releases, and whoever is removed cannot. Your token is kept in your
-operating system's keychain (Credential Manager, Keychain, libsecret or kwallet). On a machine
-with no keychain service running -- a headless box, usually -- it goes in a file only you can
-read instead, and the app says so rather than pretending otherwise.
+Signing in is still offered, and does two things. It raises GitHub's rate limit for this
+machine from sixty requests an hour to five thousand, which matters on a shared or
+office connection where sixty is spent by lunchtime. And it is what lets a copy check a
+release that is *not* public -- a fork kept private, or this project before it was opened up.
+Settings -> **The Brain** -> **Connections** -> **Sign in**, or `aether1 signin`. It shows a
+short code, you type it in at `github.com/login/device`, and that is the whole of it. AETHER1
+never sees a password, and the token it receives can do exactly one thing -- read the contents
+of repositories the app is installed on.
+
+Your token is kept in your operating system's keychain (Credential Manager, Keychain,
+libsecret or kwallet). On a machine with no keychain service running -- a headless box,
+usually -- it goes in a file only you can read instead, and the app says so rather than
+pretending otherwise.
+
+Whether you sign in or not, **a download is checked before it is installed.** Every release
+asset is signed with minisign in the release pipeline, the public key is compiled into this
+binary, and a bundle whose signature does not verify is deleted rather than installed. That
+is the guarantee that matters, and it never depended on the releases being hard to reach.
 
 Connections is also where you can see whether the **GitHub CLI** (`gh`) is on this computer,
 which is a different thing entirely: that is the program AETHER CODE runs read-only commands

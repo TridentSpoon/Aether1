@@ -1736,9 +1736,11 @@
                                     </div>
                                 </div>
                                 <div class="text-[11px] font-mono text-slate-500 leading-snug">
-                                    Lets this copy see new releases, which live on a private repository.
-                                    A short code typed in at github.com; Aether1 never sees a password, and
-                                    the access it gets is read-only. Declining leaves everything else working.
+                                    Optional. Checking for updates works without it &mdash; the releases are
+                                    public. Signing in raises GitHub&rsquo;s hourly request limit, and lets this
+                                    copy see releases that are not public. A short code typed in at github.com;
+                                    Aether1 never sees a password, and the access it gets is read-only.
+                                    Declining leaves everything else working.
                                 </div>
                                 <!-- The device code, shown here as well as in the update panel: whichever
                                      one started the sign-in is the one drawing it. -->
@@ -2532,9 +2534,10 @@
                                 <button id="btn-check-update" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
                                     🔄 Check for Updates
                                 </button>
-                                <!-- Shown when the check needs a signed-in GitHub account and there
-                                     isn't one. AETHER1's releases are on a private repository, so
-                                     the person asking has to be somebody the owner let in. The
+                                <!-- Shown when signing in is the actual next move: a stored token
+                                     GitHub has stopped accepting, or releases it will not show to
+                                     an anonymous request, which is what a private repository looks
+                                     like from outside. An ordinary check needs none of this. The
                                      sign-in itself is owned by The Brain -> Connections; this opens
                                      it rather than keeping a second copy of the same buttons, so
                                      there is one place that says whether you are signed in. -->

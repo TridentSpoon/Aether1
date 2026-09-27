@@ -174,7 +174,7 @@ fn fetch_latest_main_sha() -> Result<String, String> {
         // genuinely missing repo, and "http status: 404" on its own reads as a bug report
         // waiting to happen rather than as the expected result of not being signed in.
         if !have_token && matches!(e, ureq::Error::StatusCode(404)) {
-            releases::ReleaseError::NotSignedIn.message()
+            releases::ReleaseError::NoAccess { signed_in: false }.message()
         } else {
             e.to_string()
         }
@@ -366,7 +366,16 @@ fn compute_release_status() -> UpdateStatus {
             }
         }
         Err(e) => UpdateStatus {
-            needs_sign_in: matches!(e, releases::ReleaseError::NotSignedIn),
+            // The sign-in button is offered where signing in is actually the next move:
+            // a token GitHub rejected, or no token and releases it will not show, which is
+            // what a private repository looks like from outside. Not offered when a signed-in
+            // account was refused -- there the answer is to ask the owner, and a sign-in
+            // button says the opposite.
+            needs_sign_in: matches!(
+                e,
+                releases::ReleaseError::NotSignedIn
+                    | releases::ReleaseError::NoAccess { signed_in: false }
+            ),
             error: Some(e.message()),
             ..base_status()
         },
