@@ -46,6 +46,7 @@ mod serve_auth;
 mod serve_tls;
 mod server;
 mod setup;
+mod speech_words;
 mod terminal;
 mod tools;
 mod vault;
@@ -1609,6 +1610,19 @@ fn voice_pickers_rust() -> serde_json::Value {
 }
 
 #[tauri::command(async)]
+fn pronunciations_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::pronunciations(&engine)
+}
+
+#[tauri::command(async)]
+fn set_pronunciations_rust(
+    engine: tauri::State<LlmEngine>,
+    words: Vec<speech_words::Say>,
+) -> Result<serde_json::Value, String> {
+    commands::set_pronunciations(&engine, words)
+}
+
+#[tauri::command(async)]
 fn set_persona_voice_rust(
     engine: tauri::State<LlmEngine>,
     persona: String,
@@ -2442,6 +2456,8 @@ fn main() {
             test_speech_rust,
             list_personas_rust,
             voice_pickers_rust,
+            pronunciations_rust,
+            set_pronunciations_rust,
             set_persona_voice_rust,
             clear_persona_voice_rust,
             get_version_info,

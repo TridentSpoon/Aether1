@@ -59,6 +59,10 @@ USAGE:
     aether1 flow on|off            Turn that on or off
     aether1 flow line <NAME>       Pick a whole line instead of one avatar, so the question
                                    goes to whichever of its nodes owns it (`clear` to release)
+    aether1 words                  Show how this machine says the words the voice gets wrong
+    aether1 words <WORD> <SAID>    Say one word differently (the rest of the line is how it
+                                   sounds, so quotes are optional)
+    aether1 words drop <WORD>      Take one off the list
     aether1 signin                 Sign in to GitHub, so this copy can see new releases.
                                    Shows a code to type in at github.com; nothing else
     aether1 signout                Forget that sign-in
@@ -180,6 +184,13 @@ pub enum Invocation {
         /// `flow line <NAME>`: pick a whole cast rather than one of its members, so the
         /// question goes to whichever node of that line owns it. `clear` releases it.
         line: Option<String>,
+    },
+    /// `words`: the pronunciation list. With no arguments it prints it; with a word and a
+    /// respelling it adds or replaces one; `drop <WORD>` removes one.
+    Words {
+        word: Option<String>,
+        said_as: Option<String>,
+        drop: bool,
     },
     /// `signin`: the GitHub device flow, in a terminal. Prints the code, waits for it to be
     /// approved in a browser, and keeps the token in the OS keychain. See github_auth.rs for
@@ -495,6 +506,36 @@ pub fn parse(argv: &[String]) -> Invocation {
                     .to_string(),
             ),
         },
+        "words" => match rest
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => Ok(Invocation::Words {
+                word: None,
+                said_as: None,
+                drop: false,
+            }),
+            ["drop", word @ ..] if !word.is_empty() => Ok(Invocation::Words {
+                word: Some(word.join(" ")),
+                said_as: None,
+                drop: true,
+            }),
+            // The respelling is several words far more often than not ("see plus plus"), so
+            // it is the rest of the line rather than one argument -- which also means the
+            // shell's quoting is one less thing to get right.
+            [word, said @ ..] if !said.is_empty() => Ok(Invocation::Words {
+                word: Some((*word).to_string()),
+                said_as: Some(said.join(" ")),
+                drop: false,
+            }),
+            _ => Err(
+                "words takes nothing, a word and how it sounds, or `drop <WORD>` -- \
+                      for example `aether1 words nginx engine ex`"
+                    .to_string(),
+            ),
+        },
         "flow" => match rest
             .iter()
             .map(String::as_str)
@@ -690,6 +731,76 @@ fn run_prompt(text: Option<String>, session: Option<String>) -> Result<String, S
 /// Reports the line hand-offs may move within as well as the mode, because FLOW with no
 /// line to move within does nothing and the operator should be able to see that rather
 /// than wonder why it is quiet.
+/// `aether1 words` -- the same list the Words tab edits, from a terminal.
+///
+/// Worth having beyond symmetry: this is the one place the substitution can be checked
+/// without a window, by adding a word here and running `aether1 say` on a sentence with it
+/// in. The window's own "hear the list" button cannot help on a machine with no window.
+fn run_words(word: Option<&str>, said_as: Option<&str>, drop: bool) -> Result<String, String> {
+    use crate::speech_words::{self, Say};
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let Some(word) = word {
+        let mut words = speech_words::all(db);
+        let at = words
+            .iter()
+            .position(|w| w.from.eq_ignore_ascii_case(word.trim()));
+        if drop {
+            match at {
+                Some(at) => {
+                    let gone = words.remove(at);
+                    speech_words::set(db, words)?;
+                    return Ok(format!("{} is said the ordinary way again.", gone.from));
+                }
+                // Said rather than errored: the end state the operator asked for is the end
+                // state they have, and a list they cannot see is not a list to be quizzed on.
+                None => return Ok(format!("{word} was not on the list.")),
+            }
+        }
+        let said_as = said_as.unwrap_or_default();
+        let entry = Say {
+            from: word.trim().to_string(),
+            to: said_as.trim().to_string(),
+        };
+        match at {
+            Some(at) => words[at] = entry,
+            None => words.push(entry),
+        }
+        speech_words::set(db, words)?;
+        return Ok(format!(
+            "{} is now said \"{}\".",
+            word.trim(),
+            said_as.trim()
+        ));
+    }
+
+    let words = speech_words::all(db);
+    if words.is_empty() {
+        return Ok(
+            "Nothing is said differently. `aether1 words <WORD> <HOW IT SOUNDS>` \
+                   adds one."
+                .to_string(),
+        );
+    }
+    let widest = words
+        .iter()
+        .map(|w| w.from.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::from("HOW THIS MACHINE SAYS THINGS\n");
+    for w in &words {
+        out.push_str(&format!(
+            "  {:<widest$}  is said  {}\n",
+            w.from,
+            w.to,
+            widest = widest
+        ));
+    }
+    out.push_str("\nOnly the voice hears these; what is written stays as it is.");
+    Ok(out)
+}
+
 fn run_flow(state: Option<&str>, line: Option<&str>) -> Result<String, String> {
     let engine = crate::build_llm_engine();
     let db = engine.db();
@@ -1828,6 +1939,11 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),
+        Invocation::Words {
+            word,
+            said_as,
+            drop,
+        } => run_words(word.as_deref(), said_as.as_deref(), drop),
         Invocation::SignIn => run_sign_in(),
         Invocation::SignOut => Ok(run_sign_out()),
         Invocation::Update { download } => run_update(download),

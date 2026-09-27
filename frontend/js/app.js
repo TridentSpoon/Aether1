@@ -6060,6 +6060,192 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------- How to say a word -------------------------
+       Trident: "the equivalent of a spell check in a pronunciation check list? There are a
+       few words that I find hard to discern when not using my local pronunciations."
+
+       A table of say-this-as-that, stored whole rather than row by row. A row has no
+       identity of its own while it is being typed -- saving per keystroke would store
+       `Aeth` as a rule -- so the whole list goes at once, on blur and on remove, and the
+       reply is what gets drawn back. Rust trims it, drops the empty row every editor leaves
+       behind, and collapses duplicates, so redrawing from its answer is the only way the
+       pane and the voice cannot disagree. */
+    let pronunciations = { words: [], maxEntries: 200, maxLength: 120 };
+
+    async function fetchPronunciations() {
+        if (IS_TAURI) return tauriInvoke('pronunciations_rust');
+        const resp = await apiFetch('/api/speech/pronunciations');
+        if (!resp.ok) throw new Error(`could not read the pronunciations: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function storePronunciations(words) {
+        if (IS_TAURI) return tauriInvoke('set_pronunciations_rust', { words });
+        const resp = await apiFetch('/api/speech/pronunciations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ words }),
+        });
+        if (!resp.ok) throw new Error((await resp.text()) || `save failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    function takePronunciations(payload) {
+        pronunciations = {
+            words: Array.isArray(payload?.words) ? payload.words : [],
+            maxEntries: payload?.max_entries || pronunciations.maxEntries,
+            maxLength: payload?.max_length || pronunciations.maxLength,
+        };
+    }
+
+    async function refreshPronunciations() {
+        try {
+            takePronunciations(await fetchPronunciations());
+            renderPronunciations();
+        } catch (e) {
+            setPronunciationNote(`Could not read the list: ${e.message || e}`, 'bad');
+        }
+    }
+
+    function setPronunciationNote(text, tone) {
+        const note = document.getElementById('words-note');
+        if (!note) return;
+        note.textContent = text;
+        note.dataset.tone = tone || '';
+    }
+
+    /* What is on screen right now, including the row somebody is still typing into. Read
+       from the inputs rather than from `pronunciations.words`, because the point of saving
+       is to store what they typed, not what was last stored. */
+    function pronunciationsOnScreen() {
+        return Array.from(document.querySelectorAll('#words-rows .words-row')).map((row) => ({
+            from: row.querySelector('.words-from')?.value || '',
+            to: row.querySelector('.words-to')?.value || '',
+        }));
+    }
+
+    async function savePronunciations() {
+        const words = pronunciationsOnScreen();
+        // Nothing typed anywhere: this is the empty row after an Add, not a list to store.
+        if (!words.some((w) => w.from.trim() || w.to.trim()) && !pronunciations.words.length) {
+            setPronunciationNote('Nothing yet.', '');
+            return;
+        }
+        try {
+            takePronunciations(await storePronunciations(words));
+            renderPronunciations();
+            setPronunciationNote(
+                pronunciations.words.length
+                    ? `${pronunciations.words.length} saved. The next thing it says uses them.`
+                    : 'Nothing yet.',
+                pronunciations.words.length ? 'good' : '');
+        } catch (e) {
+            // The rows are left exactly as typed: a save refused for one half-filled row
+            // should not take the other nine with it.
+            setPronunciationNote(String(e.message || e), 'bad');
+        }
+    }
+
+    function renderPronunciations() {
+        const holder = document.getElementById('words-rows');
+        if (!holder) return;
+        holder.innerHTML = '';
+        for (const word of pronunciations.words) holder.appendChild(pronunciationRow(word));
+        if (!pronunciations.words.length) holder.appendChild(pronunciationRow({ from: '', to: '' }));
+        const total = pronunciations.words.length;
+        setPronunciationNote(total ? `${total} saved.` : 'Nothing yet.', '');
+    }
+
+    function pronunciationRow(word) {
+        const row = document.createElement('div');
+        row.className = 'words-row';
+
+        const from = document.createElement('input');
+        from.type = 'text';
+        from.className = 'words-from';
+        from.placeholder = 'the word';
+        from.maxLength = pronunciations.maxLength;
+        from.value = word.from || '';
+        from.setAttribute('aria-label', 'The word as it is written');
+
+        const arrow = document.createElement('span');
+        arrow.className = 'words-arrow';
+        arrow.textContent = 'is said';
+
+        const to = document.createElement('input');
+        to.type = 'text';
+        to.className = 'words-to';
+        to.placeholder = 'how it sounds';
+        to.maxLength = pronunciations.maxLength;
+        to.value = word.to || '';
+        to.setAttribute('aria-label', 'How the word should sound');
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'words-remove';
+        remove.title = 'Remove this one';
+        remove.setAttribute('aria-label', `Remove ${word.from || 'this row'}`);
+        remove.textContent = '✕';
+        remove.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            row.remove();
+            savePronunciations();
+        });
+
+        // Saved on leaving a field rather than on every keystroke: a rule is only a rule
+        // once the whole word is in it, and Enter for people who never leave the keyboard.
+        for (const field of [from, to]) {
+            field.addEventListener('blur', () => savePronunciations());
+            field.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') { event.preventDefault(); field.blur(); }
+            });
+        }
+
+        row.append(from, arrow, to, remove);
+        return row;
+    }
+
+    function addPronunciationRow() {
+        voiceEngine.playSFX('click');
+        const holder = document.getElementById('words-rows');
+        if (!holder) return;
+        if (holder.querySelectorAll('.words-row').length >= pronunciations.maxEntries) {
+            setPronunciationNote(`That is as many as it holds (${pronunciations.maxEntries}).`, 'bad');
+            return;
+        }
+        const row = pronunciationRow({ from: '', to: '' });
+        holder.appendChild(row);
+        row.querySelector('.words-from')?.focus();
+    }
+
+    /* Speaks the list back, which is the only check that counts: the rest of this pane can
+       only show that the text was stored, and the question is what it sounds like. Saves
+       first, so what is heard is what is stored rather than what was stored a minute ago. */
+    async function hearPronunciations() {
+        voiceEngine.playSFX('click');
+        await savePronunciations();
+        if (!pronunciations.words.length) {
+            setPronunciationNote('Add a word first, then this will read it back.', 'bad');
+            return;
+        }
+        // The words as written, in a sentence, so what comes out of the speaker is the
+        // substitution happening rather than a recital of the replacements.
+        const sentence = `${pronunciations.words.map((w) => w.from).join(', ')}.`;
+        setPronunciationNote('Speaking...', '');
+        try {
+            const url = await synthesizeSpeechUrl(sentence, null);
+            if (!url) return; // synthesizeSpeechUrl has already shown its own card
+            const result = await voiceEngine.playTTSAudio(url);
+            setPronunciationNote(
+                result && result.played
+                    ? 'That is how it will say them. Change a spelling and press this again.'
+                    : `It could not play that: ${result?.error || 'no reason given'}`,
+                result && result.played ? 'good' : 'bad');
+        } catch (e) {
+            setPronunciationNote(String(e.message || e), 'bad');
+        }
+    }
+
     async function refreshSoundHub(options = {}) {
         if (!document.getElementById('vhub-list') || soundHub.loading) return;
         soundHub.loading = true;
@@ -6243,6 +6429,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     ?.classList.toggle('hidden', soundHub.tab !== 'voices');
                 document.getElementById('vhub-pane-devices')
                     ?.classList.toggle('hidden', soundHub.tab !== 'devices');
+                document.getElementById('vhub-pane-words')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'words');
+                if (soundHub.tab === 'words') refreshPronunciations();
                 // The search box only means anything on one of the two tabs, and it is
                 // the wrapper that goes -- hiding the input alone leaves its magnifying
                 // glass sitting on the row with nothing to type into.
@@ -6261,6 +6450,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         document.getElementById('vhub-test-output')?.addEventListener('click', testOutputDevice);
         document.getElementById('vhub-test-input')?.addEventListener('click', testInputDevice);
+        document.getElementById('btn-words-add')?.addEventListener('click', addPronunciationRow);
+        document.getElementById('btn-words-test')?.addEventListener('click', hearPronunciations);
         // Choosing a device points the window at it straight away, so the next thing the
         // companion says comes out of it. Save Changes is what makes it survive a restart.
         for (const id of ['setting-audio-output', 'setting-audio-input']) {
