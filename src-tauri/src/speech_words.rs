@@ -167,10 +167,6 @@ impl Speller {
             })
             .into_owned()
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.matcher.is_none()
-    }
 }
 
 /// This machine's pronunciations, ready to run.
@@ -222,10 +218,8 @@ mod tests {
     fn nothing_is_changed_until_somebody_adds_a_word() {
         let db = db();
         assert!(all(&db).is_empty());
-        let speller = speller(&db);
-        assert!(speller.is_empty());
         assert_eq!(
-            speller.apply("Aether1 is listening."),
+            speller(&db).apply("Aether1 is listening."),
             "Aether1 is listening."
         );
     }
