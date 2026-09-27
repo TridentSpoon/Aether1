@@ -163,8 +163,8 @@ pub fn parse_pactl(
     let mut outputs = parse_pactl_blocks(sinks, Direction::Output, default_sink);
     let mut inputs = parse_pactl_blocks(sources, Direction::Input, default_source);
     inputs.retain(|d| !d.id.ends_with(".monitor"));
-    outputs.sort_by(|a, b| b.is_default.cmp(&a.is_default));
-    inputs.sort_by(|a, b| b.is_default.cmp(&a.is_default));
+    outputs.sort_by_key(|d| std::cmp::Reverse(d.is_default));
+    inputs.sort_by_key(|d| std::cmp::Reverse(d.is_default));
     DeviceReport {
         outputs,
         inputs,
