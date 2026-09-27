@@ -366,8 +366,7 @@ const SERVE_PORT: u16 = 8378;
 
 /// Looks at everything, once. Costs a handful of process spawns and two short-timeout
 /// connections, which is why nothing calls it on a timer.
-pub fn observe(engine: &LlmEngine, facts: &Facts) -> Observation {
-    let db = engine.db();
+pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
     let settings = |key: &str, default: &str| db.get_setting_string(key, default);
 
     let provider = settings("llm_provider", "offline");
@@ -1654,7 +1653,7 @@ pub fn apply_with(
 
     // The re-check is mandatory. A repair whose verdict is unchanged is a failed repair,
     // whatever its own exit code said.
-    let after = diagnose(&observe(engine, &Facts::default()));
+    let after = diagnose(&observe(engine.db(), &Facts::default()));
     let rechecked = after.check(check).map(|c| c.verdict);
     let recheck_detail = after.check(check).map(|c| c.detail.clone());
 
@@ -1787,10 +1786,10 @@ pub fn repeated_repairs(db: &MemoryDb) -> Vec<String> {
 
 /// The whole report, with the cross-session finding above folded in. This is what the CLI and
 /// the HUD both call.
-pub fn report(engine: &LlmEngine, facts: &Facts) -> (Observation, Health) {
-    let observation = observe(engine, facts);
+pub fn report(db: &MemoryDb, facts: &Facts) -> (Observation, Health) {
+    let observation = observe(db, facts);
     let mut health = diagnose(&observation);
-    health.repeated = repeated_repairs(engine.db());
+    health.repeated = repeated_repairs(db);
     if !health.repeated.is_empty() {
         health.needs_attention = true;
     }

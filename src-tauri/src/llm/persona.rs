@@ -672,9 +672,23 @@ impl Persona {
     pub fn domain(&self) -> Domain {
         // The two tools with no path argument that every persona keeps: what the HUD is
         // already displaying, and the operator's own notes.
-        const MINIMUM_TOOLS: &[&str] = &["telemetry_detail", "search_memory"];
-        const READS_FILES: &[&str] =
-            &["read_file", "list_dir", "telemetry_detail", "search_memory"];
+        const MINIMUM_TOOLS: &[&str] = &[
+            "telemetry_detail",
+            "search_memory",
+            // A program explaining its own failure is not a privilege: every persona
+            // can read AETHER1's self-check and its crash record, whatever else its
+            // field covers.
+            "self_check",
+            "recent_crashes",
+        ];
+        const READS_FILES: &[&str] = &[
+            "read_file",
+            "list_dir",
+            "telemetry_detail",
+            "search_memory",
+            "self_check",
+            "recent_crashes",
+        ];
         /// What the two machine-facing personas share: the file tools, plus the two that
         /// answer "what is this machine doing" -- the process table, and the Windows event
         /// log, which is the other half of "system diagnosis and event viewer checking".
@@ -689,6 +703,8 @@ impl Persona {
             // meant the two machine-facing personas fell *below* the minimum, which is not
             // a minimum -- and made "have I told you about this box before?" a proposal.
             "search_memory",
+            "self_check",
+            "recent_crashes",
         ];
 
         match self {

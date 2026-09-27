@@ -7460,6 +7460,85 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.__TAURI__.core.invoke(cmd, args);
     }
 
+    /* Step 13's last mile. The crash watcher has been finding crashes and the tray has been
+       going amber since it shipped, and the notification it raises says "AETHER1 has the
+       details. Open it to look into this together" -- but nothing in the HUD listened for
+       the event carrying those details, so opening it showed an ordinary chat window with
+       nothing in it. The promise in that notification is what this keeps.
+
+       It is a card rather than a message from the companion: no model has seen this yet, and
+       a line in AETHER1's own voice saying something crashed would be the app putting words
+       in its mouth. The card states the fact and offers the one thing worth doing next. */
+    function appendCrashCard(payload) {
+        const headline = String(payload.headline || 'Something stopped unexpectedly');
+        const context = String(payload.context || '');
+        const program = String((payload.crash && payload.crash.program) || '').trim();
+
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm leading-relaxed self-start mr-8 '
+            + 'border border-amber-500/40 bg-amber-950/20';
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 '
+            + 'border-b border-amber-500/20 text-xs font-mono text-amber-400/90';
+        const what = document.createElement('span');
+        what.textContent = '⚠ CRASH DETECTED';
+        header.appendChild(what);
+        const when = document.createElement('span');
+        when.textContent = new Date().toLocaleTimeString();
+        header.appendChild(when);
+        card.appendChild(header);
+
+        const line = document.createElement('p');
+        line.className = 'text-amber-100/90';
+        line.textContent = headline;
+        card.appendChild(line);
+
+        /* The log tail is behind a fold. It is the most useful thing here and the least
+           readable -- a wall of frames pasted into the conversation is exactly the thing
+           that made this unreadable in the first place. */
+        if (context) {
+            const fold = document.createElement('details');
+            fold.className = 'mt-2';
+            const summary = document.createElement('summary');
+            summary.className = 'text-[11px] font-mono text-amber-400/70 cursor-pointer';
+            summary.textContent = 'what it wrote before it stopped';
+            fold.appendChild(summary);
+            const pre = document.createElement('pre');
+            pre.className = 'mt-1 text-[10px] font-mono text-slate-300 whitespace-pre-wrap '
+                + 'max-h-48 overflow-y-auto';
+            pre.textContent = context;
+            fold.appendChild(pre);
+            card.appendChild(fold);
+        }
+
+        const ask = document.createElement('button');
+        ask.className = 'mt-2 text-xs font-mono text-amber-200 hover:text-amber-50 '
+            + 'border border-amber-500/40 px-2 py-0.5 rounded bg-amber-950/40 cursor-pointer';
+        ask.textContent = 'Ask ' + currentAgentName.toUpperCase() + ' about this';
+        ask.onclick = () => {
+            ask.disabled = true;
+            // The question, not the evidence: recent_crashes and self_check are in every
+            // persona's domain, so it fetches the crash itself and whatever else is wrong
+            // with the install -- which is the difference between a diagnosis and a paste.
+            handleSendMessage(program
+                ? `${program} just crashed on this machine. Look into what happened and what I should do about it.`
+                : 'Something just crashed on this machine. Look into what happened and what I should do about it.');
+        };
+        card.appendChild(ask);
+
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('crash-detected', (event) => {
+            const payload = (event && event.payload) || {};
+            if (!payload.headline) return;
+            appendCrashCard(payload);
+        });
+    }
+
     // Step 48: another copy of AETHER1 is installed somewhere on this machine. The startup
     // scan in main.rs finds them; this is where the operator is asked, because nothing is
     // ever removed without being asked and an uninstall cannot be taken back.

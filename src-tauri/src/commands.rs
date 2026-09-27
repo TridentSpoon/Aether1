@@ -881,7 +881,7 @@ pub fn synthesize_speech(
 /// behind it. `facts` carries what only the caller knows -- the desktop process fills it in,
 /// a browser-served HUD passes what it can and the report says which rows nobody could answer.
 pub fn doctor_report(engine: &LlmEngine, facts: crate::doctor::Facts) -> Value {
-    let (observation, health) = crate::doctor::report(engine, &facts);
+    let (observation, health) = crate::doctor::report(engine.db(), &facts);
     serde_json::json!({ "health": health, "observation": observation })
 }
 
@@ -903,7 +903,7 @@ pub fn doctor_repair(
 
     // The repair the report offered for this check, recomputed from a fresh probe: a button
     // pressed ten minutes after the panel was drawn must not act on what was true then.
-    let (observation, _) = crate::doctor::report(engine, &crate::doctor::Facts::default());
+    let (observation, _) = crate::doctor::report(engine.db(), &crate::doctor::Facts::default());
     let offered = crate::doctor::repair_for(check_id, &observation);
     match offered {
         Some(offered) if offered.id == repair_id => {}

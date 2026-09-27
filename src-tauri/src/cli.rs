@@ -1159,7 +1159,7 @@ fn run_doctor(
     // Facts::default(): the window, the tray registration and the watcher's poll are facts
     // about the running desktop process, and this is not it. The report says so per check
     // rather than guessing.
-    let (observation, health) = doctor::report(&engine, &doctor::Facts::default());
+    let (observation, health) = doctor::report(engine.db(), &doctor::Facts::default());
 
     if json {
         let bundle = serde_json::json!({ "observation": observation, "health": health });

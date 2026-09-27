@@ -2620,7 +2620,7 @@ fn main() {
                     std::thread::sleep(Duration::from_secs(3));
                     let engine = app_handle.state::<LlmEngine>();
                     let facts = doctor_facts(&app_handle);
-                    let (_, health) = doctor::report(&engine, &facts);
+                    let (_, health) = doctor::report(engine.db(), &facts);
                     println!("[AETHER1] self-check: {}", health.headline);
                     for check in health
                         .checks
