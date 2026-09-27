@@ -94,9 +94,10 @@ document.addEventListener('DOMContentLoaded', () => {
      * One pane is platform-dependent (Startup & Performance) and starts with its rail
      * entry hidden -- revealSettingsSection is how initStartupPerformance turns it on.
      * An entry that is hidden cannot be chosen, including out of the remembered choice
-     * below. Desktop Sprite used to be a second such entry; it is a card inside Display
-     * now (see SETTINGS_SECTION_ALIASES), since both it and the panel grid answer the
-     * same question of where this thing is drawn on screen.
+     * below. Desktop Sprite and Remote & LAN used to be two more such entries; they are
+     * cards inside Display and Network & Remote now (see SETTINGS_SECTION_ALIASES), since
+     * each answered the same question as the section it joined -- where this thing is drawn
+     * on screen, and what crosses the edge of this machine.
      *
      * A pane whose body is still a <details> is opened when it is chosen, which is
      * what keeps the two groups that probe the machine on open (the coding group,
@@ -106,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Sections that have been folded into another one. Only the remembered choice can still
     // name one, so this is what stops somebody who was last in Desktop Sprite from being
     // dropped back at the top of the rail the first time they open Settings after updating.
-    const SETTINGS_SECTION_ALIASES = { sprite: 'layout' };
+    const SETTINGS_SECTION_ALIASES = { sprite: 'layout', lan: 'network' };
     const settingsNav = document.getElementById('settings-nav');
     const settingsNavEmpty = document.getElementById('settings-nav-empty');
     const settingsSearch = document.getElementById('settings-search');
@@ -2739,7 +2740,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ].filter(Boolean).join('<br/>');
 
             // The environment can nail the mode on (AETHER1_LOCAL_ONLY). Where it has, the
-            // checkbox is shown for what it is rather than left looking like a live control.
+            // switch is shown for what it is rather than left looking like a live control.
             const localOnlyToggle = document.getElementById('setting-local-only');
             const forcedNote = document.getElementById('local-only-forced');
             if (localOnlyToggle && status.local_only_forced) {
@@ -5028,25 +5029,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnLanRevokeAll?.addEventListener('click', () => revokeEveryDevice(refreshLan));
 
-    // The one cross-pane button: "who may come in" and "what may go out" are different
-    // questions, and the card that says so can open the page that answers the other.
-    document.querySelectorAll('[data-settings-goto]').forEach(button => {
-        button.addEventListener('click', () => {
-            voiceEngine.playSFX('click');
-            showSettingsSection(button.dataset.settingsGoto);
-        });
-    });
-
+    // The LAN cards live inside Network & Remote, and only the native app can start or
+    // stop the server behind them -- so it is the cards that are revealed here, not a rail
+    // entry: local-only mode on the same page is a question in a browser tab too.
     function initRemoteLan() {
         if (!IS_TAURI) return;
-        revealSettingsSection('lan');
+        document.getElementById('remote-lan-cards')?.classList.remove('hidden');
     }
     initRemoteLan();
 
     // Read when the section is opened, and on each visit after: whether a server is up is
     // a fact about right now, and it can change from a terminal while Settings is open.
     document.addEventListener('aether-settings-section', event => {
-        if (event.detail === 'lan') refreshLan();
+        if (event.detail === 'network' && IS_TAURI) refreshLan();
     });
 
     /* ====================== GIVE IT A VOICE =============================
