@@ -3228,8 +3228,15 @@ document.addEventListener('DOMContentLoaded', () => {
             attachConsultedNotes(replyDiv, data.notes);
             voiceEngine.playSFX('incoming');
 
-            // Speak whatever never reached a sentence boundary (the tail of the reply).
-            const tail = reply.slice(spoken.length);
+            /* Speak whatever never reached a sentence boundary (the tail of the reply).
+               `spoken` is an offset into the streamed deltas, and the authoritative reply is
+               only the same string as long as every delta arrived and none was rewritten --
+               so the offset is checked against this text rather than trusted. When it does
+               not line up, the tail would be an arbitrary slice of the reply, and the words
+               it happens to start at are ones the operator has already heard: a sentence
+               spoken twice at the end of every answer. Better to say nothing than to say
+               part of it again. */
+            const tail = reply.startsWith(spoken) ? reply.slice(spoken.length) : '';
             if (tail.trim()) await speakChunk(tail);
 
             await refreshPendingApprovals();

@@ -3260,3 +3260,65 @@ with it, and no reset is needed.
 operator can always open one natively. That is the argument for the terminal being a tab and
 not a panel -- it does not have to be the thing that is always in view to be worth having in
 the window.
+
+### Two voices at once: how the speaker is claimed
+
+Trident, on a reply being spoken aloud: "The voice keeps overlapping itself. Not giving
+enough time to finish a sentence."
+
+**The overlap is a race in `playClip`, not in the queue.** `enqueueTTS` drains strictly one
+clip at a time, and every path into playback starts by cutting whatever is currently
+playing -- but the cut happens *before* the clip's element exists, and there is an `await` in
+between: a suspended `AudioContext` has to be resumed first. Two callers that both arrive
+during that window each cut a current clip that is still `null`, then each build an element
+and play it. Both are heard, and only the second is reachable by any later cut, so the first
+cannot be stopped by anything at all. Reproduced in Chromium with two half-second clips:
+they started 9 ms apart.
+
+The pairs that hit it are ordinary ones -- the reply being spoken and a Replay button, the
+start-up self-test and the first answer, an avatar tap and the answer to the question it
+asked. And the context is suspended more often than it looks: it is suspended until the
+first gesture, and again every time the window goes to the tray.
+
+**The fix is a claim taken synchronously.** `playClaim` is bumped by every `cutCurrentClip`,
+and `playClip` reads it into a local before the first await and refuses to start if it has
+moved on since -- a clip that was superseded while it was getting the speaker ready reports
+`superseded: true` and stays silent instead of joining whatever took its place. Nothing else
+can express this: the claim is the only part of "I am about to play" that exists before the
+element does.
+
+**A drain loop stops on a `superseded` outcome only when something is actually playing.** A
+cut that left the speaker free is `stopSpeech` dropping a superseded turn, and whatever was
+queued after it belongs to the *new* turn -- breaking there would strand the new reply's
+first sentences in the queue.
+
+**Three smaller things in the same area.**
+- `SENTENCE_GAP_MS` (140 ms) between queued clips. Piper and edge-tts both end a clip on the
+  last sample of the last word, so starting the next the instant `ended` fires runs two
+  sentences together with no breath between them -- half of what "not giving it time to
+  finish a sentence" describes.
+- A clip that throws no longer empties the drain loop. `audioCtx.resume()` rejects on a
+  context with no gesture behind it, and that rejection used to come out of `enqueueTTS`,
+  leaving the rest of the reply in the queue to be spoken by whichever later reply next
+  started a loop -- one answer's sentences in among another's.
+- The `MediaElementAudioSourceNode` is disconnected when its clip settles. It cannot be
+  reused and cannot be collected while connected, so before this every sentence a
+  conversation ever spoke was still in the graph, and the analyser summed all of them on
+  every render quantum.
+
+**And the tail is only spoken if it is really the tail.** The final authoritative reply is
+sliced at `spoken.length`, which is an offset into the streamed deltas -- the same string
+only as long as every delta arrived unrewritten. When it does not line up, that slice starts
+in the middle of words already spoken, which is a sentence repeated at the end of the answer;
+it is now checked with `startsWith` and skipped rather than guessed at.
+
+**On the disconnect-only fix this merged with.** `8754dbd` on main reached for the same
+symptom by disconnecting the previous source node before building the next one, and it does
+silence the second voice -- a MediaElementAudioSourceNode is the element's only output, so an
+element whose node is disconnected is inaudible. But it is still *playing*, with nothing
+pulling it, so it never reaches its end and never fires `ended`: its `finish` never settles,
+the drain loop never gets its turn back, and the window speaks nothing for the rest of the
+session. Measured in Chromium by tapping the gain node and watching for both tones at once:
+the overlap goes, and so does every reply after it. That is the failure the note on `finish`
+above was written about. The claim keeps the clip from ever starting, which is why it does not
+have this second half.
