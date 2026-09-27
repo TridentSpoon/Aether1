@@ -81,6 +81,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const settingsModal = document.getElementById('settings-modal');
     const btnCloseSettings = document.getElementById('btn-close-settings');
     const btnSaveSettings = document.getElementById('btn-save-settings');
+    const btnAgentBrowser = document.getElementById('btn-agent-browser');
+    const agentBrowserModal = document.getElementById('agent-browser-modal');
+    const btnCloseAgentBrowser = document.getElementById('btn-close-agent-browser');
+    const agentBrowserContainer = document.getElementById('agent-browser-container');
 
     /* ---- Settings: the section rail ------------------------------------------
      * Headings on the left, the chosen section's detail on the right. Every pane
@@ -9255,6 +9259,24 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSaveSettings.addEventListener('click', () => {
         saveSettings(true);
     });
+
+    if (btnAgentBrowser) {
+        btnAgentBrowser.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            if (agentBrowserContainer && AgentBrowser) {
+                // Render the agent browser when opened
+                AgentBrowser.render('agent-browser-container');
+            }
+            agentBrowserModal.classList.remove('hidden');
+        });
+    }
+
+    if (btnCloseAgentBrowser) {
+        btnCloseAgentBrowser.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            agentBrowserModal.classList.add('hidden');
+        });
+    }
 
     btnClearChat.addEventListener('click', async () => {
         voiceEngine.playSFX('click');
