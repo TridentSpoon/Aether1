@@ -3243,15 +3243,20 @@ document.addEventListener('DOMContentLoaded', () => {
             attachConsultedNotes(replyDiv, data.notes);
             voiceEngine.playSFX('incoming');
 
-            /* Speak whatever never reached a sentence boundary (the tail of the reply).
-               `spoken` is an offset into the streamed deltas, and the authoritative reply is
-               only the same string as long as every delta arrived and none was rewritten --
-               so the offset is checked against this text rather than trusted. When it does
-               not line up, the tail would be an arbitrary slice of the reply, and the words
-               it happens to start at are ones the operator has already heard: a sentence
-               spoken twice at the end of every answer. Better to say nothing than to say
-               part of it again. */
-            const tail = reply.startsWith(spoken) ? reply.slice(spoken.length) : '';
+            /* Speak whatever never reached a sentence boundary. There is almost always
+               something: takeSpeakableChunk needs MIN_SPEAKABLE characters before it will cut,
+               so a reply's last sentence is usually still sitting in `pending` -- which makes
+               this the line that finishes every answer, not an edge case.
+
+               Two sources for it, and the fallback is the point. `reply` is authoritative and
+               repairs a delta that never arrived, but slicing it at `spoken.length` is only
+               right while it really does start with what was said; when it does not, that
+               slice begins mid-word somewhere in the middle of the answer. `pending` cannot
+               be wrong -- it is, by construction, exactly the text no chunk has taken -- but
+               it only knows about deltas that arrived. So: the authoritative tail when the
+               offset lines up, and the text we know was never spoken when it does not.
+               Dropping it was tried and it truncates the reply, which is worse than both. */
+            const tail = reply.startsWith(spoken) ? reply.slice(spoken.length) : pending;
             if (tail.trim()) await speakChunk(tail);
 
             await refreshPendingApprovals();
