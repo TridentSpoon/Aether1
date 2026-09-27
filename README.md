@@ -1081,11 +1081,20 @@ asset is signed with minisign in the release pipeline, the public key is compile
 binary, and a bundle whose signature does not verify is deleted rather than installed. That
 is the guarantee that matters, and it never depended on the releases being hard to reach.
 
-Connections is also where you can see whether the **GitHub CLI** (`gh`) is on this computer,
-which is a different thing entirely: that is the program AETHER CODE runs read-only commands
-through (`gh pr view`, `gh run list`). Signing in above does not install it, it is not needed for
-updates, and installing it from [cli.github.com](https://cli.github.com) is still worth doing if
-you want AETHER CODE to be able to look at a repository.
+### The GitHub CLI is a separate thing, and AETHER CODE needs it
+
+Connections also shows whether the **GitHub CLI** (`gh`) is on this computer. This is not the
+sign-in above and does not share anything with it: `gh` is the program AETHER CODE runs
+read-only commands through (`gh pr view`, `gh run list`), and it carries its own login, made
+with `gh auth login` in a terminal. AETHER1 never reads that login -- `gh auth token` is one of
+the commands the read-only classifier refuses outright, precisely so a credential cannot be
+printed into a conversation that gets stored.
+
+So the two are independent in both directions. Signing in above does not install `gh` or log
+it in, and it is not what gives AETHER CODE its GitHub access. Equally, the update check going
+anonymous changes nothing for AETHER CODE: it was never using the app's sign-in. Install `gh`
+from [cli.github.com](https://cli.github.com) and run `gh auth login` if you want AETHER CODE
+to be able to look at a repository.
 
 **Declining costs you nothing but the update notice.** Press *Not now, and stop asking* and
 AETHER1 remembers; the check stops running and nothing else changes. Signing in later is the
