@@ -1,8 +1,31 @@
 **The Aether1 Platform**
 
-A basic project for self-hosted or API connected AI companions with a sleek holographic presence, built in the spirit of the the future we saw in Sci-Fi growing up.
+An AI companion that lives on your own machine, with a holographic presence, built in the
+spirit of the future we saw in Sci-Fi growing up.
 
-Built for Linux and Windows as peer platforms -- developed on Linux, installed on both, and a capability is not finished until it works on each -- with macOS to follow if the hardware ever does. It features real-time system and AI relevant telemetry, an interactive 3D holographic avatar, with speech capabilities, a local persistent memory, and a system tray companion in or hovering next to your notification bar.
+**It runs on your hardware and your network, and that is the whole point.** The model can be
+one on this computer or one on the old box under your desk. The memory is a file on your own
+disk. There is no Aether1 server anywhere, no account to make, and nothing is uploaded for
+"improving the service", because there is no service. Cloud providers are supported and are
+entirely your choice: point it at one deliberately, or never, and **Settings -> Network ->
+Local only** makes that a switch you can throw rather than a promise you have to take on
+trust. What it closes off is the internet, not your LAN -- reaching a model server on the
+machine in the next room is the point, not a leak.
+
+Where it does cross the network, it crosses *your* network, and it is treated like it
+matters: serving the HUD to a phone or another computer (`aether1 --serve --lan`) runs over
+TLS, and the certificate's fingerprint is printed when it starts and stays the same run to
+run, so you can check it against the one your browser shows you. Each device gets its own
+token, and any one of them can be cut off on its own with `aether1 revoke <id>`.
+
+Built for Linux and Windows as peer platforms -- developed on Linux, installed on both, and a
+capability is not finished until it works on each -- with macOS to follow if the hardware ever
+does. It features real-time system and AI relevant telemetry, an interactive 3D holographic
+avatar, with speech capabilities, a local persistent memory, and a system tray companion in or
+hovering next to your notification bar.
+
+The longer version of what this is for, and what it deliberately is not, is in
+[docs/GOALS.md](docs/GOALS.md).
 
 Intended features
 
