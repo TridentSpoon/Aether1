@@ -100,6 +100,7 @@ pub fn get_agents(selected_agent_ids: Option<Vec<String>>) -> Vec<Agent> {
 }
 
 /// Filters agents by type
+#[allow(dead_code)]
 pub fn filter_by_type(agents: &[Agent], agent_type: &AgentType) -> Vec<Agent> {
     agents
         .iter()
@@ -109,6 +110,7 @@ pub fn filter_by_type(agents: &[Agent], agent_type: &AgentType) -> Vec<Agent> {
 }
 
 /// Filters agents by capability
+#[allow(dead_code)]
 pub fn filter_by_capability(agents: &[Agent], capability: &str) -> Vec<Agent> {
     agents
         .iter()
@@ -118,6 +120,7 @@ pub fn filter_by_capability(agents: &[Agent], capability: &str) -> Vec<Agent> {
 }
 
 /// Filters agents by search query (name and description)
+#[allow(dead_code)]
 pub fn search_agents(agents: &[Agent], query: &str) -> Vec<Agent> {
     let query_lower = query.to_lowercase();
     agents
@@ -131,6 +134,7 @@ pub fn search_agents(agents: &[Agent], query: &str) -> Vec<Agent> {
 }
 
 /// Applies multiple filters in sequence
+#[allow(dead_code)]
 pub fn apply_filters(
     agents: &[Agent],
     type_filter: Option<&AgentType>,
@@ -155,20 +159,24 @@ pub fn apply_filters(
 }
 
 /// Returns all unique capabilities across all agents
+#[allow(dead_code)]
 pub fn all_capabilities() -> Vec<String> {
     let agents = built_in_agents();
-    let mut capabilities: Vec<String> = agents
-        .iter()
-        .flat_map(|a| a.capabilities.clone())
-        .collect();
+    let mut capabilities: Vec<String> =
+        agents.iter().flat_map(|a| a.capabilities.clone()).collect();
     capabilities.sort();
     capabilities.dedup();
     capabilities
 }
 
 /// Returns all agent types
+#[allow(dead_code)]
 pub fn all_types() -> Vec<AgentType> {
-    vec![AgentType::Collector, AgentType::Reviewer, AgentType::Planner]
+    vec![
+        AgentType::Collector,
+        AgentType::Reviewer,
+        AgentType::Planner,
+    ]
 }
 
 #[cfg(test)]
@@ -191,7 +199,7 @@ mod tests {
     fn test_search_agents() {
         let agents = built_in_agents();
         let results = search_agents(&agents, "code");
-        assert!(results.len() > 0);
+        assert!(!results.is_empty());
         assert!(results.iter().any(|a| a.name.contains("Reviewer")));
     }
 
