@@ -1,0 +1,506 @@
+/**
+ * Agent Browser Styling
+ *
+ * Grid-based card layout with responsive breakpoints:
+ * - Desktop (>1200px): 3 columns
+ * - Tablet (768px-1200px): 2 columns
+ * - Mobile (<768px): 1 column
+ */
+
+/* Modal styling */
+.agent-browser-shell {
+    display: flex;
+    flex-direction: column;
+    background: rgba(0, 20, 40, 0.95);
+    border: 1px solid rgba(0, 255, 200, 0.3);
+    max-width: 1400px;
+}
+
+.agent-browser-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.5rem;
+    border-bottom: 1px solid rgba(0, 255, 200, 0.2);
+    background: rgba(0, 10, 20, 0.8);
+}
+
+.agent-browser-head h2 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.agent-browser-head button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.5rem;
+    font-size: 1.5rem;
+    transition: color 0.2s ease;
+}
+
+.agent-browser-head button:hover {
+    color: #00ffc8 !important;
+}
+
+.agent-browser-content {
+    flex: 1;
+    overflow: auto;
+}
+
+/* Root container */
+.agent-browser {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: auto;
+    padding: 1.5rem;
+    gap: 1.5rem;
+}
+
+/* Hero section with title and stats */
+.agent-hero-section {
+    padding: 2rem;
+    background: linear-gradient(135deg, rgba(0, 255, 200, 0.1) 0%, rgba(0, 150, 255, 0.1) 100%);
+    border: 1px solid rgba(0, 255, 200, 0.3);
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+}
+
+.agent-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.agent-hero-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #00ffc8;
+    margin: 0;
+    text-shadow: 0 0 10px rgba(0, 255, 200, 0.5);
+}
+
+.agent-hero-subtitle {
+    font-size: 0.95rem;
+    color: #a0e7e5;
+    margin: 0;
+    opacity: 0.8;
+}
+
+.agent-stats {
+    display: flex;
+    gap: 2rem;
+    margin-top: 1rem;
+}
+
+.stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.stat-label {
+    font-size: 0.8rem;
+    color: #a0e7e5;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    opacity: 0.7;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #00ffc8;
+}
+
+/* Search section */
+.agent-search-section {
+    padding: 0 1rem;
+}
+
+.agent-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.agent-search-input {
+    width: 100%;
+    max-width: 400px;
+    padding: 0.75rem 2.5rem 0.75rem 1rem;
+    background: rgba(0, 50, 60, 0.6);
+    border: 1px solid rgba(0, 255, 200, 0.3);
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-size: 0.95rem;
+    transition: all 0.3s ease;
+}
+
+.agent-search-input:focus {
+    outline: none;
+    border-color: #00ffc8;
+    background: rgba(0, 50, 60, 0.9);
+    box-shadow: 0 0 12px rgba(0, 255, 200, 0.2);
+}
+
+.agent-search-icon {
+    position: absolute;
+    right: 0.75rem;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* Main layout with sidebar */
+.agent-browser-main {
+    display: grid;
+    grid-template-columns: 250px 1fr;
+    gap: 2rem;
+    flex: 1;
+}
+
+/* Filter sidebar */
+.agent-filters-section {
+    background: rgba(0, 20, 30, 0.6);
+    border: 1px solid rgba(0, 255, 200, 0.2);
+    border-radius: 8px;
+    padding: 1.5rem;
+    height: fit-content;
+    position: sticky;
+    top: 0;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.agent-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.filter-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.filter-heading {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #00ffc8;
+    margin: 0;
+    letter-spacing: 0.1em;
+}
+
+.filter-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #cbd5e1;
+    transition: color 0.2s ease;
+}
+
+.filter-checkbox:hover {
+    color: #00ffc8;
+}
+
+.filter-checkbox input[type="checkbox"],
+.filter-checkbox input[type="radio"] {
+    cursor: pointer;
+    accent-color: #00ffc8;
+    width: 1em;
+    height: 1em;
+}
+
+/* Agent grid */
+.agent-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    width: 100%;
+}
+
+.no-agents {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 3rem 1rem;
+    color: #a0e7e5;
+    font-size: 1rem;
+}
+
+/* Agent card */
+.agent-card {
+    display: flex;
+    flex-direction: column;
+    background: rgba(0, 30, 50, 0.7);
+    border: 1px solid rgba(0, 255, 200, 0.2);
+    border-radius: 10px;
+    padding: 1.5rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    gap: 1rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.agent-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, rgba(0, 255, 200, 0.05) 0%, transparent 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+.agent-card:hover {
+    border-color: #00ffc8;
+    background: rgba(0, 50, 80, 0.8);
+    box-shadow: 0 0 20px rgba(0, 255, 200, 0.15);
+}
+
+.agent-card:hover::before {
+    opacity: 1;
+}
+
+.agent-card.selected {
+    border-color: #00ffc8;
+    background: rgba(0, 255, 200, 0.08);
+    box-shadow: 0 0 20px rgba(0, 255, 200, 0.2), inset 0 0 20px rgba(0, 255, 200, 0.05);
+}
+
+.agent-card:focus-visible {
+    outline: 2px solid #00ffc8;
+    outline-offset: 2px;
+}
+
+.agent-card-header {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.agent-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin: 0;
+    flex: 1;
+}
+
+.agent-installed-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    background: rgba(0, 255, 200, 0.2);
+    border: 1px solid rgba(0, 255, 200, 0.4);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #00ffc8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.agent-description {
+    font-size: 0.9rem;
+    color: #cbd5e1;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.agent-meta {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 0;
+    border-top: 1px solid rgba(0, 255, 200, 0.1);
+    border-bottom: 1px solid rgba(0, 255, 200, 0.1);
+}
+
+.agent-model {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(0, 150, 255, 0.2);
+    border-radius: 4px;
+    color: #7dd3fc;
+}
+
+.agent-type {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    text-transform: capitalize;
+    font-weight: 500;
+}
+
+.agent-type-reviewer {
+    background: rgba(255, 150, 0, 0.2);
+    color: #fdb022;
+}
+
+.agent-type-planner {
+    background: rgba(100, 200, 255, 0.2);
+    color: #64c8ff;
+}
+
+.agent-type-collector {
+    background: rgba(100, 255, 150, 0.2);
+    color: #64ff96;
+}
+
+/* Agent capabilities */
+.agent-capabilities {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.agent-cap-tag {
+    display: inline-block;
+    padding: 0.35rem 0.65rem;
+    background: rgba(0, 255, 200, 0.1);
+    border: 1px solid rgba(0, 255, 200, 0.3);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: #a0e7e5;
+    text-transform: lowercase;
+    transition: all 0.2s ease;
+}
+
+.agent-card:hover .agent-cap-tag {
+    background: rgba(0, 255, 200, 0.2);
+    border-color: rgba(0, 255, 200, 0.5);
+}
+
+/* Card footer with button */
+.agent-card-footer {
+    margin-top: auto;
+    padding-top: 0.5rem;
+}
+
+.agent-select-btn {
+    width: 100%;
+    padding: 0.75rem;
+    background: rgba(0, 255, 200, 0.1);
+    border: 1px solid rgba(0, 255, 200, 0.3);
+    border-radius: 6px;
+    color: #00ffc8;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.agent-select-btn:hover {
+    background: rgba(0, 255, 200, 0.2);
+    border-color: #00ffc8;
+    box-shadow: 0 0 10px rgba(0, 255, 200, 0.2);
+}
+
+.agent-select-btn.selected {
+    background: rgba(0, 255, 200, 0.25);
+    border-color: #00ffc8;
+    box-shadow: 0 0 15px rgba(0, 255, 200, 0.3);
+}
+
+/* Responsive: Tablet */
+@media (max-width: 1200px) {
+    .agent-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Responsive: Mobile */
+@media (max-width: 768px) {
+    .agent-browser {
+        padding: 1rem;
+        gap: 1rem;
+    }
+
+    .agent-browser-main {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+
+    .agent-filters-section {
+        position: relative;
+        top: auto;
+        max-height: none;
+        margin-bottom: 0;
+    }
+
+    .agent-grid {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+
+    .agent-hero-section {
+        padding: 1.5rem;
+    }
+
+    .agent-hero-title {
+        font-size: 1.5rem;
+    }
+
+    .agent-stats {
+        gap: 1rem;
+    }
+
+    .agent-search-input {
+        max-width: 100%;
+    }
+
+    .agent-card {
+        padding: 1rem;
+    }
+
+    .agent-name {
+        font-size: 1rem;
+    }
+
+    .agent-description {
+        font-size: 0.85rem;
+    }
+}
+
+/* Scrollbar styling */
+.agent-filters-section::-webkit-scrollbar,
+.agent-browser::-webkit-scrollbar {
+    width: 6px;
+}
+
+.agent-filters-section::-webkit-scrollbar-track,
+.agent-browser::-webkit-scrollbar-track {
+    background: rgba(0, 255, 200, 0.05);
+    border-radius: 3px;
+}
+
+.agent-filters-section::-webkit-scrollbar-thumb,
+.agent-browser::-webkit-scrollbar-thumb {
+    background: rgba(0, 255, 200, 0.2);
+    border-radius: 3px;
+    transition: background 0.2s ease;
+}
+
+.agent-filters-section::-webkit-scrollbar-thumb:hover,
+.agent-browser::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 255, 200, 0.4);
+}

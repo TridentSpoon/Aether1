@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
+    <link rel="stylesheet" href="css/agent-browser.css?v=1">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
@@ -187,6 +188,7 @@
                     <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
                     <button id="btn-setup" class="hud-slideout-action" role="menuitem">🧠 Set up the AI</button>
                     <button id="btn-voice-setup" class="hud-slideout-action" role="menuitem">🗣 Set up the voice</button>
+                    <button id="btn-agent-browser" class="hud-slideout-action" role="menuitem">🤖 Agent Browser</button>
                     <button id="btn-clear-chat" class="hud-slideout-action" role="menuitem">🗑️ Clear conversation</button>
                     <button id="btn-settings" class="hud-slideout-action" role="menuitem">⚙️ Settings</button>
                 </div>
@@ -2571,6 +2573,19 @@
         </div>
     </div>
 
+    <!-- Agent Browser Modal -->
+    <div id="agent-browser-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="hud-panel agent-browser-shell w-full rounded-lg max-h-[90vh] overflow-auto">
+            <div class="agent-browser-head">
+                <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
+                    🤖 AGENT BROWSER
+                </h2>
+                <button id="btn-close-agent-browser" class="text-slate-400 hover:text-cyan-300 font-bold text-lg">&#10005;</button>
+            </div>
+            <div id="agent-browser-container" class="agent-browser-content"></div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
@@ -2591,6 +2606,7 @@
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
+    <script src="js/agent-browser.js?v=1"></script>
     <script src="js/app.js?v=59"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
