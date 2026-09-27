@@ -6125,33 +6125,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function savePronunciations() {
-        const words = pronunciationsOnScreen();
-        // Nothing typed anywhere: this is the empty row after an Add, not a list to store.
-        if (!words.some((w) => w.from.trim() || w.to.trim()) && !pronunciations.words.length) {
-            setPronunciationNote('Nothing yet.', '');
+        const onScreen = pronunciationsOnScreen();
+        /* Only the rows that are finished. A row with one half filled is a row somebody is
+           still typing -- tabbing from the word to the respelling would otherwise fire a
+           save that gets refused, and flash "nothing was given for how to say Aether1" in
+           the middle of them saying it. Rust still refuses a half-filled row, which is the
+           right answer for the CLI and for anything else posting to the endpoint; it is just
+           not an error to be halfway through a sentence. */
+        const words = onScreen.filter((w) => w.from.trim() && w.to.trim());
+        const unfinished = onScreen.filter((w) => (w.from.trim() ? 1 : 0) + (w.to.trim() ? 1 : 0) === 1).length;
+        // Nothing finished and nothing stored: there is no list yet to write over.
+        if (!words.length && !pronunciations.words.length) {
+            setPronunciationNote(unfinished ? 'Fill in both halves and it saves itself.' : 'Nothing yet.', '');
             return;
         }
         try {
             takePronunciations(await storePronunciations(words));
             renderPronunciations();
+            const total = pronunciations.words.length;
+            const tail = unfinished ? ' One row still needs its other half.' : '';
             setPronunciationNote(
-                pronunciations.words.length
-                    ? `${pronunciations.words.length} saved. The next thing it says uses them.`
-                    : 'Nothing yet.',
-                pronunciations.words.length ? 'good' : '');
+                total
+                    ? `${total} saved. The next thing it says uses them.${tail}`
+                    : `Nothing yet.${tail}`,
+                total ? 'good' : '');
         } catch (e) {
-            // The rows are left exactly as typed: a save refused for one half-filled row
-            // should not take the other nine with it.
+            // The rows are left exactly as typed: a refused save should not take the ones
+            // that were fine with it.
             setPronunciationNote(String(e.message || e), 'bad');
         }
     }
 
+    /* Always one blank row at the bottom, the way a spreadsheet has one.
+
+       It is not only for looks. Saving redraws from what Rust returned, and Rust drops the
+       blank row -- so a blank row that existed only because somebody pressed Add was being
+       erased by the save that the same click's blur had already started. The next thing they
+       typed went into the row above, over the rule they had just written. Re-creating the
+       blank row on every redraw makes that unlosable, and makes Add a convenience rather
+       than the only way to reach an empty field. */
     function renderPronunciations() {
         const holder = document.getElementById('words-rows');
         if (!holder) return;
         holder.innerHTML = '';
         for (const word of pronunciations.words) holder.appendChild(pronunciationRow(word));
-        if (!pronunciations.words.length) holder.appendChild(pronunciationRow({ from: '', to: '' }));
+        holder.appendChild(pronunciationRow({ from: '', to: '' }));
         const total = pronunciations.words.length;
         setPronunciationNote(total ? `${total} saved.` : 'Nothing yet.', '');
     }
@@ -6209,7 +6227,18 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.playSFX('click');
         const holder = document.getElementById('words-rows');
         if (!holder) return;
-        if (holder.querySelectorAll('.words-row').length >= pronunciations.maxEntries) {
+        // There is already a blank row at the bottom; if it is untouched, Add means "put me
+        // in it" rather than "give me another one nobody asked for".
+        const rows = Array.from(holder.querySelectorAll('.words-row'));
+        const last = rows[rows.length - 1];
+        const blank = last
+            && !last.querySelector('.words-from')?.value.trim()
+            && !last.querySelector('.words-to')?.value.trim();
+        if (blank) {
+            last.querySelector('.words-from')?.focus();
+            return;
+        }
+        if (rows.length >= pronunciations.maxEntries) {
             setPronunciationNote(`That is as many as it holds (${pronunciations.maxEntries}).`, 'bad');
             return;
         }
