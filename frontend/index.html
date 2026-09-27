@@ -1863,6 +1863,7 @@
                         <div class="hub-tabs" role="tablist">
                             <button type="button" id="vhub-tab-voices" class="hub-tab is-active" data-vhub-tab="voices" role="tab">Voices</button>
                             <button type="button" id="vhub-tab-devices" class="hub-tab" data-vhub-tab="devices" role="tab">Devices</button>
+                            <button type="button" id="vhub-tab-words" class="hub-tab" data-vhub-tab="words" role="tab">Words</button>
                         </div>
                         <div class="hub-search">
                             <span class="hub-search-icon" aria-hidden="true">🔍</span>
@@ -1926,6 +1927,33 @@
                                  selected, permitted and pointed at a muted input reports
                                  success on every other check there is. -->
                             <div id="vhub-level" class="hub-level hidden"><div id="vhub-level-fill" class="hub-level-fill"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- ------------------- WORDS -------------------
+                         Say this, as that. The list only ever reaches the synthesizer: what
+                         is on screen keeps the spelling it was written with, which is why
+                         this can be as phonetic as it needs to be without making the
+                         conversation unreadable. -->
+                    <div id="vhub-pane-words" class="hub-body hub-body-even hidden">
+                        <div class="hub-detail">
+                            <div class="hub-detail-name">🗣 How to say a word</div>
+                            <div class="hub-detail-sub">
+                                For the ones the voice gets wrong. Spell it the way it should
+                                sound — only the voice hears this, the chat keeps the real spelling.
+                            </div>
+                            <div id="words-rows" class="words-rows"></div>
+                            <div class="hub-action">
+                                <span id="words-note" class="hub-action-size">Nothing yet.</span>
+                                <button type="button" id="btn-words-add" class="cyber-btn text-[10px] py-1 px-2">+ Add a word</button>
+                                <button type="button" id="btn-words-test" class="cyber-btn text-[10px] py-1 px-2">▶ Hear the list</button>
+                            </div>
+                            <p class="hub-blurb">
+                                Whole words only, and case does not matter — "nginx" catches
+                                "NGINX" too. The replacement is said exactly as you type it, so
+                                keep it lower case: a voice handed capitals may spell them out.
+                                Saved as you go.
+                            </p>
                         </div>
                     </div>
 

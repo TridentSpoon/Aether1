@@ -167,6 +167,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/personas/voice", post(set_persona_voice))
         .route("/api/personas/voice/reset", post(clear_persona_voice))
         .route("/api/voice/pickers", get(voice_pickers))
+        .route(
+            "/api/speech/pronunciations",
+            get(pronunciations).post(set_pronunciations),
+        )
         .route("/api/flow", get(flow_mode).post(set_flow_mode))
         .route("/api/flow/line", post(set_flow_line))
         .route("/api/profile", get(profile_report))
@@ -682,6 +686,26 @@ async fn set_persona_voice(
     Json(req): Json<PersonaVoiceRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     commands::set_persona_voice(&state.engine, req.persona, req.voice, req.local_voice)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+/// The pronunciation list, and the ceilings the pane shows rather than guesses at.
+async fn pronunciations(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::pronunciations(&state.engine))
+}
+
+#[derive(Deserialize)]
+struct PronunciationsRequest {
+    words: Vec<crate::speech_words::Say>,
+}
+
+/// The whole list at once; the reply is the list as stored, for the pane to redraw from.
+async fn set_pronunciations(
+    State(state): State<AppState>,
+    Json(req): Json<PronunciationsRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::set_pronunciations(&state.engine, req.words)
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
