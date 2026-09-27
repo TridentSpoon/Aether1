@@ -4414,6 +4414,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const doctorChecks = document.getElementById('doctor-checks');
     const doctorStatus = document.getElementById('doctor-status');
     const btnDoctorRun = document.getElementById('btn-doctor-run');
+    const btnDoctorHeal = document.getElementById('btn-doctor-heal');
 
     function setDoctorStatus(text, tone = 'info') {
         if (!doctorStatus) return;
@@ -4436,6 +4437,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (IS_TAURI) return tauriInvoke('run_diagnostics_rust');
         const resp = await apiFetch('/api/diagnostics');
         if (!resp.ok) throw new Error(`diagnostics failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* Every repair it can make, in one press. The same call the startup pass makes when the
+       switch above is on, so what the button does and what the switch does cannot drift. */
+    async function requestDoctorAttend() {
+        if (IS_TAURI) return tauriInvoke('doctor_attend_rust');
+        const resp = await apiFetch('/api/doctor/attend', { method: 'POST' });
+        if (!resp.ok) throw new Error(await resp.text());
         return resp.json();
     }
 
@@ -4550,6 +4560,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrap;
     }
 
+    /* One line under the panel offering the model the things repair could not fix. An
+       offer rather than an automatic question: asking a local model costs the operator's
+       own graphics card for a minute, and a panel that starts doing that on its own is a
+       panel people stop pressing buttons in. */
+    function doctorOfferToAsk(attended) {
+        if (!doctorChecks) return;
+        const row = document.createElement('div');
+        row.className = 'pt-2';
+        const ask = document.createElement('button');
+        ask.className = 'cyber-btn text-xs py-1 px-3 text-cyan-300';
+        ask.textContent = `💬 Ask ${currentAgentName.toUpperCase()} about the rest`;
+        ask.onclick = () => {
+            ask.disabled = true;
+            const left = (attended.remaining || []).map(r => `${r.title}: ${r.detail}`).join('\n');
+            handleSendMessage(
+                'AETHER1 just repaired what it could of itself and these are still wrong. '
+                + 'Look into them and tell me what to do:\n\n' + left,
+            );
+        };
+        row.appendChild(ask);
+        doctorChecks.appendChild(row);
+    }
+
     async function refreshDoctor({ quiet = false } = {}) {
         if (!doctorChecks) return;
         if (!quiet) setDoctorStatus('Checking every part of AETHER1...', 'busy');
@@ -4581,6 +4614,39 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     btnDoctorRun?.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshDoctor(); });
+
+    btnDoctorHeal?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        btnDoctorHeal.disabled = true;
+        setDoctorStatus('Fixing what it can...', 'busy');
+        try {
+            const attended = await requestDoctorAttend();
+            // The headline is the honest summary -- including "tried three, none worked",
+            // which is the outcome most worth showing rather than hiding behind a refresh.
+            setDoctorStatus(attended.headline || 'Done.', (attended.remaining || []).length ? 'info' : 'good');
+            await refreshDoctor({ quiet: true });
+            // What deterministic repair could not reach goes to the companion, which has
+            // self_check and recent_crashes and can read the logs behind them. The pass
+            // above is the half that needs no model; this is the half that needs one.
+            if ((attended.remaining || []).length) doctorOfferToAsk(attended);
+        } catch (e) {
+            setDoctorStatus(`⚠ ${e.message || e}`, 'bad');
+        } finally {
+            btnDoctorHeal.disabled = false;
+        }
+    });
+
+    /* The startup pass, when the switch is on, reports what it did. It arrives whether or
+       not Settings is open, so it lands in the conversation rather than in a panel nobody
+       is looking at -- and only when it actually attempted something. */
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('self-repair-done', (event) => {
+            const payload = (event && event.payload) || {};
+            const attended = payload.attended || {};
+            if (!(attended.outcomes || []).length) return;
+            appendMessage('agent', `🛠 ${payload.headline}\n\n${payload.report || ''}`);
+        });
+    }
 
     // Checked when the group is opened, not when Settings is: the probe spawns processes and
     // opens connections, and most visits to Settings are not about this. Same reason the
@@ -8625,6 +8691,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // And the mirror of that rule for the two that change things: absent means
             // OFF, matching Grant::default_on. A switch that reads as on before anybody
             // touched it would be the one dishonest control on this page.
+            // Absent means off, matching doctor::self_repair_enabled: repairing itself
+            // unattended is something the operator switches on, never a default.
+            document.getElementById('setting-doctor-self-repair').checked = s.doctor_self_repair === true;
             document.getElementById('setting-code-perm-edit').checked = s.code_perm_edit === true;
             document.getElementById('setting-code-perm-run').checked = s.code_perm_run === true;
             document.getElementById('setting-code-workspace-root').value =
@@ -8780,6 +8849,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 code_perm_system: document.getElementById('setting-code-perm-system').checked,
                 code_perm_github: document.getElementById('setting-code-perm-github').checked,
                 code_perm_internet: document.getElementById('setting-code-perm-internet').checked,
+                doctor_self_repair: document.getElementById('setting-doctor-self-repair').checked,
                 code_perm_edit: document.getElementById('setting-code-perm-edit').checked,
                 code_perm_run: document.getElementById('setting-code-perm-run').checked,
                 code_workspace_root: document.getElementById('setting-code-workspace-root').value.trim(),

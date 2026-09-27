@@ -74,6 +74,8 @@ USAGE:
                                    conversation the HUD's Aether Code tab keeps
     aether1 code conventions       Print the house rules for a coding model to follow;
                                    redirect it into an AGENTS.md at the top of your project
+    aether1 doctor --heal          Make every repair AETHER1 can make to itself, without
+                                   asking about each one. Never anything needing root.
     aether1 code perms             What AETHER CODE is allowed to do: read the system,
                                    the GitHub CLI, the internet, and -- off until you say
                                    otherwise -- edit and run inside one project folder
@@ -146,6 +148,9 @@ pub enum Invocation {
         /// Offer the repairs. Each one is still asked about individually at the moment of
         /// acting; this flag only decides whether they are offered at all.
         fix: bool,
+        /// Make every repair AETHER1 can make, without asking about each one. Typing this
+        /// is the go-ahead for the pass -- see `doctor::attend`.
+        heal: bool,
         json: bool,
         /// Where to write the pasteable report. `Some(None)` is --report with no path, which
         /// picks one under the temp directory and prints it.
@@ -322,6 +327,7 @@ fn parse_discover(rest: Vec<String>) -> Result<Invocation, String> {
 /// path, `--report` takes an optional one, and the two flags that take nothing are order-free.
 fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
     let mut fix = false;
+    let mut heal = false;
     let mut json = false;
     let mut report: Option<Option<String>> = None;
     let mut replay: Option<String> = None;
@@ -329,6 +335,7 @@ fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--fix" => fix = true,
+            "--heal" => heal = true,
             "--json" => json = true,
             "--replay" => match iter.next() {
                 Some(path) => replay = Some(path.clone()),
@@ -349,22 +356,33 @@ fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
             other => {
                 return Err(format!(
                     "doctor does not take {other:?} -- it takes --fix, --json, --report [FILE] \
-                     or --replay <FILE>"
+                     --heal, --json, --report [FILE] or --replay <FILE>"
                 ))
             }
         }
     }
-    if replay.is_some() && fix {
+    if heal && fix {
+        // Two different things: --fix asks about each repair, --heal makes them all. Asked
+        // for together, which one the operator meant is genuinely unclear, and guessing
+        // wrong means either a prompt they did not want or a repair they did not approve.
+        return Err(
+            "--fix asks about each repair and --heal makes them all, so they cannot both be \
+             meant -- pick one"
+                .into(),
+        );
+    }
+    if replay.is_some() && (fix || heal) {
         // The observation came from another machine. Repairing this one from it would be
         // acting on a fault nobody here has.
         return Err(
             "--replay judges an observation from somewhere else, so there is nothing here to \
-             fix -- run `aether1 doctor --fix` on the machine that recorded it"
+             fix -- run it on the machine that recorded it"
                 .into(),
         );
     }
     Ok(Invocation::Doctor {
         fix,
+        heal,
         json,
         report,
         replay,
@@ -1265,6 +1283,7 @@ fn run_models(persona: Option<String>, model: Option<String>) -> Result<String, 
 /// have offered.
 fn run_doctor(
     fix: bool,
+    heal: bool,
     json: bool,
     report: Option<Option<String>>,
     replay: Option<String>,
@@ -1317,13 +1336,24 @@ fn run_doctor(
         ));
     }
 
+    if heal {
+        // Typing `--heal` is the go-ahead, which is why nothing is asked here. A terminal is
+        // also the one place this can be asked for on a machine whose window will not open,
+        // which is a fair part of why it exists.
+        let attended = doctor::attend(&engine, &doctor::Facts::default(), None);
+        return Ok(format!(
+            "AETHER1 -- fixing what it can\n\n{}",
+            attended.as_report()
+        ));
+    }
+
     let mut out = render_health(&health);
     if fix {
         out.push_str(&run_doctor_fixes(&engine, &health));
     } else if health.checks.iter().any(|check| check.repair.is_some()) {
         out.push_str(
             "\nSome of this AETHER1 can repair itself. Run `aether1 doctor --fix` to be asked \
-             about each one.\n",
+             about each one, or `aether1 doctor --heal` to have it make them all.\n",
         );
     }
     Ok(out)
@@ -1955,10 +1985,11 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Crashes => run_crashes(),
         Invocation::Doctor {
             fix,
+            heal,
             json,
             report,
             replay,
-        } => run_doctor(fix, json, report, replay),
+        } => run_doctor(fix, heal, json, report, replay),
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
@@ -2020,6 +2051,7 @@ mod tests {
             doctor(&[]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: None,
                 replay: None,
@@ -2029,6 +2061,7 @@ mod tests {
             doctor(&["--json", "--fix"]),
             Invocation::Doctor {
                 fix: true,
+                heal: false,
                 json: true,
                 report: None,
                 replay: None,
@@ -2042,6 +2075,7 @@ mod tests {
             doctor(&["--report"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: Some(None),
                 replay: None,
@@ -2051,6 +2085,7 @@ mod tests {
             doctor(&["--report", "/tmp/out.txt"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: Some(Some("/tmp/out.txt".to_string())),
                 replay: None,
@@ -2062,6 +2097,7 @@ mod tests {
             doctor(&["--report", "--fix"]),
             Invocation::Doctor {
                 fix: true,
+                heal: false,
                 json: false,
                 report: Some(None),
                 replay: None,
@@ -2079,6 +2115,7 @@ mod tests {
             doctor(&["--replay", "/tmp/obs.json"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: None,
                 replay: Some("/tmp/obs.json".to_string()),

@@ -3370,3 +3370,49 @@ written out as a button.
 real-world trap worth knowing: the second run still failed because CPython had cached a `.pyc`
 whose source was the same length and same-second mtime. The edit had landed. It is Python's
 cache, not the tool -- but a model in that loop will see it too.
+
+---
+
+#### Follow-up: attending to what is broken, rather than reporting it
+
+Trident, 2026-09-27: *"I don't want the diagnostic for ME to work on it. I want it to be
+checked locally similar to Omarchy as that is the level I want diagnostics at."*
+
+Step 47 built the ladder and stopped one rung short of this on purpose. The startup self-check
+ran the whole list and then only *said* what it found, with a comment giving the reason: a fix
+nobody agreed to is not a fix. That reasoning is about **agreement, not timing**, and the
+thing that was missing was a way to agree once rather than per repair.
+
+**`doctor::attend`** is that pass: every failing check that has a repair AETHER1 can make
+itself, made, each one re-probed, then a list of what is still wrong with the exact command
+for the parts it will never run. Three properties it holds:
+
+- **Nothing needing root, ever.** A `RepairKind::HandOver` is not attempted at all; it comes
+  back in `remaining` with its command written out. `RepairKind::InApp` is skipped when the
+  caller has no window — `aether1 doctor --heal` in a terminal cannot register a hotkey, and
+  recording that as a failed repair would be a lie about the machine. Both rules live in
+  `to_attempt`, which is pure and is what the tests drive.
+- **One attempt each.** It calls `apply_with`, so rung 3's one-repair-per-session rule is
+  unchanged. A switch left on does not become a retry loop.
+- **The re-check decides.** A repair whose check is still broken afterwards is recorded as
+  failed, whatever the thing it ran said about itself. `Attended::headline` counts what
+  worked, not what ran, which is why "Tried 1 repair(s); none of them worked" is a sentence
+  it can say.
+
+**Four ways in, one behaviour.** The "Fix what you can" button in Diagnostics; the
+`doctor_self_repair` switch beside it, which makes the startup pass repair rather than report;
+`aether1 doctor --heal`, which is the button for a machine whose window will not open; and
+`POST /api/doctor/attend` for the browser HUD. All four reach the same function. `--fix` and
+`--heal` together are refused rather than guessed at: one asks about each repair, the other
+makes them all.
+
+**And the half that needs a model.** What deterministic repair cannot reach is offered to the
+companion, which since this same PR has `self_check` and `recent_crashes` and can read the
+logs behind them. An offer under the panel rather than an automatic question: asking a local
+model costs the operator's own graphics card for a minute, and a panel that starts doing that
+by itself is one people stop pressing buttons in.
+
+**Run here, for real:** `aether1 doctor --heal` on this container tried the one repair it had
+(the Piper voice download), reported it as not having worked because the re-check still said
+nothing can speak, and listed the other five with their reasons — including the `python3 -m
+venv` line for faster-whisper, which it will not run for you.

@@ -1796,6 +1796,206 @@ pub fn report(db: &MemoryDb, facts: &Facts) -> (Observation, Health) {
     (observation, health)
 }
 
+// ---------------------------------------------------------------------------------------
+// Rung 2: attending to what is broken, rather than reporting it.
+// ---------------------------------------------------------------------------------------
+
+/// The setting that makes the startup pass repair rather than report.
+///
+/// Off until the operator turns it on, and that switch is the agreement. Step 47's design
+/// rested on nothing being repaired at startup on the grounds that a fix nobody agreed to is
+/// not a fix -- which is right, and is about *agreement*, not about timing. An operator who
+/// has read what this does and switched it on has agreed, once, to the whole class, the same
+/// way they agree to a package manager's automatic updates. What has not changed is that
+/// nothing needing root is ever run, approved or not.
+pub const SELF_REPAIR_SETTING: &str = "doctor_self_repair";
+
+/// Whether the operator has asked AETHER1 to fix what it can, unattended.
+pub fn self_repair_enabled(db: &MemoryDb) -> bool {
+    db.get_setting_bool(SELF_REPAIR_SETTING, false)
+}
+
+/// One pass of attending: everything broken that has a repair AETHER1 can make itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct Attended {
+    /// The headline before anything was tried.
+    pub before: String,
+    /// What was attempted, in the order it was attempted.
+    pub outcomes: Vec<RepairOutcome>,
+    /// What is still wrong afterwards, and for each the exact command when the fix needs
+    /// root -- the thing AETHER1 will not do and hands over instead.
+    pub remaining: Vec<Unfixed>,
+    /// The headline after. Equal to `before` when nothing was attempted.
+    pub after: String,
+}
+
+/// A check that is still not well, written for whoever reads it next -- the operator, or
+/// the model they ask about it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Unfixed {
+    pub title: &'static str,
+    pub detail: String,
+    pub verdict: Verdict,
+    /// The command to run by hand, when the repair is one AETHER1 will never make.
+    pub hand_over: Option<String>,
+}
+
+impl Attended {
+    /// Whether this pass did anything at all.
+    pub fn acted(&self) -> bool {
+        !self.outcomes.is_empty()
+    }
+
+    /// How many repairs left their check healthy.
+    pub fn fixed(&self) -> usize {
+        self.outcomes
+            .iter()
+            .filter(|o| o.rechecked == Some(Verdict::Ok))
+            .count()
+    }
+
+    /// One line, for a notification, a tray tooltip or a log.
+    pub fn headline(&self) -> String {
+        if !self.acted() {
+            return match self.remaining.len() {
+                0 => "Nothing needed fixing.".to_string(),
+                1 => format!(
+                    "{} needs you: nothing here can fix it.",
+                    self.remaining[0].title
+                ),
+                n => format!("{n} things need you: nothing here can fix them."),
+            };
+        }
+        let fixed = self.fixed();
+        let tried = self.outcomes.len();
+        match (fixed, self.remaining.len()) {
+            (0, _) => format!("Tried {tried} repair(s); none of them worked."),
+            (f, 0) => format!("Fixed {f} of {tried}, and nothing else is wrong."),
+            (f, left) => format!("Fixed {f} of {tried}. {left} still need attention."),
+        }
+    }
+
+    /// The whole pass in prose -- what was tried, what it said, what is left and the exact
+    /// commands for the parts AETHER1 will not run. This is what goes in front of a person
+    /// or a model, so it is sentences rather than a structure.
+    pub fn as_report(&self) -> String {
+        let mut out = format!("{}\n\n", self.headline());
+        for outcome in &self.outcomes {
+            out.push_str(&format!(
+                "- {}: {} -- afterwards {}\n",
+                outcome.check,
+                outcome.message.trim(),
+                match outcome.rechecked {
+                    Some(Verdict::Ok) => "fixed".to_string(),
+                    Some(verdict) => format!(
+                        "still {} ({})",
+                        verdict.mark(),
+                        outcome.recheck_detail.as_deref().unwrap_or("no detail")
+                    ),
+                    None => "not re-checked".to_string(),
+                }
+            ));
+        }
+        if !self.remaining.is_empty() {
+            out.push_str("\nStill wrong:\n");
+            for left in &self.remaining {
+                out.push_str(&format!("- {}: {}\n", left.title, left.detail));
+                if let Some(command) = &left.hand_over {
+                    out.push_str(&format!(
+                        "  AETHER1 will not run this itself -- it needs root: {command}\n"
+                    ));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Which repairs a pass would attempt, from a report and nothing else.
+///
+/// Pure, and separate from `attend`, so the two rules that decide it can be tested on a
+/// hand-written report rather than on whatever this machine happens to be missing:
+///
+///   * a repair needing root is never attempted, only reported with its command;
+///   * an in-app repair is skipped when the caller has no window to make it with, rather
+///     than attempted and failed -- `aether1 doctor --heal` in a terminal cannot register a
+///     hotkey, and recording that as a failed repair would be a lie about the machine.
+pub fn to_attempt(health: &Health, has_in_app: bool) -> Vec<(CheckId, RepairId)> {
+    health
+        .checks
+        .iter()
+        .filter(|check| matches!(check.verdict, Verdict::Degraded | Verdict::Failed))
+        .filter_map(|check| check.repair.as_ref().map(|repair| (check.id, repair)))
+        .filter(|(_, repair)| match &repair.kind {
+            RepairKind::HandOver { .. } => false,
+            RepairKind::InApp => has_in_app,
+            RepairKind::Run => true,
+        })
+        .map(|(id, repair)| (id, repair.id))
+        .collect()
+}
+
+/// Fixes everything it can fix, then says what is left.
+///
+/// **This function is the go-ahead**, exactly as `apply` is: it does not ask, because the
+/// caller asked. There are two callers and each one is somebody's yes -- a press of "Fix
+/// what you can" in Diagnostics, and the startup pass when `SELF_REPAIR_SETTING` is on.
+///
+/// Three properties worth stating, because each is the sort of thing that erodes:
+///
+///   * **It never runs anything needing root.** A `HandOver` repair is not attempted here at
+///     all; it comes back in `remaining` with its command written out. That is the line
+///     `RepairKind` draws and this does not cross it.
+///   * **One attempt each, and `apply` enforces it.** This calls `apply_with`, so rung 3's
+///     one-repair-per-session rule applies unchanged. Attending twice in a session repairs
+///     nothing the first pass already tried, which is what stops a switch left on from
+///     becoming a retry loop.
+///   * **A repair whose check is still broken afterwards is a failure**, recorded as one.
+///     Attending is measured by the re-check, never by the exit code of what it ran.
+pub fn attend(engine: &LlmEngine, facts: &Facts, in_app: Option<InAppRepair>) -> Attended {
+    let (_, health) = report(engine.db(), facts);
+    let before = health.headline.clone();
+
+    let mut outcomes = Vec::new();
+    for (check, repair) in to_attempt(&health, in_app.is_some()) {
+        match apply_with(engine, check, repair, in_app) {
+            Ok(outcome) => outcomes.push(outcome),
+            // Already tried this session, or refused for a reason apply states. Not an
+            // outcome to report as an attempt -- nothing ran.
+            Err(_) => continue,
+        }
+    }
+
+    // Re-read the world once at the end rather than trusting the per-repair re-checks: one
+    // repair can fix another check, and a report assembled from stale pieces is how a
+    // diagnostic ends up disagreeing with itself.
+    let (_, after) = report(engine.db(), facts);
+    let remaining = after
+        .checks
+        .iter()
+        .filter(|check| matches!(check.verdict, Verdict::Degraded | Verdict::Failed))
+        .map(|check| Unfixed {
+            title: check.title,
+            detail: check.detail.clone(),
+            verdict: check.verdict,
+            hand_over: match &check.repair {
+                Some(Repair {
+                    kind: RepairKind::HandOver { command },
+                    ..
+                }) => Some(command.clone()),
+                _ => None,
+            },
+        })
+        .collect();
+
+    Attended {
+        before,
+        outcomes,
+        remaining,
+        after: after.headline,
+    }
+}
+
 /// A report to hand to a person, with the observation that produced it.
 ///
 /// **It goes nowhere.** Step 47 wants a fault that looks like a bug rather than a missing
@@ -2230,5 +2430,179 @@ mod tests {
                 .count(),
             7
         );
+    }
+}
+
+#[cfg(test)]
+mod attend_tests {
+    use super::*;
+
+    fn check_with(id: CheckId, verdict: Verdict, repair: Option<Repair>) -> CheckReport {
+        CheckReport {
+            id,
+            key: id.key(),
+            title: id.title(),
+            owner: id.owner(),
+            verdict,
+            detail: "something is wrong".to_string(),
+            steps: Vec::new(),
+            repair,
+        }
+    }
+
+    fn repair(id: RepairId, kind: RepairKind) -> Repair {
+        Repair {
+            id,
+            title: "do the thing".to_string(),
+            detail: "exactly this".to_string(),
+            kind,
+        }
+    }
+
+    fn health_of(checks: Vec<CheckReport>) -> Health {
+        Health {
+            os: Os::Linux,
+            headline: "Two problems.".to_string(),
+            needs_attention: true,
+            checks,
+            repeated: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_repair_needing_root_is_never_attempted() {
+        let health = health_of(vec![check_with(
+            CheckId::VoiceOut,
+            Verdict::Failed,
+            Some(repair(
+                RepairId::InstallAudioDecoders,
+                RepairKind::HandOver {
+                    command: "sudo apt install gstreamer1.0-plugins-good".to_string(),
+                },
+            )),
+        )]);
+        assert!(to_attempt(&health, true).is_empty());
+        assert!(to_attempt(&health, false).is_empty());
+    }
+
+    #[test]
+    fn an_in_app_repair_waits_for_a_caller_that_has_a_window() {
+        let health = health_of(vec![check_with(
+            CheckId::Hotkey,
+            Verdict::Failed,
+            Some(repair(RepairId::ReregisterHotkey, RepairKind::InApp)),
+        )]);
+        assert_eq!(
+            to_attempt(&health, true),
+            vec![(CheckId::Hotkey, RepairId::ReregisterHotkey)]
+        );
+        assert!(
+            to_attempt(&health, false).is_empty(),
+            "a terminal cannot register a hotkey, and failing at it would misreport the machine"
+        );
+    }
+
+    #[test]
+    fn a_healthy_check_is_left_alone_even_when_it_has_a_repair() {
+        let health = health_of(vec![check_with(
+            CheckId::ModelEndpoint,
+            Verdict::Ok,
+            Some(repair(RepairId::StartModelServer, RepairKind::Run)),
+        )]);
+        assert!(to_attempt(&health, true).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_check_is_not_repaired_on_a_guess() {
+        let health = health_of(vec![check_with(
+            CheckId::Hotkey,
+            Verdict::Unknown,
+            Some(repair(RepairId::ReregisterHotkey, RepairKind::InApp)),
+        )]);
+        assert!(to_attempt(&health, true).is_empty());
+    }
+
+    fn outcome(check: &'static str, rechecked: Option<Verdict>) -> RepairOutcome {
+        RepairOutcome {
+            check,
+            repair: RepairId::StartModelServer,
+            ran: true,
+            message: "started".to_string(),
+            rechecked,
+            recheck_detail: Some("nothing answered".to_string()),
+            record: None,
+        }
+    }
+
+    #[test]
+    fn the_headline_counts_what_worked_not_what_ran() {
+        let attended = Attended {
+            before: "Two problems.".to_string(),
+            outcomes: vec![
+                outcome("model-endpoint", Some(Verdict::Ok)),
+                outcome("configured-model", Some(Verdict::Failed)),
+            ],
+            remaining: vec![Unfixed {
+                title: "Speaking",
+                detail: "nothing can speak".to_string(),
+                verdict: Verdict::Failed,
+                hand_over: None,
+            }],
+            after: "One problem.".to_string(),
+        };
+        assert_eq!(attended.headline(), "Fixed 1 of 2. 1 still need attention.");
+        let report = attended.as_report();
+        assert!(report.contains("afterwards fixed"));
+        assert!(report.contains("still XX (nothing answered)"), "{report}");
+        assert!(report.contains("Still wrong:\n- Speaking"));
+    }
+
+    #[test]
+    fn a_pass_that_fixed_nothing_says_so_rather_than_sounding_busy() {
+        let attended = Attended {
+            before: "One problem.".to_string(),
+            outcomes: vec![outcome("model-endpoint", Some(Verdict::Failed))],
+            remaining: Vec::new(),
+            after: "One problem.".to_string(),
+        };
+        assert_eq!(
+            attended.headline(),
+            "Tried 1 repair(s); none of them worked."
+        );
+    }
+
+    #[test]
+    fn nothing_to_try_is_not_reported_as_success() {
+        let attended = Attended {
+            before: "One problem.".to_string(),
+            outcomes: Vec::new(),
+            remaining: vec![Unfixed {
+                title: "Media playback",
+                detail: "the decoders are missing".to_string(),
+                verdict: Verdict::Failed,
+                hand_over: Some("sudo apt install gstreamer1.0-plugins-good".to_string()),
+            }],
+            after: "One problem.".to_string(),
+        };
+        assert_eq!(
+            attended.headline(),
+            "Media playback needs you: nothing here can fix it."
+        );
+        let report = attended.as_report();
+        assert!(
+            report.contains("it needs root: sudo apt install"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn the_switch_is_off_until_it_is_turned_on() {
+        let path =
+            std::env::temp_dir().join(format!("aether1_selfrepair_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = MemoryDb::open(&path).unwrap();
+        assert!(!self_repair_enabled(&db));
+        db.set_setting(SELF_REPAIR_SETTING, &json!(true)).unwrap();
+        assert!(self_repair_enabled(&db));
     }
 }

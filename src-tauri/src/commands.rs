@@ -921,6 +921,22 @@ pub fn doctor_repair(
     serde_json::to_value(outcome).map_err(|e| e.to_string())
 }
 
+/// Fixes everything AETHER1 can fix about itself, because somebody pressed the one button
+/// that says so.
+///
+/// The button rather than the switch: this is the attended path, and pressing it is the
+/// go-ahead for the whole pass in the same way pressing one repair is the go-ahead for that
+/// repair. The unattended path is `SELF_REPAIR_SETTING` and lives in main.rs's startup
+/// thread; it reaches the same `doctor::attend`, so there is one behaviour and not two.
+pub fn doctor_attend(
+    engine: &LlmEngine,
+    facts: crate::doctor::Facts,
+    in_app: Option<crate::doctor::InAppRepair>,
+) -> Result<Value, String> {
+    let attended = crate::doctor::attend(engine, &facts, in_app);
+    serde_json::to_value(attended).map_err(|e| e.to_string())
+}
+
 /// Runs diagnostics and returns a structured report with simplified output.
 /// Includes:
 /// - Simplified voice-over format

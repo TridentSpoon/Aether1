@@ -173,6 +173,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/profile/revoke", post(revoke_device))
         .route("/api/doctor", get(doctor_report))
         .route("/api/doctor/repair", post(doctor_repair))
+        .route("/api/doctor/attend", post(doctor_attend))
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
@@ -593,6 +594,15 @@ async fn doctor_repair(
     Json(req): Json<DoctorRepairRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     commands::doctor_repair(&state.engine, &req.check, &req.repair, None)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+/// Every repair this process can make, asked for from the browser HUD. Same rule as the one
+/// above: no in-app repairs, because this process holds no window to make them with, so the
+/// hotkey comes back in `remaining` rather than being silently skipped.
+async fn doctor_attend(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::doctor_attend(&state.engine, crate::doctor::Facts::default(), None)
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
