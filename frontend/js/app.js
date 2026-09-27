@@ -85,6 +85,34 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.stopSpeech();
     }
 
+    /* Stop talking, on purpose, with nothing taking its place.
+
+       This is the same cut a new question makes, and it exists separately because the only
+       ways to get silence were to ask something else or to hold the talk key -- both of which
+       start something. Ask for `diagnostics` on a machine with a bad morning behind it and the
+       answer is minutes long; there was no way to say "enough". Escape, or the button that
+       appears beside Send while there is something to stop.
+
+       Both halves matter. `stopSpeech` drops what is queued and cuts the clip playing; the
+       turn bump is what stops the sentences still inside the synthesizer from queueing
+       themselves a moment later, which is what made an earlier attempt at this feel broken. */
+    let speaking = false;
+    function hush() {
+        if (!speaking) return false;
+        supersedeSpeech();
+        setSpeakingUi(false);
+        return true;
+    }
+
+    /* Whether there is anything to stop. Driven by the engine's own state rather than by
+       "we started a reply", so it is false again the moment the last clip drains, and the
+       button does not linger over silence. */
+    function setSpeakingUi(isSpeaking) {
+        speaking = isSpeaking;
+        const btn = document.getElementById('btn-hush');
+        if (btn) btn.classList.toggle('hidden', !isSpeaking);
+    }
+
     // DOM Elements
     const chatContainer = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
@@ -439,7 +467,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.addEventListener('click', () => closeHudMenus());
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeHudMenus();
+        if (e.key !== 'Escape') return;
+        /* Silence first, and only silence: if it was talking, Escape means "be quiet" and
+           nothing else, so a press that stops a long answer does not also close the panel
+           the operator was reading. Nothing is being spoken -- the usual case -- and Escape
+           is the menu key it always was. */
+        if (hush()) return;
+        closeHudMenus();
     });
 
     // Clock
@@ -1709,6 +1743,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Voice Callbacks
     voiceEngine.onStateChange = (state) => {
         setAvatarState(state);
+        setSpeakingUi(state === 'SPEAKING');
         if (elStatusBadge) {
             elStatusBadge.textContent = state;
             if (state === 'LISTENING') {
@@ -10157,6 +10192,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const box = document.getElementById('setting-sfx');
         if (box) box.checked = on;
     }
+
+    /* No click SFX on this one. It is the button you press to make it stop making noise. */
+    document.getElementById('btn-hush')?.addEventListener('click', () => hush());
 
     btnSfxToggle.addEventListener('click', () => {
         applySfx(!voiceEngine.sfxEnabled);

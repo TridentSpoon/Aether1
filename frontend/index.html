@@ -375,6 +375,12 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
                     </button>
                     <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <!-- Hush. Hidden until there is something to stop, because a dead
+                         button beside the one you press every time is clutter, and because
+                         its appearing is itself the sign that Escape will work. -->
+                    <button id="btn-hush" class="cyber-btn px-3 py-2 text-sm rounded hidden" title="Stop talking (Esc)">
+                        <span aria-hidden="true">&#9632;</span><span class="sr-only">Stop talking</span>
+                    </button>
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
                     </button>
