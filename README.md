@@ -1174,3 +1174,31 @@ to generate a new phrase and revoke the old one.
 ## Project goals
 
 Where this is headed, and why: [docs/GOALS.md](docs/GOALS.md).
+
+## Licence, and what a fork owes you
+
+Aether1 is **GPL-3.0-only**. The full text is in [LICENSE](LICENSE).
+
+In plain terms, for the two questions people actually have:
+
+**Can I use it?** Yes. Run it, on as many machines as you like, for anything you like,
+including at work. Nothing to ask, nothing to pay, nothing to sign.
+
+**Can I fork it?** Yes — and three things come with that, which is the entire reason this
+licence was chosen:
+
+1. **A fork stays open.** If you distribute a modified Aether1, you distribute its source
+   under this same licence. Nobody takes this, closes it, and sells it back.
+2. **A fork says where it came from.** The copyright notices stay, and the GPL requires a
+   modified version to carry prominent notices saying that you changed it and when. Someone
+   handed your fork can trace it back here.
+3. **A fork is not Aether1.** The licence covers the code. It does not grant the *name* —
+   "Aether1", "AETHER1", the eXcelsior avatars and the logos are not yours to use in a way
+   that suggests your version is this project or endorsed by it. Fork it and call it
+   something of your own.
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Anything you submit is
+under the same licence, which is the only way the promises above stay true for the next
+person.
+
+Copyright (C) 2026 TridentSpoon.
