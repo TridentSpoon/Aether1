@@ -207,6 +207,32 @@ fn pick_asset(assets: &[RawAsset]) -> Option<Asset> {
 
 /// Ask GitHub for the newest published release of the update repository. Blocking; never call
 /// it on the main thread.
+/// Whether the repository itself can be read, asked only to explain a 404 from the releases
+/// endpoint.
+///
+/// `/releases/latest` answers 404 both for a repository the caller cannot see and for one
+/// that simply has no release yet, and those two want opposite things said to the operator.
+/// `/repos/{owner}/{repo}` separates them: it answers for any repository the caller can see,
+/// whether or not it has ever published anything.
+///
+/// Anything other than a clean success is read as "not visible". That is the cautious way
+/// round: a network failure here becomes the message about access rather than a confident
+/// claim that there are no releases, and the operator can retry. Only reached on the error
+/// path, so an ordinary check still makes exactly one request.
+fn repository_is_visible(repo: &str, token: Option<&str>, agent_label: &str) -> bool {
+    let mut request = ureq::get(format!("https://api.github.com/repos/{repo}"))
+        .config()
+        .timeout_global(Some(REQUEST_TIMEOUT))
+        .build()
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", agent_label);
+    if let Some(token) = token {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    request.call().is_ok()
+}
+
 pub fn latest(repo: &str, agent_label: &str) -> Result<Release, ReleaseError> {
     // Sent when there is one, not required. See the note on signing in at the top of this
     // module: public releases read fine anonymously, and a token is worth attaching anyway
@@ -226,11 +252,18 @@ pub fn latest(repo: &str, agent_label: &str) -> Result<Release, ReleaseError> {
     }
     let response = request.call().map_err(|e| match &e {
         // GitHub hides a repository it will not show behind a 404 rather than a 403, so
-        // this one status covers three different situations: a private repository the
-        // caller cannot see, a public one with no published release, and a repository
-        // that does not exist. `signed_in` is what lets the message say something true
-        // about which -- it is the only thing here that distinguishes them.
-        ureq::Error::StatusCode(404) => ReleaseError::NoAccess { signed_in },
+        // this one status covers two quite different situations: a repository the caller
+        // cannot see, and a repository they can see perfectly well that has published no
+        // release. Telling someone to sign in when the truth is "there is nothing to
+        // download yet" sends them off to do something that cannot possibly help, so the
+        // two are told apart by asking a second question rather than guessed at.
+        ureq::Error::StatusCode(404) => {
+            if repository_is_visible(repo, token.as_deref(), agent_label) {
+                ReleaseError::NoRelease
+            } else {
+                ReleaseError::NoAccess { signed_in }
+            }
+        }
         // A token that GitHub itself rejects: expired, revoked, or malformed. Only
         // reachable when one was sent, so it genuinely does mean sign in again.
         ureq::Error::StatusCode(401) => ReleaseError::NotSignedIn,
@@ -585,6 +618,31 @@ mod tests {
         // Signed in: it is not, and saying so would send someone round the same loop again.
         assert!(!signed_in.contains("sign in to"));
         assert!(signed_in.contains("owner"));
+    }
+
+    /// A repository with no release yet must not be reported as one you cannot see. Both
+    /// come back as a 404 from `/releases/latest`; `latest` asks `/repos/{owner}/{repo}` to
+    /// tell them apart, and this pins the half of it that is checkable without a network:
+    /// the message for "no release" sends nobody off to sign in, because signing in cannot
+    /// conjure a release that was never cut.
+    ///
+    /// Found the day the repository went public, when it had no releases at all and the
+    /// update check told the operator to sign in to see them.
+    #[test]
+    fn having_no_release_yet_is_not_an_access_problem() {
+        let message = ReleaseError::NoRelease.message();
+        assert!(!message.contains("sign"));
+        assert!(!message.contains("private"));
+        assert!(!message.contains("owner"));
+        // And it is a different answer from either refusal, not a reworded one.
+        assert_ne!(
+            message,
+            ReleaseError::NoAccess { signed_in: false }.message()
+        );
+        assert_ne!(
+            message,
+            ReleaseError::NoAccess { signed_in: true }.message()
+        );
     }
 
     /// Nothing states this project's releases are private any more. They were, the messages
