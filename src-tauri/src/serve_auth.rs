@@ -127,7 +127,16 @@ pub struct DeviceSummary {
 /// token, so taking access from one meant taking it from all of them and pairing everything
 /// again.
 pub struct ServeAuth {
-    phrase_hash: String,
+    /// The stored phrase hash, behind a lock because it can change under a running server:
+    /// `aether1 pair`, and the pane's New phrase / Use phrase buttons, all write this file
+    /// from a *different process* to the one serving. Held as a value read from disk rather
+    /// than a constant so a phrase changed while `--serve --lan` is up takes effect on the
+    /// next pairing attempt instead of the next restart -- the same reason the device list
+    /// is stamped and re-read, and the same bug in the other half of the credential.
+    phrase_hash: Mutex<String>,
+    /// What the hash file looked like when `phrase_hash` was read from it.
+    hash_stamp: Mutex<Option<Stamp>>,
+    hash_file: PathBuf,
     devices: Mutex<Vec<Device>>,
     /// What the device file looked like when the list in memory was read from it. `aether1
     /// revoke` runs in a separate process from `aether1 --serve`, so without this the server
@@ -168,10 +177,38 @@ impl ServeAuth {
     /// Whether this is the token the pairing phrase derives to -- the one thing the phrase is
     /// still good for, and not something `accepts` will take.
     pub fn phrase_matches(&self, presented_token: &str) -> bool {
-        constant_time_eq(
-            hash_token(presented_token).as_bytes(),
-            self.phrase_hash.as_bytes(),
-        )
+        // Cheap enough to do per call -- one `stat` -- and this path is rate limited to five
+        // attempts a minute per address anyway.
+        self.reload_phrase_if_changed();
+        let stored = self
+            .phrase_hash
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        constant_time_eq(hash_token(presented_token).as_bytes(), stored.as_bytes())
+    }
+
+    /// Re-reads the phrase hash when the file has changed underneath us, so a phrase minted
+    /// or adopted in the window process is the one a device has to type from then on.
+    ///
+    /// An unreadable or empty file leaves the remembered hash in place: the alternative is a
+    /// server that accepts nothing, or worse an empty hash that some future comparison
+    /// treats as a match, on the strength of one failed read.
+    fn reload_phrase_if_changed(&self) {
+        let current = stamp(&self.hash_file);
+        let mut remembered = self
+            .hash_stamp
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *remembered == current {
+            return;
+        }
+        if let Some(found) = read_hash(&self.hash_file) {
+            *self
+                .phrase_hash
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = found;
+        }
+        *remembered = current;
     }
 
     fn devices(&self) -> Vec<Device> {
@@ -306,6 +343,15 @@ fn save_devices(path: &Path, devices: &[Device]) -> Result<(), String> {
     Ok(())
 }
 
+/// The stored phrase hash as written, or nothing when the file is missing, unreadable or
+/// blank. Shared by every path that asks what phrase this machine currently answers to.
+fn read_hash(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|found| found.trim().to_string())
+        .filter(|found| !found.is_empty())
+}
+
 fn load_devices(path: &Path) -> Vec<Device> {
     // A missing file is an install with nothing paired yet. A corrupt one is treated the
     // same way: refusing to start because a list of devices will not parse would lock the
@@ -363,10 +409,7 @@ fn save_hash_at(path: &Path, hash: &str) -> Result<(), String> {
 }
 
 fn load_or_create_at(path: &Path, devices_file: &Path) -> Result<(ServeAuth, Setup), String> {
-    let existing = std::fs::read_to_string(path)
-        .ok()
-        .map(|found| found.trim().to_string())
-        .filter(|found| !found.is_empty());
+    let existing = read_hash(path);
 
     let (phrase_hash, setup) = match existing {
         Some(hash) => (hash, Setup::Existing),
@@ -393,7 +436,9 @@ fn load_or_create_at(path: &Path, devices_file: &Path) -> Result<(ServeAuth, Set
 
     Ok((
         ServeAuth {
-            phrase_hash,
+            phrase_hash: Mutex::new(phrase_hash),
+            hash_stamp: Mutex::new(stamp(path)),
+            hash_file: path.to_path_buf(),
             devices: Mutex::new(devices),
             stamp: Mutex::new(stamp(devices_file)),
             devices_file: devices_file.to_path_buf(),
@@ -441,10 +486,7 @@ pub fn adopt(phrase: &str) -> Result<usize, String> {
 fn adopt_at(path: &Path, devices_file: &Path, phrase: &str) -> Result<usize, String> {
     let hash = hash_token(&derive_token(&derive_token_from_phrase_inner(phrase)?));
 
-    let unchanged = std::fs::read_to_string(path)
-        .ok()
-        .map(|found| found.trim().to_string())
-        .is_some_and(|found| found == hash);
+    let unchanged = read_hash(path).is_some_and(|found| found == hash);
     if unchanged {
         return Ok(0);
     }
@@ -717,6 +759,63 @@ mod tests {
         let token = derive_token_from_phrase(phrase).unwrap();
         assert!(auth.phrase_matches(&token), "the phrase should be accepted");
         auth.add_device(label).unwrap()
+    }
+
+    /// The bug that made "connecting via LAN doesn't work, regardless of the phrase" true:
+    /// the pane writes the hash from the window's process while `--serve --lan` runs in a
+    /// child of it, so a phrase minted or adopted after the server started was checked
+    /// against the hash the server read at boot. Every device then got "wrong pairing
+    /// phrase" for the phrase the pane had just shown, and the *old* phrase still worked.
+    #[test]
+    fn a_phrase_changed_while_the_server_runs_is_the_one_it_checks() {
+        let (hash_file, devices_file) = temp_paths("phrase_reload");
+
+        // A server comes up and reads the phrase that exists now.
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let first = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+        assert!(auth.phrase_matches(&derive_token_from_phrase(&first).unwrap()));
+
+        // Another process rotates it -- `aether1 pair`, or the pane's New phrase button.
+        // The file's length never changes (a hash is a fixed width), so only the modified
+        // time distinguishes it; sleep past the filesystem's resolution rather than trust it.
+        std::thread::sleep(Duration::from_millis(1100));
+        let (second, _hash) = generate_and_save_at(&hash_file).unwrap();
+
+        assert!(
+            auth.phrase_matches(&derive_token_from_phrase(&second).unwrap()),
+            "the running server should take the phrase that was just made"
+        );
+        assert!(
+            !auth.phrase_matches(&derive_token_from_phrase(&first).unwrap()),
+            "and should stop taking the one it replaced"
+        );
+
+        let _ = std::fs::remove_file(&hash_file);
+        let _ = std::fs::remove_file(&devices_file);
+    }
+
+    /// A hash file that has gone missing must not turn into a server that accepts anything,
+    /// nor one that has forgotten the phrase it was serving a moment ago.
+    #[test]
+    fn a_vanished_hash_file_leaves_the_phrase_it_was_serving_in_place() {
+        let (hash_file, devices_file) = temp_paths("phrase_vanished");
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let phrase = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+
+        let _ = std::fs::remove_file(&hash_file);
+        assert!(
+            auth.phrase_matches(&derive_token_from_phrase(&phrase).unwrap()),
+            "the phrase already loaded should keep working"
+        );
+        assert!(!auth.phrase_matches("not the token at all"));
+
+        let _ = std::fs::remove_file(&devices_file);
     }
 
     #[test]
