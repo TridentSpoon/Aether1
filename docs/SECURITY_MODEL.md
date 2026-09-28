@@ -41,7 +41,8 @@ touch.
   back over that tmpfs, with the credential files that live inside them masked by
   `/dev/null`;
 * the nominated project folder bind-mounted read-write, and it is the only writable place;
-* user, IPC, PID, UTS and (unless `code_run_network` is on) network namespaces of their own;
+* user, IPC, PID, UTS and network namespaces of their own -- the network one always, see
+  1b;
 * the environment cleared and rebuilt from a short list, so an API key Aether1 holds cannot
   be read by a build script.
 
@@ -77,6 +78,42 @@ explains itself.
 Note what the write test asserts, because it is the distinction this whole section turns on:
 inside the box the write *succeeds*, against a tmpfs, and the command reports success.
 Nothing reaches the operator's disk. Containment, not denial.
+
+## 1b. The way out
+
+The network used to be a switch: off, and `npm install` cannot work; on, and the box could
+reach anything, including wherever a fetched page told the model to send a copy of the
+source tree. Neither is a mode to work in, so it is now a policy.
+
+The box keeps its network namespace in both states. What changes when the operator turns the
+network on is that one unix socket is bind-mounted in -- a file, which crosses a network
+namespace, rather than a route, which does not. A relay inside (`aether1 --net-relay`, which
+is Aether1 re-entering itself and then running the real command) listens on loopback, and
+`code_proxy.rs`, running outside where the real network is, decides one question per
+connection: is this host one the project agreed to?
+
+Three properties follow:
+
+* **Bypassing is not possible.** A program that ignores `HTTPS_PROXY` does not reach the
+  internet by ignoring it. There is no route; it reaches nothing.
+* **No interception and no certificate.** The decision is taken on the `CONNECT` line, which
+  names the host in the clear before TLS begins. Aether1 never terminates TLS, never sees
+  inside the tunnel, and installs no certificate anywhere.
+* **The question is about a domain, once.** `.aether/policy.json` in the project holds
+  `allow` and `deny` lists over a starter set of package registries and source hosts; `deny`
+  wins. A refused host is recorded and shown by `aether1 code net`, so "the build said it
+  could not reach something" and "what did it want" are one question.
+
+What this is not: a content filter. An allowed host is allowed entirely -- which is bounded
+by the sandbox, since what the command can read is the project folder and nothing else.
+
+Matching is exact or dot-delimited subdomain, so `crates.io` covers `static.crates.io` and
+not `crates.io.evil.example`. Credentials in an authority are stripped before the host is
+read, because `http://crates.io@evil.example/` goes to the second one.
+
+The end-to-end test is the claim itself: a real command in a real sandbox tries the host
+directly and is blocked, then reaches an allowed host through the proxy, with the domain
+added between the two runs.
 
 ## 1a. Putting it back
 
@@ -169,6 +206,8 @@ Listed here rather than implied by silence:
 * `openat`-style filesystem operations to close the resolve/open gap (section 2).
 * A short-lived WebSocket credential, and a prominent statement of what the pairing phrase
   is (section 5).
+* A Settings surface for the domain policy; today it is `aether1 code net` and the project's
+  own `.aether/policy.json` (section 1b).
 * One outbound network policy object rather than a check per subsystem (section 6).
 * A PAKE for pairing, so a spoofed announcement cannot collect a phrase (section 5).
 * A second-pass audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri

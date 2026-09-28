@@ -24,6 +24,7 @@ mod cli;
 mod code_chat;
 mod code_checkpoint;
 mod code_perms;
+mod code_proxy;
 mod code_sandbox;
 mod code_setup;
 mod code_tools;
@@ -2371,6 +2372,11 @@ fn main() {
     // `aether1 face` with nothing already running: this launch becomes the instance, and
     // the face has to be opened from setup() below rather than by the single-instance
     // handler, which only ever runs for the *second* launch.
+    // Inside the sandbox, and before anything else this process would normally do: no
+    // tray, no database, no window. It bridges one socket and runs one command.
+    if let cli::Invocation::NetRelay { socket, argv } = &invocation {
+        std::process::exit(code_proxy::relay_main(socket, argv));
+    }
     let open_face_at_launch = matches!(invocation, cli::Invocation::Face);
     match invocation {
         // `show`/`toggle`/`face` continue into the app path: the single-instance plugin
