@@ -142,6 +142,8 @@ pub fn status(engine: &LlmEngine, managed: &ManagedServer) -> Value {
         // The outward half: machines *this* one has paired with, as opposed to the devices
         // that have paired with it. Tokens are left out -- the pane has no use for them.
         "paired_peers": paired_peers_payload(),
+        // Which paired machine, if any, answers when this one has no model of its own.
+        "chat_peer": engine.db().get_setting_string(crate::peers::HELPER_SETTING, ""),
     })
 }
 
@@ -352,6 +354,27 @@ pub fn pair_with_peer(
 pub fn peer_models(address: &str, port: u16) -> Result<Value, String> {
     let models = crate::peers::models_on(address, port)?;
     Ok(json!({ "address": address, "port": port, "models": models }))
+}
+
+/// Names the machine that answers when this one cannot, or clears it with an empty
+/// address. Stored as a plain setting so it survives a restart the way every other choice
+/// in the pane does.
+pub fn set_chat_peer(
+    engine: &LlmEngine,
+    managed: &ManagedServer,
+    address: &str,
+    port: u16,
+) -> Result<Value, String> {
+    let value = if address.trim().is_empty() {
+        String::new()
+    } else {
+        format!("{address}:{port}")
+    };
+    engine
+        .db()
+        .set_setting(crate::peers::HELPER_SETTING, &json!(value))
+        .map_err(|e| format!("could not remember that choice: {e}"))?;
+    Ok(status(engine, managed))
 }
 
 /// Forgets one machine on this side. The other machine still lists the device it gave a

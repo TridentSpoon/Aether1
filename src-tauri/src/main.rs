@@ -557,6 +557,18 @@ fn lan_pair_with_rust(
     lan::pair_with_peer(&engine, &managed, &name, &address, port, &secret)
 }
 
+/// Chooses the paired machine that answers when this one has no model of its own, or
+/// clears the choice with an empty address.
+#[tauri::command(async)]
+fn lan_set_chat_peer_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+    address: String,
+    port: u16,
+) -> Result<serde_json::Value, String> {
+    lan::set_chat_peer(&engine, &managed, &address, port)
+}
+
 /// What a paired machine can run, asked over the token it handed out. Reads that machine's
 /// model scan and changes nothing on either end.
 #[tauri::command(async)]
@@ -2804,6 +2816,7 @@ fn main() {
             lan_pair_with_rust,
             lan_forget_peer_rust,
             lan_peer_models_rust,
+            lan_set_chat_peer_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,

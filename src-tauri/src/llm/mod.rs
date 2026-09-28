@@ -1094,12 +1094,39 @@ impl LlmEngine {
             sink(&reply);
             reply
         } else if config.provider == Provider::Offline {
-            let reply = config.persona.offline_reply(
-                prompt,
-                &telem.os_name,
-                telem.cpu_percent,
-                &config.agent_name,
-            );
+            // Nothing here can answer -- but another AETHER1 on this network may be able to,
+            // and the operator has named one. Asked only on this branch, so a machine with a
+            // model of its own never sends a word anywhere: this is what a question would
+            // otherwise have got instead, which is a canned line about being offline.
+            //
+            // A machine that cannot be reached, or that says nothing useful, falls through
+            // to that same canned line rather than surfacing a network error at someone who
+            // asked a question. The reason is printed for whoever is reading the terminal.
+            let setting = if crate::peers::is_relaying() {
+                // This answer is already being produced for another machine. Passing the
+                // question on again is how a pair of machines that name each other end up
+                // talking to nobody.
+                String::new()
+            } else {
+                self.db.get_setting_string(crate::peers::HELPER_SETTING, "")
+            };
+            let from_peer = crate::peers::helper(&setting).and_then(|(address, port)| {
+                match crate::peers::chat_on(&address, port, prompt, session_id) {
+                    Ok(reply) => Some(reply),
+                    Err(e) => {
+                        eprintln!("[AETHER1] {address} could not answer that: {e}");
+                        None
+                    }
+                }
+            });
+            let reply = from_peer.unwrap_or_else(|| {
+                config.persona.offline_reply(
+                    prompt,
+                    &telem.os_name,
+                    telem.cpu_percent,
+                    &config.agent_name,
+                )
+            });
             sink(&reply);
             reply
         } else if tools_on {

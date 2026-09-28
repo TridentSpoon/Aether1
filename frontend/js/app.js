@@ -5825,6 +5825,21 @@ document.addEventListener('DOMContentLoaded', () => {
             state.className = 'net-state';
             state.dataset.state = 'on';
             state.append(document.createElement('i'), 'Paired');
+            // Whether questions this machine cannot answer go to that one. Off unless it
+            // is asked for: a question leaving this machine is the operator's choice.
+            const helper = document.createElement('button');
+            helper.type = 'button';
+            const chosen = (lanReport && lanReport.chat_peer) === `${addresses[0]}:${peer.port}`;
+            helper.className = chosen
+                ? 'net-card-action'
+                : 'net-card-action net-card-action-quiet';
+            helper.textContent = chosen ? 'Answering chat' : 'Let it answer chat';
+            helper.title = chosen
+                ? 'Questions this machine cannot answer are sent here. Press to stop.'
+                : 'When this machine has no model of its own, send questions here instead.';
+            helper.addEventListener('click', () =>
+                setChatPeer(chosen ? '' : addresses[0], peer.port, helper));
+
             const models = document.createElement('button');
             models.type = 'button';
             models.className = 'net-card-action net-card-action-quiet';
@@ -5837,7 +5852,7 @@ document.addEventListener('DOMContentLoaded', () => {
             forget.addEventListener('click', () => forgetPeer(addresses[0], peer.port, forget));
             const side = document.createElement('div');
             side.className = 'net-peer-side';
-            side.append(state, models, forget);
+            side.append(state, helper, models, forget);
             row.append(side);
             return row;
         }
@@ -5947,6 +5962,17 @@ document.addEventListener('DOMContentLoaded', () => {
             button.disabled = false;
             button.textContent = 'What it can run';
             row.append(answer);
+        }
+    }
+
+    async function setChatPeer(address, port, button) {
+        button.disabled = true;
+        try {
+            renderLan(await tauriInvoke('lan_set_chat_peer_rust', { address, port }));
+            renderPeers(lastScan);
+        } catch (e) {
+            setScanNotice(`Could not remember that choice: ${e.message || e}`);
+            button.disabled = false;
         }
     }
 
