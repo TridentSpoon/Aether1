@@ -965,7 +965,7 @@
                              need a child process (LAN access, pairing) are hidden in a browser
                              tab and revealed by initRemoteLan once IS_TAURI is confirmed, so the
                              rail no longer changes shape between the app and a tab. -->
-                        <button type="button" id="settings-nav-network" class="settings-nav-item" data-settings-section="network" data-keywords="internet offline cloud proxy leave machine lan wifi wi-fi network remote serve pair pairing pair a device phrase passphrase pass phrase code pairing code qr qr code scan devices token revoke tls certificate port share phone tablet laptop" data-hint="what may leave this machine, and who may reach it" title="what may leave this machine, and who may reach it">
+                        <button type="button" id="settings-nav-network" class="settings-nav-item" data-settings-section="network" data-keywords="internet offline cloud proxy leave machine lan wifi wi-fi network remote serve pair pairing pair a device phrase passphrase pass phrase code pairing code qr qr code scan devices token revoke tls certificate port share phone tablet laptop scan discover find machines peers mdns announce" data-hint="what may leave this machine, and who may reach it" title="what may leave this machine, and who may reach it">
                             <span class="settings-nav-icon">🌐</span>
                             <span class="settings-nav-text">Network &amp; Remote</span>
                         </button>
@@ -2563,6 +2563,30 @@
                         </div>
                     </div>
 
+                    <!-- CARD 1b: who else is out there. mDNS discovery, which discovery.rs
+                         has always done and only `aether1 discover` ever called -- so the
+                         window could show a pairing code while having no idea which machines
+                         were on the network to use it. Reading only: it browses, stops, and
+                         contacts nothing. -->
+                    <div class="net-card">
+                        <div class="net-card-head">
+                            <span class="net-card-icon" aria-hidden="true">📡</span>
+                            <div class="net-card-heading">
+                                <h4 class="net-card-title">AETHER1s on this network</h4>
+                                <p class="net-card-hint">
+                                    Machines announcing themselves on your own network, found
+                                    without anyone typing an address. Only a machine that is
+                                    serving announces, so an empty list means nothing is
+                                    listening rather than nothing is there.
+                                </p>
+                            </div>
+                            <button type="button" id="btn-lan-scan" class="net-card-action net-card-action-quiet">Scan</button>
+                        </div>
+                        <p id="lan-scan-notice" class="net-notice hidden"></p>
+                        <div id="lan-peers" class="net-peers"></div>
+                    </div>
+
+
                     <!-- CARD 2: local auth. The phrase is the entry credential; the tokens it
                          hands out are what every later request actually carries. -->
                     <div class="net-card">
@@ -2901,7 +2925,7 @@
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=2"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=62"></script>
+    <script src="js/app.js?v=63"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>
