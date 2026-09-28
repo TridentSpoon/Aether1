@@ -546,8 +546,13 @@ struct ChatRequest {
 /// matching what the old Python /api/chat did and what app.js's non-Tauri branch reads.
 async fn chat(
     State(state): State<AppState>,
+    headers: header::HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    // A question relayed from another AETHER1 is answered here or not at all. Without this,
+    // two machines each naming the other as their helper would pass one question back and
+    // forth until both timed out -- which is exactly what the first live test did.
+    let relayed = headers.contains_key(crate::peers::RELAY_HEADER);
     let engine = state.engine.clone();
     let message = req.message;
     let session_id =
@@ -558,6 +563,9 @@ async fn chat(
         let engine = engine.clone();
         let session_id = session_id.clone();
         tokio::task::spawn_blocking(move || {
+            // Held for the whole answer: the flag is thread-local, and this is the thread
+            // the answer is produced on.
+            let _relaying = relayed.then(crate::peers::Relaying::begin);
             commands::generate_response(&engine, message, Some(session_id))
         })
         .await

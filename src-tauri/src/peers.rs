@@ -413,6 +413,131 @@ pub fn models_on(address: &str, port: u16) -> Result<Vec<String>, String> {
     Ok(models_in(&answer))
 }
 
+/// The setting naming the machine that answers when this one cannot. Empty means nobody,
+/// which is the default: a question leaving this machine for another is something the
+/// operator asks for, never something that starts happening by itself.
+pub const HELPER_SETTING: &str = "lan_chat_peer";
+
+/// The header a relayed question carries, and the thread-local that remembers one arriving.
+///
+/// Two machines can each name the other as their helper -- a perfectly reasonable thing for
+/// an operator to set up, and without this a single question would bounce between them until
+/// both gave up on a timeout. **Found by running it**, not by reading it: the first live
+/// test pointed a machine at itself and the answer never came back.
+///
+/// So a question that arrived from another AETHER1 is answered here or not at all. One hop,
+/// never two. The flag is thread-local because `/api/chat` answers on one blocking thread,
+/// the same reason `vault::consulted` is.
+pub const RELAY_HEADER: &str = "X-Aether1-Relayed";
+
+thread_local! {
+    static RELAYING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks this thread as answering for another machine until it is dropped.
+pub struct Relaying;
+
+impl Relaying {
+    pub fn begin() -> Self {
+        RELAYING.with(|flag| flag.set(true));
+        Relaying
+    }
+}
+
+impl Drop for Relaying {
+    fn drop(&mut self) {
+        RELAYING.with(|flag| flag.set(false));
+    }
+}
+
+/// Whether this answer is being produced for another machine, and so must not be passed on
+/// again.
+pub fn is_relaying() -> bool {
+    RELAYING.with(|flag| flag.get())
+}
+
+/// Asks a paired machine to answer a message, and gives back what it said.
+///
+/// This is the whole point of the network, in Trident's own words: basic chat answered by a
+/// small model somewhere on it. The other machine runs its own engine, with its own persona
+/// and history, so what comes back is an answer rather than a completion -- that is why this
+/// posts to `/api/chat` rather than reaching for the model server behind it.
+///
+/// `session_id` is this machine's, passed through so the conversation over there stays one
+/// conversation rather than a series of unrelated questions.
+pub fn chat_on(
+    address: &str,
+    port: u16,
+    message: &str,
+    session_id: &str,
+) -> Result<String, String> {
+    let peer = paired_peers()
+        .into_iter()
+        .find(|peer| peer.address == address && peer.port == port)
+        .ok_or_else(|| "This machine is not paired with that one.".to_string())?;
+
+    let body = serde_json::json!({
+        "message": message,
+        "session_id": session_id,
+        // The answer is read here, not spoken there: voice belongs to the machine the
+        // operator is sitting at.
+        "generate_voice": false,
+    })
+    .to_string();
+    let head = format!(
+        "POST /api/chat HTTP/1.1\r\nHost: {address}:{port}\r\nContent-Type: application/json\r\n\
+         Authorization: Bearer {}\r\n{RELAY_HEADER}: 1\r\nConnection: close\r\n",
+        peer.token
+    );
+    let (status, answer, _) = request(
+        address,
+        port,
+        Some(peer.fingerprint.clone()),
+        &head,
+        Some(&body),
+    )?;
+    match status {
+        200 => {}
+        401 => {
+            return Err(
+                "That machine no longer accepts this one -- its pairing was revoked, or its \
+                 phrase was replaced. Pair with it again."
+                    .to_string(),
+            )
+        }
+        other => {
+            return Err(format!(
+                "That machine answered with {other}: {}",
+                answer.trim()
+            ))
+        }
+    }
+    reply_in(&answer)
+}
+
+/// The words out of a chat answer. A machine that answered with no reply in it is a failure
+/// rather than an empty message: something is wrong over there, and an empty bubble would
+/// hide it.
+fn reply_in(answer: &str) -> Result<String, String> {
+    serde_json::from_str::<serde_json::Value>(answer)
+        .ok()
+        .and_then(|value| value.get("reply")?.as_str().map(str::to_string))
+        .filter(|reply| !reply.trim().is_empty())
+        .ok_or_else(|| "That machine answered, but with nothing in it.".to_string())
+}
+
+/// The machine set to answer when this one cannot, as address and port, if it is still
+/// paired with. A setting naming a machine that has since been forgotten answers nobody
+/// rather than failing: forgetting is how an operator turns this off in the obvious way.
+pub fn helper(setting: &str) -> Option<(String, u16)> {
+    let (address, port) = setting.trim().rsplit_once(':')?;
+    let port: u16 = port.parse().ok()?;
+    paired_peers()
+        .into_iter()
+        .find(|peer| peer.address == address && peer.port == port)
+        .map(|peer| (peer.address, peer.port))
+}
+
 /// The model names out of a scan, in the order that machine reported them and without
 /// repeats -- two servers on one machine often offer the same model, and a list that says it
 /// twice reads as a mistake.
@@ -543,6 +668,44 @@ mod tests {
         assert!(models_in("{}").is_empty());
     }
 
+    /// The loop guard, which a live test found the need for: while an answer is being
+    /// produced for another machine, this one must not pass the question on again.
+    #[test]
+    fn a_relayed_question_is_marked_for_as_long_as_it_is_being_answered() {
+        assert!(!is_relaying(), "nothing is relayed until something says so");
+        {
+            let _relaying = Relaying::begin();
+            assert!(is_relaying(), "answering for another machine");
+        }
+        assert!(!is_relaying(), "and not a moment longer");
+    }
+
+    #[test]
+    fn a_reply_is_the_words_in_it_and_nothing_else() {
+        assert_eq!(
+            reply_in(r#"{"reply":"I can hear you.","session_id":"x"}"#).unwrap(),
+            "I can hear you."
+        );
+    }
+
+    /// An empty answer is a failure over there, not an empty message from a model. Passing
+    /// it on would put a blank bubble on screen and hide whatever went wrong.
+    #[test]
+    fn an_answer_with_nothing_in_it_is_a_failure_rather_than_a_silence() {
+        assert!(reply_in(r#"{"reply":"   "}"#).is_err());
+        assert!(reply_in(r#"{"session_id":"x"}"#).is_err());
+        assert!(reply_in("not json").is_err());
+    }
+
+    #[test]
+    fn a_helper_setting_that_names_nobody_this_machine_knows_answers_nobody() {
+        assert!(helper("").is_none());
+        assert!(helper("not-an-address").is_none());
+        assert!(helper("192.168.1.44:notaport").is_none());
+        // A well-formed setting is deliberately not asserted here: whether it names a peer
+        // depends on this machine's own store, which a test must not depend on.
+    }
+
     #[test]
     fn a_machine_that_was_never_paired_with_is_not_asked_anything() {
         let outcome = models_on("203.0.113.7", 8378);
@@ -586,6 +749,19 @@ mod tests {
         // accepted at all, which is what the token is for.
         let models = models_on("127.0.0.1", 8378).expect("the server accepted the token");
         println!("models: {models:?}");
+    }
+
+    /// The point of the whole thing, and manual for the same reason as the rest: a question
+    /// this machine could not answer, answered by another one over the token it gave.
+    ///
+    ///   cargo test -- --ignored asking_a_real_server_to_answer_a_question
+    #[test]
+    #[ignore = "needs a real --serve --lan this machine has already paired with"]
+    fn asking_a_real_server_to_answer_a_question_gets_words_back() {
+        let reply = chat_on("127.0.0.1", 8378, "Are you there?", "peer-test")
+            .expect("the other machine answered");
+        assert!(!reply.trim().is_empty(), "and it said something");
+        println!("reply: {reply}");
     }
 
     #[test]
