@@ -3,7 +3,10 @@
 // with the `sysinfo` crate, which already knows how to ask each OS for this the right
 // way -- the same code path here runs on Linux and Windows.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
+use std::time::{Duration, Instant};
 // Aliased: this crate already has a local `percent` variable (the disk-usage calculation
 // below), and uom's unit marker types double as values, so the bare name collides with it.
 use starship_battery::units::ratio::percent as ratio_percent;
@@ -131,22 +134,7 @@ impl Telemetry {
             0.0
         };
 
-        let disks = Disks::new_with_refreshed_list();
-        let (disk_used_gb, disk_total_gb, disk_percent) = disks
-            .list()
-            .first()
-            .map(|d| {
-                let total = d.total_space();
-                let available = d.available_space();
-                let used = total.saturating_sub(available);
-                let percent = if total > 0 {
-                    (used as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
-                (bytes_to_gb(used), bytes_to_gb(total), percent)
-            })
-            .unwrap_or((0.0, 0.0, 0.0));
+        let (disk_used_gb, disk_total_gb, disk_percent) = disk_usage();
 
         let mut top_processes: Vec<(String, f32)> = sys
             .processes()
@@ -291,9 +279,197 @@ impl Telemetry {
     }
 }
 
+// ---- Disk usage -------------------------------------------------------------------------
+//
+// This is the one reading that cannot be taken on the caller's thread.
+//
+// `Disks::new_with_refreshed_list()` does not ask about a disk; it enumerates every mount
+// on the machine and stats each one. On a desktop that is instant. On a machine with an
+// automounted network share it is not: stat'ing the mount point is what *triggers* the
+// automount, and if the server is gone the call sits in uninterruptible I/O until the
+// automounter gives up -- fifteen seconds, by default, per attempt. Nothing in the process
+// can interrupt it, because a thread in D state does not take signals.
+//
+// That is not a hypothetical. It is what a 1 Hz telemetry tick on a laptop with a dead NFS
+// entry in /etc/fstab actually did: the tick's real cadence became ~20s, the hardware panel
+// updated three times a minute instead of sixty, and a thread sat pinned in disk wait about
+// three quarters of the time -- which the operator reads, correctly, as the app lagging.
+// A sleeping USB drive or an unreachable SMB share does the same thing, so fixing the one
+// mount would have been fixing the symptom.
+//
+// The rule this settles on: a telemetry reading is never worth blocking for. The figures are
+// taken on a thread of their own and the tick takes whatever the last completed reading was.
+// Disk usage moves by gigabytes an hour at worst, so a reading up to a minute old is not
+// meaningfully different from a fresh one -- and a reading that never arrives because the
+// filesystem is wedged is strictly better than a HUD that freezes waiting for it.
+
+/// How stale a reading may be before another is started. Deliberately far longer than the
+/// tick: the old code re-read this every second, which on the machine above meant triggering
+/// a dead automount every second.
+const DISK_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+struct DiskReading {
+    used_gb: f64,
+    total_gb: f64,
+    percent: f64,
+    taken_at: Option<Instant>,
+}
+
+fn disk_cache() -> &'static Mutex<DiskReading> {
+    static CACHE: OnceLock<Mutex<DiskReading>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        Mutex::new(DiskReading {
+            used_gb: 0.0,
+            total_gb: 0.0,
+            percent: 0.0,
+            taken_at: None,
+        })
+    })
+}
+
+/// Set while a refresh thread is alive. Without it, a wedged filesystem would have the tick
+/// start a new thread every second, each one parking in the same place, and the count would
+/// climb for as long as the mount stayed dead.
+fn disk_refresh_running() -> &'static AtomicBool {
+    static RUNNING: OnceLock<AtomicBool> = OnceLock::new();
+    RUNNING.get_or_init(|| AtomicBool::new(false))
+}
+
+/// The last completed reading, and a refresh started if that reading is old. Never blocks:
+/// before the first one finishes this reports zeroes, which is what the HUD already shows
+/// for a machine that reports no disks at all.
+fn disk_usage() -> (f64, f64, f64) {
+    let (reading, stale) = {
+        let cache = disk_cache().lock().unwrap_or_else(|e| e.into_inner());
+        let stale = match cache.taken_at {
+            None => true,
+            Some(at) => at.elapsed() >= DISK_REFRESH_INTERVAL,
+        };
+        ((cache.used_gb, cache.total_gb, cache.percent), stale)
+    };
+
+    if stale
+        && disk_refresh_running()
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    {
+        thread::spawn(|| {
+            let measured = measure_disk();
+            if let Some((used_gb, total_gb, percent)) = measured {
+                let mut cache = disk_cache().lock().unwrap_or_else(|e| e.into_inner());
+                cache.used_gb = used_gb;
+                cache.total_gb = total_gb;
+                cache.percent = percent;
+                cache.taken_at = Some(Instant::now());
+            }
+            // Stamped even when nothing was measured, so a machine that reports no disks
+            // does not start a thread every tick forever.
+            else {
+                let mut cache = disk_cache().lock().unwrap_or_else(|e| e.into_inner());
+                cache.taken_at = Some(Instant::now());
+            }
+            disk_refresh_running().store(false, Ordering::Release);
+        });
+    }
+
+    reading
+}
+
+/// The blocking part, run only on the refresh thread. Picks the filesystem AETHER1 itself is
+/// installed on rather than whichever one the OS happened to list first -- `.first()` was
+/// arbitrary, and on a machine with several drives it could report a disk the operator has
+/// nothing to do with. Falls back to the largest, which is the better guess than the first
+/// when the executable's path cannot be matched to a mount.
+fn measure_disk() -> Option<(f64, f64, f64)> {
+    let disks = Disks::new_with_refreshed_list();
+    let here = std::env::current_exe().ok();
+
+    let chosen = here
+        .as_ref()
+        .and_then(|exe| {
+            // The longest mount point that is a prefix of our own path: with / and /home
+            // both matching, /home is the one the file is actually on.
+            disks
+                .list()
+                .iter()
+                .filter(|d| exe.starts_with(d.mount_point()))
+                .max_by_key(|d| d.mount_point().as_os_str().len())
+        })
+        .or_else(|| disks.list().iter().max_by_key(|d| d.total_space()))?;
+
+    let total = chosen.total_space();
+    let used = total.saturating_sub(chosen.available_space());
+    let percent = if total > 0 {
+        (used as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    Some((bytes_to_gb(used), bytes_to_gb(total), percent))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug this whole arrangement exists for. `disk_usage` used to be
+    /// `Disks::new_with_refreshed_list()` taken inline on the telemetry tick, which stats
+    /// every mount on the machine -- and stat'ing an automounted share whose server is gone
+    /// blocks in uninterruptible I/O for about fifteen seconds, per attempt, once a second.
+    ///
+    /// There is no dead NFS server in a test runner, so this cannot reproduce the stall. What
+    /// it can pin is the property that makes the stall survivable: the call returns to its
+    /// caller promptly whatever the filesystem is doing, because the filesystem is somebody
+    /// else's thread's problem. A generous bound -- the point is "did not wait on a mount",
+    /// not a benchmark, and a loaded CI runner is allowed to be slow.
+    #[test]
+    fn disk_usage_returns_without_waiting_on_the_filesystem() {
+        let started = Instant::now();
+        let _ = disk_usage();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "disk_usage blocked for {:?}; it must never wait on a mount",
+            started.elapsed()
+        );
+    }
+
+    /// A wedged mount means the refresh thread is parked for as long as the mount stays dead.
+    /// If a stale cache started a fresh one on every tick, the parked threads would pile up at
+    /// one a second for as long as the operator left the app open. The in-flight flag is what
+    /// stops that, so repeated calls with nothing cached must stay cheap.
+    #[test]
+    fn repeated_calls_stay_cheap_while_a_refresh_is_in_flight() {
+        let started = Instant::now();
+        for _ in 0..200 {
+            let _ = disk_usage();
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "200 calls took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// `.first()` was arbitrary: on a machine with several drives the HUD could report one the
+    /// operator has nothing to do with. Whatever is chosen now, it has to be internally
+    /// consistent -- used never above total, percent agreeing with both.
+    #[test]
+    fn the_chosen_disk_reports_consistent_figures() {
+        let Some((used_gb, total_gb, percent)) = measure_disk() else {
+            return; // A machine reporting no disks at all is not a failure; see disk_usage.
+        };
+        assert!(used_gb <= total_gb, "used {used_gb} > total {total_gb}");
+        assert!(
+            (0.0..=100.0).contains(&percent),
+            "percent out of range: {percent}"
+        );
+        if total_gb > 0.0 {
+            let expected = used_gb / total_gb * 100.0;
+            assert!(
+                (percent - expected).abs() < 0.5,
+                "percent {percent} disagrees with {used_gb}/{total_gb}"
+            );
+        }
+    }
 
     /// The HUD and the CLI read the same numbers and must say the same thing about them.
     /// They did not: `aether1 status` printed "63.7%" while the HUD's panel showed the raw
