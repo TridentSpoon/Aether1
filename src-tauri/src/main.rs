@@ -541,6 +541,15 @@ fn lan_new_pairing_code_rust(
     lan::new_pairing_code(&engine, &managed)
 }
 
+/// Every other AETHER1 announcing itself on this network, found over mDNS.
+///
+/// Read-only and on-demand: it browses for a few seconds, stops, and contacts nothing.
+/// Takes no state because it asks this machine nothing -- the answer is on the wire.
+#[tauri::command(async)]
+fn lan_discover_rust() -> Result<serde_json::Value, String> {
+    lan::discover_peers()
+}
+
 /// Closing the sequence takes the code down with it.
 #[tauri::command(async)]
 fn lan_clear_pairing_code_rust(
@@ -2756,6 +2765,7 @@ fn main() {
             lan_set_phrase_rust,
             lan_new_pairing_code_rust,
             lan_clear_pairing_code_rust,
+            lan_discover_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,

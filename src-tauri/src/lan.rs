@@ -301,6 +301,62 @@ pub fn clear_pairing_code(engine: &LlmEngine, managed: &ManagedServer) -> Value 
     status(engine, managed)
 }
 
+/// How long a scan browses the network before reporting what it found.
+///
+/// mDNS answers arrive over a second or two rather than at once, so a shorter window
+/// misses machines that are there; a longer one is a button that looks stuck. Three
+/// seconds is what `aether1 discover` defaults to, and this is the same call.
+const DISCOVER_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Every other AETHER1 announcing itself on this network.
+///
+/// This is `aether1 discover` in the window. It only ever *reads*: browsing is on-demand
+/// and stops before this returns (see discovery.rs), nothing is contacted, and nothing
+/// about this machine changes. A machine that is not serving does not announce, so an
+/// empty list means "nobody is serving", not "the network is broken".
+///
+/// This machine's own server announces too, and is marked rather than hidden: seeing
+/// yourself in the list is how you know the scan works, and it is the entry a second
+/// machine will be looking for.
+pub fn discover_peers() -> Result<Value, String> {
+    let peers = crate::discovery::discover(DISCOVER_TIMEOUT)?;
+    let own_name = sysinfo::System::host_name().unwrap_or_default();
+    let own_addresses = lan_addresses();
+
+    let mut found: Vec<Value> = peers
+        .into_iter()
+        .map(|peer| {
+            let addresses: Vec<String> = peer
+                .addresses
+                .iter()
+                .filter(|ip| matches!(ip, IpAddr::V4(_)))
+                .map(|ip| ip.to_string())
+                .collect();
+            // Either the name matches ours or one of the addresses is one of ours: a
+            // machine with two interfaces answers on both, and a hostname is not unique
+            // enough on its own to decide this.
+            let is_this_machine = (!own_name.is_empty() && peer.instance_name == own_name)
+                || addresses.iter().any(|a| own_addresses.contains(a));
+            json!({
+                "name": peer.instance_name,
+                "port": peer.port,
+                "addresses": addresses,
+                "version": peer.properties.get("version").cloned(),
+                "is_this_machine": is_this_machine,
+            })
+        })
+        .collect();
+    // This machine first, then alphabetically: the operator is looking for the *other*
+    // machine, and a stable order stops the list jumping between scans.
+    found.sort_by(|a, b| {
+        let own = |v: &Value| !v["is_this_machine"].as_bool().unwrap_or(false);
+        let name = |v: &Value| v["name"].as_str().unwrap_or_default().to_lowercase();
+        own(a).cmp(&own(b)).then_with(|| name(a).cmp(&name(b)))
+    });
+
+    Ok(json!({ "peers": found, "scanned_for": DISCOVER_TIMEOUT.as_secs() }))
+}
+
 /// Starts the server at launch when the operator has asked for that, and otherwise does
 /// nothing at all. Mirrors `background_services::start_ollama_if_needed`: safe to call
 /// speculatively, silent about every reason it might decline.
@@ -345,6 +401,34 @@ mod tests {
         drop(listener);
         let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
         assert!(TcpStream::connect_timeout(&address, PROBE_TIMEOUT).is_err());
+    }
+
+    /// Not run in CI: it needs a multicast-capable network and another AETHER1
+    /// announcing, which a runner is not guaranteed. Run it by hand against a real
+    /// `aether1 announce` on this machine or another one:
+    ///
+    ///   aether1 announce --name test-peer &
+    ///   cargo test -- --ignored the_scan_reports_what_is_announcing
+    #[test]
+    #[ignore = "needs another AETHER1 announcing on the network"]
+    fn the_scan_reports_what_is_announcing() {
+        let report = discover_peers().expect("the scan itself must not fail");
+        let peers = report["peers"].as_array().expect("peers is a list").clone();
+        assert!(
+            !peers.is_empty(),
+            "nothing answered: is `aether1 announce` running?"
+        );
+        for peer in &peers {
+            assert!(peer["name"].is_string(), "every peer is named: {peer}");
+            assert!(peer["port"].is_u64(), "every peer has a port: {peer}");
+            for address in peer["addresses"].as_array().expect("addresses is a list") {
+                let address = address.as_str().unwrap();
+                assert!(
+                    !address.contains(':'),
+                    "IPv6 is filtered out -- nothing in the pane can use it yet: {address}"
+                );
+            }
+        }
     }
 
     /// The addresses list is what someone types into another device, so loopback in it

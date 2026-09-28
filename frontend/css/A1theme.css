@@ -3083,6 +3083,11 @@ select,
     color: var(--neon-amber);
 }
 
+/* The scan results. Rows are .net-row, so a found machine reads the same as every other
+   fact in the pane rather than as a widget of its own. */
+.net-peers { display: flex; flex-direction: column; }
+.net-peers .profile-empty { padding: 0.5rem 0.875rem; }
+
 .net-row {
     display: flex;
     align-items: center;

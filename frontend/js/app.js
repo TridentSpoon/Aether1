@@ -5362,6 +5362,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (lanPhraseInput) lanPhraseInput.value = '';
         setUsePhraseNote('');
         if (btnLanUsePhrase) btnLanUsePhrase.disabled = true;
+        resetPeers();
         try {
             renderLan(await tauriInvoke('lan_status_rust'));
         } catch (e) {
@@ -5761,6 +5762,104 @@ document.addEventListener('DOMContentLoaded', () => {
         pairCountdown = setInterval(renderPairCountdown, 1000);
         pairWatch = setInterval(watchForPairedDevice, 3000);
     });
+
+    /* ---- Who else is out there -------------------------------------------------
+     *
+     * discovery.rs has announced and browsed for AETHER1s since step 45, but only the
+     * `aether1 discover` subcommand ever called it -- so the window could show a pairing
+     * code while having no way to say which machines were on the network to type it into.
+     * This is that call, in the pane.
+     *
+     * Reading only, and on demand. A scan browses for a few seconds and stops; nothing is
+     * contacted, nothing about this machine changes, and no scan runs unless the button is
+     * pressed. Pairing to a machine in this list is the next piece, not this one.
+     */
+
+    const lanPeersEl = document.getElementById('lan-peers');
+    const lanScanNoticeEl = document.getElementById('lan-scan-notice');
+    const btnLanScan = document.getElementById('btn-lan-scan');
+
+    function setScanNotice(text) {
+        if (!lanScanNoticeEl) return;
+        lanScanNoticeEl.textContent = text || '';
+        lanScanNoticeEl.classList.toggle('hidden', !text);
+    }
+
+    /* Built as nodes rather than markup: every string here comes off the network, from a
+       name another machine chose for itself. */
+    function peerRow(peer) {
+        const row = document.createElement('div');
+        row.className = 'net-row';
+
+        const text = document.createElement('div');
+        text.className = 'net-row-text';
+        const title = document.createElement('p');
+        title.className = 'net-row-title';
+        title.textContent = peer.is_this_machine
+            ? `${peer.name} (this machine)`
+            : String(peer.name || 'an AETHER1');
+        const hint = document.createElement('p');
+        hint.className = 'net-row-hint';
+        hint.textContent = peer.version
+            ? `AETHER1 ${peer.version}`
+            : 'version not announced';
+        text.append(title, hint);
+
+        const where = document.createElement('p');
+        where.className = 'net-row-value';
+        const addresses = Array.isArray(peer.addresses) ? peer.addresses : [];
+        where.textContent = addresses.length
+            ? addresses.map(address => `${address}:${peer.port}`).join('  ')
+            : `port ${peer.port}`;
+
+        row.append(text, where);
+        return row;
+    }
+
+    function renderPeers(peers) {
+        if (!lanPeersEl) return;
+        lanPeersEl.textContent = '';
+        if (!peers.length) {
+            const empty = document.createElement('p');
+            empty.className = 'profile-empty';
+            empty.textContent =
+                'Nothing answered. Only a machine that is serving announces itself, so '
+                + 'start LAN access over there and scan again.';
+            lanPeersEl.append(empty);
+            return;
+        }
+        peers.forEach(peer => lanPeersEl.append(peerRow(peer)));
+    }
+
+    async function scanForPeers() {
+        if (!IS_TAURI || !btnLanScan) return;
+        btnLanScan.disabled = true;
+        btnLanScan.textContent = 'Scanning…';
+        setScanNotice('');
+        try {
+            const report = await tauriInvoke('lan_discover_rust');
+            renderPeers(Array.isArray(report?.peers) ? report.peers : []);
+        } catch (e) {
+            setScanNotice(`Could not scan the network: ${e.message || e}`);
+        } finally {
+            btnLanScan.disabled = false;
+            btnLanScan.textContent = 'Scan';
+        }
+    }
+
+    /* Cleared on every visit to the pane. A list of machines is a fact about the moment
+       it was gathered, and one left over from last time would be read as current. */
+    function resetPeers() {
+        if (!lanPeersEl) return;
+        lanPeersEl.textContent = '';
+        const prompt = document.createElement('p');
+        prompt.className = 'profile-empty';
+        prompt.textContent = 'Press Scan to see which machines are serving right now.';
+        lanPeersEl.append(prompt);
+        setScanNotice('');
+    }
+
+    btnLanScan?.addEventListener('click', scanForPeers);
 
     btnLanRevokeAll?.addEventListener('click', () => revokeEveryDevice(refreshLan));
 
