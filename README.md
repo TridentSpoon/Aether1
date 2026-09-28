@@ -423,10 +423,10 @@ of models it can run, so there is nothing to look up.
 
 Settings is a list of headings on the left and one section at a time on the right, named
 by the question you came in with rather than by which module implements it: **👤 Profile**,
-**🎨 Appearance**, **🎭 Avatars**, **🧱 Display**, **🧠 The Brain**, **🗣 Voice & Sound**
-and **📓 Memory**. Folded under **🛠 Advanced** at the bottom are the ones you set once or go
-looking for only when something is wrong: **🔐 What it may do**, **🌐 Network**,
-**📡 Remote & LAN**, **⚡ Startup & Performance**, **🩺 Is it working?** and
+**🎨 Appearance**, **🎭 Avatars**, **🧱 Display**, **🧠 The Brain**, **🗣 Voice & Sound**,
+**📓 Memory** and **🧩 Code Analysis**. Folded under **🛠 Advanced** at the bottom are the ones
+you set once or go looking for only when something is wrong: **🔐 What it may do**,
+**🌐 Network & Remote**, **⚡ Startup & Performance**, **🩺 Is it working?** and
 **🖥 The app itself**. The things almost nobody needs — the Piper voice file, the Whisper
 model file — are nested one level further inside the section they belong to, and the search
 box at the top of the list finds a section by what is in it, so "api key" or "ollama"
@@ -1178,11 +1178,19 @@ loopback mode needs no password of its own -- the operating system is the passwo
 
 `aether1 --serve --lan` opens it to your whole network, for the case where you genuinely
 want the HUD on your phone or another machine in the house. Unlike loopback mode, this
-*does* need a password: the first time you run it, AETHER1 prints a 12-word pairing phrase
-(shown once — write it down). Type that phrase into the other device's pairing prompt (or
-`POST` it as `{"phrase": "..."}` to `/api/pair`) to get back a token; without it, every
-route refuses — your conversation, the action log, everything. Run `aether1 pair` any time
-to generate a new phrase and revoke the old one.
+*does* need a password, and every device that gets in carries a token of its own.
+
+From the window, **Settings → Network & Remote → Pair a device** is the short way: it puts
+this machine on the network, shows a QR code and the address for the other device, and a
+one-time code to type when that device asks. The code is good for ten minutes and for one
+device, and it leaves the pairing phrase and everything already paired alone.
+
+The longer-lived credential is the **pairing phrase**: twelve words, printed once the first
+time `--serve --lan` runs and never shown again. Either the phrase or a live code can be
+typed into the other device's prompt, or `POST`ed as `{"phrase": "..."}` to `/api/pair`, to
+get back that device's token; without a token every route refuses — your conversation, the
+action log, everything. `aether1 devices` lists what is paired and `aether1 revoke <id>`
+cuts one off. `aether1 pair` makes a new phrase, which unpairs everything on the old one.
 
 ## Project goals
 
