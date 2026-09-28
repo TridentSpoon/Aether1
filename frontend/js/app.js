@@ -137,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
      * One pane is platform-dependent (Startup & Performance) and starts with its rail
      * entry hidden -- revealSettingsSection is how initStartupPerformance turns it on.
      * An entry that is hidden cannot be chosen, including out of the remembered choice
-     * below. Desktop Sprite and Remote & LAN used to be two more such entries; they are
+     * below. Desktop Sprite and Network & Remote used to be two more such entries; they are
      * cards inside Display and Network & Remote now (see SETTINGS_SECTION_ALIASES), since
      * each answered the same question as the section it joined -- where this thing is drawn
      * on screen, and what crosses the edge of this machine.
@@ -4996,7 +4996,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* Drawn from one function into whichever pane is asking: Profile shows the devices
-       because that is where an operator looks for their own things, and Remote & LAN
+       because that is where an operator looks for their own things, and Network & Remote
        shows them because that is where the pairing that created them lives. Two copies
        of this list would be two chances to disagree about who is paired. */
     function renderDevices(payload, listEl, revokeAllBtn, refresh) {
@@ -5008,11 +5008,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!devices.length) {
             const empty = document.createElement('p');
             empty.className = 'profile-empty';
+            /* Both panes draw this list, and only one of them has the sequence on it, so
+               this names where to go rather than assuming a button is in reach. It used to
+               tell the operator to run `aether1 --serve --lan` in a terminal and points at
+               a pane that has since been renamed -- and on the Network & Remote pane it
+               said so directly underneath a notice saying the same thing better. */
             empty.textContent = payload.pairing_set_up
-                ? 'Nothing has paired yet. Run aether1 --serve --lan, then type the pairing '
-                  + 'phrase into a browser on another device on your network.'
-                : 'No pairing phrase has been made yet. Make one with New phrase in Remote & '
-                  + 'LAN, or run aether1 --serve --lan, which makes one and prints it once.';
+                ? 'Nothing has paired yet. Pair a device, in Network & Remote, walks through it.'
+                : 'No pairing phrase yet. Pair a device, in Network & Remote, makes one as it goes.';
             listEl.appendChild(empty);
             return;
         }
@@ -5136,7 +5139,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.detail === 'profile') refreshProfile();
     });
 
-    /* ====================== REMOTE & LAN =================================
+    /* ====================== NETWORK & REMOTE =============================
      * Step 45 in the window: start the server, stop the one AETHER1 started, make a
      * pairing phrase, and see who has used one.
      *
@@ -5211,14 +5214,14 @@ document.addEventListener('DOMContentLoaded', () => {
         let notice = '';
         if (!devices.pairing_set_up) {
             notice = 'Make a pairing phrase before putting this machine on the network — '
-                + 'without one there is nothing for another device to type.';
+                + 'without one there is nothing for another device to type. Pair a device '
+                + 'makes one and starts the server for you.';
         } else if (running && !ours) {
             notice = `Something is already answering on port ${report.port}. AETHER1 did not `
                 + 'start it, so it will not stop it either.';
-        } else if (running && !devices.devices.length) {
-            notice = 'Nothing has paired yet. Pair a device walks through it, or open the '
-                + 'address below on the other device and type the phrase when it asks.';
         }
+        // "Nothing has paired yet" is deliberately NOT here: the device list says it, a few
+        // rows below, and having both said it at once was the same sentence twice.
         lanNoticeEl?.classList.toggle('hidden', !notice);
         if (lanNoticeEl) lanNoticeEl.textContent = notice;
 
@@ -5265,8 +5268,17 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             renderLan(await tauriInvoke(stopping ? 'lan_stop_rust' : 'lan_start_rust'));
         } catch (e) {
-            alert(String(e.message || e));
+            // In the card rather than in an alert box: the card has a line for exactly this,
+            // and the commonest refusal -- no pairing phrase yet -- is one the notice is
+            // already showing, so an alert was the same sentence twice with an OK button.
             await refreshLan();
+            // Only when the refreshed card has nothing to say for itself. The commonest
+            // refusal -- no pairing phrase yet -- is one the notice already explains at
+            // more length, and replacing that with the shorter sentence loses the way out.
+            if (lanNoticeEl && lanNoticeEl.classList.contains('hidden')) {
+                lanNoticeEl.textContent = String(e.message || e);
+                lanNoticeEl.classList.remove('hidden');
+            }
         }
     });
 
@@ -5285,9 +5297,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (lanPhraseWords) lanPhraseWords.textContent = report.phrase || '';
             if (lanPhraseNote) {
                 lanPhraseNote.textContent = report.unpaired
-                    ? `${report.unpaired} device${report.unpaired === 1 ? '' : 's'} were unpaired `
-                      + 'by this and will each have to type the new phrase.'
-                    : 'Type it into a browser on the other device when it asks.';
+                    ? (report.unpaired === 1
+                        ? 'One device was unpaired by this and will have to pair again.'
+                        : `All ${report.unpaired} devices were unpaired by this and will each `
+                          + 'have to pair again.')
+                    : 'Type it into a browser on the other device when it asks. Pair a device '
+                      + 'hands out a one-time code instead, which does not replace this.';
             }
             lanPhraseBox?.classList.remove('hidden');
         } catch (e) {
@@ -5563,6 +5578,24 @@ document.addEventListener('DOMContentLoaded', () => {
             return; // A read that failed says nothing; the next one in three seconds might.
         }
         renderLan(report);
+        // Stopping LAN access with the sequence open used to leave it saying "waiting for a
+        // device" with a live code on screen, directly below a card reading Off: an
+        // instruction to go and type a code into a machine that stopped answering.
+        if (!report.running) {
+            stopPairTimers();
+            pairCodeExpiresAt = 0;
+            setPairStep(1, 'todo');
+            setPairStep(2, 'todo');
+            setPairStep(3, 'todo');
+            if (pairCodeEl) pairCodeEl.textContent = '—';
+            if (pairCodeLifeEl) pairCodeLifeEl.textContent = '';
+            setPairOutcome(
+                'LAN access was stopped, so nothing can pair. Press Start above, then Pair a '
+                + 'device again.',
+                'bad'
+            );
+            return;
+        }
         const arrived = (report.devices?.devices || []).find(d => !pairKnownIds.has(d.id));
         if (!arrived) {
             // The code being spent with nothing new on the list means the device paired and
@@ -9043,7 +9076,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // been saved must not read as "off" here when the vault is in fact writing.
             document.getElementById('setting-vault-journal').checked = s.vault_journal !== false;
             document.getElementById('setting-local-only').checked = s.local_only === true;
-            // Remote & LAN. Saved by Save Changes with everything else rather than the
+            // Network & Remote. Saved by Save Changes with everything else rather than the
             // moment the switch moves: Settings has one Save button, and a panel that
             // committed on its own would also commit half-typed edits on another pane.
             const lanAutostart = document.getElementById('setting-lan-autostart');
