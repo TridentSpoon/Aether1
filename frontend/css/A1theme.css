@@ -3103,6 +3103,8 @@ select,
     border-top: 1px solid var(--border-neon);
 }
 .net-peer-pair .net-field-note { padding: 0; }
+.net-peer-models { flex: 1 0 100%; margin-top: 0.4rem; }
+.net-peer-models[data-tone="bad"] { color: var(--neon-amber); }
 
 .net-row {
     display: flex;

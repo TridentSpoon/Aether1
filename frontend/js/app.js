@@ -5825,6 +5825,11 @@ document.addEventListener('DOMContentLoaded', () => {
             state.className = 'net-state';
             state.dataset.state = 'on';
             state.append(document.createElement('i'), 'Paired');
+            const models = document.createElement('button');
+            models.type = 'button';
+            models.className = 'net-card-action net-card-action-quiet';
+            models.textContent = 'What it can run';
+            models.addEventListener('click', () => askPeerModels(row, addresses[0], peer.port, models));
             const forget = document.createElement('button');
             forget.type = 'button';
             forget.className = 'net-card-action net-card-action-quiet';
@@ -5832,7 +5837,7 @@ document.addEventListener('DOMContentLoaded', () => {
             forget.addEventListener('click', () => forgetPeer(addresses[0], peer.port, forget));
             const side = document.createElement('div');
             side.className = 'net-peer-side';
-            side.append(state, forget);
+            side.append(state, models, forget);
             row.append(side);
             return row;
         }
@@ -5917,6 +5922,32 @@ document.addEventListener('DOMContentLoaded', () => {
         box.append(label, controls, outcome);
         row.append(box);
         field.focus();
+    }
+
+    /* The first thing the token this machine was given is actually for. It reads the other
+       machine's model scan and changes nothing on either end, which is why it is a button
+       rather than a question. */
+    async function askPeerModels(row, address, port, button) {
+        const previous = row.querySelector('.net-peer-models');
+        if (previous) previous.remove();
+        button.disabled = true;
+        button.textContent = 'Asking…';
+        const answer = document.createElement('p');
+        answer.className = 'net-row-hint net-peer-models';
+        try {
+            const report = await tauriInvoke('lan_peer_models_rust', { address, port });
+            const models = Array.isArray(report?.models) ? report.models : [];
+            answer.textContent = models.length
+                ? `Can run: ${models.join(', ')}`
+                : 'Reached it, and it has no model loaded right now.';
+        } catch (e) {
+            answer.textContent = String(e.message || e);
+            answer.dataset.tone = 'bad';
+        } finally {
+            button.disabled = false;
+            button.textContent = 'What it can run';
+            row.append(answer);
+        }
     }
 
     async function forgetPeer(address, port, button) {

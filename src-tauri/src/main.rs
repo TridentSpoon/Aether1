@@ -557,6 +557,13 @@ fn lan_pair_with_rust(
     lan::pair_with_peer(&engine, &managed, &name, &address, port, &secret)
 }
 
+/// What a paired machine can run, asked over the token it handed out. Reads that machine's
+/// model scan and changes nothing on either end.
+#[tauri::command(async)]
+fn lan_peer_models_rust(address: String, port: u16) -> Result<serde_json::Value, String> {
+    lan::peer_models(&address, port)
+}
+
 /// Forgets a machine this one had paired with. Only this side; the token it was given is
 /// the other machine's to revoke.
 #[tauri::command(async)]
@@ -2796,6 +2803,7 @@ fn main() {
             lan_discover_rust,
             lan_pair_with_rust,
             lan_forget_peer_rust,
+            lan_peer_models_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,

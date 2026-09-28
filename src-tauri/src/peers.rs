@@ -222,23 +222,25 @@ fn parse_response(raw: &[u8]) -> Result<(u16, String), String> {
 /// `secret` is the one-time code that machine is showing, or its twelve-word phrase --
 /// whichever the operator has. This end does not care which: `/api/pair` tries the code
 /// first and falls back to the phrase, so there is no wrong box to type it into.
-pub fn pair_with(name: &str, address: &str, port: u16, secret: &str) -> Result<Peer, String> {
-    let secret = secret.trim();
-    if secret.is_empty() {
-        return Err("Type the code that machine is showing, or its pairing phrase.".to_string());
-    }
+/// One request to a machine on the network, over TLS whose certificate is checked against
+/// `expected` when there is one and recorded either way.
+///
+/// Shared by pairing and by everything done with a token afterwards, so there is exactly one
+/// place that decides what "trusted" means on this side of the wire.
+fn request(
+    address: &str,
+    port: u16,
+    expected: Option<String>,
+    head: &str,
+    body: Option<&str>,
+) -> Result<(u16, String, String), String> {
     let ip: IpAddr = address
         .parse()
         .map_err(|_| format!("{address} is not an address this can connect to"))?;
 
-    // A machine already paired with is pinned to the certificate it had. A new one is not,
-    // and what it presents becomes the pin.
-    let known = paired_peers()
-        .into_iter()
-        .find(|peer| peer.address == address && peer.port == port);
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = Arc::new(PinnedCertificate {
-        expected: known.as_ref().map(|peer| peer.fingerprint.clone()),
+        expected,
         seen: Mutex::new(None),
         provider: provider.clone(),
     });
@@ -263,18 +265,14 @@ pub fn pair_with(name: &str, address: &str, port: u16, secret: &str) -> Result<P
         .map_err(|e| format!("could not start a secure connection to {address}: {e}"))?;
     let mut tls = StreamOwned::new(connection, stream);
 
-    let body = serde_json::json!({
-        "phrase": secret,
-        "device": device_label(),
-    })
-    .to_string();
-    let request = format!(
-        "POST /api/pair HTTP/1.1\r\nHost: {address}:{port}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    tls.write_all(request.as_bytes())
-        .map_err(|e| format!("could not ask {address} to pair: {e}"))?;
+    let mut wire = head.to_string();
+    if let Some(body) = body {
+        wire.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
+    } else {
+        wire.push_str("\r\n");
+    }
+    tls.write_all(wire.as_bytes())
+        .map_err(|e| format!("could not reach {address}: {e}"))?;
     tls.flush().ok();
 
     let mut raw = Vec::new();
@@ -291,11 +289,41 @@ pub fn pair_with(name: &str, address: &str, port: u16, secret: &str) -> Result<P
         }
     }
     let (status, answer) = parse_response(&raw)?;
-
     let fingerprint =
         verifier.seen.lock().unwrap().clone().ok_or_else(|| {
             "the connection ended before that machine identified itself".to_string()
         })?;
+    Ok((status, answer, fingerprint))
+}
+
+pub fn pair_with(name: &str, address: &str, port: u16, secret: &str) -> Result<Peer, String> {
+    let secret = secret.trim();
+    if secret.is_empty() {
+        return Err("Type the code that machine is showing, or its pairing phrase.".to_string());
+    }
+
+    // A machine already paired with is pinned to the certificate it had. A new one is not,
+    // and what it presents becomes the pin.
+    let known = paired_peers()
+        .into_iter()
+        .find(|peer| peer.address == address && peer.port == port);
+
+    let body = serde_json::json!({
+        "phrase": secret,
+        "device": device_label(),
+    })
+    .to_string();
+    let head = format!(
+        "POST /api/pair HTTP/1.1\r\nHost: {address}:{port}\r\n\
+         Content-Type: application/json\r\nConnection: close\r\n"
+    );
+    let (status, answer, fingerprint) = request(
+        address,
+        port,
+        known.as_ref().map(|peer| peer.fingerprint.clone()),
+        &head,
+        Some(&body),
+    )?;
 
     match status {
         200 => {}
@@ -343,6 +371,65 @@ pub fn pair_with(name: &str, address: &str, port: u16, secret: &str) -> Result<P
     peers.push(peer.clone());
     save_at(&file, &peers)?;
     Ok(peer)
+}
+
+/// Asks a machine already paired with what models it can run, using the token it gave.
+///
+/// The first thing the stored token is for. Until now being paired was a fact with no
+/// consequence; this is the smallest honest use of it, and it answers the question the
+/// operator actually has -- "what is that machine good for" -- while proving the credential
+/// works. Routing a conversation to one of these models is the step after.
+///
+/// Pinned, with no first-use exception: this machine's certificate was recorded when it
+/// paired, so anything else answering on its address is refused rather than trusted.
+pub fn models_on(address: &str, port: u16) -> Result<Vec<String>, String> {
+    let peer = paired_peers()
+        .into_iter()
+        .find(|peer| peer.address == address && peer.port == port)
+        .ok_or_else(|| "This machine is not paired with that one.".to_string())?;
+
+    let head = format!(
+        "GET /api/scanner/status HTTP/1.1\r\nHost: {address}:{port}\r\n\
+         Authorization: Bearer {}\r\nConnection: close\r\n",
+        peer.token
+    );
+    let (status, answer, _) = request(address, port, Some(peer.fingerprint.clone()), &head, None)?;
+    match status {
+        200 => {}
+        401 => {
+            return Err(
+                "That machine no longer accepts this one -- its pairing was revoked, or its \
+                 phrase was replaced. Pair with it again."
+                    .to_string(),
+            )
+        }
+        other => {
+            return Err(format!(
+                "That machine answered with {other}: {}",
+                answer.trim()
+            ))
+        }
+    }
+    Ok(models_in(&answer))
+}
+
+/// The model names out of a scan, in the order that machine reported them and without
+/// repeats -- two servers on one machine often offer the same model, and a list that says it
+/// twice reads as a mistake.
+fn models_in(scan: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(scan) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for server in value["local_servers"].as_array().unwrap_or(&Vec::new()) {
+        for model in server["models"].as_array().unwrap_or(&Vec::new()) {
+            let Some(name) = model.as_str() else { continue };
+            if !names.iter().any(|seen| seen == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// What the other machine will list this one as. The hostname, because that is what its
@@ -438,6 +525,31 @@ mod tests {
     }
 
     #[test]
+    fn model_names_come_out_of_a_scan_in_order_and_once_each() {
+        let scan = r#"{"local_servers":[
+            {"port":11434,"models":["qwen2.5:7b","llama3.2:3b"]},
+            {"port":1234,"models":["qwen2.5:7b"]}
+        ]}"#;
+        assert_eq!(models_in(scan), vec!["qwen2.5:7b", "llama3.2:3b"]);
+    }
+
+    /// A machine that is serving but has nothing loaded is not an error, and must not be
+    /// reported as one: "reached it, nothing loaded" is a different fact from "could not
+    /// reach it".
+    #[test]
+    fn a_machine_with_nothing_loaded_reads_as_an_empty_list() {
+        assert!(models_in(r#"{"local_servers":[{"port":11434,"models":[]}]}"#).is_empty());
+        assert!(models_in("not json at all").is_empty());
+        assert!(models_in("{}").is_empty());
+    }
+
+    #[test]
+    fn a_machine_that_was_never_paired_with_is_not_asked_anything() {
+        let outcome = models_on("203.0.113.7", 8378);
+        assert!(outcome.unwrap_err().contains("not paired"));
+    }
+
+    #[test]
     fn an_empty_secret_never_reaches_the_network() {
         let outcome = pair_with("somewhere", "127.0.0.1", 1, "   ");
         assert!(outcome.unwrap_err().contains("Type the code"));
@@ -459,6 +571,21 @@ mod tests {
             message.contains("pairing code") || message.contains("pairing phrase"),
             "the other machine's own words, not ours: {message}"
         );
+    }
+
+    /// Also manual, and the point of the whole step: the token that came back is good for
+    /// something. Run it straight after `pairing_with_a_real_server`, which leaves this
+    /// machine paired with the server it just talked to.
+    ///
+    ///   cargo test -- --ignored asking_a_real_server_what_it_can_run
+    #[test]
+    #[ignore = "needs a real --serve --lan this machine has already paired with"]
+    fn asking_a_real_server_what_it_can_run_uses_the_stored_token() {
+        // Not an assertion about *which* models: a container has none, and a machine with
+        // nothing loaded is a legitimate answer. What is asserted is that the request was
+        // accepted at all, which is what the token is for.
+        let models = models_on("127.0.0.1", 8378).expect("the server accepted the token");
+        println!("models: {models:?}");
     }
 
     #[test]
