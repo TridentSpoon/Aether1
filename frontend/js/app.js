@@ -8916,6 +8916,16 @@ document.addEventListener('DOMContentLoaded', () => {
     /// markup alone, which is why index.html ships wording that is true everywhere: a
     /// backend too old to send the field, or one built for a platform not listed above,
     /// should read vague rather than wrong.
+    // What this machine can actually do to a command, said plainly under the Run switch.
+    // The backend decides the words (code_sandbox.rs) so the CLI and the HUD cannot
+    // drift apart on the one question an operator has to be able to trust.
+    function applySandboxState(sandbox) {
+        const line = document.getElementById('code-sandbox-state');
+        if (!line || !sandbox) return;
+        line.textContent = sandbox.description;
+        line.classList.toggle('text-amber-300', sandbox.confines === false);
+    }
+
     function applyOsWording(os) {
         const wording = OS_WORDING[os];
         if (!wording) return;
@@ -8942,6 +8952,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Before the fields: this only rewrites static help text, but doing it first
             // means the panel is never briefly describing the wrong machine.
             applyOsWording(data.os);
+            applySandboxState(data.sandbox);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
@@ -9006,6 +9017,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-doctor-self-repair').checked = s.doctor_self_repair === true;
             document.getElementById('setting-code-perm-edit').checked = s.code_perm_edit === true;
             document.getElementById('setting-code-perm-run').checked = s.code_perm_run === true;
+            document.getElementById('setting-code-run-network').checked = s.code_run_network === true;
+            document.getElementById('setting-code-run-unconfined').checked = s.code_run_unconfined === true;
             document.getElementById('setting-code-workspace-root').value =
                 typeof s.code_workspace_root === 'string' ? s.code_workspace_root : '';
             document.getElementById('setting-code-run-allowlist').value =
@@ -9162,6 +9175,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 doctor_self_repair: document.getElementById('setting-doctor-self-repair').checked,
                 code_perm_edit: document.getElementById('setting-code-perm-edit').checked,
                 code_perm_run: document.getElementById('setting-code-perm-run').checked,
+                code_run_network: document.getElementById('setting-code-run-network').checked,
+                code_run_unconfined: document.getElementById('setting-code-run-unconfined').checked,
                 code_workspace_root: document.getElementById('setting-code-workspace-root').value.trim(),
                 code_run_allowlist: document.getElementById('setting-code-run-allowlist').value
                     .split(',').map(p => p.trim()).filter(Boolean),

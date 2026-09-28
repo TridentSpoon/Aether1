@@ -84,7 +84,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         name: "run",
         grant: Grant::Run,
-        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. There is no shell: give the program and its arguments separately. A non-zero exit is a result to read, not an error.",
+        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. There is no shell: give the program and its arguments separately. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on, so a step that needs to fetch dependencies will fail and should be reported rather than worked around.",
     },
     Capability {
         name: "search_web",

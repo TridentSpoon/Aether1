@@ -15,11 +15,16 @@
 //!   2. **The three reading grants default on; the two that change things default off.**
 //!      An operator who asked for a coding panel asked for one that can see their code. No
 //!      one asks for a model that edits their working tree by default.
-//!   3. **Changing anything happens in one folder and nowhere else.** `edit` and `run` are
-//!      confined to the project folder the operator nominated, by `code_workspace`, which
-//!      states its own five rules and is the only place in this program a model can write
-//!      or spawn. Outside that folder the old refusal still stands, word for word: put the
-//!      command in a fenced block and it becomes a button.
+//!   3. **Changing anything happens in one folder, and the kernel is what says so.**
+//!      `edit` writes only inside the project folder the operator nominated, checked by
+//!      `code_workspace`. `run` spawns inside an OS-level sandbox (`code_sandbox`): the
+//!      host filesystem read-only, the home directory hidden, the network off, and the
+//!      project folder the one writable place. Where a machine has no sandbox -- Windows
+//!      today, or a Linux box without bubblewrap -- `run` refuses and says why, because
+//!      python3, node, cargo and make are general-purpose ways to execute code and an
+//!      allowlist of their names was never the boundary it read like. Outside that folder
+//!      the old refusal still stands, word for word: put the command in a fenced block and
+//!      it becomes a button.
 //!   4. **The terminal is still untouchable.** That boundary is older than this module
 //!      (`scripts/check_terminal_isolation.sh`) and neither this module nor `code_workspace`
 //!      goes near it. Nothing here can type, press, or reach a shell: `gh` and every
@@ -53,8 +58,9 @@ pub enum Grant {
     /// Changing files inside the operator's nominated project folder, and nowhere else.
     /// Off until they say otherwise -- see `code_workspace`.
     Edit,
-    /// Running build and test commands inside that same folder, from a list of programs
-    /// the operator keeps. Off until they say otherwise.
+    /// Running build and test commands in a sandbox whose one writable place is that
+    /// same folder, from a list of programs the operator keeps. Off until they say
+    /// otherwise, and refused outright on a machine that cannot confine them.
     Run,
 }
 
@@ -100,7 +106,8 @@ impl Grant {
             Grant::Internet => "Fetch a public page when it needs documentation",
             Grant::Edit => "Change files inside the project folder you nominated, and nowhere else",
             Grant::Run => {
-                "Run build and test commands in that folder, from a list of programs you keep"
+                "Run build and test commands in a sandbox that can only write that folder, \
+                 from a list of programs you keep"
             }
         }
     }

@@ -23,6 +23,7 @@ mod background_services;
 mod cli;
 mod code_chat;
 mod code_perms;
+mod code_sandbox;
 mod code_setup;
 mod code_tools;
 mod code_workspace;

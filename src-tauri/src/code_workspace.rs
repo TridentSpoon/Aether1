@@ -39,7 +39,7 @@
 //! already has can undo.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -416,6 +416,14 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     check_allowed(db, program, rest)?;
 
+    // The boundary, before anything is spawned. An allowlisted program is still a
+    // general-purpose way to execute code, so where the kernel cannot confine it the
+    // operator has to have said, once, that they want it run anyway.
+    let sandbox = crate::code_sandbox::detect();
+    if !sandbox.confines() && !crate::code_sandbox::unconfined_allowed(db) {
+        return Err(crate::code_sandbox::unconfined_refusal(&sandbox));
+    }
+
     let root = root(db)?;
     let cwd = match args.get("cwd").and_then(Value::as_str) {
         None | Some("") => root.clone(),
@@ -454,15 +462,22 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     let started = Instant::now();
     // Spawned directly, never through a shell: `argv` is passed as arguments, so nothing in
-    // it can be interpreted as syntax.
-    let mut child = Command::new(program)
-        .args(rest)
-        .current_dir(&cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("{program} could not be started in {}: {e}", cwd.display()))?;
+    // it can be interpreted as syntax. Wrapped in a sandbox where the machine has one, and
+    // refused above where it does not, so the containment this tool claims is enforced by
+    // the kernel rather than by the allowlist -- see `code_sandbox`.
+    let mut child = crate::code_sandbox::command(
+        &sandbox,
+        program,
+        rest,
+        &cwd,
+        &root,
+        crate::code_sandbox::network_allowed(db),
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|e| format!("{program} could not be started in {}: {e}", cwd.display()))?;
 
     // Polled rather than waited on, so a command that never returns is killed rather than
     // holding the panel open until the operator gives up on it.
@@ -881,6 +896,9 @@ mod tests {
         std::fs::write(project.join("hello.txt"), "hi\n").unwrap();
         db.set_setting(ALLOWLIST_SETTING, &serde_json::json!(["ls", "false"]))
             .unwrap();
+        // This test is about the reporting, not the boundary, so it runs either way: the
+        // sandbox where there is one, and unconfined where there is not.
+        allow_unconfined_if_needed(&db);
         with_home(&home, || {
             let out = run(&db, &serde_json::json!({"argv": ["ls"]})).unwrap();
             assert!(out.contains("exited successfully (0)"), "{out}");
@@ -890,6 +908,206 @@ mod tests {
             let failed = run(&db, &serde_json::json!({"argv": ["false"]})).unwrap();
             assert!(failed.contains("exited with status 1"), "{failed}");
         });
+    }
+
+    // ------------------------------------------------------ the sandbox, adversarially
+    //
+    // These are the tests the security review asked for, and they are written the way it
+    // framed the question: not "does the allowlist contain python3", but *can a
+    // model-controlled argv cause a read, a write or a network call outside the workspace*.
+    // Every one of them passes an allowlisted interpreter a hostile one-liner and then
+    // looks at what actually happened on disk.
+    //
+    // They need a sandbox to mean anything, so on a machine without one they assert the
+    // other half of the promise instead -- that `run` refuses rather than pretending.
+
+    /// Lets a test that is not about the boundary run on a machine with no sandbox.
+    fn allow_unconfined_if_needed(db: &MemoryDb) {
+        if !crate::code_sandbox::detect().confines() {
+            db.set_setting(
+                crate::code_sandbox::UNCONFINED_SETTING,
+                &serde_json::json!(true),
+            )
+            .unwrap();
+        }
+    }
+
+    /// A workspace with `run` on, the given programs allowed, and the sandbox this machine
+    /// actually has. `None` when there is no sandbox, having first checked that `run`
+    /// refuses and explains itself.
+    fn adversarial(name: &str, programs: &[&str]) -> Option<(MemoryDb, PathBuf, PathBuf)> {
+        let (db, project, home) = workspace(name);
+        crate::code_perms::set(&db, crate::code_perms::Grant::Run, true).unwrap();
+        db.set_setting(ALLOWLIST_SETTING, &serde_json::json!(programs))
+            .unwrap();
+        if crate::code_sandbox::detect().confines() {
+            return Some((db, project, home));
+        }
+        let err = with_home(&home, || {
+            run(&db, &serde_json::json!({"argv": [programs[0]]})).unwrap_err()
+        });
+        assert!(
+            err.contains("cannot confine it"),
+            "with no sandbox, run must refuse and say why: {err}"
+        );
+        assert!(
+            err.contains("code run-unconfined"),
+            "and must say how to override it: {err}"
+        );
+        None
+    }
+
+    /// The exact example from the review: `python3 -c` reading a credential out of the
+    /// operator's home directory. It must come back empty-handed.
+    #[test]
+    fn python_cannot_read_the_operators_home() {
+        let Some((db, project, home)) = adversarial("py_read", &["python3"]) else {
+            return;
+        };
+        let secret = home.join(".ssh");
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(secret.join("id_ed25519"), "PRIVATE-KEY-MATERIAL").unwrap();
+
+        let out = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"argv": [
+                    "python3", "-c",
+                    "import os,pathlib\n\
+                     p=pathlib.Path(os.path.expanduser('~/.ssh/id_ed25519'))\n\
+                     print('CONTENTS:'+p.read_text() if p.exists() else 'ABSENT')",
+                ]}),
+            )
+            .unwrap()
+        });
+        assert!(
+            !out.contains("PRIVATE-KEY-MATERIAL"),
+            "the key must not be readable from inside the sandbox: {out}"
+        );
+        assert!(out.contains("ABSENT"), "{out}");
+        let _ = project;
+    }
+
+    /// And writing outside it. The file must not appear, and the workspace write beside it
+    /// must -- a sandbox that blocks everything would pass the first half by being useless.
+    #[test]
+    fn python_cannot_write_outside_the_workspace() {
+        let Some((db, project, home)) = adversarial("py_write", &["python3"]) else {
+            return;
+        };
+        let outside = home.join("outside.txt");
+        let out = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"argv": [
+                    "python3", "-c",
+                    format!(
+                        "open('{}','w').write('escaped')\nprint('WROTE OUTSIDE')",
+                        outside.display()
+                    ),
+                ]}),
+            )
+            .unwrap()
+        });
+        // The write is *contained*, not refused: inside the box the path exists on a
+        // tmpfs and `open` succeeds, so the command reports success. What matters is that
+        // nothing reached the operator's disk, which is what this asserts. Nothing here
+        // asserts on stdout, because the report echoes the argv and the argv is the
+        // attack -- a test looking for its own marker in that echo always finds it.
+        assert!(
+            !outside.exists(),
+            "a write outside the workspace landed on disk: {out}"
+        );
+
+        let inside = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"argv": ["python3", "-c", "open('made.txt','w').write('ok')"]}),
+            )
+            .unwrap()
+        });
+        assert!(
+            project.join("made.txt").is_file(),
+            "but the workspace itself is writable: {inside}"
+        );
+    }
+
+    /// The network, which is off unless the operator turns it on. `node -e` stands in for
+    /// every allowlisted interpreter here; they all have a socket call.
+    #[test]
+    fn a_command_cannot_reach_the_network_by_default() {
+        let Some((db, _project, home)) = adversarial("net", &["python3"]) else {
+            return;
+        };
+        assert!(!crate::code_sandbox::network_allowed(&db));
+        let out = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"argv": [
+                    "python3", "-c",
+                    "import socket\n\
+                     try:\n\
+                     \x20 socket.create_connection(('1.1.1.1',443),timeout=5)\n\
+                     \x20 print('NET'+'-OPEN')\n\
+                     except OSError as e:\n\
+                     \x20 print('NET'+'-BLOCKED')",
+                ], "timeout_secs": 30}),
+            )
+            .unwrap()
+        });
+        // Assembled at runtime, so these markers can only come from the command's own
+        // output and never from the argv the report echoes back.
+        assert!(!out.contains("NET-OPEN"), "{out}");
+        assert!(out.contains("NET-BLOCKED"), "{out}");
+    }
+
+    /// `make` runs whatever the Makefile says, and the Makefile is a file the model can
+    /// write. So the recipe is the attack, and it is confined the same as everything else.
+    #[test]
+    fn a_makefile_recipe_is_confined_too() {
+        let Some((db, project, home)) = adversarial("make", &["make"]) else {
+            return;
+        };
+        if crate::paths::find_installed_binary(&["make"]).is_none() {
+            return;
+        }
+        let outside = home.join("from-make.txt");
+        std::fs::write(
+            project.join("Makefile"),
+            format!("all:\n\techo escaped > {}\n", outside.display()),
+        )
+        .unwrap();
+        let out = with_home(&home, || {
+            run(&db, &serde_json::json!({"argv": ["make"]})).unwrap()
+        });
+        assert!(
+            !outside.exists(),
+            "a make recipe wrote outside the workspace: {out}"
+        );
+    }
+
+    /// Aether1 holds API keys in its own environment. A build script is not entitled to
+    /// them, and the sandbox rebuilds the environment from a short list rather than
+    /// inheriting one.
+    #[test]
+    fn the_environment_does_not_leak_into_a_command() {
+        let Some((db, _project, home)) = adversarial("env", &["python3"]) else {
+            return;
+        };
+        let out = with_home(&home, || {
+            std::env::set_var("AETHER1_LLM_KEY_FOR_TEST", "sk-secret");
+            let out = run(
+                &db,
+                &serde_json::json!({"argv": [
+                    "python3", "-c",
+                    "import os; print('KEY:'+os.environ.get('AETHER1_LLM_KEY_FOR_TEST','ABSENT'))",
+                ]}),
+            )
+            .unwrap();
+            std::env::remove_var("AETHER1_LLM_KEY_FOR_TEST");
+            out
+        });
+        assert!(out.contains("KEY:ABSENT"), "{out}");
     }
 
     #[test]

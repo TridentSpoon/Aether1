@@ -2325,6 +2325,36 @@
                             <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
                         </label>
                     </div>
+                    <!-- Whether a command is actually confined is a fact about this
+                         machine, so it is stated here rather than implied by the switch
+                         above. Filled in by app.js from the sandbox block that rides
+                         alongside the settings. -->
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Confinement</p>
+                            <p id="code-sandbox-state" class="net-row-hint">Checking what this machine can do...</p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Network inside the sandbox</p>
+                            <p class="net-row-hint">Off by default. Turn it on only when a build has to fetch dependencies.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-run-network" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Run without a sandbox</p>
+                            <p class="net-row-hint">Only for a machine that has none. A command then runs as you: python3, node, cargo and make can read your keys, write anywhere you can, and use the network.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-run-unconfined" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
                     <div class="net-row">
                         <div class="net-row-text">
                             <p class="net-row-title">Programs it may run</p>
