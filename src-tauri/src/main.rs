@@ -1005,11 +1005,34 @@ fn perform_update_core<R: tauri::Runtime>(
     println!("[AETHER1] Update: relaunching {}...", new_binary.display());
     match Command::new(&new_binary).current_dir(&root).spawn() {
         Ok(_child) => {
+            note_expected_exit(app);
             app.exit(0);
             Ok(())
         }
         Err(e) => Err((UpdateStage::Relaunch, format!("relaunch failed: {e}"))),
     }
+}
+
+/// Remember, just before ending this process on purpose, that we ended it -- so the copy
+/// that starts next does not report our own teardown as a crash.
+///
+/// AETHER1's renderer aborts on the way out (a WebKitGTK/Mesa teardown bug), and the
+/// relaunch after an update puts a fresh copy there to watch it happen, so updating
+/// reliably produced a CRASH DETECTED card for the shutdown the operator had just asked
+/// for. Written to settings rather than to a file because settings already outlive the
+/// process and the watcher already holds the database it would have to read.
+///
+/// Best effort throughout: a record that does not get written costs one card an operator
+/// has seen before, and nothing here is worth delaying an exit over.
+fn note_expected_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let record = watchers::crash::ExpectedExit::for_this_process();
+    let Ok(value) = serde_json::to_value(&record) else {
+        return;
+    };
+    let engine = app.state::<LlmEngine>();
+    let _ = engine
+        .db()
+        .set_setting(watchers::crash::EXPECTED_EXIT_SETTING, &value);
 }
 
 /// Tray-specific wrapper around perform_update_core that keeps the tray tooltip and menu
@@ -3029,7 +3052,10 @@ fn main() {
                                 eprintln!("[AETHER1] Could not toggle the fullscreen face: {e}");
                             }
                         }
-                        "quit" => app.exit(0),
+                        "quit" => {
+                            note_expected_exit(app);
+                            app.exit(0);
+                        }
                         _ => {}
                     }
                 })
@@ -3195,7 +3221,14 @@ fn main() {
                                 .ok()
                                 .flatten(),
                         );
-                        let Ok(news) = watch.poll(&muted) else {
+                        let expected = watchers::crash::expected_exit(
+                            engine
+                                .db()
+                                .get_setting(watchers::crash::EXPECTED_EXIT_SETTING)
+                                .ok()
+                                .flatten(),
+                        );
+                        let Ok(news) = watch.poll(&muted, expected.as_ref()) else {
                             continue;
                         };
                         for crash in news {

@@ -21,10 +21,16 @@
   --grid-cols: 24;
   --cell-h: 24px;
   --grid-gap: 10px;
+  /* The row gap is the column gap until js/layout.js says otherwise. It gets
+     its own property because the two are not the same thing: the gap between
+     columns is a seam an operator can see and grab, while the gaps between the
+     rows of one tall panel are inside that panel and invisible, so they are
+     what gives way first when a short window cannot fit the layout. */
+  --grid-row-gap: var(--grid-gap);
   display: grid;
   grid-template-columns: repeat(var(--grid-cols), minmax(0, 1fr));
   grid-auto-rows: var(--cell-h);
-  gap: var(--grid-gap);
+  gap: var(--grid-row-gap) var(--grid-gap);
   align-content: start;
   position: relative;
 }
@@ -349,6 +355,98 @@ body.layout-seaming .movable-panel > * {
   .panel-grip,
   .panel-resize,
   .panel-seam {
+    display: none;
+  }
+
+}
+
+/* ---- The snap rail ----------------------------------------------------------
+   A short column of ready-made arrangements down the left edge of the grid.
+   Absolutely positioned like the seams, so it takes no grid cell and does not
+   push the panels around.
+
+   It sits over the left edge of the leftmost panel rather than in the 16px
+   gutter, which is not wide enough for anything you can hit with a pointer.
+   That is the same trade the seams make: the strip it covers is panel border,
+   not content. Held at low opacity until it is hovered or focused, because it
+   is a control an operator wants two or three times a week and has to look at
+   the rest of the time. */
+.panel-snap-rail {
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  opacity: 0.4;
+  transition: opacity 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+
+/* At rest it is four faint marks over the panel's own edge. The plate behind
+   them only appears once it is being used, so the arrangement control does not
+   sit permanently on top of the avatar. */
+.panel-snap-rail:hover,
+.panel-snap-rail:focus-within {
+  opacity: 1;
+  background: var(--bg-panel-solid, rgba(8, 15, 30, 0.9));
+  border-color: color-mix(in srgb, var(--neon-cyan, #22d3ee) 30%, transparent);
+}
+
+.panel-snap {
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-snap svg {
+  width: 100%;
+  height: 100%;
+  /* The icons are solid blocks standing in for panels, so they read at 18px
+     where an outline drawing would turn to mush. */
+  fill: var(--neon-cyan, #22d3ee);
+  fill-opacity: 0.55;
+}
+
+.panel-snap:hover svg,
+.panel-snap:focus-visible svg {
+  fill-opacity: 1;
+}
+
+.panel-snap:focus-visible {
+  outline: none;
+  border-color: var(--neon-cyan, #22d3ee);
+}
+
+/* The arrangement already on the screen. Marked rather than merely
+   highlighted, so pressing it again is visibly a no-op instead of looking like
+   a button that did nothing. */
+.panel-snap[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--neon-cyan, #22d3ee) 60%, transparent);
+  background: color-mix(in srgb, var(--neon-cyan, #22d3ee) 14%, transparent);
+}
+
+.panel-snap[aria-pressed="true"] svg {
+  fill-opacity: 1;
+}
+
+/* One stacked column has no arrangements to choose between. Kept here rather
+   than with the other narrow-window rules further up, which are declared before
+   .panel-snap-rail and so would lose to it. */
+@media (max-width: 1023px) {
+  .panel-snap-rail {
     display: none;
   }
 }
