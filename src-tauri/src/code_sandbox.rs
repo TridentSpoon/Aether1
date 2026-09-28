@@ -180,6 +180,29 @@ impl Sandbox {
 /// a container, a policy on loopback -- and every one of them would otherwise turn into a
 /// confusing failure of the operator's first command rather than an honest line in Settings.
 pub fn detect() -> Sandbox {
+    // Cached for a short while. The probe spawns a process, `detect` is asked on every
+    // command and by every settings read, and the answer changes only when somebody
+    // installs or removes bubblewrap -- so a few seconds of memory turns a per-command
+    // spawn into a per-minute one while still picking up an install without a restart.
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Sandbox)>> =
+        std::sync::Mutex::new(None);
+    const REMEMBER_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((asked, answer)) = cache.as_ref() {
+            if asked.elapsed() < REMEMBER_FOR {
+                return answer.clone();
+            }
+        }
+    }
+    let answer = detect_uncached();
+    if let Ok(mut cache) = CACHE.lock() {
+        *cache = Some((std::time::Instant::now(), answer.clone()));
+    }
+    answer
+}
+
+fn detect_uncached() -> Sandbox {
     if !cfg!(target_os = "linux") {
         return Sandbox::Unavailable(
             "there is no sandbox for this platform yet (Windows needs a restricted token or \
@@ -214,7 +237,17 @@ pub fn detect() -> Sandbox {
 /// Starts `true` inside the real argument list, in a throwaway directory. The cheapest
 /// possible question that has the same answer as "will the operator's next command run".
 fn probe(bwrap: &Path, network_off: bool) -> bool {
-    let dir = std::env::temp_dir().join(format!("aether1_sandbox_probe_{}", std::process::id()));
+    // A directory of this call's own. Named for the process *and* the thread and a
+    // counter, because the probe's own cleanup would otherwise pull the ground out from
+    // under another thread's probe -- which is exactly what happened in CI, where enough
+    // tests ask at once for two to collide, and it read as "bubblewrap will not start
+    // here".
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "aether1_sandbox_probe_{}_{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     if std::fs::create_dir_all(&dir).is_err() {
         return false;
     }

@@ -969,8 +969,11 @@ mod tests {
         if crate::code_sandbox::detect().confines() {
             return Some((db, project, home));
         }
+        // Any program will do to see the refusal, and the caller may have passed none --
+        // the shell test deliberately allows nothing, to prove the list is not the gate.
+        let probe = programs.first().copied().unwrap_or("python3");
         let err = with_home(&home, || {
-            run(&db, &serde_json::json!({"argv": [programs[0]]})).unwrap_err()
+            run(&db, &serde_json::json!({"argv": [probe]})).unwrap_err()
         });
         assert!(
             err.contains("cannot confine it"),

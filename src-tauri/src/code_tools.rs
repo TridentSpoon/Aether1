@@ -552,6 +552,14 @@ mod tests {
         .unwrap();
         db.set_setting(crate::code_workspace::ALLOWLIST_SETTING, &json!(["cat"]))
             .unwrap();
+        // This test is about the loop -- create, run, edit, run again -- and not about the
+        // boundary, so it runs either way: confined where the machine can, and with the
+        // operator's unconfined switch where it cannot. A machine with no sandbox is the
+        // ordinary case on Windows and on a CI runner.
+        if !crate::code_sandbox::detect().confines() {
+            db.set_setting(crate::code_sandbox::UNCONFINED_SETTING, &json!(true))
+                .unwrap();
+        }
 
         // Both grants off to begin with, which is how a fresh install ships.
         let refused = call(
