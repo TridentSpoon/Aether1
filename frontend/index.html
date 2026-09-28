@@ -960,7 +960,7 @@
                             <span class="settings-nav-icon">🌐</span>
                             <span class="settings-nav-text">Network &amp; Remote</span>
                         </button>
-                        <button type="button" id="settings-nav-startup" class="settings-nav-item hidden" data-settings-section="startup" data-keywords="autostart login game mode performance quiet" data-hint="what runs on login, and how to quiet it" title="what runs on login, and how to quiet it">
+                        <button type="button" id="settings-nav-startup" class="settings-nav-item hidden" data-settings-section="startup" data-keywords="autostart login game mode performance quiet idle timeout cpu battery ollama model server sleep" data-hint="what runs on login, and how to quiet it" title="what runs on login, and how to quiet it">
                             <span class="settings-nav-icon">⚡</span>
                             <span class="settings-nav-text">Startup &amp; Performance</span>
                         </button>
@@ -2673,6 +2673,24 @@
                             When AETHER1 starts, also start Ollama if it isn't already
                             running &mdash; without you having to ask for it. Does nothing
                             if Ollama isn't installed, or if something is already listening.
+                        </p>
+                    </div>
+
+                    <div class="space-y-1 pt-1">
+                        <div class="flex items-center gap-2">
+                            <label for="setting-ollama-idle-minutes" class="text-xs font-mono text-slate-300">Stop the local model server after</label>
+                            <input id="setting-ollama-idle-minutes" type="number" min="0" max="1440" step="1"
+                                class="w-16 rounded bg-slate-900 border border-cyan-500/50 text-cyan-200 text-xs font-mono px-2 py-1 focus:ring-0">
+                            <span class="text-xs font-mono text-slate-300">minutes idle</span>
+                        </div>
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            A model server with nobody talking to it is the most expensive
+                            idle thing on this machine &mdash; it holds the whole model in
+                            memory. After this long with no local reply, AETHER1 stops the
+                            one it started; the next thing you ask starts it again, at the
+                            cost of waiting for the first token. Only servers AETHER1 started
+                            itself &mdash; one you are running yourself is left alone. Set it
+                            to 0 to keep it running.
                         </p>
                     </div>
 

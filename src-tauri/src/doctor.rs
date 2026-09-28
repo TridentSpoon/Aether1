@@ -235,6 +235,11 @@ pub struct AppProbe {
     pub hud_responding: Option<bool>,
     /// Whether AETHER1 is holding a live Ollama child of its own.
     pub managed_ollama: Option<bool>,
+    /// Whether the idle watch is the reason there is no live child right now. A server that
+    /// stopped itself after idling is not a fault -- the next local turn starts it again --
+    /// so this is what keeps the autostart check from reporting one. See
+    /// background_services::stop_if_idle.
+    pub local_server_asleep: Option<bool>,
     pub autostart_ollama: bool,
     pub hotkey_registered: Option<bool>,
 }
@@ -354,6 +359,7 @@ pub struct Facts {
     pub hud_windows: Option<u32>,
     pub hud_responding: Option<bool>,
     pub managed_ollama: Option<bool>,
+    pub local_server_asleep: Option<bool>,
     pub hotkey_registered: Option<bool>,
     pub serving: Option<bool>,
     pub lan: Option<bool>,
@@ -411,6 +417,7 @@ pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
             hud_windows: facts.hud_windows,
             hud_responding: facts.hud_responding,
             managed_ollama: facts.managed_ollama,
+            local_server_asleep: facts.local_server_asleep,
             autostart_ollama: db.get_setting_bool("autostart_ollama", false),
             hotkey_registered: facts.hotkey_registered,
         },
@@ -878,6 +885,19 @@ fn judge_services(app: &AppProbe, model: &ModelProbe) -> (Verdict, String, Vec<S
             Verdict::Unknown,
             "Autostart is on. Whether the child AETHER1 started is still alive is a fact about \
              the running app, and this was asked from a terminal."
+                .to_string(),
+            Vec::new(),
+        );
+    }
+    // Stopped on purpose, by the idle watch, and remembered as such. Reported before the
+    // "nothing of ours is running" branches below, which would otherwise call a deliberate
+    // nap a failure.
+    if app.local_server_asleep == Some(true) {
+        return (
+            Verdict::Ok,
+            "Autostart is on. The model server AETHER1 started stopped itself after idling, \
+             and the next local turn will start it again. Set the model server's idle \
+             timeout to 0 minutes to keep it running instead."
                 .to_string(),
             Vec::new(),
         );
@@ -2065,6 +2085,7 @@ mod tests {
                 hud_windows: Some(1),
                 hud_responding: Some(true),
                 managed_ollama: Some(true),
+                local_server_asleep: Some(false),
                 autostart_ollama: true,
                 hotkey_registered: Some(true),
             },
@@ -2337,6 +2358,22 @@ mod tests {
         // ...but an Ollama the operator started themselves is not AETHER1's to account for.
         obs.model.models = Some(vec!["llama3.2".to_string()]);
         assert_eq!(verdict(&obs, CheckId::BackgroundServices), Verdict::Ok);
+    }
+
+    /// A server the idle watch stopped on purpose is not the same thing as a server that
+    /// died, and reporting it as a failure would have made the idle timeout look like a bug
+    /// every time it worked.
+    #[test]
+    fn a_server_asleep_on_purpose_is_not_a_failure() {
+        let mut obs = healthy();
+        obs.app.managed_ollama = Some(false);
+        obs.app.local_server_asleep = Some(true);
+        obs.model.models = None;
+        assert_eq!(verdict(&obs, CheckId::BackgroundServices), Verdict::Ok);
+
+        // And the distinction holds: the same state without the nap is still a failure.
+        obs.app.local_server_asleep = Some(false);
+        assert_eq!(verdict(&obs, CheckId::BackgroundServices), Verdict::Failed);
     }
 
     #[test]
