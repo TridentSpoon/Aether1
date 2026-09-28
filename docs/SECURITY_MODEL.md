@@ -13,6 +13,13 @@ mismatch and the fix are section 1.
 `code_workspace::run` spawns build and test commands for the coding panel. There are three
 layers, and only one of them is a boundary.
 
+**Inside the sandbox the allowlist is not consulted, and there is a shell.** That follows
+from the paragraph below rather than contradicting it: a list permitting `python3`, `node`,
+`make` and `cargo` permits arbitrary code already, so keeping it as a gate while the box
+exists would be theatre, and keeping it while refusing a shell would be a distinction with
+nothing behind it. It stays for the one case where it is the only thing standing --
+`run-unconfined`, where it is enforced exactly as it always was.
+
 **The allowlist is policy, not containment.** `code_run_allowlist` holds program names --
 `cargo`, `npm`, `node`, `python3`, `make` and the rest of the starter list. It stops a model
 reaching for `curl`, `ssh` or `rm` by name, which is worth having. It is not a sandbox, and
@@ -61,6 +68,24 @@ explains itself.
 Note what the write test asserts, because it is the distinction this whole section turns on:
 inside the box the write *succeeds*, against a tmpfs, and the command reports success.
 Nothing reaches the operator's disk. Containment, not denial.
+
+## 1a. Putting it back
+
+Confinement settles what the agent can reach and not what it can ruin inside the folder it is
+*meant* to reach. The old answer there was a table of refused `git` subcommands -- no
+`reset`, no `clean` -- which stopped being enforceable when the sandbox got a shell, because
+a shell can run git. So the guarantee changed from "it cannot destroy your work" to "whatever
+it does, you can put it back", which is both true and stronger.
+
+`code_checkpoint.rs` commits the entire working tree -- tracked, untracked, staged and
+unstaged -- to a ref under `refs/aether1/checkpoints/` before the first change of a session,
+built through a temporary index so nothing is staged and neither HEAD nor any branch moves.
+`aether1 code revert` restores additively: what the checkpoint held comes back, what has
+appeared since is left alone and listed. A workspace that is not a git repository gets no
+checkpoint and is told so rather than quietly going unprotected.
+
+The tests take a repository with uncommitted and untracked work, do the worst a shell could
+do to it -- overwrite, delete, `git reset --hard` -- and assert every byte comes back.
 
 ## 2. What AETHER CODE may change without a sandbox
 

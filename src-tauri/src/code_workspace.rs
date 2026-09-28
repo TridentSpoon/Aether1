@@ -393,20 +393,45 @@ pub fn seed_starter_allowlist(db: &MemoryDb) {
 /// all. Getting that distinction backwards makes a model apologise for a red test instead of
 /// reading it.
 pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
-    let argv: Vec<String> = args
-        .get("argv")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|v| v.as_str().unwrap_or_default().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
+    // The boundary, before anything is decided. What is allowed to run depends entirely on
+    // whether the kernel is holding the walls up, so this is the first question asked.
+    let sandbox = crate::code_sandbox::detect();
+    if !sandbox.confines() && !crate::code_sandbox::unconfined_allowed(db) {
+        return Err(crate::code_sandbox::unconfined_refusal(&sandbox));
+    }
+    let confined = sandbox.confines();
+
+    // `shell` is one string handed to `sh -lc`, and it exists only inside the sandbox. A
+    // shell is the natural way to say `cargo test && cargo clippy`, and refusing one while
+    // allowing `bash` in an argv would be a distinction with nothing behind it. Outside the
+    // sandbox there is no boundary for it to be inside, so there it is refused.
+    let argv: Vec<String> = match args.get("shell").and_then(Value::as_str) {
+        Some(line) if !line.trim().is_empty() => {
+            if !confined {
+                return Err(
+                    "shell is only available inside the sandbox, and this machine has none. \
+                     Run a single program with argv instead, or see `aether1 code \
+                     run-unconfined` for what running without a sandbox means."
+                        .to_string(),
+                );
+            }
+            vec!["/bin/sh".to_string(), "-lc".to_string(), line.to_string()]
+        }
+        _ => args
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|v| v.as_str().unwrap_or_default().to_string())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
     let Some((program, rest)) = argv.split_first() else {
         return Err(
-            "run needs an argv array: {\"argv\": [\"cargo\", \"test\"]}. There is no shell \
-             here, so a pipe or a redirect in an argument is just text."
+            "run needs an argv array: {\"argv\": [\"cargo\", \"test\"]}, or a shell line: \
+             {\"shell\": \"cargo test && cargo clippy\"}."
                 .to_string(),
         );
     };
@@ -414,14 +439,15 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
         return Err("the first entry of argv must be a program name".to_string());
     }
 
-    check_allowed(db, program, rest)?;
-
-    // The boundary, before anything is spawned. An allowlisted program is still a
-    // general-purpose way to execute code, so where the kernel cannot confine it the
-    // operator has to have said, once, that they want it run anyway.
-    let sandbox = crate::code_sandbox::detect();
-    if !sandbox.confines() && !crate::code_sandbox::unconfined_allowed(db) {
-        return Err(crate::code_sandbox::unconfined_refusal(&sandbox));
+    // The allowlist is policy, and it only has a job where there is nothing else. Inside
+    // the sandbox it is skipped entirely, and that is not a loosening so much as an
+    // admission: a list that permits `python3`, `node` and `make` permits arbitrary code
+    // already, and one that permits a shell permits everything the shell can reach. What
+    // stops a command mattering is the box around it, so the box is what is checked. Where
+    // there is no box -- an operator who has switched `run-unconfined` on -- the list is
+    // the only thing standing anywhere, and it is enforced exactly as it always was.
+    if !confined {
+        check_allowed(db, program, rest)?;
     }
 
     let root = root(db)?;
@@ -1084,6 +1110,64 @@ mod tests {
             !outside.exists(),
             "a make recipe wrote outside the workspace: {out}"
         );
+    }
+
+    /// The point of the whole exercise: inside the box the model gets a shell and the
+    /// allowlist is not consulted, because a list that permits `python3` and `make`
+    /// permits arbitrary code already. What stops a command mattering is the box.
+    #[test]
+    fn inside_the_sandbox_there_is_a_shell_and_no_allowlist() {
+        // Deliberately an empty allowlist: if it were still the gate, nothing would run.
+        let Some((db, project, home)) = adversarial("shell", &[]) else {
+            return;
+        };
+        let out = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"shell": "echo one > a.txt && echo two >> a.txt && wc -l < a.txt"}),
+            )
+            .unwrap()
+        });
+        assert!(out.contains("exited successfully (0)"), "{out}");
+        assert_eq!(
+            std::fs::read_to_string(project.join("a.txt")).unwrap(),
+            "one\ntwo\n",
+            "a pipeline, a redirect and an && all worked: {out}"
+        );
+
+        // And it is still a box: the shell is confined exactly as an argv is.
+        let outside = home.join("from-the-shell.txt");
+        let escaped = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"shell": format!("echo no > {}", outside.display())}),
+            )
+            .unwrap()
+        });
+        assert!(
+            !outside.exists(),
+            "the shell is inside the sandbox too: {escaped}"
+        );
+    }
+
+    /// Without a sandbox there is nothing for a shell to be inside, so there is no shell --
+    /// whatever the operator has switched on. `run-unconfined` buys back the old capability,
+    /// one program at a time from the operator's own list, not a new one.
+    #[test]
+    fn without_a_sandbox_there_is_no_shell_even_unconfined() {
+        if crate::code_sandbox::detect().confines() {
+            return;
+        }
+        let (db, _project, home) = workspace("noshell");
+        db.set_setting(
+            crate::code_sandbox::UNCONFINED_SETTING,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        let err = with_home(&home, || {
+            run(&db, &serde_json::json!({"shell": "echo hello"})).unwrap_err()
+        });
+        assert!(err.contains("only available inside the sandbox"), "{err}");
     }
 
     /// Aether1 holds API keys in its own environment. A build script is not entitled to

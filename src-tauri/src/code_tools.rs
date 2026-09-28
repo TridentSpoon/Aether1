@@ -84,7 +84,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         name: "run",
         grant: Grant::Run,
-        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. There is no shell: give the program and its arguments separately. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on, so a step that needs to fetch dependencies will fail and should be reported rather than worked around.",
+        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. Or {\"shell\": \"cargo test && cargo clippy\"} for a shell line, which works inside the sandbox. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on, so a step that needs to fetch dependencies will fail and should be reported rather than worked around. Work freely inside that folder -- a checkpoint is taken before you change anything, so the operator can put it all back.",
     },
     Capability {
         name: "search_web",
@@ -132,6 +132,12 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
     };
     code_perms::require(db, capability.grant).map_err(|Refusal(why)| why)?;
 
+    // Before the first thing that changes anything, a way back. See code_checkpoint.rs for
+    // why this replaced the table of refused `git` subcommands rather than joining it.
+    if matches!(name, "edit_file" | "create_file" | "run") {
+        checkpoint_if_due(db);
+    }
+
     match name {
         "read_file" => run_builtin(db, &crate::tools::builtin::ReadFile, args),
         "list_dir" => run_builtin(db, &crate::tools::builtin::ListDir, args),
@@ -145,6 +151,45 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
         // Unreachable while CAPABILITIES and this match agree; a refusal rather than a
         // panic, because the cost of disagreeing is one confused turn and not a crash.
         other => Err(format!("{other} is declared but not implemented")),
+    }
+}
+
+/// How long one checkpoint covers. A burst of edits and test runs is one piece of work and
+/// wants one way back, not forty; an hour later it is a different afternoon and wants its
+/// own. Long enough that `git add -A` on a large repository is never in the way, short
+/// enough that what a revert loses is a session and not a day.
+const CHECKPOINT_EVERY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Takes a checkpoint when the newest one is old enough to be a different piece of work.
+///
+/// Best effort on purpose: a workspace that is not a git repository, or a git that will not
+/// run, must not stop the model from working. What it costs is the ability to undo, and
+/// `aether1 code checkpoints` says plainly when there is nothing to undo to.
+fn checkpoint_if_due(db: &MemoryDb) {
+    let Ok(root) = crate::code_workspace::root(db) else {
+        return;
+    };
+    let due = match crate::code_checkpoint::latest(&root) {
+        Ok(Some(newest)) => match newest
+            .reference
+            .rsplit('/')
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            Some(secs) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                now.saturating_sub(secs) >= CHECKPOINT_EVERY.as_secs()
+            }
+            None => true,
+        },
+        Ok(None) => true,
+        Err(_) => false,
+    };
+    if due {
+        let _ = crate::code_checkpoint::take(&root, "before AETHER CODE changed anything");
     }
 }
 

@@ -3584,3 +3584,41 @@ reaches the operator's disk. Containment, not denial.
 place — including the ones this step does not close: the resolve-then-open gap in the
 filesystem guard, the WebSocket token in the query string, the pairing phrase as a standing
 credential, and the per-subsystem local-only checks.
+
+---
+
+## Step 54 — a real shell in the box, and a way back out of anything
+
+Trident's second review changed the target, and the sentence it turns on is: *"autonomy
+doesn't require giving the agent unrestricted access; it requires making the safe environment
+large enough that most useful work happens inside it."* An agent that must ask before every
+command is a chatbot with a confirmation dialog. The design is in `docs/AGENT_RUNTIME.md`;
+this step is the first two pieces of it, and they only became possible once step 53 made the
+kernel the boundary.
+
+**The allowlist stops pretending.** Inside the sandbox it is not consulted, and `run` takes
+`{"shell": "cargo test && cargo clippy"}`. That is not a loosening: a list permitting
+`python3`, `node`, `make` and `cargo` permits arbitrary code already — `make` runs recipes,
+`cargo` runs `build.rs`, `npm` runs lifecycle scripts — so the list never made a command
+harmless, it only read as though it did. The box does. The list survives where there is no
+box (`run-unconfined`), enforced exactly as before, and a shell is refused there for the same
+reason: there is nothing for it to be inside.
+
+**Checkpoints replace the refused-git table.** `REFUSED_GIT` protected uncommitted work by
+refusing `reset`, `clean` and the rest, which a shell walks straight around — and a guard
+that can be walked around reads as protection and is not. `code_checkpoint.rs` commits the
+whole working tree (tracked, untracked, staged, unstaged) to a ref under
+`refs/aether1/checkpoints/` before the first change of a session, through a **temporary
+index**, so taking one stages nothing, moves neither HEAD nor any branch, and does not show
+up in `git status`. One per thirty minutes of active work: a burst of edits and test runs is
+one piece of work and wants one way back, not forty.
+
+`aether1 code revert` restores **additively** — what the checkpoint held comes back, what has
+appeared since is left alone and named in the report. A revert that deleted things would be
+one more way to lose an afternoon, which is the opposite of the point. `aether1 code
+checkpoints` lists them for somebody who has just come back to a folder they left an agent
+working in.
+
+**The test that matters** takes a repository with uncommitted edits and an untracked file,
+does the worst a shell can do — overwrite, delete, `git reset --hard` — and asserts every
+byte comes back, with the agent's own new file still there and named rather than removed.

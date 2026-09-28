@@ -85,6 +85,8 @@ USAGE:
                                    otherwise -- edit and run inside one project folder
     aether1 code perms <n> on|off  Turn one of those on or off
     aether1 code workspace [path]  The project folder it may change; prints the current one
+    aether1 code checkpoints       Every point AETHER CODE's work can be put back to
+    aether1 code revert [which]    Put the project folder back to one of them
     aether1 code run-network on|off   Let commands reach the network from inside the sandbox
     aether1 code run-unconfined on|off  Run commands on a machine with no sandbox anyway
     aether1 code run-allow <prog>  Let it run that program in the project folder
@@ -183,6 +185,13 @@ pub enum Invocation {
     /// `code workspace`: the project folder AETHER CODE may change, printed or set.
     CodeWorkspace {
         path: Option<String>,
+    },
+    /// `code checkpoints` / `code revert`: the way back from autonomous work.
+    CodeCheckpoints {
+        /// True for `revert`, which puts the working tree back.
+        revert: bool,
+        /// Which checkpoint, when the operator names one rather than taking the newest.
+        which: Option<String>,
     },
     /// `code run-network` / `code run-unconfined`: the two switches around the sandbox
     /// commands are spawned in. Printed with no argument, set with `on`/`off`.
@@ -528,6 +537,23 @@ pub fn parse(argv: &[String]) -> Invocation {
                     "code workspace takes one path, or nothing to print the current one"
                         .to_string(),
                 ),
+            },
+            // The way back. `checkpoints` lists, `revert` restores -- the newest by
+            // default, because "undo what it just did" is the question being asked.
+            Some("checkpoints") => Ok(Invocation::CodeCheckpoints {
+                revert: false,
+                which: None,
+            }),
+            Some("revert") => match &rest[1..] {
+                [] => Ok(Invocation::CodeCheckpoints {
+                    revert: true,
+                    which: None,
+                }),
+                [which] => Ok(Invocation::CodeCheckpoints {
+                    revert: true,
+                    which: Some(which.to_string()),
+                }),
+                _ => Err("code revert takes one checkpoint, or nothing for the newest".to_string()),
             },
             // The sandbox switches. Both print their state with no argument, because "is
             // this confined" is the question an operator asks before they trust `run` at
@@ -1130,6 +1156,46 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
              terminal for you to run, and nothing enters it but your own Return key.\n",
         );
     }
+    Ok(out)
+}
+
+/// `aether1 code checkpoints` and `aether1 code revert` -- the way back.
+///
+/// The question this answers is "what did it do and how do I undo it", asked by somebody who
+/// has just come back to a folder they left an agent working in, so it prints what a revert
+/// would restore before it is asked for rather than only afterwards.
+fn run_code_checkpoints(revert: bool, which: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let root = crate::code_workspace::root(engine.db())?;
+    if revert {
+        return crate::code_checkpoint::revert(&root, which.as_deref());
+    }
+    if !crate::code_checkpoint::is_repo(&root) {
+        return Ok(format!(
+            "  {} is not a git repository, so there is nothing to put work back to.\n\n\
+             Run `git init` in it and AETHER CODE will take a checkpoint before it first \
+             changes anything.\n",
+            root.display()
+        ));
+    }
+    let checkpoints = crate::code_checkpoint::list(&root)?;
+    if checkpoints.is_empty() {
+        return Ok(
+            "  No checkpoints yet. One is taken before AETHER CODE first changes \
+                   anything in the project folder.\n"
+                .to_string(),
+        );
+    }
+    let mut out = format!("  {} checkpoint(s), newest first:\n\n", checkpoints.len());
+    for point in &checkpoints {
+        let name = point
+            .reference
+            .rsplit('/')
+            .next()
+            .unwrap_or(&point.reference);
+        out.push_str(&format!("  {name}  {}\n", point.when));
+    }
+    out.push_str("\n  Put the folder back with `aether1 code revert` (newest), or name one.\n");
     Ok(out)
 }
 
@@ -2182,6 +2248,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
         Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
+        Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
         Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),

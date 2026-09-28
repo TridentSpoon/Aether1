@@ -22,6 +22,7 @@ mod audio_devices;
 mod background_services;
 mod cli;
 mod code_chat;
+mod code_checkpoint;
 mod code_perms;
 mod code_sandbox;
 mod code_setup;
