@@ -36,6 +36,12 @@
     // this from AETHER1's other stored settings.
     const TOKEN_KEY = 'aether1-lan-token';
 
+    /* The two subprotocol names, matching WS_PROTOCOL and WS_TOKEN_PREFIX in
+     * src-tauri/src/server.rs. WS_PROTOCOL is the one the server selects; the prefixed one is
+     * how the token gets there. */
+    const WS_PROTOCOL = 'aether1';
+    const WS_TOKEN_PREFIX = 'aether1.token.';
+
     /* A browser with storage blocked (private windows, some embedded webviews) must still be
      * able to pair -- it just pairs again next reload. Every access is guarded rather than
      * assuming localStorage is there and writable. */
@@ -81,15 +87,18 @@
         return next;
     }
 
-    /* A WebSocket handshake from a browser cannot carry a custom header, which is why
-     * server.rs accepts `?token=` on the `/ws/*` routes. Appended with the right separator so
-     * a URL that already has a query keeps it. */
-    function wsUrl(url) {
-        if (IS_TAURI) return url;
+    /* A WebSocket handshake from a browser cannot carry a custom header -- except this one.
+     * The constructor's second argument becomes `Sec-WebSocket-Protocol`, so the token rides
+     * there rather than in the URL, where access logs and proxy logs would write it down.
+     *
+     * Two are offered: the one carrying the token, and the plain one the server selects and
+     * echoes. The plain one has to be in the list, because a browser closes a socket whose
+     * requested subprotocol was not selected, and the server never selects the one with the
+     * credential in it. */
+    function wsProtocols() {
+        if (IS_TAURI) return [WS_PROTOCOL];
         const token = readToken();
-        if (!token) return url;
-        const separator = url.includes('?') ? '&' : '?';
-        return `${url}${separator}token=${encodeURIComponent(token)}`;
+        return token ? [`${WS_TOKEN_PREFIX}${token}`, WS_PROTOCOL] : [WS_PROTOCOL];
     }
 
     /* Whether a response is the server saying "pair first" rather than any other failure.
@@ -289,7 +298,7 @@
 
     window.LanAuth = {
         authorize,
-        wsUrl,
+        wsProtocols,
         isUnauthorized,
         isLockedOut,
         onUnauthorized,

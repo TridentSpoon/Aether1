@@ -62,10 +62,11 @@ function apiFetch(path, options) {
         });
 }
 
-/* The same credential for the `/ws/*` routes, which take it as `?token=` because a browser
- * cannot put a header on a WebSocket handshake. */
-function apiWsUrl(url) {
-    return window.LanAuth ? window.LanAuth.wsUrl(url) : url;
+/* The same credential for the `/ws/*` routes. It travels as a WebSocket subprotocol rather
+ * than in the URL -- the constructor's second argument is the one handshake header a browser
+ * lets a page set, and a URL is the part of a request that ends up in logs. */
+function apiWsProtocols() {
+    return window.LanAuth ? window.LanAuth.wsProtocols() : ['aether1'];
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1967,7 +1968,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
-        const ws = new WebSocket(apiWsUrl(wsUrl));
+        const ws = new WebSocket(wsUrl, apiWsProtocols());
 
         ws.onmessage = (event) => {
             try {
@@ -3070,7 +3071,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // plumbing already exists here for telemetry (see /ws/chat in server.rs).
         return await new Promise((resolve, reject) => {
             const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
-            const socket = new WebSocket(apiWsUrl(`${wsBase}/ws/chat`));
+            const socket = new WebSocket(`${wsBase}/ws/chat`, apiWsProtocols());
             socket.onopen = () => socket.send(JSON.stringify({
                 message: text, session_id: sessionId, generate_voice: false
             }));

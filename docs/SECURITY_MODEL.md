@@ -200,10 +200,16 @@ Two consequences worth stating rather than discovering:
 * **The phrase is a standing credential.** Anyone who knows it can pair a new device until it
   is rotated, and revoking a device does not revoke the phrase. `aether1 pair` rotates it and
   clears every device.
-* **WebSocket tokens travel in the query string**, because a browser's `WebSocket`
-  constructor cannot send an `Authorization` header. URLs end up in history, logs and
-  debugging output more readily than headers do. A short-lived nonce exchanged over the
-  authenticated HTTPS path would be better, and is on the list.
+* **A WebSocket's credential travels as a subprotocol**, not in the URL. A browser's
+  `WebSocket` constructor cannot send an `Authorization` header, but its second argument
+  becomes `Sec-WebSocket-Protocol`, which is the one handshake header a page can set. A
+  client offers `aether1.token.<token>` alongside a plain `aether1`, and the server selects
+  the plain one, so the credential travels in one direction and never comes back. `?token=`
+  is not read at all: a URL is the part of a request that gets written down, by access logs,
+  by reverse proxies and by their error pages, and this token is not a short-lived ticket but
+  the credential for every other request that device makes. A header is not immune to being
+  logged either, which is why a short-lived socket ticket would still be better; it is not
+  what was open, though, and the query string was.
 
 `discovery.rs` announces over DNS-SD, which anyone on the network can impersonate, so a
 phrase can be typed into a convincing fake. A PAKE (SPAKE2) is the answer and is not written
@@ -230,8 +236,8 @@ Listed here rather than implied by silence:
 
 * Windows confinement for `run` (section 1).
 * `openat`-style filesystem operations to close the resolve/open gap (section 2).
-* A short-lived WebSocket credential, and a prominent statement of what the pairing phrase
-  is (section 5).
+* A short-lived socket ticket rather than the device token itself, and a prominent statement
+  of what the pairing phrase is (section 5).
 * A Settings surface for the domain policy; today it is `aether1 code net` and the project's
   own `.aether/policy.json` (section 1b).
 * One outbound network policy object rather than a check per subsystem (section 6).
