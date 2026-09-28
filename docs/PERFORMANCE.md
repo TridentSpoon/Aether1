@@ -35,21 +35,30 @@ Idle means: started, nothing asked of it, nobody looking.
 
 | | before | after |
 |---|---|---|
-| `aether1 --serve`, no browser attached, 5 minutes | 5.36s of CPU (1.79% of one core) | **0 CPU ticks** (below the kernel's 10ms resolution, for 300 seconds) |
-| one telemetry reading, wall clock | 212ms | 1.7ms |
-| one telemetry reading, scan work only (the 200ms block taken out) | 12.4ms | 1.7ms |
+| `aether1 --serve`, no browser attached, 5 minutes | 4.78s of CPU (1.59% of one core) | **0 CPU ticks** (below the kernel's 10ms resolution, for 300 seconds) |
+| one telemetry reading, wall clock | 209ms | 1.7ms |
+| one telemetry reading, scan work only (the 200ms block taken out) | 8.95ms | 1.7ms |
 
-The reading is ~7x cheaper in work done and ~128x cheaper in wall time, and the loop that takes
+The reading is ~5x cheaper in work done and ~120x cheaper in wall time, and the loop that takes
 it does not run at all when there is nobody to feed.
 
 Measured on 2026-09-28, in a container with few processes running. A machine with hundreds of
 processes pays more per scan than this, on both sides of the table -- the ratio is the part that
 travels, not the absolute numbers.
 
+The "before" column is `main` as it stands *after* the fix that moved the disk figures off the
+tick, not before it. That fix removed a different and worse problem -- a `Disks` enumeration
+inline on the tick, which blocks in uninterruptible I/O for fifteen seconds at a time on a dead
+automount -- and measuring against the state before it would have credited its win to this
+change. The two fixes also pull against each other in one place, which is worth knowing: holding
+a `Disks` in the sampler across ticks, which is what the rest of this change does with the
+`System` and `Networks`, would have put that blocking call straight back on the tick, no cheaper
+for being held. So the sampler holds everything except the disks.
+
 ## What each fix was
 
 **The telemetry sampler is kept, not rebuilt** (`src-tauri/src/llm/telemetry.rs`). `Sampler`
-holds the `System`, `Networks`, `Disks` and battery handle across ticks and refreshes them. The
+holds the `System`, `Networks` and battery handle across ticks and refreshes them. The
 previous tick is the earlier of the two CPU samples, so the 200ms block is gone from every
 reading but the first; the delta readings (CPU, network throughput) now get a full second of
 spacing instead of 200ms, which makes them *more* accurate; the constants are read once. One
@@ -116,6 +125,9 @@ The desktop app needs a screen, so it is a hands-on check rather than a script:
    almost nothing.
 4. Open the window again. The panel should be live on the next reading, not a stale one and not
    half a minute later.
+
+The disk figures are the exception, and stay on their own thread behind `disk_usage()` for the
+reason above.
 
 The regression that hid inside the first measurement is worth knowing about, because it is the
 kind that would come back: the `--serve` loop parks on `receiver_count() == 0`, and `run()` was
