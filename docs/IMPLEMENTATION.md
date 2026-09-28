@@ -3622,3 +3622,44 @@ working in.
 **The test that matters** takes a repository with uncommitted edits and an untracked file,
 does the worst a shell can do — overwrite, delete, `git reset --hard` — and asserts every
 byte comes back, with the agent's own new file still there and named rather than removed.
+
+---
+
+## Step 55 — the sandbox gets one way out, and it is a policy
+
+The network was the last part of the box that was still a switch: off, and `npm install`
+cannot work; on, and the box could reach anything at all, including wherever a fetched page
+told the model to post a copy of the source tree. Trident's review named the proxy as the
+piece that makes an agent's autonomy safe rather than merely large, and it is right — with
+the filesystem confined, the network is the only way anything gets out.
+
+**The shape, which is the whole argument.** The box keeps its own network namespace in both
+states, so it has a loopback interface and no route anywhere. Switching the network on does
+not give it one. It bind-mounts in a single unix socket, which crosses a network namespace
+because it is a file rather than a route. Inside, `aether1 --net-relay` (Aether1 re-entering
+itself, then running the real command as a child) listens on loopback and hands every
+connection down that socket. Outside, `code_proxy.rs` answers one question per connection:
+is this host one the project agreed to?
+
+So a program that ignores `HTTPS_PROXY` does not get out by ignoring it. There is nothing to
+get out through.
+
+**No interception, no certificate.** The decision is taken on the `CONNECT` line, which names
+the host in the clear before TLS starts. Aether1 never terminates TLS and never sees inside
+the tunnel. What it enforces is where a connection goes, which is what the policy is about.
+
+**`.aether/policy.json`** holds `allow` and `deny` over a starter set of package registries
+and source hosts, with `deny` winning — the only way to take a default away. Matching is
+exact or dot-delimited subdomain, so `crates.io` covers `static.crates.io` and not
+`crates.io.evil.example`, and credentials are stripped from an authority before the host is
+read, because `http://crates.io@evil.example/` goes to the second one. A refused host is
+recorded, so `aether1 code net` answers both "what may it reach" and "what did it just try".
+
+**The test is the claim.** A real command in a real sandbox tries the host directly and is
+blocked, then reaches an allowed host through the proxy, with the domain allowed between the
+two runs. It found two real bugs while being written: `/run` is on the read-only host bind so
+the socket could not be mounted there (it lives under the sandbox's own tmpfs now), and the
+proxy was keyed per process rather than per database.
+
+**Still to come:** the *allow once / allow for this project / deny* card in the HUD. Today
+the refusal explains itself and names the one command that fixes it.

@@ -623,6 +623,12 @@ impl MemoryDb {
         rows.collect()
     }
 
+    /// The database file itself. `MemoryDb` is a path and opens a connection per call, so
+    /// this is how another thread gets a handle of its own on the same database.
+    pub fn path(&self) -> &Path {
+        &self.db_path
+    }
+
     /// The directory the database lives in, which is also where hand-editable companion
     /// files (the model price list) are looked for.
     pub fn dir(&self) -> Option<&Path> {

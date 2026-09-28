@@ -101,6 +101,24 @@ const ENV_PASSTHROUGH: &[&str] = &[
     "PYTHONDONTWRITEBYTECODE",
 ];
 
+/// How a command reaches the network, which is three states rather than a switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Net {
+    /// No network namespace but the sandbox's own, and nothing bridged into it. The box has
+    /// a loopback interface and no route anywhere.
+    None,
+    /// The same isolation, plus one unix socket bind-mounted in. A relay started inside the
+    /// box listens on loopback and hands every connection down that socket to Aether1's
+    /// proxy, which allows or refuses it by host. A program that ignores `HTTPS_PROXY` does
+    /// not get out by ignoring it -- there is nowhere for it to go.
+    Proxied { socket: PathBuf },
+    /// This machine will not let bubblewrap unshare a network namespace, so the box has the
+    /// host's network whatever anyone sets. The proxy variables are still pointed at the
+    /// relay, which well-behaved tools honour, but nothing enforces it and the Confinement
+    /// line says so.
+    Unenforced,
+}
+
 /// What this machine can actually do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sandbox {
@@ -251,7 +269,17 @@ fn probe(bwrap: &Path, network_off: bool) -> bool {
     if std::fs::create_dir_all(&dir).is_err() {
         return false;
     }
-    let args = bwrap_args("/bin/true", &[], &dir, &dir, !network_off);
+    let args = bwrap_args(
+        "/bin/true",
+        &[],
+        &dir,
+        &dir,
+        if network_off {
+            &Net::None
+        } else {
+            &Net::Unenforced
+        },
+    );
     let ok = Command::new(bwrap)
         .args(&args)
         .env_clear()
@@ -272,13 +300,31 @@ fn probe(bwrap: &Path, network_off: bool) -> bool {
 /// does not pretend to: asking for it to be off there would build an argument list that
 /// fails to start at all, which is a worse answer than an honest description.
 pub fn network_allowed(db: &MemoryDb) -> bool {
-    network_for(&detect(), db)
+    db.get_setting_bool(NETWORK_SETTING, false)
 }
 
-/// The same question asked of a sandbox already in hand, so spawning a command does not
-/// probe bubblewrap twice.
-pub fn network_for(sandbox: &Sandbox, db: &MemoryDb) -> bool {
-    db.get_setting_bool(NETWORK_SETTING, false) || !sandbox.can_cut_network()
+/// How this command reaches the network: the operator's switch, what the machine can
+/// enforce, and whether the proxy started.
+///
+/// The proxy is only started when the network is actually wanted, so an operator who never
+/// turns it on never has a listening socket at all.
+pub fn network_for(sandbox: &Sandbox, db: &MemoryDb) -> Net {
+    if !sandbox.can_cut_network() {
+        // Nothing to decide: the box has the host's network either way. The variables are
+        // still pointed at the relay, so a tool that honours them goes through the policy;
+        // `description` is where the honesty about that lives.
+        return Net::Unenforced;
+    }
+    if !network_allowed(db) {
+        return Net::None;
+    }
+    match crate::code_proxy::start(db) {
+        Ok(proxy) => Net::Proxied {
+            socket: proxy.socket.clone(),
+        },
+        // A proxy that will not start is not a reason to hand the box the whole network.
+        Err(_) => Net::None,
+    }
 }
 
 /// Whether the operator has said to run commands unconfined anyway.
@@ -315,7 +361,7 @@ pub fn command(
     rest: &[String],
     cwd: &Path,
     root: &Path,
-    network: bool,
+    net: &Net,
 ) -> Command {
     match sandbox {
         Sandbox::Unavailable(_) => {
@@ -325,7 +371,24 @@ pub fn command(
         }
         Sandbox::Bubblewrap { bwrap, .. } => {
             let mut cmd = Command::new(bwrap);
-            for arg in bwrap_args(program, rest, cwd, root, network) {
+            // With a proxy in play the command is wrapped: Aether1 itself runs inside the
+            // box, starts the relay on loopback, and then runs what was asked for. Two
+            // processes rather than a shell line, so nothing in the argv is ever parsed.
+            let (program, rest) = match net {
+                Net::Proxied { .. } => {
+                    let me = aether1_binary().to_string_lossy().to_string();
+                    let mut wrapped = vec![
+                        "--net-relay".to_string(),
+                        crate::code_proxy::SOCKET_IN_SANDBOX.to_string(),
+                        "--".to_string(),
+                        program.to_string(),
+                    ];
+                    wrapped.extend(rest.iter().cloned());
+                    (me, wrapped)
+                }
+                _ => (program.to_string(), rest.to_vec()),
+            };
+            for arg in bwrap_args(&program, &rest, cwd, root, net) {
                 cmd.arg(arg);
             }
             // The sandbox's own environment, not this process's. `env_clear` covers what
@@ -335,10 +398,40 @@ pub fn command(
             for (key, value) in passthrough_env() {
                 cmd.env(key, value);
             }
+            // Both spellings, because build tools are split on which they read.
+            if !matches!(net, Net::None) {
+                let proxy = format!("http://127.0.0.1:{}", crate::code_proxy::RELAY_PORT);
+                for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+                    cmd.env(key, &proxy);
+                }
+            }
             cmd.current_dir(cwd);
             cmd
         }
     }
+}
+
+/// Aether1's own binary, which is what runs inside the box as the relay.
+///
+/// `current_exe` almost always answers this. The exception is a test run, where the running
+/// executable is the test harness in `target/debug/deps/` -- and a test that could not
+/// start the relay would be a test of everything except the part that matters, so the
+/// binary beside it is used instead.
+fn aether1_binary() -> PathBuf {
+    let Ok(exe) = std::env::current_exe() else {
+        return PathBuf::from("aether1");
+    };
+    if exe.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("deps")) {
+        if let Some(beside) = exe
+            .parent()
+            .and_then(Path::parent)
+            .map(|dir| dir.join("aether1"))
+            .filter(|path| path.is_file())
+        {
+            return beside;
+        }
+    }
+    exe
 }
 
 /// The environment the child is given: the passthrough list, as this process has it.
@@ -361,7 +454,7 @@ pub fn bwrap_args(
     rest: &[String],
     cwd: &Path,
     root: &Path,
-    network: bool,
+    net: &Net,
 ) -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut args: Vec<String> = Vec::new();
@@ -376,7 +469,7 @@ pub fn bwrap_args(
         "--unshare-uts",
         "--unshare-cgroup-try",
     ]);
-    if !network {
+    if !matches!(net, Net::Unenforced) {
         push(&["--unshare-net"]);
     }
     // A process group of its own, so the child cannot push characters back into the
@@ -403,6 +496,16 @@ pub fn bwrap_args(
         }
     }
 
+    // The way out, if there is one: a socket, not a route. It crosses the network
+    // namespace because it is a file.
+    if let Net::Proxied { socket } = net {
+        push(&[
+            "--bind",
+            &socket.to_string_lossy(),
+            crate::code_proxy::SOCKET_IN_SANDBOX,
+        ]);
+    }
+
     // The one writable place, last so nothing above can hide it.
     let root_s = root.to_string_lossy().to_string();
     push(&["--bind", &root_s, &root_s]);
@@ -420,12 +523,20 @@ mod tests {
     use super::*;
 
     fn args_for(network: bool) -> Vec<String> {
+        args_for_net(if network {
+            &Net::Unenforced
+        } else {
+            &Net::None
+        })
+    }
+
+    fn args_for_net(net: &Net) -> Vec<String> {
         bwrap_args(
             "python3",
             &["-c".to_string(), "print(1)".to_string()],
             Path::new("/w/sub"),
             Path::new("/w"),
-            network,
+            net,
         )
     }
 
@@ -454,6 +565,28 @@ mod tests {
         assert!(
             ro_host < workspace,
             "the host must be mounted before the workspace"
+        );
+    }
+
+    /// The shape the whole proxy rests on: a box that can reach the network through the
+    /// proxy still has no network namespace of its own to route from. The socket is the
+    /// only way out, and it is a file rather than a route, which is why it crosses.
+    #[test]
+    fn a_proxied_box_keeps_its_network_namespace_and_gets_only_a_socket() {
+        let args = args_for_net(&Net::Proxied {
+            socket: PathBuf::from("/var/aether1/net.sock"),
+        });
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("--unshare-net"),
+            "a proxied box is still cut off from the network: {joined}"
+        );
+        assert!(
+            joined.contains(&format!(
+                "--bind /var/aether1/net.sock {}",
+                crate::code_proxy::SOCKET_IN_SANDBOX
+            )),
+            "and reaches the proxy through one socket: {joined}"
         );
     }
 

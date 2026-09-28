@@ -85,6 +85,8 @@ USAGE:
                                    otherwise -- edit and run inside one project folder
     aether1 code perms <n> on|off  Turn one of those on or off
     aether1 code workspace [path]  The project folder it may change; prints the current one
+    aether1 code net               What the sandbox may reach, and what it has asked for
+    aether1 code net-allow <domain>   Let it reach one more
     aether1 code checkpoints       Every point AETHER CODE's work can be put back to
     aether1 code revert [which]    Put the project folder back to one of them
     aether1 code run-network on|off   Let commands reach the network from inside the sandbox
@@ -185,6 +187,16 @@ pub enum Invocation {
     /// `code workspace`: the project folder AETHER CODE may change, printed or set.
     CodeWorkspace {
         path: Option<String>,
+    },
+    /// `--net-relay`: Aether1 running inside the sandbox, bridging loopback to the proxy
+    /// socket and then running the real command. Never typed by a person.
+    NetRelay {
+        socket: String,
+        argv: Vec<String>,
+    },
+    /// `code net`: what the sandbox may reach, and `code net-allow <domain>` to add one.
+    CodeNet {
+        allow: Option<String>,
     },
     /// `code checkpoints` / `code revert`: the way back from autonomous work.
     CodeCheckpoints {
@@ -437,6 +449,18 @@ fn parse_announce(rest: Vec<String>) -> Result<Invocation, String> {
 pub fn parse(argv: &[String]) -> Invocation {
     let args: Vec<String> = argv.iter().skip(1).cloned().collect();
 
+    // The sandbox's own entry point, checked first and documented nowhere the operator
+    // looks: `--net-relay <socket> -- <program> <args...>` is how Aether1 re-enters itself
+    // inside the box to bridge loopback to the proxy. It is not a verb anybody types.
+    if let Some(at) = args.iter().position(|a| a == "--net-relay") {
+        let socket = args.get(at + 1).cloned().unwrap_or_default();
+        let rest: Vec<String> = match args.iter().position(|a| a == "--") {
+            Some(dashes) => args[dashes + 1..].to_vec(),
+            None => Vec::new(),
+        };
+        return Invocation::NetRelay { socket, argv: rest };
+    }
+
     // Checked before anything else so the existing `--serve` behavior is unchanged: it
     // wins wherever it appears in argv.
     if args.iter().any(|a| a == "--serve") {
@@ -535,6 +559,19 @@ pub fn parse(argv: &[String]) -> Invocation {
                 }),
                 _ => Err(
                     "code workspace takes one path, or nothing to print the current one"
+                        .to_string(),
+                ),
+            },
+            // What the sandbox may reach. `net` lists, including what has been refused so
+            // far, because "why did my build fail" and "what did it want" are one question.
+            Some("net") => Ok(Invocation::CodeNet { allow: None }),
+            Some("net-allow") => match &rest[1..] {
+                [domain] => Ok(Invocation::CodeNet {
+                    allow: Some(domain.to_string()),
+                }),
+                _ => Err(
+                    "code net-allow takes one domain -- for example `code net-allow \
+                     registry.npmjs.org`"
                         .to_string(),
                 ),
             },
@@ -1155,6 +1192,47 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
              file, a repository or a setting -- a command that would is written into your\n\
              terminal for you to run, and nothing enters it but your own Return key.\n",
         );
+    }
+    Ok(out)
+}
+
+/// `aether1 code net` and `aether1 code net-allow <domain>` -- what the sandbox may reach.
+///
+/// Listing shows the refused hosts as well as the allowed ones, because the question an
+/// operator arrives with is "the build said it could not reach something, what was it".
+fn run_code_net(allow: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let root = crate::code_workspace::root(db)?;
+    if let Some(domain) = allow {
+        crate::code_proxy::allow_domain(&root, &domain)?;
+        crate::code_proxy::clear_pending(db);
+        return Ok(format!(
+            "  {domain} is now allowed for {}.\n  Written to {}.\n",
+            root.display(),
+            crate::code_proxy::POLICY_FILE
+        ));
+    }
+    let allowed = crate::code_proxy::allowed(&root);
+    let pending = crate::code_proxy::pending(db);
+    let mut out = format!(
+        "  Commands are {}\n  The network inside it is {}\n\n  Allowed:\n",
+        crate::code_sandbox::detect().description(),
+        if crate::code_sandbox::network_allowed(db) {
+            "on, through the proxy"
+        } else {
+            "off -- `aether1 code run-network on`"
+        }
+    );
+    for domain in &allowed {
+        out.push_str(&format!("    {domain}\n"));
+    }
+    if !pending.is_empty() {
+        out.push_str("\n  Asked for and refused:\n");
+        for domain in &pending {
+            out.push_str(&format!("    {domain}\n"));
+        }
+        out.push_str("\n  Allow one with `aether1 code net-allow <domain>`.\n");
     }
     Ok(out)
 }
@@ -2249,6 +2327,9 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
         Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
         Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
+        Invocation::CodeNet { allow } => run_code_net(allow),
+        // Handled in main before this point; listed so the match stays exhaustive.
+        Invocation::NetRelay { .. } => Ok(String::new()),
         Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),

@@ -497,7 +497,7 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
         rest,
         &cwd,
         &root,
-        crate::code_sandbox::network_for(&sandbox, db),
+        &crate::code_sandbox::network_for(&sandbox, db),
     )
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
