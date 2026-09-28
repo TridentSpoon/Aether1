@@ -1,0 +1,495 @@
+//! Pairing *outward*: this machine as the device that asks, rather than the one that is
+//! asked.
+//!
+//! Everything before this made AETHER1 a good host. It hands out a one-time code, checks
+//! it, mints a token for whoever typed it, and lists who is paired. The only thing that
+//! ever *typed* a code was a browser on the other machine -- so the window could show a
+//! code while having nothing that could answer one, which is what "multiple places to
+//! present codes and the only place to submit one is linked to nothing" meant.
+//!
+//! This is the other half. Given a machine found by a scan (discovery.rs, surfaced in the
+//! pane) and the code it is showing, this pairs with it from here and keeps what came back.
+//!
+//! Three decisions worth keeping:
+//!
+//! 1. **The certificate is trusted on first pairing and pinned afterwards.** A LAN server
+//!    signs its own certificate -- no public authority will vouch for an address on your own
+//!    network -- so there is nothing to check it against the first time. What there *is* is
+//!    the next time: the fingerprint seen while pairing is stored with the token, and a
+//!    later connection to that machine must present the same one or it is refused. That
+//!    turns an unauthenticated first hop into a relationship that cannot be silently taken
+//!    over, which is the same bargain SSH makes.
+//! 2. **The request is written by hand over rustls rather than through the HTTP client.**
+//!    ureq cannot both accept an unknown certificate and tell us which one it accepted, and
+//!    the fingerprint is the entire point. One POST with a known body is a small enough
+//!    thing to write out.
+//! 3. **The token is stored, and nothing uses it yet.** Being paired is what this step
+//!    delivers; routing work to a paired machine is a later one. The store is where that
+//!    will read from.
+
+use std::io::{Read, Write};
+use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, IpAddr as PkiIpAddr, ServerName, UnixTime};
+use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, SignatureScheme, StreamOwned};
+use serde::{Deserialize, Serialize};
+
+/// How long to wait on the other machine at each stage. A machine on the same network
+/// answers in milliseconds; this is a guard against one that has gone away mid-pairing,
+/// not a realistic round trip.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A cap on what is read back. The answer is a small JSON object or a line of text; anything
+/// larger is a machine that is not what it said it was, and is not worth buffering.
+const MAX_RESPONSE: u64 = 64 * 1024;
+
+fn peers_path() -> PathBuf {
+    crate::project_root()
+        .join("backend")
+        .join("serve_peers.json")
+}
+
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default()
+}
+
+/// One machine this one has paired with, and what it takes to reach it again.
+///
+/// The token is here in the clear, unlike the *incoming* half in serve_auth.rs, which only
+/// ever stores hashes. The difference is what the two are for: a server only has to
+/// recognise a token it is shown, so it need not be able to reproduce one; a client has to
+/// send it, so it must. This file carries a credential and is written 0600 for that reason.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct Peer {
+    /// What the other machine announced itself as. A label for a person, not an identity.
+    pub name: String,
+    pub address: String,
+    pub port: u16,
+    pub token: String,
+    /// The certificate this machine presented while pairing, and must present again.
+    pub fingerprint: String,
+    pub paired_at: u64,
+}
+
+fn load_at(file: &Path) -> Vec<Peer> {
+    // A store that cannot be read is treated as empty rather than as an error: nothing here
+    // is load-bearing enough to stop the pane drawing, and pairing again rewrites it.
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_at(file: &Path, peers: &[Peer]) -> Result<(), String> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not make the folder for the paired machines list: {e}"))?;
+    }
+    let text = serde_json::to_string_pretty(peers)
+        .map_err(|e| format!("could not write the paired machines list: {e}"))?;
+    std::fs::write(file, text)
+        .map_err(|e| format!("could not write the paired machines list: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // It holds tokens in the clear, so it is readable by this account and nobody else --
+        // the same promise serve_devices.json and the key file make.
+        let _ = std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// Every machine this one has paired with. The token is deliberately left out: a list is
+/// something an operator might paste into a message asking for help.
+pub fn paired_peers() -> Vec<Peer> {
+    load_at(&peers_path())
+}
+
+/// Forgets one machine. Only this side is touched -- the other machine still lists the
+/// device it gave a token to until somebody revokes it there, which is the same asymmetry
+/// as deleting a saved password.
+pub fn forget(address: &str, port: u16) -> Result<(), String> {
+    forget_at(&peers_path(), address, port)
+}
+
+fn forget_at(file: &Path, address: &str, port: u16) -> Result<(), String> {
+    let mut peers = load_at(file);
+    peers.retain(|peer| !(peer.address == address && peer.port == port));
+    save_at(file, &peers)
+}
+
+/// A certificate verifier that accepts one connection and remembers what it accepted.
+///
+/// With `expected` set it is not trusting at all: the certificate must hash to exactly that,
+/// or the handshake fails. With it unset -- only ever on the first pairing with a machine --
+/// it accepts what it is given and records the fingerprint so that every connection after
+/// this one can be checked.
+#[derive(Debug)]
+struct PinnedCertificate {
+    expected: Option<String>,
+    seen: Mutex<Option<String>>,
+    provider: Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl ServerCertVerifier for PinnedCertificate {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let fingerprint = crate::serve_tls::fingerprint(end_entity.as_ref());
+        if let Some(expected) = &self.expected {
+            if expected != &fingerprint {
+                return Err(rustls::Error::General(
+                    "that machine is presenting a different certificate than the one it \
+                     paired with. Either it was reinstalled, or something is answering in \
+                     its place."
+                        .to_string(),
+                ));
+            }
+        }
+        *self.seen.lock().unwrap() = Some(fingerprint);
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+/// The status line and body of one HTTP/1.1 answer.
+///
+/// Split out from the connection so the part that can be got wrong -- where the headers
+/// stop -- is testable without a server on the other end.
+fn parse_response(raw: &[u8]) -> Result<(u16, String), String> {
+    let split = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "that machine sent an answer that stopped mid-way".to_string())?;
+    let head = String::from_utf8_lossy(&raw[..split]);
+    let body = String::from_utf8_lossy(&raw[split + 4..]).to_string();
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| "that machine did not answer like a web server".to_string())?;
+    Ok((status, body))
+}
+
+/// Pairs with a machine found on the network, and keeps what it gave back.
+///
+/// `secret` is the one-time code that machine is showing, or its twelve-word phrase --
+/// whichever the operator has. This end does not care which: `/api/pair` tries the code
+/// first and falls back to the phrase, so there is no wrong box to type it into.
+pub fn pair_with(name: &str, address: &str, port: u16, secret: &str) -> Result<Peer, String> {
+    let secret = secret.trim();
+    if secret.is_empty() {
+        return Err("Type the code that machine is showing, or its pairing phrase.".to_string());
+    }
+    let ip: IpAddr = address
+        .parse()
+        .map_err(|_| format!("{address} is not an address this can connect to"))?;
+
+    // A machine already paired with is pinned to the certificate it had. A new one is not,
+    // and what it presents becomes the pin.
+    let known = paired_peers()
+        .into_iter()
+        .find(|peer| peer.address == address && peer.port == port);
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = Arc::new(PinnedCertificate {
+        expected: known.as_ref().map(|peer| peer.fingerprint.clone()),
+        seen: Mutex::new(None),
+        provider: provider.clone(),
+    });
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("could not set up a secure connection: {e}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier.clone())
+        .with_no_client_auth();
+
+    let socket = SocketAddr::new(ip, port);
+    let stream = TcpStream::connect_timeout(&socket, NETWORK_TIMEOUT).map_err(|e| {
+        format!("could not reach {address} on port {port}: {e}. Is LAN access still on over there?")
+    })?;
+    stream.set_read_timeout(Some(NETWORK_TIMEOUT)).ok();
+    stream.set_write_timeout(Some(NETWORK_TIMEOUT)).ok();
+
+    // The address is the name: there is nothing else to check it against, and the
+    // fingerprint is what identifies the machine either way.
+    let server_name = ServerName::IpAddress(PkiIpAddr::from(ip));
+    let connection = ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| format!("could not start a secure connection to {address}: {e}"))?;
+    let mut tls = StreamOwned::new(connection, stream);
+
+    let body = serde_json::json!({
+        "phrase": secret,
+        "device": device_label(),
+    })
+    .to_string();
+    let request = format!(
+        "POST /api/pair HTTP/1.1\r\nHost: {address}:{port}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    tls.write_all(request.as_bytes())
+        .map_err(|e| format!("could not ask {address} to pair: {e}"))?;
+    tls.flush().ok();
+
+    let mut raw = Vec::new();
+    // `Connection: close` means the answer ends when the stream does; a peer that stops
+    // talking mid-answer shows up as a parse failure rather than as a hang, because the
+    // socket has a read timeout.
+    let mut limited = Read::take(&mut tls, MAX_RESPONSE);
+    if let Err(e) = limited.read_to_end(&mut raw) {
+        // A server that closes without a clean TLS shutdown is normal here and has already
+        // given us everything it was going to say, so an error with a body in hand is not
+        // worth failing over.
+        if raw.is_empty() {
+            return Err(format!("{address} stopped answering part-way through: {e}"));
+        }
+    }
+    let (status, answer) = parse_response(&raw)?;
+
+    let fingerprint =
+        verifier.seen.lock().unwrap().clone().ok_or_else(|| {
+            "the connection ended before that machine identified itself".to_string()
+        })?;
+
+    match status {
+        200 => {}
+        401 | 400 => {
+            return Err(if answer.trim().is_empty() {
+                "That machine did not accept the code. Codes run out after ten minutes -- \
+                 ask it for a new one."
+                    .to_string()
+            } else {
+                answer.trim().to_string()
+            })
+        }
+        429 => {
+            return Err(
+                "That machine has stopped accepting attempts for a minute. Wait, then try again."
+                    .to_string(),
+            )
+        }
+        other => {
+            return Err(format!(
+                "That machine answered with {other}: {}",
+                answer.trim()
+            ))
+        }
+    }
+
+    let token = serde_json::from_str::<serde_json::Value>(&answer)
+        .ok()
+        .and_then(|value| value.get("token")?.as_str().map(str::to_string))
+        .ok_or_else(|| "That machine paired but sent no token back.".to_string())?;
+
+    let peer = Peer {
+        name: name.trim().to_string(),
+        address: address.to_string(),
+        port,
+        token,
+        fingerprint,
+        paired_at: now_seconds(),
+    };
+    let file = peers_path();
+    let mut peers = load_at(&file);
+    // Pairing again with a machine already here replaces it rather than adding a second
+    // entry: the new token is the one that works, and the old one is now dead weight.
+    peers.retain(|existing| !(existing.address == peer.address && existing.port == peer.port));
+    peers.push(peer.clone());
+    save_at(&file, &peers)?;
+    Ok(peer)
+}
+
+/// What the other machine will list this one as. The hostname, because that is what its
+/// operator will recognise in a list they may later revoke from.
+fn device_label() -> String {
+    match sysinfo::System::host_name() {
+        Some(name) if !name.trim().is_empty() => format!("AETHER1 on {name}"),
+        _ => "another AETHER1".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_file(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("aether1-peers-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("serve_peers.json")
+    }
+
+    fn peer(address: &str) -> Peer {
+        Peer {
+            name: "kitchen-netbook".to_string(),
+            address: address.to_string(),
+            port: 8378,
+            token: "abc123".to_string(),
+            fingerprint: "AA BB".to_string(),
+            paired_at: 1,
+        }
+    }
+
+    #[test]
+    fn a_missing_store_reads_as_nobody_paired_rather_than_failing() {
+        assert!(load_at(&temp_file("missing")).is_empty());
+    }
+
+    #[test]
+    fn a_stored_machine_comes_back_as_it_went_in() {
+        let file = temp_file("round-trip");
+        save_at(&file, &[peer("192.168.1.44")]).unwrap();
+        assert_eq!(load_at(&file), vec![peer("192.168.1.44")]);
+    }
+
+    /// The token is a live credential, so the file it sits in must not be readable by
+    /// anyone else on a shared machine.
+    #[cfg(unix)]
+    #[test]
+    fn the_store_is_readable_by_this_account_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let file = temp_file("permissions");
+        save_at(&file, &[peer("192.168.1.44")]).unwrap();
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "group or others can read {file:?}");
+    }
+
+    #[test]
+    fn forgetting_one_machine_leaves_the_others_alone() {
+        let file = temp_file("forget");
+        save_at(&file, &[peer("192.168.1.44"), peer("192.168.1.45")]).unwrap();
+        forget_at(&file, "192.168.1.44", 8378).unwrap();
+        assert_eq!(load_at(&file), vec![peer("192.168.1.45")]);
+    }
+
+    #[test]
+    fn an_answer_is_split_at_the_blank_line_and_not_before() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"token\":\"x\"}";
+        assert_eq!(
+            parse_response(raw).unwrap(),
+            (200, "{\"token\":\"x\"}".to_string())
+        );
+    }
+
+    /// A body that itself contains a blank line must not be cut at the first one it holds.
+    #[test]
+    fn a_body_with_a_blank_line_in_it_survives_intact() {
+        let raw = b"HTTP/1.1 400 Bad Request\r\n\r\nfirst\r\n\r\nsecond";
+        assert_eq!(
+            parse_response(raw).unwrap(),
+            (400, "first\r\n\r\nsecond".to_string())
+        );
+    }
+
+    #[test]
+    fn an_answer_that_stops_before_its_headers_end_is_reported() {
+        assert!(parse_response(b"HTTP/1.1 200 OK\r\nContent-Ty").is_err());
+    }
+
+    #[test]
+    fn something_that_is_not_a_web_server_is_reported_as_such() {
+        assert!(parse_response(b"hello there\r\n\r\nbody").is_err());
+    }
+
+    #[test]
+    fn an_empty_secret_never_reaches_the_network() {
+        let outcome = pair_with("somewhere", "127.0.0.1", 1, "   ");
+        assert!(outcome.unwrap_err().contains("Type the code"));
+    }
+
+    /// Also manual, and the other two halves of the same session: a refusal has to arrive
+    /// in the other machine's own words, and a machine whose certificate has changed since
+    /// pairing has to be refused rather than quietly re-trusted.
+    ///
+    ///   cargo test -- --ignored a_wrong_code_is_refused_in_the_other_machines_words
+    ///   rm backend/serve_cert.pem backend/serve_key.pem   # then restart the server
+    ///   cargo test -- --ignored a_changed_certificate_is_refused
+    #[test]
+    #[ignore = "needs a real --serve --lan on this machine"]
+    fn a_wrong_code_is_refused_in_the_other_machines_words() {
+        let outcome = pair_with("this machine", "127.0.0.1", 8378, "NOTTHECODE");
+        let message = outcome.expect_err("a wrong code must not pair");
+        assert!(
+            message.contains("pairing code") || message.contains("pairing phrase"),
+            "the other machine's own words, not ours: {message}"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a real --serve --lan whose certificate has been replaced"]
+    fn a_changed_certificate_is_refused() {
+        let phrase = std::env::var("AETHER1_TEST_PHRASE").expect("AETHER1_TEST_PHRASE");
+        let message = pair_with("this machine", "127.0.0.1", 8378, &phrase)
+            .expect_err("a changed certificate must not pair");
+        assert!(
+            message.contains("different certificate"),
+            "the pin is what should have stopped it: {message}"
+        );
+    }
+
+    /// Not run in CI: it needs a real `aether1 --serve --lan` on this machine and its
+    /// pairing phrase. Run it by hand:
+    ///
+    ///   aether1 pair                       # prints twelve words
+    ///   aether1 --serve --lan &
+    ///   AETHER1_TEST_PHRASE="the twelve words" \
+    ///     cargo test -- --ignored pairing_with_a_real_server
+    #[test]
+    #[ignore = "needs a real --serve --lan on this machine"]
+    fn pairing_with_a_real_server_stores_a_token_and_a_fingerprint() {
+        let phrase = std::env::var("AETHER1_TEST_PHRASE").expect("AETHER1_TEST_PHRASE");
+        let peer = pair_with("this machine", "127.0.0.1", 8378, &phrase).expect("pairing");
+        assert!(!peer.token.is_empty(), "a token came back");
+        assert!(!peer.fingerprint.is_empty(), "the certificate was recorded");
+        assert!(
+            paired_peers().iter().any(|p| p.token == peer.token),
+            "and it was written down"
+        );
+    }
+}

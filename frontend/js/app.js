@@ -5785,11 +5785,19 @@ document.addEventListener('DOMContentLoaded', () => {
         lanScanNoticeEl.classList.toggle('hidden', !text);
     }
 
+    /* Which machines this one has already paired with, from the last status read. The
+       answer lives on the Rust side, so a row can say "paired" without this side keeping
+       its own idea of who is. */
+    function pairedWith(peer) {
+        const paired = (lanReport && lanReport.paired_peers) || [];
+        return paired.some(p => p.address === peer.address && p.port === peer.port);
+    }
+
     /* Built as nodes rather than markup: every string here comes off the network, from a
        name another machine chose for itself. */
     function peerRow(peer) {
         const row = document.createElement('div');
-        row.className = 'net-row';
+        row.className = 'net-row net-peer';
 
         const text = document.createElement('div');
         text.className = 'net-row-text';
@@ -5800,23 +5808,134 @@ document.addEventListener('DOMContentLoaded', () => {
             : String(peer.name || 'an AETHER1');
         const hint = document.createElement('p');
         hint.className = 'net-row-hint';
-        hint.textContent = peer.version
-            ? `AETHER1 ${peer.version}`
-            : 'version not announced';
-        text.append(title, hint);
-
-        const where = document.createElement('p');
-        where.className = 'net-row-value';
         const addresses = Array.isArray(peer.addresses) ? peer.addresses : [];
-        where.textContent = addresses.length
+        const where = addresses.length
             ? addresses.map(address => `${address}:${peer.port}`).join('  ')
             : `port ${peer.port}`;
+        hint.textContent = peer.version ? `${where} — AETHER1 ${peer.version}` : where;
+        text.append(title, hint);
+        row.append(text);
 
-        row.append(text, where);
+        // Nothing to offer for this machine: it is already reachable from here, and
+        // pairing with yourself would hand out a token nothing would ever send.
+        if (peer.is_this_machine || !addresses.length) return row;
+
+        if (pairedWith({ address: addresses[0], port: peer.port })) {
+            const state = document.createElement('span');
+            state.className = 'net-state';
+            state.dataset.state = 'on';
+            state.append(document.createElement('i'), 'Paired');
+            const forget = document.createElement('button');
+            forget.type = 'button';
+            forget.className = 'net-card-action net-card-action-quiet';
+            forget.textContent = 'Forget';
+            forget.addEventListener('click', () => forgetPeer(addresses[0], peer.port, forget));
+            const side = document.createElement('div');
+            side.className = 'net-peer-side';
+            side.append(state, forget);
+            row.append(side);
+            return row;
+        }
+
+        const pair = document.createElement('button');
+        pair.type = 'button';
+        pair.className = 'net-card-action';
+        pair.textContent = 'Pair';
+        pair.addEventListener('click', () => openPeerPairing(row, peer, addresses[0], pair));
+        row.append(pair);
         return row;
     }
 
+    /* The code goes in on the row of the machine it belongs to. Asking for it anywhere else
+       is how the old flow ended up with codes on one screen and a box on another. */
+    function openPeerPairing(row, peer, address, pairButton) {
+        if (row.querySelector('.net-peer-pair')) return;
+        pairButton.disabled = true;
+
+        const box = document.createElement('div');
+        box.className = 'net-peer-pair';
+        const label = document.createElement('p');
+        label.className = 'net-row-hint';
+        label.textContent =
+            `On ${peer.name}, open Settings, Network & Remote, Pair a device. Type the code `
+            + 'it shows here. Its twelve-word phrase works too.';
+        const field = document.createElement('input');
+        field.type = 'text';
+        // The same field the phrase box uses, so it is the one input style in the pane.
+        field.className = 'w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono';
+        field.autocomplete = 'off';
+        field.spellcheck = false;
+        field.placeholder = 'the code, or twelve words';
+        const go = document.createElement('button');
+        go.type = 'button';
+        go.className = 'net-card-action';
+        go.textContent = 'Pair';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'net-card-action net-card-action-quiet';
+        cancel.textContent = 'Cancel';
+        const outcome = document.createElement('p');
+        outcome.className = 'net-field-note hidden';
+
+        const close = () => { box.remove(); pairButton.disabled = false; };
+        cancel.addEventListener('click', close);
+
+        async function submit() {
+            const secret = field.value.trim();
+            if (!secret) return;
+            go.disabled = true;
+            field.disabled = true;
+            go.textContent = 'Pairing…';
+            outcome.classList.add('hidden');
+            try {
+                const report = await tauriInvoke('lan_pair_with_rust', {
+                    name: peer.name, address, port: peer.port, secret,
+                });
+                // The row is redrawn from the fresh status, so "Paired" is the Rust side's
+                // answer rather than this side assuming the press worked.
+                renderLan(report);
+                renderPeers(lastScan);
+            } catch (e) {
+                outcome.textContent = String(e.message || e);
+                outcome.dataset.tone = 'bad';
+                outcome.classList.remove('hidden');
+                go.disabled = false;
+                field.disabled = false;
+                go.textContent = 'Pair';
+                field.focus();
+            }
+        }
+        go.addEventListener('click', submit);
+        field.addEventListener('keydown', event => {
+            if (event.key === 'Enter') { event.preventDefault(); submit(); }
+            if (event.key === 'Escape') close();
+        });
+
+        const controls = document.createElement('div');
+        controls.className = 'net-field-row';
+        controls.append(field, go, cancel);
+        box.append(label, controls, outcome);
+        row.append(box);
+        field.focus();
+    }
+
+    async function forgetPeer(address, port, button) {
+        button.disabled = true;
+        try {
+            renderLan(await tauriInvoke('lan_forget_peer_rust', { address, port }));
+            renderPeers(lastScan);
+        } catch (e) {
+            setScanNotice(`Could not forget that machine: ${e.message || e}`);
+            button.disabled = false;
+        }
+    }
+
+    // What the last scan found, so a row can be redrawn after pairing without scanning
+    // again -- three more seconds of waiting to see a word change.
+    let lastScan = [];
+
     function renderPeers(peers) {
+        lastScan = peers;
         if (!lanPeersEl) return;
         lanPeersEl.textContent = '';
         if (!peers.length) {
@@ -5852,6 +5971,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function resetPeers() {
         if (!lanPeersEl) return;
         lanPeersEl.textContent = '';
+        lastScan = [];
         const prompt = document.createElement('p');
         prompt.className = 'profile-empty';
         prompt.textContent = 'Press Scan to see which machines are serving right now.';
