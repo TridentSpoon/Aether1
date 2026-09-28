@@ -24,6 +24,7 @@ mod cli;
 mod code_chat;
 mod code_checkpoint;
 mod code_perms;
+mod code_policy;
 mod code_proxy;
 mod code_sandbox;
 mod code_setup;
@@ -1507,6 +1508,15 @@ fn sync_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// Rust-native twin of POST /api/code/level: the project's autonomy level.
+#[tauri::command(async)]
+fn code_set_level_rust(
+    engine: tauri::State<LlmEngine>,
+    level: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_set_level(&engine, &level)
+}
+
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
 #[tauri::command(async)]
 fn save_settings_rust(
@@ -2492,6 +2502,7 @@ fn main() {
             graft_version_rust,
             get_settings_rust,
             save_settings_rust,
+            code_set_level_rust,
             generate_speech_rust,
             speech_clip_rust,
             transcribe_rust,

@@ -2305,6 +2305,24 @@
                     <div class="px-3 pb-3">
                         <input id="setting-code-workspace-root" type="text" placeholder="e.g. ~/Projects/aether1" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
+                    <!-- The autonomy level. It is not a fifth switch: picking one writes
+                         the four switches below and beside it, and records the answer in the
+                         project's own .aether/policy.json so it travels with the project.
+                         Filled in by app.js from the autonomy and levels blocks that ride
+                         alongside the settings. -->
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Trusted with</p>
+                            <p id="code-level-hint" class="net-row-hint">Answered once per project, and it sets the switches below.</p>
+                        </div>
+                        <select id="setting-code-level" class="bg-slate-900 border border-cyan-500/40 rounded p-1 text-sm text-cyan-100"></select>
+                    </div>
+                    <div id="code-level-shares-row" class="net-row hidden">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Folders it may also see</p>
+                            <p id="code-level-shares" class="net-row-hint"></p>
+                        </div>
+                    </div>
                     <div class="net-row">
                         <div class="net-row-text">
                             <p class="net-row-title">Edit files</p>

@@ -8926,6 +8926,54 @@ document.addEventListener('DOMContentLoaded', () => {
         line.classList.toggle('text-amber-300', sandbox.confines === false);
     }
 
+    // The autonomy level: what this project is trusted with. The four names, their
+    // descriptions and the answer all come from the backend (code_policy.rs), so this is
+    // display and one POST -- picking a level writes the project's own file and the four
+    // switches it stands for, which is why the panel is reloaded afterwards rather than
+    // having its switches set here.
+    function applyAutonomy(autonomy, levels) {
+        const select = document.getElementById('setting-code-level');
+        const hint = document.getElementById('code-level-hint');
+        const sharesRow = document.getElementById('code-level-shares-row');
+        const shares = document.getElementById('code-level-shares');
+        if (!select || !hint) return;
+        const chosen = autonomy && autonomy.level;
+        if (!chosen) {
+            // No project folder nominated, so there is nowhere to write an answer. Say that
+            // rather than offering a choice that would go nowhere.
+            select.classList.add('hidden');
+            hint.textContent = 'Set a project folder below, and this is where you say what it may do.';
+            if (sharesRow) sharesRow.classList.add('hidden');
+            return;
+        }
+        select.classList.remove('hidden');
+        select.innerHTML = '';
+        for (const level of levels || []) {
+            const option = document.createElement('option');
+            option.value = level.key;
+            option.textContent = level.title;
+            option.title = level.description;
+            select.appendChild(option);
+        }
+        select.value = chosen;
+        const described = (levels || []).find((level) => level.key === chosen);
+        hint.textContent = described ? described.description : '';
+        // A switch moved by hand is reported, not reinterpreted: the level is still what the
+        // project's file says, and the operator is told something below it has moved.
+        const drifted = autonomy.matches === false;
+        hint.classList.toggle('text-amber-300', drifted);
+        if (drifted) {
+            hint.textContent += ' -- one of the switches below has been changed by hand, so this is no longer what is in force. Pick the level again to restore it.';
+        }
+        if (sharesRow && shares) {
+            const list = autonomy.shares || [];
+            sharesRow.classList.toggle('hidden', list.length === 0);
+            shares.textContent = list
+                .map((share) => `${share.path} (${share.write ? 'read and write' : 'read only'})`)
+                .join(', ') + '. Add one with `aether1 code share <folder>`.';
+        }
+    }
+
     function applyOsWording(os) {
         const wording = OS_WORDING[os];
         if (!wording) return;
@@ -8953,6 +9001,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // means the panel is never briefly describing the wrong machine.
             applyOsWording(data.os);
             applySandboxState(data.sandbox);
+            applyAutonomy(data.autonomy, data.levels);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
@@ -10430,6 +10479,32 @@ document.addEventListener('DOMContentLoaded', () => {
         // Saved without closing anything or announcing it: this is a menu toggle, and the
         // one thing it must do that it did not before is survive a restart.
         saveSettings(false);
+    });
+
+    // Picking a level is its own request, not part of Save: it writes the project's file
+    // and the four switches at once, and those switches are fields on this same panel, so
+    // the panel is reloaded to show what the choice did.
+    document.getElementById('setting-code-level')?.addEventListener('change', async (e) => {
+        const level = e.target.value;
+        try {
+            if (IS_TAURI) {
+                await tauriInvoke('code_set_level_rust', { level });
+            } else {
+                const resp = await apiFetch('/api/code/level', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ level }),
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+            }
+            await loadSettings();
+        } catch (err) {
+            const hint = document.getElementById('code-level-hint');
+            if (hint) {
+                hint.textContent = `That level was not set: ${err.message || err}`;
+                hint.classList.add('text-amber-300');
+            }
+        }
     });
 
     document.getElementById('setting-sfx')?.addEventListener('change', (e) => {

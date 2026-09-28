@@ -3663,3 +3663,50 @@ proxy was keyed per process rather than per database.
 
 **Still to come:** the *allow once / allow for this project / deny* card in the HUD. Today
 the refusal explains itself and names the one command that fixes it.
+
+---
+
+## Step 56 — a project is trusted once, and the answer is four words long
+
+The sandbox settled how a boundary is enforced and the proxy settled how the one way out is
+policed. What was left is the question an operator actually has: *how much of my machine does
+this project get?* Answering it per command is a chatbot with a confirmation dialog; answering
+it once, in words, is an agent.
+
+**Four levels, because a slider is a question nobody can answer.** Assistant reads the project
+and changes nothing. Developer reads and writes it, which is what a coding agent needs and is
+the default. Agent adds the folders the operator named, each of them read-only or writable.
+Unrestricted turns the sandbox off and says so in those words. Each is a described
+configuration, not a position on a scale.
+
+**A level is a name for switches that already existed.** `code_perm_edit`, `code_perm_run`,
+`code_run_network`, `code_run_unconfined` — picking a level writes those four and nothing
+else. There is no fifth mechanism to reason about, and nothing new to get wrong.
+
+**The project's file is the level's only home.** `.aether/policy.json`, beside the code it
+describes, the same file the proxy reads its domains from. It has to be that way round:
+Developer and Agent set identical switches and differ only in what they do with the folder
+list, so the settings table cannot be asked which of the two was chosen. What it *can* answer
+is whether the switches still match the recorded level — and an operator who turns the network
+off by hand is told their project is no longer at the level its file claims, rather than
+having their choice quietly reinterpreted as whichever name now fits. That distinction came
+out of a test, not a design: the first version tried to identify the level by reading the
+switches back, and its own test proved it could not.
+
+**Read and write are separate answers, per folder.** `aether1 code share ~/Documents` makes a
+folder readable inside the sandbox; `share-write` makes it writable, and only Agent and above
+honour that. So *"read my vault and summarise it"* works at any level that can read, while
+*"reorganise my vault"* is a level someone chose. `$HOME` itself and the filesystem root are
+refused — hiding them is the point of the box — and a named folder that is not on this
+machine is left out rather than failing the command, because a policy file travels with a
+repository.
+
+**Enforced where everything else is.** The level becomes a `code_sandbox::Access`: the
+workspace binds read-only at Assistant, named folders bind before it as `--ro-bind-try` or
+`--bind-try`. Two tests run a real command in a real sandbox and check the host disk — the
+project folder is unwritable at Assistant, and a shared folder is readable at Developer and
+writable only at Agent.
+
+`aether1 code level` lists the four and marks the one in force; `aether1 code share`,
+`share-write` and `unshare` manage the folders. Settings has the same choice as a dropdown,
+described in the same words, because both read them from `code_policy.rs`.

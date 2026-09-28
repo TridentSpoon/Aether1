@@ -758,6 +758,7 @@ mod tests {
                 &crate::code_sandbox::Net::Proxied {
                     socket: proxy.clone(),
                 },
+                &crate::code_sandbox::Access::project_only(),
             )
             .output()
             .expect("the sandbox runs");

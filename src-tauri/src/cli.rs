@@ -85,6 +85,10 @@ USAGE:
                                    otherwise -- edit and run inside one project folder
     aether1 code perms <n> on|off  Turn one of those on or off
     aether1 code workspace [path]  The project folder it may change; prints the current one
+    aether1 code level [name]      How much this project is trusted with; prints all four
+    aether1 code share <folder>    Let it read one folder beyond the project
+    aether1 code share-write <folder>   ...and write it (the agent level only)
+    aether1 code unshare <folder>  Take one back
     aether1 code net               What the sandbox may reach, and what it has asked for
     aether1 code net-allow <domain>   Let it reach one more
     aether1 code checkpoints       Every point AETHER CODE's work can be put back to
@@ -193,6 +197,18 @@ pub enum Invocation {
     NetRelay {
         socket: String,
         argv: Vec<String>,
+    },
+    /// `code level`: how much this project is trusted with, printed or set.
+    CodeLevel {
+        level: Option<String>,
+    },
+    /// `code share`: the folders beyond the project the sandbox may see.
+    CodeShare {
+        path: Option<String>,
+        /// True for `share-write <path>`, which asks for a writable folder.
+        write: bool,
+        /// True for `unshare <path>`.
+        remove: bool,
     },
     /// `code net`: what the sandbox may reach, and `code net-allow <domain>` to add one.
     CodeNet {
@@ -562,6 +578,34 @@ pub fn parse(argv: &[String]) -> Invocation {
                         .to_string(),
                 ),
             },
+            // How much this project is trusted with. With no argument it prints the four
+            // and marks the one in force, because choosing needs them side by side.
+            Some("level") => match &rest[1..] {
+                [] => Ok(Invocation::CodeLevel { level: None }),
+                [level] => Ok(Invocation::CodeLevel {
+                    level: Some(level.to_string()),
+                }),
+                _ => Err("code level takes one level, or nothing to print them".to_string()),
+            },
+            Some(verb @ ("share" | "share-write" | "unshare")) => {
+                let write = verb == "share-write";
+                let remove = verb == "unshare";
+                match &rest[1..] {
+                    [] if !remove => Ok(Invocation::CodeShare {
+                        path: None,
+                        write,
+                        remove,
+                    }),
+                    [path] => Ok(Invocation::CodeShare {
+                        path: Some(path.to_string()),
+                        write,
+                        remove,
+                    }),
+                    _ => Err(format!(
+                        "code {verb} takes one folder -- for example `code {verb} ~/Documents`"
+                    )),
+                }
+            }
             // What the sandbox may reach. `net` lists, including what has been refused so
             // far, because "why did my build fail" and "what did it want" are one question.
             Some("net") => Ok(Invocation::CodeNet { allow: None }),
@@ -1192,6 +1236,129 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
              file, a repository or a setting -- a command that would is written into your\n\
              terminal for you to run, and nothing enters it but your own Return key.\n",
         );
+    }
+    Ok(out)
+}
+
+/// `aether1 code level [name]` -- how much this project is trusted with.
+///
+/// Printing shows all four with the one in force marked, because a level is a choice between
+/// described configurations and choosing needs them beside each other. It also says when the
+/// switches under the level no longer match it, which is what an operator who changed one by
+/// hand needs told.
+fn run_code_level(level: Option<String>) -> Result<String, String> {
+    use crate::code_policy::{self, Level};
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let root = crate::code_workspace::root(db)?;
+
+    if let Some(asked) = level {
+        let Some(wanted) = Level::from_key(&asked) else {
+            let known: Vec<&str> = code_policy::ALL.iter().map(|l| l.key()).collect();
+            return Err(format!(
+                "there is no level called {asked:?}. There are four: {}",
+                known.join(", ")
+            ));
+        };
+        code_policy::set_level(&root, db, wanted)?;
+        return Ok(format!(
+            "  {} is now at the {} level.\n  {}\n  Written to {}.\n",
+            root.display(),
+            wanted.key(),
+            wanted.description(),
+            code_policy::FILE
+        ));
+    }
+
+    let (in_force, matches) = code_policy::effective(&root, db);
+    let mut out = format!("  {}\n\n", root.display());
+    for level in code_policy::ALL {
+        out.push_str(&format!(
+            "  {} {:<13} {}\n",
+            if *level == in_force { "->" } else { "  " },
+            level.key(),
+            level.description()
+        ));
+    }
+    if !code_policy::is_trusted(&root) {
+        out.push_str(
+            "\n  This project has not been answered for yet, so it runs at the default.\n               Set one with `aether1 code level developer`.\n",
+        );
+    }
+    if !matches {
+        out.push_str(
+            "\n  One of the switches under this level has been changed by hand, so the \
+             project\n  is not running exactly as the level describes. `aether1 code level \
+             <name>`\n  puts it back.\n",
+        );
+    }
+    let shared = code_policy::mounts(&root);
+    if !shared.is_empty() {
+        out.push_str("\n  Folders shared with it:\n");
+        for mount in &shared {
+            out.push_str(&format!(
+                "    {} ({})\n",
+                mount.path.display(),
+                if mount.write {
+                    "read and write"
+                } else {
+                    "read"
+                }
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// `aether1 code share [folder]` and its two siblings -- the folders beyond the project.
+fn run_code_share(path: Option<String>, write: bool, remove: bool) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let root = crate::code_workspace::root(db)?;
+    let Some(path) = path else {
+        let shared = crate::code_policy::mounts(&root);
+        if shared.is_empty() {
+            return Ok(
+                "  Nothing beyond the project folder is shared with it.\n  Add one with \
+                 `aether1 code share ~/Documents`.\n"
+                    .to_string(),
+            );
+        }
+        let mut out = String::from("  Shared with the sandbox:\n");
+        for mount in &shared {
+            out.push_str(&format!(
+                "    {} ({})\n",
+                mount.path.display(),
+                if mount.write {
+                    "read and write"
+                } else {
+                    "read"
+                }
+            ));
+        }
+        return Ok(out);
+    };
+    if remove {
+        return Ok(if crate::code_policy::remove_mount(&root, &path)? {
+            format!("  {path} is no longer shared.\n")
+        } else {
+            format!("  {path} was not shared.\n")
+        });
+    }
+    let resolved = crate::code_policy::add_mount(&root, &path, write)?;
+    let level = crate::code_policy::level(&root);
+    let mut out = format!(
+        "  {} is shared with the sandbox ({}).\n",
+        resolved.display(),
+        if write { "read and write" } else { "read" }
+    );
+    if write && !level.honours_writable_mounts() {
+        out.push_str(&format!(
+            "\n  At the {} level it is read-only. `aether1 code level agent` is the level \
+             that writes a shared folder.\n",
+            level.key()
+        ));
     }
     Ok(out)
 }
@@ -2328,6 +2495,12 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
         Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
         Invocation::CodeNet { allow } => run_code_net(allow),
+        Invocation::CodeLevel { level } => run_code_level(level),
+        Invocation::CodeShare {
+            path,
+            write,
+            remove,
+        } => run_code_share(path, write, remove),
         // Handled in main before this point; listed so the match stays exhaustive.
         Invocation::NetRelay { .. } => Ok(String::new()),
         Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),

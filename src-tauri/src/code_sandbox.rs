@@ -101,6 +101,29 @@ const ENV_PASSTHROUGH: &[&str] = &[
     "PYTHONDONTWRITEBYTECODE",
 ];
 
+/// What the command may see of the filesystem beyond the read-only host: whether the
+/// project folder itself is writable, and which other folders are bound in.
+///
+/// Decided by `code_policy` from the project's own file, and passed in rather than read here,
+/// so this module keeps one job -- building a box -- and the question of what a project is
+/// trusted with has one home.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Access {
+    /// False at the Assistant level, where the agent reads and changes nothing.
+    pub write_workspace: bool,
+    pub extra: Vec<crate::code_policy::Mount>,
+}
+
+impl Access {
+    /// The ordinary case: the project folder, writable, and nothing else.
+    pub fn project_only() -> Access {
+        Access {
+            write_workspace: true,
+            extra: Vec::new(),
+        }
+    }
+}
+
 /// How a command reaches the network, which is three states rather than a switch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Net {
@@ -279,6 +302,7 @@ fn probe(bwrap: &Path, network_off: bool) -> bool {
         } else {
             &Net::Unenforced
         },
+        &Access::project_only(),
     );
     let ok = Command::new(bwrap)
         .args(&args)
@@ -362,6 +386,7 @@ pub fn command(
     cwd: &Path,
     root: &Path,
     net: &Net,
+    access: &Access,
 ) -> Command {
     match sandbox {
         Sandbox::Unavailable(_) => {
@@ -388,7 +413,7 @@ pub fn command(
                 }
                 _ => (program.to_string(), rest.to_vec()),
             };
-            for arg in bwrap_args(&program, &rest, cwd, root, net) {
+            for arg in bwrap_args(&program, &rest, cwd, root, net, access) {
                 cmd.arg(arg);
             }
             // The sandbox's own environment, not this process's. `env_clear` covers what
@@ -455,6 +480,7 @@ pub fn bwrap_args(
     cwd: &Path,
     root: &Path,
     net: &Net,
+    access: &Access,
 ) -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut args: Vec<String> = Vec::new();
@@ -506,9 +532,34 @@ pub fn bwrap_args(
         ]);
     }
 
-    // The one writable place, last so nothing above can hide it.
+    // The folders the project named, before the workspace so the workspace still wins if
+    // one of them contains it. Each is read-only unless the level said otherwise, which is
+    // what makes "read my notes" a different answer from "reorganise my notes".
+    for mount in &access.extra {
+        let path = mount.path.to_string_lossy().to_string();
+        push(&[
+            if mount.write {
+                "--bind-try"
+            } else {
+                "--ro-bind-try"
+            },
+            &path,
+            &path,
+        ]);
+    }
+
+    // The workspace, last so nothing above can hide it. Read-only at the Assistant level:
+    // the agent can look at the project and run its tests, and cannot change it.
     let root_s = root.to_string_lossy().to_string();
-    push(&["--bind", &root_s, &root_s]);
+    push(&[
+        if access.write_workspace {
+            "--bind"
+        } else {
+            "--ro-bind"
+        },
+        &root_s,
+        &root_s,
+    ]);
 
     let cwd_s = cwd.to_string_lossy().to_string();
     push(&["--chdir", &cwd_s]);
@@ -537,6 +588,7 @@ mod tests {
             Path::new("/w/sub"),
             Path::new("/w"),
             net,
+            &Access::project_only(),
         )
     }
 
