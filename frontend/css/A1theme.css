@@ -3088,6 +3088,22 @@ select,
 .net-peers { display: flex; flex-direction: column; }
 .net-peers .profile-empty { padding: 0.5rem 0.875rem; }
 
+/* A found machine and what can be done with it. The row keeps the pane's own shape; the
+   pairing box drops underneath the machine it belongs to, which is the whole point of
+   asking for the code there rather than somewhere else on the page. */
+.net-peer { flex-wrap: wrap; }
+.net-peer-side { display: flex; align-items: center; gap: 0.5rem; }
+.net-peer-pair {
+    flex: 1 0 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--border-neon);
+}
+.net-peer-pair .net-field-note { padding: 0; }
+
 .net-row {
     display: flex;
     align-items: center;

@@ -45,6 +45,7 @@ mod llm;
 mod local_only;
 mod model_scanner;
 mod paths;
+mod peers;
 mod persona_voice;
 mod profile;
 mod releases;
@@ -539,6 +540,33 @@ fn lan_new_pairing_code_rust(
     managed: tauri::State<lan::ManagedServer>,
 ) -> Result<serde_json::Value, String> {
     lan::new_pairing_code(&engine, &managed)
+}
+
+/// Pairs with a machine found on the network, using the code it is showing over there.
+/// The whole point of the step: a code typed into this app rather than into a browser on
+/// the other machine.
+#[tauri::command(async)]
+fn lan_pair_with_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+    name: String,
+    address: String,
+    port: u16,
+    secret: String,
+) -> Result<serde_json::Value, String> {
+    lan::pair_with_peer(&engine, &managed, &name, &address, port, &secret)
+}
+
+/// Forgets a machine this one had paired with. Only this side; the token it was given is
+/// the other machine's to revoke.
+#[tauri::command(async)]
+fn lan_forget_peer_rust(
+    engine: tauri::State<LlmEngine>,
+    managed: tauri::State<lan::ManagedServer>,
+    address: String,
+    port: u16,
+) -> Result<serde_json::Value, String> {
+    lan::forget_peer(&engine, &managed, &address, port)
 }
 
 /// Every other AETHER1 announcing itself on this network, found over mDNS.
@@ -2766,6 +2794,8 @@ fn main() {
             lan_new_pairing_code_rust,
             lan_clear_pairing_code_rust,
             lan_discover_rust,
+            lan_pair_with_rust,
+            lan_forget_peer_rust,
             connections_rust,
             github_sign_in_start_rust,
             github_sign_in_poll_rust,

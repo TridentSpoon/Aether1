@@ -139,6 +139,9 @@ pub fn status(engine: &LlmEngine, managed: &ManagedServer) -> Value {
         // holding the code itself anywhere. Null when there is none, or it has run out.
         "code_expires_at": serve_auth::pairing_code_expiry(),
         "now": now_seconds(),
+        // The outward half: machines *this* one has paired with, as opposed to the devices
+        // that have paired with it. Tokens are left out -- the pane has no use for them.
+        "paired_peers": paired_peers_payload(),
     })
 }
 
@@ -299,6 +302,59 @@ pub fn new_pairing_code(engine: &LlmEngine, managed: &ManagedServer) -> Result<V
 pub fn clear_pairing_code(engine: &LlmEngine, managed: &ManagedServer) -> Value {
     serve_auth::clear_pairing_code();
     status(engine, managed)
+}
+
+/// The machines this one has paired with, in the shape the pane draws. Never the token:
+/// nothing on that side of the wall has any use for it.
+fn paired_peers_payload() -> Vec<Value> {
+    crate::peers::paired_peers()
+        .into_iter()
+        .map(|peer| {
+            json!({
+                "name": peer.name,
+                "address": peer.address,
+                "port": peer.port,
+                "paired_at": peer.paired_at,
+            })
+        })
+        .collect()
+}
+
+/// Pairs with a machine a scan found, using the code it is showing its own operator.
+///
+/// This is the half that never existed: until now the only thing that could answer a
+/// pairing code was a browser on the other machine, so the window could show one and
+/// accept none. Failure comes back as the other machine's own words where it had any --
+/// "wrong pairing phrase" is more use than "pairing failed".
+pub fn pair_with_peer(
+    engine: &LlmEngine,
+    managed: &ManagedServer,
+    name: &str,
+    address: &str,
+    port: u16,
+    secret: &str,
+) -> Result<Value, String> {
+    let peer = crate::peers::pair_with(name, address, port, secret)?;
+    let mut report = status(engine, managed);
+    report["paired_with"] = json!({
+        "name": peer.name,
+        "address": peer.address,
+        "port": peer.port,
+    });
+    Ok(report)
+}
+
+/// Forgets one machine on this side. The other machine still lists the device it gave a
+/// token to, which is its operator's to revoke -- the pane says so rather than implying
+/// this reaches across.
+pub fn forget_peer(
+    engine: &LlmEngine,
+    managed: &ManagedServer,
+    address: &str,
+    port: u16,
+) -> Result<Value, String> {
+    crate::peers::forget(address, port)?;
+    Ok(status(engine, managed))
 }
 
 /// How long a scan browses the network before reporting what it found.
