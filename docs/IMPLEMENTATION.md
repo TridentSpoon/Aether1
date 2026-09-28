@@ -3582,8 +3582,8 @@ reaches the operator's disk. Containment, not denial.
 
 **`docs/SECURITY_MODEL.md`** is new, and holds the boundaries and their known limits in one
 place — including the ones this step does not close: the resolve-then-open gap in the
-filesystem guard, the WebSocket token in the query string, the pairing phrase as a standing
-credential, and the per-subsystem local-only checks.
+filesystem guard, the WebSocket token in the query string (closed in step 57), the pairing
+phrase as a standing credential, and the per-subsystem local-only checks.
 
 ---
 
@@ -3710,3 +3710,41 @@ writable only at Agent.
 `aether1 code level` lists the four and marks the one in force; `aether1 code share`,
 `share-write` and `unshare` manage the folders. Settings has the same choice as a dropdown,
 described in the same words, because both read them from `code_policy.rs`.
+
+---
+
+## Step 57 — the socket's credential stops travelling in the URL
+
+Review 1 named this one and it took ten minutes to fix, which is the whole reason it is worth
+writing down: a device token was being appended to `/ws/telemetry` and `/ws/chat` as
+`?token=...`, the best-known workaround for a browser that cannot put an `Authorization`
+header on a WebSocket handshake, and the wrong one.
+
+**Why the URL is the wrong place.** A URL is the part of a request that gets written down.
+Access logs record the request line, a reverse proxy in front of this server records it, and
+so do its error pages. And the thing being written down is not a short-lived ticket -- it is
+the same 256-bit device token that authenticates every other request that device makes, good
+until somebody runs `aether1 revoke`.
+
+**The one header a browser will send.** `new WebSocket(url, protocols)` puts its second
+argument in `Sec-WebSocket-Protocol`. So the client offers two: `aether1.token.<token>` and a
+plain `aether1`. `require_lan_token` reads the first, and the handlers select the second --
+the credential goes one way and is never echoed back. The plain one has to exist, because a
+browser closes a socket whose requested subprotocol the server did not select.
+
+`?token=` is no longer read. On this repo that is a one-line decision rather than a migration:
+the only clients are the pages this repository ships.
+
+**A header is not a magic word.** Headers get logged too, where someone configures it. The
+right end state is a short-lived, single-use ticket exchanged over the authenticated HTTPS
+path, so that a leaked handshake is worth nothing a minute later; that is still on the list in
+`docs/SECURITY_MODEL.md`. What this step closes is the gap between "a credential that leaks
+where URLs leak" and "a credential that travels where every other credential here already
+travels".
+
+**Verified over the wire**, against a real `aether1 --serve --lan` on TLS: the handshake
+carrying the token gets `101 Switching Protocols` with `sec-websocket-protocol: aether1` in
+the response and no token in it, the same handshake with no credential gets 401, and the same
+handshake with the token in the query string gets 401. Two unit tests pin the extraction, and
+one of them reads `frontend/js/lan-auth.js` to check the two subprotocol names still agree --
+a mismatch would fail every socket from a paired browser with nothing readable to say why.

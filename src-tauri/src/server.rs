@@ -305,14 +305,43 @@ fn bearer_token(request: &Request) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The subprotocol a `/ws/*` client always offers, and the one this server selects. It
+/// carries no credential; it exists so that a handshake which also offered a token has
+/// something the server can echo back, since a browser closes a socket whose requested
+/// subprotocol was not selected.
+pub const WS_PROTOCOL: &str = "aether1";
+
+/// The prefix of the subprotocol that carries a device token.
+const WS_TOKEN_PREFIX: &str = "aether1.token.";
+
 /// A WebSocket handshake can't carry a custom `Authorization` header from a browser, so the
-/// `/ws/*` routes also accept the token as `?token=...` -- the standard workaround for this
-/// exact limitation.
-fn token_from_query(request: &Request) -> Option<String> {
-    let query = request.uri().query()?;
-    url::form_urlencoded::parse(query.as_bytes())
-        .find(|(k, _)| k == "token")
-        .map(|(_, v)| v.into_owned())
+/// `/ws/*` routes read the token from `Sec-WebSocket-Protocol` instead -- the one handshake
+/// header a browser does let a page set, through the WebSocket constructor's second
+/// argument.
+///
+/// It used to be `?token=...`, which is the better-known workaround and the wrong one: a URL
+/// is the part of a request that gets written down. Access logs record the request line,
+/// reverse proxies and their error pages record it too, and a device token here is not a
+/// short-lived ticket but the credential for every other request that device makes. A
+/// header is not immune to being logged, but it is not logged *by default* by the things in
+/// front of this server, and it is the same place the credential already travels for every
+/// route that is not a socket.
+///
+/// The server never echoes the token back. A client offers two subprotocols --
+/// `aether1.token.<token>` and `aether1` -- and the handlers select `aether1`, so the
+/// credential appears in one direction only.
+fn token_from_subprotocol(request: &Request) -> Option<String> {
+    let offered = request
+        .headers()
+        .get(header::SEC_WEBSOCKET_PROTOCOL)?
+        .to_str()
+        .ok()?;
+    offered
+        .split(',')
+        .map(str::trim)
+        .find_map(|protocol| protocol.strip_prefix(WS_TOKEN_PREFIX))
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
 }
 
 fn unauthorized() -> Response {
@@ -321,7 +350,8 @@ fn unauthorized() -> Response {
         Json(serde_json::json!({
             "error": "pairing required",
             "hint": "POST your pairing phrase to /api/pair to get a token, then send it back \
-                      as `Authorization: Bearer <token>` (or ?token=<token> for a WebSocket)"
+                      as `Authorization: Bearer <token>` (or, for a WebSocket, as the \
+                      `aether1.token.<token>` subprotocol)"
         })),
     )
         .into_response()
@@ -353,7 +383,7 @@ async fn require_lan_token(
     if let Some(wait) = lan.limiter.retry_after(ip) {
         return too_many_attempts(wait);
     }
-    match bearer_token(&request).or_else(|| token_from_query(&request)) {
+    match bearer_token(&request).or_else(|| token_from_subprotocol(&request)) {
         Some(token) if lan.auth.accepts(&token) => {
             lan.limiter.record_success(ip);
             next.run(request).await
@@ -1349,7 +1379,8 @@ async fn tts(
 }
 
 async fn ws_chat(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| chat_socket(socket, state))
+    ws.protocols([WS_PROTOCOL])
+        .on_upgrade(move |socket| chat_socket(socket, state))
 }
 
 async fn chat_socket(mut socket: WebSocket, state: AppState) {
@@ -1487,7 +1518,11 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
 
 async fn ws_telemetry(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     let rx = state.telemetry_tx.subscribe();
-    ws.on_upgrade(move |socket| telemetry_socket(socket, rx))
+    // `protocols` selects WS_PROTOCOL when the client offered it, and sets no header when it
+    // offered nothing -- which is what a loopback tab that has no token to carry does. The
+    // token subprotocol is deliberately not listed, so it is never echoed back.
+    ws.protocols([WS_PROTOCOL])
+        .on_upgrade(move |socket| telemetry_socket(socket, rx))
 }
 
 async fn telemetry_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<Value>) {
@@ -1536,5 +1571,82 @@ mod bind_tests {
                 "unexpected port in {address}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod ws_credential_tests {
+    use super::*;
+
+    fn handshake(header_value: Option<&str>) -> Request {
+        let mut builder = Request::builder().uri("/ws/telemetry");
+        if let Some(value) = header_value {
+            builder = builder.header(header::SEC_WEBSOCKET_PROTOCOL, value);
+        }
+        builder.body(Body::empty()).expect("a request to build")
+    }
+
+    /// The point of the change: the credential is read from the handshake header and from
+    /// nowhere else. A query string is the part of a request that gets written into logs, so
+    /// a token offered there is not a token at all -- and this test is the only thing that
+    /// stops it quietly coming back as a convenience.
+    #[test]
+    fn a_socket_token_is_read_from_the_handshake_and_not_from_the_url() {
+        let secret = "a".repeat(64);
+
+        assert_eq!(
+            token_from_subprotocol(&handshake(Some(&format!(
+                "{WS_TOKEN_PREFIX}{secret}, {WS_PROTOCOL}"
+            )))),
+            Some(secret.clone())
+        );
+        // Order is the client's to choose, and whitespace after a comma is normal.
+        assert_eq!(
+            token_from_subprotocol(&handshake(Some(&format!(
+                "{WS_PROTOCOL},{WS_TOKEN_PREFIX}{secret}"
+            )))),
+            Some(secret.clone())
+        );
+
+        // A loopback tab offers the plain subprotocol and has no token to give.
+        assert_eq!(token_from_subprotocol(&handshake(Some(WS_PROTOCOL))), None);
+        assert_eq!(token_from_subprotocol(&handshake(None)), None);
+        // The prefix with nothing after it is not an empty token, it is no token: an empty
+        // string reaching `accepts` is a comparison nobody meant to make.
+        assert_eq!(
+            token_from_subprotocol(&handshake(Some(WS_TOKEN_PREFIX))),
+            None
+        );
+
+        // And the URL is not consulted, however plausible the parameter looks.
+        let in_the_url = Request::builder()
+            .uri(format!("/ws/telemetry?token={secret}"))
+            .body(Body::empty())
+            .expect("a request to build");
+        assert_eq!(token_from_subprotocol(&in_the_url), None);
+        assert_eq!(bearer_token(&in_the_url), None);
+    }
+
+    /// The server selects the plain subprotocol and never the one carrying the token, so the
+    /// credential travels in one direction. A browser closes a socket whose requested
+    /// subprotocol was not selected, which is why the plain one has to exist at all.
+    #[test]
+    fn the_server_never_echoes_the_token_back() {
+        assert!(!WS_PROTOCOL.starts_with(WS_TOKEN_PREFIX));
+        assert!(WS_TOKEN_PREFIX.starts_with(WS_PROTOCOL));
+        // The frontend's copy of these two names has to match, since a mismatch would fail
+        // every socket from a paired browser with no error anyone could read.
+        let lan_auth = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../frontend/js/lan-auth.js"),
+        )
+        .expect("lan-auth.js should be readable");
+        assert!(
+            lan_auth.contains(&format!("const WS_PROTOCOL = '{WS_PROTOCOL}';")),
+            "lan-auth.js does not agree with WS_PROTOCOL"
+        );
+        assert!(
+            lan_auth.contains(&format!("const WS_TOKEN_PREFIX = '{WS_TOKEN_PREFIX}';")),
+            "lan-auth.js does not agree with WS_TOKEN_PREFIX"
+        );
     }
 }
