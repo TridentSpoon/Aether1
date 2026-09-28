@@ -738,7 +738,66 @@ enum UpdateStage {
     Relaunch,
 }
 
-/// Actually applies an update: `git pull --ff-only` (see the auth note on github_token),
+/// Runs a git subcommand in `root` with its output captured, so a failure can be reported
+/// with git's own words instead of a bare exit code.
+///
+/// This app is a windowed process (`windows_subsystem = "windows"`), which makes every
+/// shortcut here load-bearing on Windows. Inherited stdio would send git's diagnostics to a
+/// console that does not exist, which is exactly how "git pull did not succeed" came to be
+/// the whole of what an operator was told; a spawned console-mode child would also flash a
+/// window (see paths::suppress_console_window); and a git that decides to *prompt* -- for a
+/// password, for a passphrase -- would wait forever on a terminal nobody can type into, so
+/// GIT_TERMINAL_PROMPT=0 turns that hang into an error with a name. Credential helpers with
+/// their own GUI (Git Credential Manager, the usual one on Windows) are unaffected.
+fn run_git(root: &std::path::Path, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    paths::suppress_console_window(&mut cmd);
+    cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            // The single most likely Windows cause, and the one the old message hid
+            // completely: the app is launched from Explorer or a shortcut, and whatever
+            // PATH that inherited has no git in it -- commonly because git was installed
+            // after the session that started the app began.
+            "git was not found on PATH, so there is nothing here to pull with -- install \
+             Git (git-scm.com on Windows) and start AETHER1 again from a fresh session, \
+             or pull by hand in the checkout"
+                .to_string()
+        } else {
+            format!("could not run git: {e}")
+        }
+    })
+}
+
+/// Turns a failed git invocation into a message worth showing: what was being attempted,
+/// then git's own stderr, capped so a wall of output cannot fill the panel.
+fn git_failure(action: &str, out: &std::process::Output) -> String {
+    let mut detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if detail.is_empty() {
+        detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    }
+    let detail = detail
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if detail.is_empty() {
+        match out.status.code() {
+            Some(code) => format!("{action} failed (git exited {code}, and said nothing)"),
+            None => format!("{action} failed (git was killed before it finished)"),
+        }
+    } else {
+        format!("{action} failed: {detail}")
+    }
+}
+
+/// Actually applies an update: a fetch and a fast-forward (see the auth note on github_token),
 /// rebuild, then relaunch the freshly built binary and exit this process so the new build
 /// takes over. Blocking (a rebuild can take over a minute); always call this off the main
 /// thread. On success this process exits and never returns to the caller; on failure it
@@ -778,16 +837,92 @@ fn perform_update_core<R: tauri::Runtime>(
 
     let root = project_root();
 
-    println!("[AETHER1] Update: running `git pull --ff-only`...");
-    let pull_ok = Command::new("git")
-        .args(["pull", "--ff-only"])
-        .current_dir(&root)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    // `git pull --ff-only` as one opaque call was the whole of the diagnosis an operator
+    // got: every distinct cause -- no git, no checkout, a dirty tree, no upstream, a
+    // refused fetch, a diverged branch -- arrived as the same four words. It is taken apart
+    // here so each one is named where it happens, and so the ones that are *not* failures
+    // of the network (the first three) never reach the network at all.
+    let git = |args: &[&str]| run_git(&root, args).map_err(|e| (UpdateStage::Pull, e));
 
-    if !pull_ok {
-        return Err((UpdateStage::Pull, "git pull did not succeed".to_string()));
+    let inside = git(&["rev-parse", "--is-inside-work-tree"])?;
+    if !inside.status.success() {
+        return Err((
+            UpdateStage::Pull,
+            format!(
+                "{} is not a git checkout, so there is nothing to pull",
+                root.display()
+            ),
+        ));
+    }
+
+    // A fast-forward will not run over local edits, and git says so in a sentence that
+    // names files -- worth passing on, because the usual culprit is a file the build
+    // itself rewrote (Cargo.lock after a rebuild is the standing example) rather than
+    // anything the operator remembers touching.
+    let dirty = git(&["status", "--porcelain", "--untracked-files=no"])?;
+    if dirty.status.success() {
+        let stdout = String::from_utf8_lossy(&dirty.stdout);
+        let changed: Vec<&str> = stdout
+            .lines()
+            .filter_map(|line| line.get(3..))
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        if !changed.is_empty() {
+            let shown = changed
+                .iter()
+                .take(5)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rest = changed.len().saturating_sub(5);
+            let rest = if rest > 0 {
+                format!(" and {rest} more")
+            } else {
+                String::new()
+            };
+            return Err((
+                UpdateStage::Pull,
+                format!(
+                    "the checkout has uncommitted changes ({shown}{rest}), and git will not \
+                     fast-forward over them -- commit, stash or `git checkout --` them in \
+                     the checkout, then update again"
+                ),
+            ));
+        }
+    }
+
+    let upstream = git(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])?;
+    if !upstream.status.success() {
+        let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+        let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
+        let detail = if branch.is_empty() || branch == "HEAD" {
+            "this checkout is on a detached HEAD, so git has nowhere to pull from -- \
+             `git checkout main` in the checkout puts it back on a branch"
+                .to_string()
+        } else {
+            format!(
+                "branch `{branch}` has no upstream, so git has nowhere to pull from -- \
+                 `git branch --set-upstream-to=origin/main` in the checkout is the fix"
+            )
+        };
+        return Err((UpdateStage::Pull, detail));
+    }
+    let upstream = String::from_utf8_lossy(&upstream.stdout).trim().to_string();
+
+    println!("[AETHER1] Update: fetching {upstream}...");
+    let fetched = git(&["fetch", "--quiet"])?;
+    if !fetched.status.success() {
+        return Err((UpdateStage::Pull, git_failure("git fetch", &fetched)));
+    }
+
+    println!("[AETHER1] Update: fast-forwarding to {upstream}...");
+    let merged = git(&["merge", "--ff-only", &upstream])?;
+    if !merged.status.success() {
+        return Err((
+            UpdateStage::Pull,
+            git_failure("git merge --ff-only", &merged),
+        ));
     }
 
     let new_binary = if cfg!(target_os = "windows") {

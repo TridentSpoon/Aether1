@@ -73,39 +73,45 @@ if not exist "%BIN%" (
 
     if not "!BUILD_ERRORLEVEL!"=="0" (
         echo.
-        REM --- errorlevel 4551 from rustc/cargo means Windows itself refused to launch
-        REM     the compiler (Smart App Control or a managed WDAC/AppLocker policy), not
-        REM     a problem with AETHER1's code -- a plain "build failed" message here would
+        REM --- error 4551 means Windows itself refused to launch something the build
+        REM     produced (Smart App Control or a managed WDAC/AppLocker policy), not a
+        REM     problem with AETHER1's code -- a plain "build failed" message here would
         REM     send people chasing a bug in the repo instead of their Windows settings.
+        REM     What gets blocked is the build scripts Cargo compiles into target/ and
+        REM     runs, not rustc: they are unsigned and seconds old, which is exactly what
+        REM     these policies refuse. Naming rustc sent the first person who hit this
+        REM     looking at their Rust install, where there was nothing to find.
         findstr /C:"Application Control policy has blocked this file" "!BUILD_LOG!" >nul 2>&1
         if not errorlevel 1 (
             echo ======================================================================
-            echo   Windows blocked rustc.exe from running
+            echo   Windows blocked the build's own programs from running
             echo ======================================================================
             echo.
-            echo   This is NOT a problem with AETHER1's code. Windows itself refused to
-            echo   launch the Rust compiler ^(error 4551, "Application Control policy
-            echo   has blocked this file"^). This is almost always one of:
+            echo   This is NOT a problem with AETHER1's code, and not a problem with
+            echo   Rust either. Building this app compiles small helper programs
+            echo   ^(Cargo build scripts^) into src-tauri\target\ and then runs them,
+            echo   and Windows refused to launch those: error 4551, "An Application
+            echo   Control policy has blocked this file". The build output above names
+            echo   the exact files it would not run.
             echo.
-            echo     1. Smart App Control ^(on by default on many new/reset Windows 11
-            echo        installs^) blocking rustc.exe because it isn't signed the way
-            echo        Microsoft-trusted binaries are.
-            echo     2. A company-managed PC's WDAC/AppLocker policy that only allows
-            echo        programs to run from approved folders ^(e.g. Program Files^),
-            echo        which excludes your .rustup folder under your user profile.
+            echo   They were blocked for being new and unsigned, not for where they
+            echo   live -- so moving Rust, or your .rustup and .cargo folders, changes
+            echo   nothing at all. Every build produces fresh unsigned programs.
             echo.
-            echo   To check: Settings -^> Privacy ^& security -^> Windows Security -^>
-            echo   App ^& browser control -^> Smart App Control. If it's On and shows
-            echo   "Evaluation", you can turn it off there.
+            echo   Which policy it is:
             echo.
-            echo   If this is a work/managed laptop, this is IT's call -- ask them to
-            echo   allow-list rustc.exe/cargo.exe or your .rustup/.cargo folders.
+            echo     Smart App Control, on by default on clean installs of Windows 11
+            echo     22H2 and later. Settings -^> Privacy ^& security -^> Windows
+            echo     Security -^> App ^& browser control -^> Smart App Control.
             echo.
-            echo   Workaround: reinstall rustup after pointing it at a system path
-            echo   Windows already trusts instead of your user profile, e.g.:
-            echo     setx RUSTUP_HOME C:\ProgramData\rustup
-            echo     setx CARGO_HOME C:\ProgramData\cargo
-            echo   then open a NEW terminal and reinstall from https://rustup.rs
+            echo     WARNING: turning Smart App Control off is a one-way door. It
+            echo     cannot be switched back on without reinstalling Windows. Read
+            echo     "Windows blocked it" in README.md before you decide.
+            echo.
+            echo     A managed PC's WDAC or AppLocker policy, if that switch is not
+            echo     there or already says Off. Then it is IT's call, and what they
+            echo     need to allow is the Rust toolchain AND this checkout's
+            echo     src-tauri\target directory, where the blocked programs are built.
             echo ======================================================================
         ) else (
             echo Build failed ^(exit code !BUILD_ERRORLEVEL!^) -- see the errors above.
