@@ -85,6 +85,10 @@ USAGE:
                                    otherwise -- edit and run inside one project folder
     aether1 code perms <n> on|off  Turn one of those on or off
     aether1 code workspace [path]  The project folder it may change; prints the current one
+    aether1 code checkpoints       Every point AETHER CODE's work can be put back to
+    aether1 code revert [which]    Put the project folder back to one of them
+    aether1 code run-network on|off   Let commands reach the network from inside the sandbox
+    aether1 code run-unconfined on|off  Run commands on a machine with no sandbox anyway
     aether1 code run-allow <prog>  Let it run that program in the project folder
     aether1 code run-deny <prog>   Take that program back off the list
     aether1 discover               List other AETHER1 instances announcing themselves on
@@ -181,6 +185,20 @@ pub enum Invocation {
     /// `code workspace`: the project folder AETHER CODE may change, printed or set.
     CodeWorkspace {
         path: Option<String>,
+    },
+    /// `code checkpoints` / `code revert`: the way back from autonomous work.
+    CodeCheckpoints {
+        /// True for `revert`, which puts the working tree back.
+        revert: bool,
+        /// Which checkpoint, when the operator names one rather than taking the newest.
+        which: Option<String>,
+    },
+    /// `code run-network` / `code run-unconfined`: the two switches around the sandbox
+    /// commands are spawned in. Printed with no argument, set with `on`/`off`.
+    CodeSandbox {
+        /// Which switch: the network inside the box, or running with no box at all.
+        unconfined: bool,
+        on: Option<bool>,
     },
     /// `code run-allow`: the programs it may run inside that folder, printed or added to.
     CodeRunAllow {
@@ -520,6 +538,47 @@ pub fn parse(argv: &[String]) -> Invocation {
                         .to_string(),
                 ),
             },
+            // The way back. `checkpoints` lists, `revert` restores -- the newest by
+            // default, because "undo what it just did" is the question being asked.
+            Some("checkpoints") => Ok(Invocation::CodeCheckpoints {
+                revert: false,
+                which: None,
+            }),
+            Some("revert") => match &rest[1..] {
+                [] => Ok(Invocation::CodeCheckpoints {
+                    revert: true,
+                    which: None,
+                }),
+                [which] => Ok(Invocation::CodeCheckpoints {
+                    revert: true,
+                    which: Some(which.to_string()),
+                }),
+                _ => Err("code revert takes one checkpoint, or nothing for the newest".to_string()),
+            },
+            // The sandbox switches. Both print their state with no argument, because "is
+            // this confined" is the question an operator asks before they trust `run` at
+            // all, and it should be answerable without changing anything.
+            Some(verb @ ("run-network" | "run-unconfined")) => {
+                let unconfined = verb == "run-unconfined";
+                match &rest[1..] {
+                    [] => Ok(Invocation::CodeSandbox {
+                        unconfined,
+                        on: None,
+                    }),
+                    [state] => match state.to_lowercase().as_str() {
+                        "on" => Ok(Invocation::CodeSandbox {
+                            unconfined,
+                            on: Some(true),
+                        }),
+                        "off" => Ok(Invocation::CodeSandbox {
+                            unconfined,
+                            on: Some(false),
+                        }),
+                        other => Err(format!("code {verb} is `on` or `off`, not {other:?}")),
+                    },
+                    _ => Err(format!("code {verb} takes `on`, `off`, or nothing")),
+                }
+            }
             Some(verb @ ("run-allow" | "run-deny")) => {
                 let add = verb == "run-allow";
                 match &rest[1..] {
@@ -1081,12 +1140,14 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
         out.push_str(&format!(
             "  It can change things, inside one folder and nowhere else: {where_it_is}\n\
              Programs it may run there: {}\n\
+             Commands are {}\n\
              Everything outside that folder is still written into your terminal for you to\n\
              run, and nothing enters it but your own Return key.\n",
             match crate::code_workspace::allowlist(db) {
                 list if list.is_empty() => "none".to_string(),
                 list => list.join(", "),
-            }
+            },
+            crate::code_sandbox::detect().description(),
         ));
     } else {
         out.push_str(
@@ -1096,6 +1157,88 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
         );
     }
     Ok(out)
+}
+
+/// `aether1 code checkpoints` and `aether1 code revert` -- the way back.
+///
+/// The question this answers is "what did it do and how do I undo it", asked by somebody who
+/// has just come back to a folder they left an agent working in, so it prints what a revert
+/// would restore before it is asked for rather than only afterwards.
+fn run_code_checkpoints(revert: bool, which: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let root = crate::code_workspace::root(engine.db())?;
+    if revert {
+        return crate::code_checkpoint::revert(&root, which.as_deref());
+    }
+    if !crate::code_checkpoint::is_repo(&root) {
+        return Ok(format!(
+            "  {} is not a git repository, so there is nothing to put work back to.\n\n\
+             Run `git init` in it and AETHER CODE will take a checkpoint before it first \
+             changes anything.\n",
+            root.display()
+        ));
+    }
+    let checkpoints = crate::code_checkpoint::list(&root)?;
+    if checkpoints.is_empty() {
+        return Ok(
+            "  No checkpoints yet. One is taken before AETHER CODE first changes \
+                   anything in the project folder.\n"
+                .to_string(),
+        );
+    }
+    let mut out = format!("  {} checkpoint(s), newest first:\n\n", checkpoints.len());
+    for point in &checkpoints {
+        let name = point
+            .reference
+            .rsplit('/')
+            .next()
+            .unwrap_or(&point.reference);
+        out.push_str(&format!("  {name}  {}\n", point.when));
+    }
+    out.push_str("\n  Put the folder back with `aether1 code revert` (newest), or name one.\n");
+    Ok(out)
+}
+
+/// `aether1 code run-network` and `aether1 code run-unconfined` -- the two answers to
+/// "what is `run` allowed to reach", printed or set.
+///
+/// `run-unconfined` is the only switch in this program that removes a boundary rather than
+/// adding one, so printing it always says what it costs, whether it is on or off.
+fn run_code_sandbox(unconfined: bool, on: Option<bool>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let key = if unconfined {
+        crate::code_sandbox::UNCONFINED_SETTING
+    } else {
+        crate::code_sandbox::NETWORK_SETTING
+    };
+    if let Some(on) = on {
+        db.set_setting(key, &serde_json::json!(on))
+            .map_err(|e: rusqlite::Error| e.to_string())?;
+    }
+    let sandbox = crate::code_sandbox::detect();
+    let state = |b: bool| if b { "on" } else { "off" };
+    Ok(if unconfined {
+        format!(
+            "  Commands are {}
+  run-unconfined is {}
+
+             With it on, a command runs as you: python3, node, cargo and make can execute              any code they are given, so they can read your keys, write anywhere you can              write, and use the network. With it off, a machine that cannot confine a              command refuses to run one.
+",
+            sandbox.description(),
+            state(crate::code_sandbox::unconfined_allowed(db)),
+        )
+    } else {
+        format!(
+            "  Commands are {}
+  run-network is {}
+
+             Off is the default: a test suite does not need the network, and a build that              wants to fetch dependencies is worth seeing rather than granting quietly.
+",
+            sandbox.description(),
+            state(crate::code_sandbox::network_allowed(db)),
+        )
+    })
 }
 
 /// `aether1 code workspace [path]` -- the one folder AETHER CODE may change.
@@ -2104,6 +2247,8 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
+        Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
+        Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
         Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),

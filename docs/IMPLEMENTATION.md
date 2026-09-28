@@ -3536,3 +3536,89 @@ by itself is one people stop pressing buttons in.
 nothing can speak, and listed the other five with their reasons — including the `python3 -m
 venv` line for faster-whisper, which it will not run for you.
 
+
+---
+
+## Step 53 — `run` gets a real sandbox, because the allowlist was never one
+
+A source-level security review of `main` (2026-09-28) found one thing worth treating as
+important, and it was right. `code_workspace::run` was described as running commands "in the
+project folder and nowhere else", and the mechanism behind that sentence was
+`Command::current_dir` plus a list of allowed program names. Neither is a boundary.
+`current_dir` says where a process starts, not what it may touch, and every interpreter on
+the starter list is a general-purpose way to execute code: `python3 -c` reads
+`~/.ssh/id_ed25519` if asked, `node -e` opens sockets, `cargo` runs `build.rs`, `make` runs
+whatever the Makefile says — and the Makefile is a file the model can write. Spawning without
+a shell removes shell metacharacters and nothing else.
+
+So the effective model was *"the AI can execute arbitrary code under these trusted program
+names, with the project as its working directory"*, wearing the words of *"the AI can only
+change things inside the project"*. The gap between those two sentences is the whole of this
+step.
+
+**`code_sandbox.rs`** makes the kernel keep the promise. On Linux with bubblewrap installed:
+the host filesystem read-only, `$HOME` replaced by an empty tmpfs (so keys and credentials
+are absent, not merely unwritten), the toolchain caches bound back over that tmpfs with the
+credential files inside them masked by `/dev/null`, the project folder bind-mounted
+read-write as the only writable place, user/IPC/PID/UTS namespaces of their own, the network
+unshared unless `code_run_network` is on, and the environment cleared and rebuilt from a
+short list so an API key Aether1 is holding cannot be read by a build script.
+
+**Where there is no sandbox, `run` refuses.** Windows wants a restricted token or an
+AppContainer and does not have one yet; a Linux box without bubblewrap has nothing. The
+refusal says why and says what the alternative costs, and `code_run_unconfined` is the
+operator's deliberate answer to it. The wording on both switches, in the CLI and in Settings,
+comes from one function, so what the HUD claims and what the kernel does cannot drift apart.
+
+**Tested adversarially, which is the part that matters.** The tests do not assert that the
+allowlist contains `python3`; they hand `python3` a hostile argv and look at the disk
+afterwards — a planted key in the home directory (unreadable), a write above the workspace
+(never lands), a `make` recipe writing outside it (never lands), a socket to a public address
+(refused), Aether1's own environment (absent). On a machine with no sandbox those same tests
+assert the other half of the promise: that `run` refuses and explains itself. Worth noting
+what the write test asserts, because it is the distinction the whole step turns on: inside
+the box the write *succeeds* against a tmpfs and the command reports success, and nothing
+reaches the operator's disk. Containment, not denial.
+
+**`docs/SECURITY_MODEL.md`** is new, and holds the boundaries and their known limits in one
+place — including the ones this step does not close: the resolve-then-open gap in the
+filesystem guard, the WebSocket token in the query string, the pairing phrase as a standing
+credential, and the per-subsystem local-only checks.
+
+---
+
+## Step 54 — a real shell in the box, and a way back out of anything
+
+Trident's second review changed the target, and the sentence it turns on is: *"autonomy
+doesn't require giving the agent unrestricted access; it requires making the safe environment
+large enough that most useful work happens inside it."* An agent that must ask before every
+command is a chatbot with a confirmation dialog. The design is in `docs/AGENT_RUNTIME.md`;
+this step is the first two pieces of it, and they only became possible once step 53 made the
+kernel the boundary.
+
+**The allowlist stops pretending.** Inside the sandbox it is not consulted, and `run` takes
+`{"shell": "cargo test && cargo clippy"}`. That is not a loosening: a list permitting
+`python3`, `node`, `make` and `cargo` permits arbitrary code already — `make` runs recipes,
+`cargo` runs `build.rs`, `npm` runs lifecycle scripts — so the list never made a command
+harmless, it only read as though it did. The box does. The list survives where there is no
+box (`run-unconfined`), enforced exactly as before, and a shell is refused there for the same
+reason: there is nothing for it to be inside.
+
+**Checkpoints replace the refused-git table.** `REFUSED_GIT` protected uncommitted work by
+refusing `reset`, `clean` and the rest, which a shell walks straight around — and a guard
+that can be walked around reads as protection and is not. `code_checkpoint.rs` commits the
+whole working tree (tracked, untracked, staged, unstaged) to a ref under
+`refs/aether1/checkpoints/` before the first change of a session, through a **temporary
+index**, so taking one stages nothing, moves neither HEAD nor any branch, and does not show
+up in `git status`. One per thirty minutes of active work: a burst of edits and test runs is
+one piece of work and wants one way back, not forty.
+
+`aether1 code revert` restores **additively** — what the checkpoint held comes back, what has
+appeared since is left alone and named in the report. A revert that deleted things would be
+one more way to lose an afternoon, which is the opposite of the point. `aether1 code
+checkpoints` lists them for somebody who has just come back to a folder they left an agent
+working in.
+
+**The test that matters** takes a repository with uncommitted edits and an untracked file,
+does the worst a shell can do — overwrite, delete, `git reset --hard` — and asserts every
+byte comes back, with the agent's own new file still there and named rather than removed.

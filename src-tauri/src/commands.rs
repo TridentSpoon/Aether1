@@ -624,6 +624,11 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "lan_autostart": false,
         "voice_startup_audible": true,
         "game_mode": false,
+        // The two switches around the sandbox `run` spawns commands in. Both off: a test
+        // suite does not need the network, and a machine that cannot confine a command
+        // refuses to run one until the operator says otherwise -- see code_sandbox.rs.
+        "code_run_network": false,
+        "code_run_unconfined": false,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())
@@ -639,7 +644,19 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
     // saveable. It rides along here because the Settings page needs it for the same
     // reason the setup wizard does -- to describe *this* machine's folders and programs
     // rather than a guess drawn from whatever browser is pointed at it.
-    serde_json::json!({ "settings": settings, "os": setup::Os::current() })
+    // `sandbox` rides along for the same reason as `os`, and is the more important of the
+    // two: whether `run` is actually confined on this machine is a fact about the machine,
+    // not a preference, and the Settings page has to be able to say so plainly rather than
+    // describing a boundary that may not be there.
+    let sandbox = crate::code_sandbox::detect();
+    serde_json::json!({
+        "settings": settings,
+        "os": setup::Os::current(),
+        "sandbox": {
+            "confines": sandbox.confines(),
+            "description": sandbox.description(),
+        },
+    })
 }
 
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {

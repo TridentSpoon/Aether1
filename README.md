@@ -1031,6 +1031,10 @@ aether1 code ask "why won't this compile"  # ask the coding model, from a termin
 aether1 code conventions > AGENTS.md     # house rules for a local coding model to follow
 aether1 code perms                       # what AETHER CODE may look at (all of it read-only)
 aether1 code perms github off            # ...and the switch for one of the three
+aether1 code workspace ~/Projects/thing  # the one folder it may change
+aether1 code run-allow cargo             # a program it may run in that folder
+aether1 code run-network                 # is the network reachable from inside the sandbox?
+aether1 code run-unconfined              # what running with no sandbox would mean
 aether1 signin                           # sign in to GitHub, so this copy can see new releases
 aether1 signout                          # forget that sign-in
 aether1 update                           # what version is out, against what you are running

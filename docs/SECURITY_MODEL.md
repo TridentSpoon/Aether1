@@ -1,0 +1,175 @@
+# Aether1's security model
+
+What each boundary in this program actually is, and -- more usefully -- what it is not. The
+code states its own invariants next to the code that holds them; this file is for the
+boundaries themselves, and for the promises a reader should not read into them.
+
+Written down in this form after a source-level security review of `main` (2026-09-28) found
+a real mismatch between one of those promises and the operating system underneath it. The
+mismatch and the fix are section 1.
+
+## 1. What AETHER CODE may run, and where
+
+`code_workspace::run` spawns build and test commands for the coding panel. There are three
+layers, and only one of them is a boundary.
+
+**Inside the sandbox the allowlist is not consulted, and there is a shell.** That follows
+from the paragraph below rather than contradicting it: a list permitting `python3`, `node`,
+`make` and `cargo` permits arbitrary code already, so keeping it as a gate while the box
+exists would be theatre, and keeping it while refusing a shell would be a distinction with
+nothing behind it. It stays for the one case where it is the only thing standing --
+`run-unconfined`, where it is enforced exactly as it always was.
+
+**The allowlist is policy, not containment.** `code_run_allowlist` holds program names --
+`cargo`, `npm`, `node`, `python3`, `make` and the rest of the starter list. It stops a model
+reaching for `curl`, `ssh` or `rm` by name, which is worth having. It is not a sandbox, and
+for a while this program's own wording implied it was. Every interpreter on that list is a
+general-purpose way to execute code: `python3 -c` will read `~/.ssh/id_ed25519` if it is
+asked to, `node -e` will open a socket, `cargo` runs `build.rs`, `make` runs whatever the
+Makefile says, and the Makefile is a file the model can write. Spawning without a shell
+removes shell metacharacters as an attack; it does nothing about any of that.
+
+**`current_dir` is not containment either.** It says where a process starts, not what it may
+touch.
+
+**The boundary is the kernel.** `code_sandbox.rs` puts the command in a namespace:
+
+* the host filesystem mounted read-only;
+* `$HOME` replaced with an empty tmpfs, so keys, browser profiles, cloud credentials and
+  dotfiles are absent rather than merely unwritten;
+* the toolchain caches a build genuinely needs (`~/.cargo`, `~/.npm`, `~/.gradle`, ...) bound
+  back over that tmpfs, with the credential files that live inside them masked by
+  `/dev/null`;
+* the nominated project folder bind-mounted read-write, and it is the only writable place;
+* user, IPC, PID, UTS and (unless `code_run_network` is on) network namespaces of their own;
+* the environment cleared and rebuilt from a short list, so an API key Aether1 holds cannot
+  be read by a build script.
+
+This is bubblewrap (`bwrap`), which means Linux with bubblewrap installed -- and *working*,
+which is not the same question. `detect()` starts `true` inside the real argument list rather
+than trusting that the binary exists, because every failure here is environmental: a kernel
+with unprivileged user namespaces disabled, a container, an AppArmor policy. One of those is
+worth naming, because it is common and it is partial: unsharing the network makes bubblewrap
+bring up a loopback interface, and a host that forbids that (a container, a CI runner) fails
+the whole spawn. The filesystem half works perfectly there, so that is what happens -- the
+box keeps everything it can hold, drops the network namespace, and the Confinement line says
+"this machine will not let it cut the network" instead of implying an isolation that is not
+there.
+
+**Where there is no sandbox, `run` refuses.** Windows has no implementation yet -- it wants a
+restricted token or an AppContainer with an explicit ACL boundary, and until that is written
+the honest answer on Windows is the refusal, not a weaker sandbox described in the same
+words as a strong one. The refusal says why, and says what the alternative costs. An operator
+can set `code_run_unconfined` and run anyway; with that on, a command runs as them, with
+everything their account can reach, and both the CLI and the Settings row say so in those
+words.
+
+`aether1 code run-unconfined` and the Confinement line in Settings → AETHER CODE both report
+what this machine actually does, from the same function, so the two cannot drift.
+
+**Tested adversarially, not asserted.** `code_workspace.rs`'s tests hand an allowlisted
+interpreter a hostile argv and then look at the disk: `python3` reading a planted key out of
+the home directory, `python3` writing above the workspace, a `make` recipe writing outside
+it, a socket to a public address, and Aether1's own environment. On a machine with no
+sandbox those same tests assert the other half of the promise -- that `run` refuses and
+explains itself.
+
+Note what the write test asserts, because it is the distinction this whole section turns on:
+inside the box the write *succeeds*, against a tmpfs, and the command reports success.
+Nothing reaches the operator's disk. Containment, not denial.
+
+## 1a. Putting it back
+
+Confinement settles what the agent can reach and not what it can ruin inside the folder it is
+*meant* to reach. The old answer there was a table of refused `git` subcommands -- no
+`reset`, no `clean` -- which stopped being enforceable when the sandbox got a shell, because
+a shell can run git. So the guarantee changed from "it cannot destroy your work" to "whatever
+it does, you can put it back", which is both true and stronger.
+
+`code_checkpoint.rs` commits the entire working tree -- tracked, untracked, staged and
+unstaged -- to a ref under `refs/aether1/checkpoints/` before the first change of a session,
+built through a temporary index so nothing is staged and neither HEAD nor any branch moves.
+`aether1 code revert` restores additively: what the checkpoint held comes back, what has
+appeared since is left alone and listed. A workspace that is not a git repository gets no
+checkpoint and is told so rather than quietly going unprotected.
+
+The tests take a repository with uncommitted and untracked work, do the worst a shell could
+do to it -- overwrite, delete, `git reset --hard` -- and assert every byte comes back.
+
+## 2. What AETHER CODE may change without a sandbox
+
+`edit_file` and `create_file` do not spawn anything, so they are guarded in-process instead:
+one nominated folder, paths canonicalised before they are judged (the parent when the file
+does not exist yet, so a symlink out of the project resolves to where it really goes and is
+refused), `fs_guard`'s denied names and home-directory rule checked as well rather than
+instead, and no delete, rename or move at all. Both grants default off.
+
+The known limit: resolve, check, then open is three steps, and a hostile process on the same
+machine could in principle replace something between the second and the third. Closing that
+means `openat`-style operations against a directory file descriptor. It is not the practical
+attack path against a coding assistant, and it is on the list.
+
+## 3. The terminal
+
+Nothing a model can call reaches `terminal.rs`. A command that would change something outside
+the workspace is *typed* into the operator's terminal without a newline, and their Return key
+is the whole consent model. `scripts/check_terminal_isolation.sh` enforces the isolation in
+CI.
+
+## 4. `gh`
+
+Whitelisted by `(command, verb)` pair, on the rule that no argument to a listed pair can
+change anything -- so `repo clone`, `run download`, `pr checkout`, `browse` and `auth token`
+are all out, read-only or not. `gh api` is judged by its method and by the flags that imply a
+body, because its verb is a flag rather than a subcommand. Fail closed: a pair this table has
+not heard of is refused.
+
+## 5. The LAN server
+
+Loopback by default (`127.0.0.1:8378`); `--lan` is an explicit opt-in that binds `0.0.0.0`,
+switches on TLS, and puts the whole router behind authentication. A 12-word BIP-39 pairing
+phrase, stored hashed and compared in constant time, is exchanged at `/api/pair` for a
+per-device token; devices are revocable individually, failed attempts are rate-limited per
+IP, and the certificate fingerprint is printed for the operator to check.
+
+Two consequences worth stating rather than discovering:
+
+* **The phrase is a standing credential.** Anyone who knows it can pair a new device until it
+  is rotated, and revoking a device does not revoke the phrase. `aether1 pair` rotates it and
+  clears every device.
+* **WebSocket tokens travel in the query string**, because a browser's `WebSocket`
+  constructor cannot send an `Authorization` header. URLs end up in history, logs and
+  debugging output more readily than headers do. A short-lived nonce exchanged over the
+  authenticated HTTPS path would be better, and is on the list.
+
+`discovery.rs` announces over DNS-SD, which anyone on the network can impersonate, so a
+phrase can be typed into a convincing fake. A PAKE (SPAKE2) is the answer and is not written
+yet.
+
+## 6. Leaving the machine
+
+Local-only mode is enforced at the network boundary rather than in the UI: the update check,
+the cloud providers, cloud speech and model downloads each refuse. The known weakness is that
+each subsystem asks `local_only_enabled()` for itself, so a new one can forget to; a single
+outbound-policy object would make that regression impossible rather than merely unlikely.
+
+## 7. Updates
+
+A release bundle is verified before it is trusted: the asset is matched, its `.minisig`
+fetched, and the download streamed through a verifier against a public key compiled into the
+binary. Verification failure deletes the file. An unsigned asset is never offered on the
+release path. A development checkout updates itself by `git pull --ff-only` instead, which is
+a different trust decision and a deliberate one.
+
+## Still open
+
+Listed here rather than implied by silence:
+
+* Windows confinement for `run` (section 1).
+* `openat`-style filesystem operations to close the resolve/open gap (section 2).
+* A short-lived WebSocket credential, and a prominent statement of what the pairing phrase
+  is (section 5).
+* One outbound network policy object rather than a check per subsystem (section 6).
+* A PAKE for pairing, so a spoofed announcement cannot collect a phrase (section 5).
+* A second-pass audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri
+  capability set, where prompt injection and tool confusion are the next class of issue.
