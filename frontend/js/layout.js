@@ -35,23 +35,44 @@
     const COLS = 24;
     const GAP_PX = 10;
 
-    /* Row height is not a constant. Columns have always been twelfths of the
-       window, so panels follow its width; rows were a fixed 24px, so they
-       followed nothing -- the default arrangement wanted about 1250px of height
-       and simply ran off the bottom of any ordinary laptop, avatar and all.
-       ROW_PX_MIN/MAX bound what a row may be scaled to: below the floor a panel
-       stops being readable, so the grid stops shrinking and the window scrolls
-       instead, which is the honest failure; above the ceiling a huge monitor
-       would be handing panels height their contents have no use for. */
-    const ROW_PX_MIN = 14;
-    const ROW_PX_MAX = 48;
-    const ROW_PX_FALLBACK = 24;
-    let rowPx = ROW_PX_FALLBACK;
-
     /* A panel smaller than this is not a panel, it is a sliver you cannot
        read and cannot easily grab your way out of. */
     const MIN_W = 4;
     const MIN_H = 4;
+
+    /* Row height is not a constant. Columns have always been twelfths of the
+       window, so panels follow its width; rows were a fixed 24px, so they
+       followed nothing -- the default arrangement wanted about 1250px of height
+       and simply ran off the bottom of any ordinary laptop, avatar and all.
+
+       The floor is what stops that scaling from going silly, and it is stated
+       in the only unit that means anything to someone looking at the screen:
+       how short the smallest panel may get. A row on its own is not a thing
+       anyone reads -- the shipped layout is two panels thirty-seven rows tall,
+       so a row is an internal coordinate, not a visible band. MIN_PANEL_PX is
+       a title bar and a line of content under it; ROW_PX_MIN is whatever row
+       height a MIN_H-tall panel needs to reach it, counting the gaps that
+       panel swallows. Stating the floor as a row height instead was the bug:
+       14px a row read as "still readable" and meant a 878px layout in an 800px
+       window, so an ordinary 1280x800 laptop scrolled. Above the ceiling a huge
+       monitor would be handing panels height their contents have no use for. */
+    const MIN_PANEL_PX = 64;
+    const ROW_PX_MIN = Math.max(
+        6,
+        Math.ceil((MIN_PANEL_PX - GAP_PX * (MIN_H - 1)) / MIN_H)
+    );
+    const ROW_PX_MAX = 48;
+    const ROW_PX_FALLBACK = 24;
+    let rowPx = ROW_PX_FALLBACK;
+
+    /* The gap between rows, which is not the gap between columns once the
+       window is short. A panel spanning N rows absorbs the N-1 gaps inside it,
+       so on the shipped layout 36 of the 37 gaps are invisible -- they are
+       simply 360px of the height budget spent on nothing. When the rows cannot
+       fit at their floor, that invisible gap gives way first: it costs a couple
+       of pixels of seam and buys back most of a laptop's worth of height. */
+    const GAP_MIN_PX = 2;
+    let rowGap = GAP_PX;
     /* Pointer travel before a press counts as a drag rather than a click. */
     const DRAG_THRESHOLD_PX = 4;
 
@@ -340,7 +361,9 @@
     function fitRowHeight() {
         if (window.innerWidth < GRID_MIN_WIDTH) {
             rowPx = ROW_PX_FALLBACK;
+            rowGap = GAP_PX;
             layout.style.removeProperty('--cell-h');
+            layout.style.removeProperty('--grid-row-gap');
             return;
         }
         const cs = getComputedStyle(layout);
@@ -350,9 +373,24 @@
            is on the screen, not how much the panels currently take up -- using
            the latter would feed the answer back into itself and never settle. */
         const available = layout.clientHeight - padTop - padBottom;
-        const gaps = GAP_PX * (DESIGN_ROWS - 1);
-        const ideal = (available - gaps) / DESIGN_ROWS;
+        const joins = Math.max(0, DESIGN_ROWS - 1);
+        let gap = GAP_PX;
+        let ideal = (available - gap * joins) / DESIGN_ROWS;
+        /* Rows first, gap second: shrinking a row costs readability, shrinking
+           the gap between two rows of the same panel costs nothing anyone can
+           see. So the gap is only touched once the rows have hit their floor,
+           and only by as much as it takes to get the layout back inside the
+           window. */
+        if (ideal < ROW_PX_MIN && joins > 0) {
+            gap = Math.max(
+                GAP_MIN_PX,
+                Math.min(GAP_PX, Math.floor((available - ROW_PX_MIN * DESIGN_ROWS) / joins))
+            );
+            ideal = (available - gap * joins) / DESIGN_ROWS;
+        }
         if (!Number.isFinite(ideal) || ideal <= 0) return;
+        rowGap = gap;
+        layout.style.setProperty('--grid-row-gap', gap + 'px');
         /* Rounded down, not to nearest: half a pixel too generous per row is
            thirty-seven half-pixels of overflow, and a scrollbar that appears to
            show you eleven pixels of nothing is worse than eleven pixels of
@@ -405,7 +443,7 @@
             padLeft,
             padTop,
             colPitch: (contentWidth + GAP_PX) / COLS,
-            rowPitch: rowPx + GAP_PX,
+            rowPitch: rowPx + rowGap,
         };
     }
 
@@ -696,7 +734,7 @@
             el.style.top = (m.padTop + (seam.rowStart - 1) * m.rowPitch) + 'px';
             el.style.height = Math.max(
                 0,
-                (seam.rowEnd - seam.rowStart) * m.rowPitch - GAP_PX
+                (seam.rowEnd - seam.rowStart) * m.rowPitch - rowGap
             ) + 'px';
             el.classList.add('panel-seam-vertical');
             el.classList.remove('panel-seam-horizontal');
@@ -704,7 +742,7 @@
             /* The gap lies immediately above the boundary row's start,
                and the handle is centred on it. */
             const boundaryY = m.padTop + (seam.boundary - 1) * m.rowPitch;
-            const centre = boundaryY - GAP_PX / 2;
+            const centre = boundaryY - rowGap / 2;
             el.style.top = (centre - SEAM_HIT_PX / 2) + 'px';
             el.style.height = SEAM_HIT_PX + 'px';
             el.style.left = (m.padLeft + (seam.colStart - 1) * m.colPitch) + 'px';
