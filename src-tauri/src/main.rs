@@ -95,6 +95,14 @@ const FACE_LABEL: &str = "face";
 /// preference.
 const CLOSE_TO_TRAY_NOTICE: &str = "close_to_tray_notice";
 
+/// How long the telemetry loop waits between looks while every window is off screen.
+///
+/// Not the mechanism -- a window coming back wakes the loop immediately (see llm::Pulse).
+/// This is the fallback that keeps a missed wake costing a few stale seconds instead of a
+/// dead panel until restart, and a look is one `is_visible()` call, not a reading of the
+/// machine.
+const HIDDEN_RECHECK: Duration = Duration::from_secs(30);
+
 /// Set by build.rs from `git rev-parse HEAD` at compile time; "unknown" if this wasn't
 /// built from a git checkout (e.g. a source tarball without a .git directory).
 const BUILT_COMMIT: &str = env!("AETHER1_GIT_COMMIT");
@@ -1092,6 +1100,35 @@ fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
     perform_update_core(&app).map_err(|(_, msg)| msg)
 }
 
+/// Is anything AETHER1 draws actually on a screen right now?
+///
+/// Every window it owns counts, not just the HUD: the desktop sprite and the fullscreen face
+/// read the same telemetry, and the avatar in them animates. A window that is hidden (closed
+/// to the tray) or minimised is not on screen; a window merely behind another one is, because
+/// no platform tells us otherwise reliably and guessing wrong here would stop the panel
+/// updating for someone looking straight at it.
+fn any_window_on_screen(app: &tauri::AppHandle) -> bool {
+    app.webview_windows().values().any(|window| {
+        // Unknown means yes. A window whose state cannot be read is not grounds for deciding
+        // nobody is looking.
+        let visible = window.is_visible().unwrap_or(true);
+        let minimized = window.is_minimized().unwrap_or(false);
+        visible && !minimized
+    })
+}
+
+/// The HUD saying it can be seen again.
+///
+/// The telemetry loop parks when no window is on screen, and a window event is usually what
+/// brings it back -- but the webview knows about its own visibility before the platform tells
+/// us anything (a tab switch, a page coming back from `document.hidden`), and on some window
+/// managers it is the only one that knows. So the frontend calls this on becoming visible and
+/// the loop reads the machine on the next instant instead of up to HIDDEN_RECHECK later.
+#[tauri::command(async)]
+fn wake_telemetry_rust(pulse: tauri::State<Arc<llm::Pulse>>) {
+    pulse.wake();
+}
+
 /// Rust-native equivalent of POST /api/chat (backend/main.py), minus voice generation --
 /// the frontend calls generate_speech_rust separately for that, matching the two-command
 /// split the rest of this file already uses instead of one do-everything endpoint. Body
@@ -1099,9 +1136,14 @@ fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command(async)]
 fn generate_response_rust(
     engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
     prompt: String,
     session_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // A turn is about to go to a model. If the idle watch stopped the local server, this is
+    // what brings it back before the request goes out; otherwise it just tells the watch the
+    // server is still wanted. A cloud turn does neither -- see background_services::note_use.
+    background_services::note_use(&engine, &managed_ollama);
     commands::generate_response(&engine, prompt, session_id)
 }
 
@@ -1116,10 +1158,15 @@ fn generate_response_rust(
 fn generate_response_streaming_rust(
     app: tauri::AppHandle,
     engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
     prompt: String,
     session_id: Option<String>,
     stream_id: String,
 ) -> Result<serde_json::Value, String> {
+    // A turn is about to go to a model. If the idle watch stopped the local server, this is
+    // what brings it back before the request goes out; otherwise it just tells the watch the
+    // server is still wanted. A cloud turn does neither -- see background_services::note_use.
+    background_services::note_use(&engine, &managed_ollama);
     // The hand-off is emitted on its own event rather than as a first delta, because it is
     // a different speaker: the node leaving says it, and the deltas that follow belong to
     // the one arriving. It always lands before any delta, so the HUD can relabel the reply
@@ -1159,9 +1206,14 @@ fn generate_response_streaming_rust(
 fn code_chat_ask_rust(
     app: tauri::AppHandle,
     engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
     prompt: String,
     stream_id: String,
 ) -> Result<code_chat::CodeReply, String> {
+    // A turn is about to go to a model. If the idle watch stopped the local server, this is
+    // what brings it back before the request goes out; otherwise it just tells the watch the
+    // server is still wanted. A cloud turn does neither -- see background_services::note_use.
+    background_services::note_use(&engine, &managed_ollama);
     commands::code_chat_ask(&engine, &prompt, &mut |delta| {
         let _ = app.emit(
             "code-chat-delta",
@@ -1195,6 +1247,10 @@ fn doctor_facts(app: &tauri::AppHandle) -> doctor::Facts {
         managed_ollama: Some(
             app.state::<background_services::ManagedOllama>()
                 .is_managed(),
+        ),
+        local_server_asleep: Some(
+            app.state::<background_services::ManagedOllama>()
+                .is_sleeping(),
         ),
         hotkey_registered: hotkey::registered(),
         // This process is the desktop app; the server is a separate invocation, and the port
@@ -1282,8 +1338,13 @@ fn set_flow_line_rust(
 #[tauri::command(async)]
 fn agent_genesis_rust(
     engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
     purpose: String,
 ) -> Result<serde_json::Value, String> {
+    // A turn is about to go to a model. If the idle watch stopped the local server, this is
+    // what brings it back before the request goes out; otherwise it just tells the watch the
+    // server is still wanted. A cloud turn does neither -- see background_services::note_use.
+    background_services::note_use(&engine, &managed_ollama);
     commands::agent_genesis(&engine, purpose)
 }
 
@@ -2596,6 +2657,7 @@ fn main() {
         ))
         .manage(llm_engine)
         .manage(background_services::ManagedOllama::default())
+        .manage(Arc::new(llm::Pulse::default()))
         .manage(lan::ManagedServer::default())
         // Only the native app ever has this. `--serve` returns from main() long before
         // here, so in a headless run the map of live terminals does not exist to be
@@ -2715,9 +2777,18 @@ fn main() {
             start_window_resize_rust,
             set_game_mode_rust,
             get_agents_rust,
-            set_agent_selection_rust
+            set_agent_selection_rust,
+            wake_telemetry_rust
         ])
         .on_window_event(|window, event| {
+            // Any window event at all is a reason for the telemetry loop to look again: a
+            // window shown, focused, restored from the taskbar or moved to another screen all
+            // arrive here, and the loop's own check is what decides whether there is anything
+            // to feed. Waking it when there is not costs one `is_visible()` call.
+            if let Some(pulse) = window.app_handle().try_state::<Arc<llm::Pulse>>() {
+                pulse.wake();
+            }
+
             // Closing the main HUD window hides it to the tray rather than exiting. AETHER1
             // is a background thing -- the hotkey summons it, the crash watcher and the
             // model server keep running, the tray icon says it is there -- and a close
@@ -3041,32 +3112,79 @@ fn main() {
             // event instead of a websocket message, but the same ~1s cadence and the same
             // payload shape (see Telemetry::to_wire_json / UsageSnapshot), so the frontend's
             // existing updateHardwareTelemetry/updateTokenTelemetry handle both paths as-is.
+            //
+            // It ticks only while a window is on screen. The panel this feeds lives in a
+            // window; with every window minimised or closed to the tray there is nobody to
+            // read a number a second, and taking it anyway was the largest thing AETHER1 did
+            // while doing nothing -- a full pass over the machine, every second, forever, on
+            // a laptop in a bag. Parked, the thread is off the scheduler entirely (see
+            // llm::Pulse) until a window event or the HUD itself wakes it.
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let mut sampler = llm::Sampler::new();
+                    // What the webview was last told, so `hud-visibility` is emitted on the
+                    // change rather than on every tick. Starts as None: the first look
+                    // always says something, and the avatar loop wants to be told once at
+                    // startup rather than left guessing.
+                    let mut announced: Option<bool> = None;
+                    loop {
+                        let pulse = app_handle.state::<Arc<llm::Pulse>>();
+                        let visible = any_window_on_screen(&app_handle);
+                        if announced != Some(visible) {
+                            announced = Some(visible);
+                            let _ = app_handle
+                                .emit("hud-visibility", serde_json::json!({ "visible": visible }));
+                        }
+                        if !visible {
+                            // Nothing to feed. The timeout is the safety net, not the
+                            // mechanism: a window coming back calls wake() and this returns
+                            // at once. See llm::Pulse for why the net is there at all.
+                            pulse.park(HIDDEN_RECHECK);
+                            continue;
+                        }
+
+                        let telemetry = sampler.sample();
+                        let engine = app_handle.state::<LlmEngine>();
+                        let payload = serde_json::json!({
+                            "telemetry": telemetry.to_wire_json(),
+                            "tokens": engine.usage_snapshot(),
+                            "agent_name": engine.agent_name(),
+                            // Step 19: usually null. It carries one line when a model the
+                            // operator picked has been uninstalled, said once per model per
+                            // session -- taken here rather than read, so collecting it is
+                            // what clears it and two windows cannot both claim to have
+                            // shown it.
+                            "routing_notice": engine.take_routing_notice(),
+                        });
+                        let _ = app_handle.emit("telemetry-update", payload);
+                        // Game Mode's "low usage" half. Read fresh every tick rather than
+                        // cached, so switching Game Mode off is felt on the very next tick
+                        // instead of waiting out a long sleep that was already in progress.
+                        let game_mode = engine.db().get_setting_bool("game_mode", false);
+                        let interval = if game_mode { 5000 } else { 1000 };
+                        pulse.park(Duration::from_millis(interval));
+                    }
+                });
+            }
+
+            // The model server's own idle watch: see background_services. A minute's sleep
+            // between looks, and each look is a flag and a clock -- this thread is not the
+            // kind of background work this pass was about, but it is what lets the expensive
+            // kind (a model held in memory for nobody) stop on its own.
             {
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || loop {
-                    let telemetry = llm::Telemetry::snapshot();
+                    std::thread::sleep(background_services::IDLE_CHECK_INTERVAL);
                     let engine = app_handle.state::<LlmEngine>();
-                    let payload = serde_json::json!({
-                        "telemetry": telemetry.to_wire_json(),
-                        "tokens": engine.usage_snapshot(),
-                        "agent_name": engine.agent_name(),
-                        // Step 19: usually null. It carries one line when a model the
-                        // operator picked has been uninstalled, said once per model per
-                        // session -- taken here rather than read, so collecting it is what
-                        // clears it and two windows cannot both claim to have shown it.
-                        "routing_notice": engine.take_routing_notice(),
-                    });
-                    let _ = app_handle.emit("telemetry-update", payload);
-                    // Game Mode's "low usage" half: the HUD window is hidden (so its own
-                    // render loop is already throttled by the webview), but this thread
-                    // keeps sampling sysinfo regardless of window visibility -- so it's the
-                    // one piece Game Mode has to slow down itself rather than getting for
-                    // free. Read fresh every tick rather than cached, so switching Game
-                    // Mode off is felt on the very next tick instead of waiting out a long
-                    // sleep that was already in progress.
-                    let game_mode = engine.db().get_setting_bool("game_mode", false);
-                    let interval = if game_mode { 5000 } else { 1000 };
-                    std::thread::sleep(Duration::from_millis(interval));
+                    let managed = app_handle.state::<background_services::ManagedOllama>();
+                    if background_services::stop_if_idle(&engine, &managed) {
+                        println!(
+                            "[AETHER1] The model server has been idle and was stopped. \
+                             The next local turn will start it again."
+                        );
+                        let _ = app_handle.emit("local-server-asleep", serde_json::json!(true));
+                    }
                 });
             }
 
@@ -3170,7 +3288,24 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, _event| {});
+        .run(|app_handle, event| {
+            // The way out. app.exit(0) ends this process; it does not reap anything this
+            // process started, so without this "Quit AETHER1" left the model server running
+            // -- still holding its model in memory -- and, with --lan asked for, left a
+            // server bound to the network with nothing behind it. Both are children AETHER1
+            // spawned on its own behalf, and both die with it now.
+            //
+            // ExitRequested rather than Exit: it arrives while the app's managed state is
+            // still readable, which is where the handles live.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                background_services::stop_managed_ollama(
+                    &app_handle.state::<background_services::ManagedOllama>(),
+                );
+                if let Some(engine) = app_handle.try_state::<LlmEngine>() {
+                    let _ = lan::stop(&engine, &app_handle.state::<lan::ManagedServer>());
+                }
+            }
+        });
 }
 
 #[cfg(test)]
