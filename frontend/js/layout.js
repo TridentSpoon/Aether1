@@ -804,6 +804,9 @@
             el.setAttribute('aria-label', seamTitle(seam));
             placeSeam(el, seam);
         });
+        /* Every path that changes a placement ends here, so this is the one
+           place the snap rail has to be brought back into step. */
+        markActiveSnap();
     }
 
     function seamFor(el) {
@@ -1001,11 +1004,191 @@
         handle.focus();
     });
 
+    // ---- Snapping to a ready-made layout ------------------------------------
+
+    /* The grid lets an operator put a panel anywhere, which is the point of it
+       and also means the two or three arrangements anyone actually wants have
+       to be built by hand, one drag at a time. The rail down the left edge is
+       those arrangements as one click each.
+
+       They are computed from however many panels are switched on rather than
+       written out for the two the HUD ships with, so turning one off and
+       snapping gives a layout for what is on the screen now, not for what the
+       markup used to hold. */
+
+    /* Panels in reading order -- left to right, then top to bottom. Snapping
+       keeps the order the operator already has rather than imposing the order
+       the markup happens to be in: the panel on the left stays on the left. */
+    function liveIds() {
+        return Array.from(state.keys())
+            .filter((id) => !off.has(id))
+            .sort((a, b) => {
+                const A = state.get(a);
+                const B = state.get(b);
+                return (A.col - B.col) || (A.row - B.row);
+            });
+    }
+
+    /* n spans summing to total. The remainder goes to the earliest panels, so
+       an odd number of cells shows up as one panel a cell wider rather than as
+       a runt at the end or a gap the grid cannot fill. */
+    function shares(total, n) {
+        const base = Math.floor(total / n);
+        let extra = total - base * n;
+        return Array.from({ length: n }, () => base + (extra-- > 0 ? 1 : 0));
+    }
+
+    function snapColumns(ids) {
+        const out = new Map();
+        let col = 1;
+        shares(COLS, ids.length).forEach((w, i) => {
+            out.set(ids[i], { col, row: 1, w, h: DESIGN_ROWS });
+            col += w;
+        });
+        return out;
+    }
+
+    function snapRows(ids) {
+        const out = new Map();
+        let row = 1;
+        shares(DESIGN_ROWS, ids.length).forEach((h, i) => {
+            out.set(ids[i], { col: 1, row, w: COLS, h });
+            row += h;
+        });
+        return out;
+    }
+
+    /* One panel takes two thirds of the width and the rest stack down the
+       remaining third. With one panel on screen there is nothing to give the
+       third to, so this is the full grid instead. */
+    function snapFocus(ids, side) {
+        if (ids.length < 2) return snapColumns(ids);
+        const mainW = Math.round((COLS * 2) / 3);
+        const restW = COLS - mainW;
+        const main = side === 'left' ? ids[0] : ids[ids.length - 1];
+        const rest = ids.filter((id) => id !== main);
+        const out = new Map();
+        out.set(main, {
+            col: side === 'left' ? 1 : restW + 1,
+            row: 1,
+            w: mainW,
+            h: DESIGN_ROWS,
+        });
+        let row = 1;
+        shares(DESIGN_ROWS, rest.length).forEach((h, i) => {
+            out.set(rest[i], {
+                col: side === 'left' ? mainW + 1 : 1,
+                row,
+                w: restW,
+                h,
+            });
+            row += h;
+        });
+        return out;
+    }
+
+    const SNAPS = [
+        {
+            id: 'columns',
+            label: 'Side by side',
+            icon: '<rect x="1" y="2" width="6" height="12" /><rect x="9" y="2" width="6" height="12" />',
+            build: snapColumns,
+        },
+        {
+            id: 'rows',
+            label: 'Stacked',
+            icon: '<rect x="1" y="2" width="14" height="5" /><rect x="1" y="9" width="14" height="5" />',
+            build: snapRows,
+        },
+        {
+            id: 'focus-left',
+            label: 'Room for the left panel',
+            icon: '<rect x="1" y="2" width="9" height="12" /><rect x="12" y="2" width="3" height="12" />',
+            build: (ids) => snapFocus(ids, 'left'),
+        },
+        {
+            id: 'focus-right',
+            label: 'Room for the right panel',
+            icon: '<rect x="1" y="2" width="3" height="12" /><rect x="6" y="2" width="9" height="12" />',
+            build: (ids) => snapFocus(ids, 'right'),
+        },
+    ];
+
+    let rail = null;
+
+    function applySnap(snap) {
+        const ids = liveIds();
+        if (!ids.length) return;
+        const next = snap.build(ids);
+        /* A snap that hands someone a panel too small to read is not worth
+           having. With enough panels on, stacking and the two focus layouts
+           both get there; side by side is the one that degrades gracefully, so
+           it is what they fall back to. */
+        const tooSmall = Array.from(next.values())
+            .some((r) => r.w < MIN_W || r.h < MIN_H);
+        const chosen = tooSmall ? snapColumns(ids) : next;
+        for (const [id, rect] of chosen) state.set(id, rect);
+        applyAll();
+        save();
+        /* renderSeams also re-marks the rail, so the button just pressed lights
+           up here rather than being set twice from two places. */
+        renderSeams();
+        settle();
+    }
+
+    function matchesLayout(wanted) {
+        for (const [id, rect] of wanted) {
+            const cur = state.get(id);
+            if (!cur) return false;
+            if (cur.col !== rect.col || cur.row !== rect.row ||
+                cur.w !== rect.w || cur.h !== rect.h) return false;
+        }
+        return true;
+    }
+
+    /* Which snap, if any, describes the layout on the screen right now. Worked
+       out by rebuilding each one and comparing rather than by remembering which
+       button was last pressed: drag a panel afterwards and the remembered
+       answer would be a lie, while this one simply stops matching. */
+    function markActiveSnap() {
+        if (!rail) return;
+        const ids = liveIds();
+        SNAPS.forEach((snap) => {
+            const button = rail.querySelector('[data-snap="' + snap.id + '"]');
+            if (!button) return;
+            const active = ids.length > 0 && matchesLayout(snap.build(ids));
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    }
+
+    function buildRail() {
+        rail = document.createElement('div');
+        rail.className = 'panel-snap-rail';
+        rail.setAttribute('role', 'group');
+        rail.setAttribute('aria-label', 'Snap the panels to a layout');
+        SNAPS.forEach((snap) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'panel-snap';
+            button.dataset.snap = snap.id;
+            button.title = snap.label;
+            button.setAttribute('aria-label', snap.label);
+            button.setAttribute('aria-pressed', 'false');
+            button.innerHTML =
+                '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+                snap.icon + '</svg>';
+            button.addEventListener('click', () => applySnap(snap));
+            rail.appendChild(button);
+        });
+        layout.appendChild(rail);
+    }
+
     // ---- Wiring -------------------------------------------------------------
 
     const resetButton = document.getElementById('btn-reset-layout');
     if (resetButton) resetButton.addEventListener('click', resetLayout);
 
+    buildRail();
     fitRowHeight();
     applySaved();
 })();
