@@ -1963,6 +1963,19 @@ document.addEventListener('DOMContentLoaded', () => {
             window.__TAURI__.event.listen('telemetry-update', (event) => {
                 handleTelemetryPayload(event.payload);
             });
+
+            /* The panel is only fed while a window is on screen -- see the telemetry loop in
+               src-tauri/src/main.rs, which parks when there is nobody to feed. A window event
+               is usually what wakes it, but the webview knows it is back before the window
+               manager tells anyone, and on some desktops it is the only one that knows. So
+               say so, and the next reading is taken immediately instead of up to half a
+               minute later. */
+            const sayWeAreBack = () => {
+                if (document.hidden) return;
+                tauriInvoke('wake_telemetry_rust').catch(() => null);
+            };
+            document.addEventListener('visibilitychange', sayWeAreBack);
+            window.addEventListener('focus', sayWeAreBack);
             return;
         }
 
@@ -9138,6 +9151,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             document.getElementById('setting-autostart-app').checked = s.autostart_app === true;
             document.getElementById('setting-autostart-ollama').checked = s.autostart_ollama === true;
+            // Blank rather than 0 would read as "never", which is a different answer.
+            document.getElementById('setting-ollama-idle-minutes').value =
+                Number.isFinite(Number(s.ollama_idle_minutes)) ? Number(s.ollama_idle_minutes) : 15;
             document.getElementById('setting-voice-startup-audible').checked = s.voice_startup_audible !== false;
             setGameModeButtonState(s.game_mode === true);
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
@@ -9289,6 +9305,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 desktop_sprite_enabled: spriteModeToggle ? spriteModeToggle.checked : false,
                 autostart_app: document.getElementById('setting-autostart-app').checked,
                 autostart_ollama: document.getElementById('setting-autostart-ollama').checked,
+                // A field left empty, or filled with something that is not a whole number of
+                // minutes, means the default rather than "never" -- 0 has to be typed.
+                ollama_idle_minutes: (() => {
+                    const typed = Number(document.getElementById('setting-ollama-idle-minutes').value);
+                    return Number.isInteger(typed) && typed >= 0 ? typed : 15;
+                })(),
                 voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked
             }
         };

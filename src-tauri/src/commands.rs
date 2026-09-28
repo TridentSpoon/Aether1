@@ -619,6 +619,9 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // survives a restart rather than silently reverting).
         "autostart_app": false,
         "autostart_ollama": false,
+        // Minutes with no local reply before the model server AETHER1 started is stopped
+        // again; 0 keeps it running. See background_services::IDLE_SETTING.
+        "ollama_idle_minutes": crate::background_services::DEFAULT_IDLE_MINUTES,
         // Remote & LAN: whether AETHER1 puts this machine on the network as it starts.
         // Off unless asked for -- see lan.rs.
         "lan_autostart": false,

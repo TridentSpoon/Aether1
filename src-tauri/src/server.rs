@@ -41,6 +41,9 @@ use crate::vault;
 struct AppState {
     engine: Arc<LlmEngine>,
     telemetry_tx: broadcast::Sender<Value>,
+    /// Woken when a /ws/telemetry client subscribes, so the parked sampling loop starts
+    /// feeding it on the next instant rather than after NO_CLIENT_RECHECK.
+    telemetry_pulse: Arc<llm::Pulse>,
     /// Whether this server was started with --lan. Carried on the state because
     /// `/api/doctor` reports it: the TLS certificate and the mDNS announcement only exist in
     /// the --lan case, and a check that claimed otherwise would be reporting a fault on a
@@ -62,6 +65,11 @@ struct LanState {
 /// start.bat, the README and `aether1 doctor` all assume; the Remote & LAN pane probes it
 /// to say whether anything is serving, and reads it from here rather than repeating it.
 pub const SERVE_PORT: u16 = 8378;
+
+/// How long the headless telemetry loop waits between looks while no browser is attached.
+/// A subscribing client wakes it immediately; this is only the fallback, and a look is one
+/// integer read.
+const NO_CLIENT_RECHECK: Duration = Duration::from_secs(30);
 
 /// The address the HTTP server listens on.
 ///
@@ -85,29 +93,49 @@ fn bind_address(lan: bool) -> &'static str {
 
 pub async fn run(engine: LlmEngine, lan: bool) {
     let engine = Arc::new(engine);
-    let (telemetry_tx, _rx) = broadcast::channel::<Value>(8);
+    // The receiver is dropped at once rather than held: `receiver_count()` is how the loop
+    // below knows whether anyone is listening, and a receiver kept alive here for the whole
+    // life of the server would answer "yes" forever, on a machine with no browser open.
+    let (telemetry_tx, _) = broadcast::channel::<Value>(8);
 
     // Mirrors the Tauri path's telemetry thread (main.rs's setup() closure): same
-    // Telemetry::snapshot()/usage_snapshot()/agent_name() payload every ~1s, broadcast to
-    // however many /ws/telemetry clients are connected instead of a Tauri event.
+    // payload every ~1s, broadcast to however many /ws/telemetry clients are connected
+    // instead of a Tauri event.
+    //
+    // And the same rule about who is listening. Here it is not a question of windows: a
+    // headless server with no browser attached has nobody to send to, and `send` on a
+    // broadcast channel with no receivers is not a cheap no-op if the payload cost a full
+    // pass over the machine to build. So the loop parks until a /ws/telemetry client
+    // subscribes (see llm::Pulse, woken by ws_telemetry below) -- `aether1 --serve` left
+    // running in a terminal with no tab open now costs nothing at all.
+    let pulse = Arc::new(llm::Pulse::default());
     {
         let engine = engine.clone();
         let tx = telemetry_tx.clone();
-        std::thread::spawn(move || loop {
-            let telemetry = llm::Telemetry::snapshot();
-            let payload = serde_json::json!({
-                "telemetry": telemetry.to_wire_json(),
-                "tokens": engine.usage_snapshot(),
-                "agent_name": engine.agent_name(),
-            });
-            let _ = tx.send(payload); // Err just means no WS clients are connected right now
-            std::thread::sleep(Duration::from_millis(1000));
+        let pulse = pulse.clone();
+        std::thread::spawn(move || {
+            let mut sampler = llm::Sampler::new();
+            loop {
+                if tx.receiver_count() == 0 {
+                    pulse.park(NO_CLIENT_RECHECK);
+                    continue;
+                }
+                let telemetry = sampler.sample();
+                let payload = serde_json::json!({
+                    "telemetry": telemetry.to_wire_json(),
+                    "tokens": engine.usage_snapshot(),
+                    "agent_name": engine.agent_name(),
+                });
+                let _ = tx.send(payload); // Err just means the last client left mid-tick
+                pulse.park(Duration::from_millis(1000));
+            }
         });
     }
 
     let state = AppState {
         engine,
         telemetry_tx,
+        telemetry_pulse: pulse,
         lan,
     };
     let static_service =
@@ -1518,6 +1546,9 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
 
 async fn ws_telemetry(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     let rx = state.telemetry_tx.subscribe();
+    // Subscribe first, then wake: the loop checks receiver_count(), so waking before there
+    // is a receiver to count would park it again for a whole NO_CLIENT_RECHECK.
+    state.telemetry_pulse.wake();
     // `protocols` selects WS_PROTOCOL when the client offered it, and sets no header when it
     // offered nothing -- which is what a loopback tab that has no token to carry does. The
     // token subprotocol is deliberately not listed, so it is never echoed back.

@@ -12,7 +12,7 @@ mod pricing;
 pub(crate) mod providers;
 pub mod routing;
 mod stt;
-mod telemetry;
+pub mod telemetry;
 pub mod tts;
 
 use std::sync::Mutex;
@@ -32,7 +32,7 @@ pub use persona::{Domain, Persona, Provider, Root};
 use providers::ChatContext;
 pub use providers::Sink;
 pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio, transcribe};
-pub use telemetry::Telemetry;
+pub use telemetry::{Pulse, Sampler, Telemetry};
 pub use tts::{
     generate_speech_reporting, generate_speech_with, local_status as tts_local_status,
     os_engine_name as tts_os_engine_name, os_status as tts_os_status, Engine as TtsEngine,
@@ -1216,6 +1216,20 @@ impl LlmEngine {
 
     pub fn agent_name(&self) -> String {
         self.load_config().agent_name
+    }
+
+    /// True when the model that would answer a turn right now is a server on this machine.
+    ///
+    /// Reads the settings directly rather than going through load_config, for the same
+    /// reason usage_snapshot does: the callers are lifecycle decisions about the local
+    /// server, not turns, and scanning the environment for cloud keys tells them nothing.
+    pub fn uses_local_server(&self) -> bool {
+        let provider_key = self.db.get_setting_string("llm_provider", "offline");
+        let provider = persona::Provider::from_key(&provider_key);
+        let endpoint = self
+            .db
+            .get_setting_string("llm_endpoint", "http://localhost:11434");
+        Self::telemetry_mode(provider, &endpoint) == "local"
     }
 
     /// The panel's whole payload. Reads settings directly rather than going through

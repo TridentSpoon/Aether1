@@ -507,6 +507,18 @@ impl MemoryDb {
         }
     }
 
+    /// A stored whole number, tolerating the string form a number typed into a settings
+    /// field arrives as. Anything that is not a non-negative whole number -- a word, a
+    /// negative, a fraction -- falls back to the default rather than being rounded into
+    /// something the operator did not ask for.
+    pub fn get_setting_u64(&self, key: &str, default: u64) -> u64 {
+        match self.get_setting(key) {
+            Ok(Some(JsonValue::Number(n))) => n.as_u64().unwrap_or(default),
+            Ok(Some(JsonValue::String(s))) => s.trim().parse().unwrap_or(default),
+            _ => default,
+        }
+    }
+
     /// Every stored setting as a single object, matching memory_db.py's
     /// get_all_settings -- used for the Settings modal's bulk load/save.
     pub fn get_all_settings(&self) -> rusqlite::Result<JsonValue> {

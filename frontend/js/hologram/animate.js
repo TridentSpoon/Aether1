@@ -9,38 +9,93 @@
 // treated the same as IDLE (static, click-reactive only) since it isn't one of the
 // three reactions requested.
 
+/* Whether the native window this webview lives in is on a screen at all.
+   `document.hidden` is the browser's answer and it is the one to trust where it changes --
+   but in the desktop window it does not always: WebKitGTK keeps a minimised window's page
+   "visible", and no browser has an opinion about a window sitting in the tray. So the Rust
+   side, which is asking the window manager anyway for its own telemetry loop, says so
+   directly (see any_window_on_screen in src-tauri/src/main.rs, and the "hud-visibility"
+   event it emits when the answer changes).
+   Starts false -- meaning "no reason to think otherwise" -- so a page that never hears the
+   event, i.e. every browser tab, behaves exactly as it did before. */
+let nativelyHidden = false;
+
+/* The loops that have parked themselves, and the one thing that restarts them.
+   Parking rather than skipping is the point: a skipped frame still costs a callback, and
+   `requestAnimationFrame` is not reliably throttled in a desktop webview the way it is in a
+   background browser tab -- so a minimised window was still waking sixty times a second to
+   decide it had nothing to do. */
+const parked = new Set();
+
+function resumeParkedLoops() {
+    if (parked.size === 0) return;
+    // Copied first: each resumed loop may park itself again immediately (the window is back
+    // but the panel is still switched off), and that must not mutate what we are iterating.
+    const waking = Array.from(parked);
+    parked.clear();
+    for (const resume of waking) resume();
+}
+
+if (typeof document !== 'undefined') {
+    /* The events that mean "look again". `visibilitychange` covers a tab or a window the
+       browser has an opinion about; `focus` and `pageshow` cover coming back to it. Each one
+       only restarts the loop -- the loop's own checks decide whether there is anything to
+       draw, so a spurious wake costs one frame's worth of tests. */
+    document.addEventListener('visibilitychange', resumeParkedLoops);
+    window.addEventListener('focus', resumeParkedLoops);
+    window.addEventListener('pageshow', resumeParkedLoops);
+    window.addEventListener('resize', resumeParkedLoops);
+
+    if (window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('hud-visibility', (event) => {
+            nativelyHidden = !(event.payload && event.payload.visible);
+            if (!nativelyHidden) resumeParkedLoops();
+        }).catch(() => null);
+    }
+}
+
+/* How long a parked loop waits before looking of its own accord.
+   Two of the reasons to park raise no event at all: a panel switched off in Settings
+   (`offsetParent`), and a lost WebGL context on a driver that never fires the restore event.
+   For those this is the whole mechanism rather than a safety net -- and two wake-ups a
+   second instead of sixty is the difference this pass is about. */
+const PARKED_RECHECK_MS = 500;
+
 HologramAvatar.prototype.animate = function() {
     // A disposed engine stops here rather than queueing another frame. Without this,
     // anything that replaces one engine with another -- the avatar workbench does it
     // on every slider nudge -- leaves the old loop running forever behind the new one.
     if (this.disposed) return;
-    requestAnimationFrame(() => this.animate());
 
     /* Nothing to draw for a window nobody can see. Minimised, hidden behind another window
-       on a compositor that reports it, or sitting in the tray, this loop was still running
-       the full scene sixty times a second -- particle physics, tentacle chains, the lot --
+       on a compositor that reports it, or sitting in the tray, this loop was running the
+       full scene sixty times a second -- particle physics, tentacle chains, the lot --
        burning CPU and GPU on pixels that go nowhere.
-       The frame is skipped rather than the loop stopped, so there is nothing to restart:
-       the moment the window is visible again the next frame draws as normal. The clock keeps
-       counting wall time across the skipped frames, so the avatar comes back where it would
-       have been rather than frozen mid-gesture -- what you return to is the companion
-       carrying on, not one that stopped when you looked away. */
-    if (typeof document !== 'undefined' && document.hidden) return;
+       The loop parks instead of queueing another frame, and something has to wake it: an
+       event, or the timer above. The clock keeps counting wall time while it is parked, so
+       the avatar comes back where it would have been rather than frozen mid-gesture -- what
+       you return to is the companion carrying on, not one that stopped when you looked away.
 
-    /* The same argument one level down: the window can be visible while this
-       particular panel is switched off in Settings. `offsetParent` is null for an
-       element with no layout box, which is exactly what `display: none` on any
-       ancestor produces -- so this needs to know nothing about panels, and holds
-       for a collapsed column or a hidden tab just as well. Guarded because a
-       `position: fixed` canvas also reports null, and the desktop sprite window
-       uses one. */
+       The same argument one level down, and it is why parking is not simply "when the window
+       is hidden": the window can be visible while this particular panel is switched off in
+       Settings. `offsetParent` is null for an element with no layout box, which is exactly
+       what `display: none` on any ancestor produces -- so this needs to know nothing about
+       panels, and holds for a collapsed column or a hidden tab just as well. Guarded because
+       a `position: fixed` canvas also reports null, and the desktop sprite window uses one.
+
+       And the last of them: the driver has taken the context away. Drawing into it does
+       nothing but throw, and the webglcontextrestored handler in core.js rebuilds the scene
+       when it comes back. */
     const canvas = this.renderer && this.renderer.domElement;
-    if (canvas && canvas.offsetParent === null &&
-        getComputedStyle(canvas).position !== 'fixed') return;
+    const hidden = (typeof document !== 'undefined' && document.hidden) || nativelyHidden;
+    const offLayout = canvas && canvas.offsetParent === null &&
+        getComputedStyle(canvas).position !== 'fixed';
+    if (hidden || offLayout || this.contextLost) {
+        this.park();
+        return;
+    }
 
-    // The driver has taken the context away. Drawing into it does nothing but throw, and
-    // the webglcontextrestored handler in core.js rebuilds the scene when it comes back.
-    if (this.contextLost) return;
+    requestAnimationFrame(() => this.animate());
 
     const elapsedTime = this.clock.getElapsedTime();
 
@@ -148,6 +203,39 @@ HologramAvatar.prototype.animate = function() {
     }
 
     this.renderer.render(this.scene, this.camera);
+};
+
+/* Stops the loop until something wakes it. Registered once per engine no matter how many
+   frames decide to park, so an engine cannot end up with two loops running when it wakes. */
+HologramAvatar.prototype.unpark = function() {
+    if (this.parkedTimer) {
+        clearTimeout(this.parkedTimer);
+        this.parkedTimer = null;
+    }
+    if (this.parkedResume) {
+        parked.delete(this.parkedResume);
+        this.parkedResume = null;
+    }
+};
+
+HologramAvatar.prototype.park = function() {
+    if (this.parkedResume) return;
+    const resume = () => {
+        this.parkedResume = null;
+        if (this.parkedTimer) {
+            clearTimeout(this.parkedTimer);
+            this.parkedTimer = null;
+        }
+        // A disposed engine has no business coming back, and animate() refuses anyway --
+        // this just saves the frame.
+        if (!this.disposed) this.animate();
+    };
+
+    this.parkedResume = resume;
+    parked.add(resume);
+    this.parkedTimer = setTimeout(() => {
+        if (parked.delete(resume)) resume();
+    }, PARKED_RECHECK_MS);
 };
 
 // ==============================================================

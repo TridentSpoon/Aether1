@@ -914,6 +914,9 @@ class HologramAvatar {
        engine more than once needs this -- the HUD builds exactly one and keeps it. */
     dispose() {
         this.disposed = true;
+        // A parked render loop holds a timer and a place in the wake list (see animate.js).
+        // Neither should outlive the engine that parked it.
+        if (this.unpark) this.unpark();
         if (this.resizeObserver) this.resizeObserver.disconnect();
         if (this.renderer) {
             this.renderer.dispose();
