@@ -344,6 +344,16 @@ pub fn pair_with_peer(
     Ok(report)
 }
 
+/// Asks a paired machine what it can run, over the token it gave when it paired.
+///
+/// The first use the stored token has. Nothing is changed on either machine -- it is one
+/// read of the other one's model scan -- so this is a button an operator can press without
+/// wondering what it will do.
+pub fn peer_models(address: &str, port: u16) -> Result<Value, String> {
+    let models = crate::peers::models_on(address, port)?;
+    Ok(json!({ "address": address, "port": port, "models": models }))
+}
+
 /// Forgets one machine on this side. The other machine still lists the device it gave a
 /// token to, which is its operator's to revoke -- the pane says so rather than implying
 /// this reaches across.
