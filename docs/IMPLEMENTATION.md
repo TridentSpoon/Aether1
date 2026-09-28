@@ -3748,3 +3748,52 @@ the response and no token in it, the same handshake with no credential gets 401,
 handshake with the token in the query string gets 401. Two unit tests pin the extraction, and
 one of them reads `frontend/js/lan-auth.js` to check the two subprotocol names still agree --
 a mismatch would fail every socket from a paired browser with nothing readable to say why.
+
+---
+
+## Step 58 — the check and the open stop being two different walks
+
+The last of review 1's findings, and the one that sounds academic until you write it down.
+`edit_file` and `create_file` called `resolve`, which canonicalized the path and proved it was
+inside the project folder, and then called `std::fs::write` with the same string -- which the
+operating system walked again from `/`. Two walks with a gap between them is a race. Anything
+that can write to a directory along the way, including a `run` command or a `build.rs` in the
+project itself, can replace a component with a link in that gap, and the second walk goes
+somewhere the first one approved of and the second one does not.
+
+**The fix is not a better check, it is one walk.** `code_openat` opens the project folder once
+-- the operator's own canonicalized setting, the trust anchor -- and then descends: each
+directory below it opened with `openat` from the *handle* above rather than by name from `/`,
+so renaming or swapping a directory after it was opened cannot change which directory the next
+step happens in. There is no name left to re-resolve. Every open carries `O_NOFOLLOW`, so a
+link anywhere on the way is an error naming the component. `..` and `.` are refused as steps;
+they cannot come out of `resolve`, but a guard that relies on its caller having been careful is
+not a guard. `create_file` makes its directories with one `mkdirat` per step for the same
+reason: `create_dir_all` would have followed a link standing in for one of them.
+
+**One capability kept.** A link that stays inside the project used to work, and still does:
+`resolve` follows it, checks where it lands, and returns the real file, so the strict open
+never meets the link. Losing that quietly would have been a regression nobody noticed until
+someone hit it.
+
+**A thing the errno will not tell you.** `O_NOFOLLOW` on a link gives `ELOOP` -- except with
+`O_DIRECTORY`, where Linux checks directory-ness first and gives `ENOTDIR`. Reporting "not a
+directory" for the exact case this walk exists to catch would hide it where it matters most, so
+the code asks the filesystem with `fstatat(AT_SYMLINK_NOFOLLOW)` instead of guessing from the
+error. My own test found that: it staged a link in place of a directory and got the wrong
+message.
+
+**Windows is not covered** and says so. There is no `openat`; the equivalent
+(`NtCreateFile` with a root directory handle and `FILE_FLAG_OPEN_REPARSE_POINT`) is a different
+piece of work. There the path is checked and then resolved again. `code_openat::confines()`
+answers the question and `aether1 code workspace` prints the answer, for the same reason
+`code_sandbox` states what it cannot do rather than describing a weaker boundary in a stronger
+boundary's words.
+
+**The tests stage the race** rather than arguing about it: a directory replaced by a link to
+somewhere outside after the check passed, a file replaced by a link to a private key, a link
+that stays inside working as before, and `create_file` refusing to make a tree through a link.
+Each one asserts on the host disk, not on the message.
+
+`libc` becomes a direct dependency under `cfg(unix)` for `openat`, `mkdirat` and `fstatat`. It
+was already in the tree via Tauri.

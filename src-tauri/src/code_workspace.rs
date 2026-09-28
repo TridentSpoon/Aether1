@@ -18,7 +18,10 @@
 //!      parent when the file does not exist yet, so a symlink pointing out of the project
 //!      is resolved to where it really goes and then refused. `fs_guard` is checked as well
 //!      as this, not instead of it: the denied names and the home-directory rule still hold,
-//!      so a workspace root cannot be used to reach a credential.
+//!      so a workspace root cannot be used to reach a credential. And the open that follows
+//!      does not walk the path again -- `code_openat` descends from the project folder's own
+//!      descriptor without following a link, so nothing can be swapped in between the
+//!      judgement and the write.
 //!   3. **No shell, ever.** `run` takes an argv and spawns the program directly. There is no
 //!      `sh -c` anywhere in this file, so a pipe, a redirect, a `;` or a backtick in an
 //!      argument is a literal string the program will reject. This is also why the terminal
@@ -218,8 +221,12 @@ pub fn resolve(db: &MemoryDb, path: &str) -> Result<PathBuf, String> {
     }
 
     // An existing file is resolved too: a symlink inside the project pointing out of it is
-    // a hole straight through rule 2.
-    if resolved.is_symlink() {
+    // a hole straight through rule 2. A link that stays inside is allowed, and what comes
+    // back is the file it names rather than the link -- because the open that follows walks
+    // down from the root refusing to follow links (see code_openat), so the link's own path
+    // would be turned away at the last step. Resolving it here keeps the capability and the
+    // guarantee at the same time.
+    let resolved = if resolved.is_symlink() {
         let target = resolved
             .canonicalize()
             .map_err(|e| format!("cannot follow {}: {e}", resolved.display()))?;
@@ -230,7 +237,10 @@ pub fn resolve(db: &MemoryDb, path: &str) -> Result<PathBuf, String> {
                 target.display()
             ));
         }
-    }
+        target
+    } else {
+        resolved
+    };
 
     // And the companion's own guard on top: the denied names and the home-directory rule
     // are answered in one place for the whole program, and a workspace does not overrule
@@ -269,8 +279,11 @@ pub fn edit_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
     }
 
     let resolved = resolve(db, &path)?;
-    let before = std::fs::read_to_string(&resolved)
-        .map_err(|e| format!("cannot read {}: {e}", resolved.display()))?;
+    // Read and write both walk down from the project folder's own descriptor rather than
+    // handing the path back to the operating system to resolve a second time -- see
+    // code_openat for why a second walk is a race and not a formality.
+    let root = root(db)?;
+    let before = crate::code_openat::read(&root, &resolved)?;
 
     let count = before.matches(find.as_str()).count();
     match count {
@@ -295,8 +308,9 @@ pub fn edit_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
     if after == before {
         return Err("that edit would change nothing".to_string());
     }
-    std::fs::write(&resolved, &after)
-        .map_err(|e| format!("cannot write {}: {e}", resolved.display()))?;
+    // `false`: a missing directory means this path is wrong, and an `edit_file` that makes
+    // directories turns a typo into a new tree.
+    crate::code_openat::write(&root, &resolved, after.as_bytes(), false)?;
 
     let _ = db.log_action(
         "code.edit_file",
@@ -338,12 +352,11 @@ pub fn create_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     let resolved = resolve(db, &path)?;
     let existed = resolved.exists();
-    if let Some(parent) = resolved.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
-    }
-    std::fs::write(&resolved, content)
-        .map_err(|e| format!("cannot write {}: {e}", resolved.display()))?;
+    // The directories on the way are made by the same downward walk that opens the file, so
+    // a link swapped in as one of them is refused instead of being followed -- `create_dir_all`
+    // would have followed it. See code_openat.
+    let root = root(db)?;
+    crate::code_openat::write(&root, &resolved, content.as_bytes(), true)?;
 
     let _ = db.log_action(
         "code.create_file",
@@ -707,7 +720,7 @@ mod tests {
 
     /// A throwaway home directory, named for the test that asked for it so two running at
     /// once cannot land in each other's.
-    fn temp_home(name: &str) -> PathBuf {
+    pub(super) fn temp_home(name: &str) -> PathBuf {
         let home =
             std::env::temp_dir().join(format!("aether1_workspace_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
@@ -716,7 +729,7 @@ mod tests {
     }
 
     /// A database and a project folder inside that home, wired to each other.
-    fn workspace(name: &str) -> (MemoryDb, PathBuf, PathBuf) {
+    pub(super) fn workspace(name: &str) -> (MemoryDb, PathBuf, PathBuf) {
         let home = temp_home(name);
         let project = home.join("project");
         std::fs::create_dir_all(project.join("src")).unwrap();
@@ -732,7 +745,7 @@ mod tests {
     /// `fs_guard` only writes inside the operator's home, so the temp home has to be the
     /// home for the duration. The lock is the one fs_guard's own tests take, because two
     /// tests swapping HOME at once is a race.
-    fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+    pub(super) fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
         let _guard = crate::tools::fs_guard::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1319,5 +1332,166 @@ mod tests {
             "and it says so"
         );
         assert!(cut.len() < long.len() / 2);
+    }
+}
+
+/// The race the check used to leave open, and the tests that hold it shut.
+///
+/// These live here rather than in `code_openat` because what matters is the behaviour of
+/// `edit_file` and `create_file` -- an operator does not call `openat`, they ask the
+/// companion to change a file, and the question is whether that can be made to touch
+/// something else.
+#[cfg(all(test, unix))]
+mod toctou_tests {
+    use super::tests::*;
+    use super::*;
+
+    /// The gap this closes, staged rather than argued about: `resolve` approves a path, and
+    /// *then* a component of it becomes a link pointing out of the project. Before, the write
+    /// walked the path a second time and followed the new link. Now the walk holds each
+    /// directory open and refuses a link, so the write lands nowhere -- and the file it was
+    /// aimed at is untouched.
+    #[test]
+    fn a_directory_swapped_for_a_link_after_the_check_does_not_get_written_through() {
+        let (db, project, home) = workspace("toctou_dir");
+        with_home(&home.clone(), || {
+            let outside = home.join("outside");
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::write(outside.join("target.txt"), "THEIRS").unwrap();
+
+            // A real directory in the project, with the file the model means to write.
+            std::fs::create_dir_all(project.join("staging")).unwrap();
+            std::fs::write(project.join("staging/target.txt"), "ours").unwrap();
+
+            // The check passes on the honest tree.
+            let resolved = resolve(&db, "staging/target.txt").expect("a path inside the project");
+            assert!(resolved.starts_with(&project));
+
+            // Now the swap, which is the whole attack: `staging` becomes a link to `outside`.
+            // In the real world this happens between the check and the write; doing it here by
+            // hand is the same thing with the timing made certain.
+            std::fs::remove_dir_all(project.join("staging")).unwrap();
+            std::os::unix::fs::symlink(&outside, project.join("staging")).unwrap();
+
+            let refused = crate::code_openat::write(&project, &resolved, b"MINE", false)
+                .expect_err("a swapped directory should be refused");
+            assert!(
+                refused.contains("symbolic link"),
+                "the refusal should name what it found: {refused}"
+            );
+            // And the proof is on disk, not in the message.
+            assert_eq!(
+                std::fs::read_to_string(outside.join("target.txt")).unwrap(),
+                "THEIRS"
+            );
+        });
+    }
+
+    /// The same for the file itself: the last component becoming a link is the easier attack,
+    /// because nothing has to be a directory. `edit_file` is driven end to end here, so this
+    /// covers the read as well as the write -- a read that follows the link is an exfiltration
+    /// even when no write lands.
+    #[test]
+    fn a_file_swapped_for_a_link_after_the_check_is_neither_read_nor_written() {
+        let (db, project, home) = workspace("toctou_file");
+        with_home(&home.clone(), || {
+            crate::code_perms::set(&db, crate::code_perms::Grant::Edit, true).unwrap();
+            let secret = home.join("secret.txt");
+            std::fs::write(&secret, "PRIVATE-KEY-MATERIAL").unwrap();
+
+            let note = project.join("note.txt");
+            std::fs::write(&note, "hello\n").unwrap();
+            // Checked while it is an honest file...
+            assert!(resolve(&db, "note.txt").is_ok());
+            // ...and a link by the time anything opens it.
+            std::fs::remove_file(&note).unwrap();
+            std::os::unix::fs::symlink(&secret, &note).unwrap();
+
+            // resolve() catches this one on its own, because the link exists by the time it looks.
+            // The point of the test is the layer under it: even handed the pre-swap path, the open
+            // refuses.
+            let refused = crate::code_openat::read(&project, &note)
+                .expect_err("a link in place of the file should be refused");
+            assert!(refused.contains("symbolic link"), "{refused}");
+            let refused = crate::code_openat::write(&project, &note, b"x", false)
+                .expect_err("a link in place of the file should be refused");
+            assert!(refused.contains("symbolic link"), "{refused}");
+            assert_eq!(
+                std::fs::read_to_string(&secret).unwrap(),
+                "PRIVATE-KEY-MATERIAL"
+            );
+        });
+    }
+
+    /// A link that stays inside the project is still usable, which is the capability the
+    /// stricter open could easily have taken away without anyone noticing until it did.
+    #[test]
+    fn a_link_that_stays_inside_the_project_still_works() {
+        let (db, project, home) = workspace("toctou_inside");
+        with_home(&home.clone(), || {
+            crate::code_perms::set(&db, crate::code_perms::Grant::Edit, true).unwrap();
+            std::fs::write(project.join("src/real.txt"), "before\n").unwrap();
+            std::os::unix::fs::symlink(project.join("src/real.txt"), project.join("alias.txt"))
+                .unwrap();
+
+            let report = edit_file(
+                &db,
+                &serde_json::json!({ "path": "alias.txt", "find": "before", "replace": "after" }),
+            )
+            .expect("an edit through a link inside the project");
+            assert!(report.contains("updated"), "{report}");
+            assert_eq!(
+                std::fs::read_to_string(project.join("src/real.txt")).unwrap(),
+                "after\n"
+            );
+        });
+    }
+
+    /// `create_file` makes the directories it needs, and that is a walk too: each one is made
+    /// and opened from the descriptor above it, so a link standing in for one of them is
+    /// refused rather than followed. `create_dir_all` would have followed it.
+    #[test]
+    fn creating_a_file_does_not_make_directories_through_a_link() {
+        let (db, project, home) = workspace("toctou_mkdir");
+        with_home(&home.clone(), || {
+            crate::code_perms::set(&db, crate::code_perms::Grant::Edit, true).unwrap();
+            let outside = home.join("elsewhere");
+            std::fs::create_dir_all(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, project.join("gen")).unwrap();
+
+            let refused =
+                crate::code_openat::write(&project, &project.join("gen/deep/file.txt"), b"x", true)
+                    .expect_err("a link standing in for a directory should be refused");
+            assert!(refused.contains("symbolic link"), "{refused}");
+            assert!(
+                !outside.join("deep").exists(),
+                "it made a directory out there"
+            );
+
+            // And the honest case still works, directories and all.
+            crate::code_openat::write(&project, &project.join("built/deep/file.txt"), b"x", true)
+                .expect("a real directory tree inside the project");
+            assert_eq!(
+                std::fs::read_to_string(project.join("built/deep/file.txt")).unwrap(),
+                "x"
+            );
+        });
+    }
+
+    /// The walk refuses anything that is not a plain descent, so a caller that has not
+    /// canonicalized cannot hand it a way up. `resolve` always does, which is exactly why
+    /// this has to be checked here instead of trusted there.
+    #[test]
+    fn nothing_that_could_climb_is_treated_as_a_step() {
+        let (_db, project, home) = workspace("toctou_steps");
+        assert_eq!(
+            crate::code_openat::steps_within(&project, &project.join("src/main.rs")).unwrap(),
+            vec!["src".to_string(), "main.rs".to_string()]
+        );
+        assert!(crate::code_openat::steps_within(&project, &project).is_err());
+        assert!(crate::code_openat::steps_within(&project, &home).is_err());
+        assert!(
+            crate::code_openat::steps_within(&project, &project.join("../outside.txt")).is_err()
+        );
     }
 }

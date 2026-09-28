@@ -29,6 +29,7 @@ dependencies = [
  "bip39",
  "getrandom 0.3.4",
  "keyring",
+ "libc",
  "mdns-sd",
  "minisign-verify",
  "msedge-tts",

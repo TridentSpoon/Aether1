@@ -62,3 +62,10 @@ opt-level = "s"
 # Debug symbols are about two megabytes of the shipped binary and are of no use to anyone
 # running it -- a backtrace from a release build is read from the source, not from these.
 strip = true
+
+# openat/mkdirat for code_openat.rs, so a file in the project is opened by walking down from
+# the project folder's own descriptor rather than by handing its path back to the OS to walk
+# again. Already in the tree via tauri; taken directly for those two calls. Unix only -- the
+# Windows path there is std::fs and says so.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
