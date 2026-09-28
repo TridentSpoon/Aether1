@@ -72,24 +72,40 @@ checkpoint held is restored, what has appeared since is left alone and named. Th
 replaced the table of refused `git` subcommands, which stopped being enforceable the moment
 the sandbox had a shell — a guard that can be walked around reads as protection and is not.
 
+**Four levels, and a project that is trusted once** (`code_policy.rs`). What a project is
+allowed is one answer, recorded in the project's own `.aether/policy.json` and not in the
+settings table:
+
+| | The project folder | Other folders | Network | Commands |
+|---|---|---|---|---|
+| Assistant | read | read, where named | through the proxy | in the sandbox |
+| Developer | read and write | read, where named | through the proxy | in the sandbox |
+| Agent | read and write | as named, read or write | through the proxy | in the sandbox |
+| Unrestricted | read and write | everything you can reach | anything | as you |
+
+Developer is the default, and is the one that can work for an hour without asking anything.
+A level is not new machinery: it is a name for four switches that already existed
+(`code_perm_edit`, `code_perm_run`, `code_run_network`, `code_run_unconfined`) plus the
+folder list in the same file. The file is the level's only home, because Developer and Agent
+set identical switches and differ only in what they do with those folders — so the settings
+table cannot be asked which of the two was chosen. What it *can* answer is whether the
+switches still match the recorded level, and an operator who moves one by hand is told their
+project is no longer at the level its file claims rather than being silently rounded to
+whichever name happens to fit.
+
+**Read and write are separate answers per folder.** `aether1 code share ~/Documents` makes a
+folder readable inside the sandbox; `share-write` makes it writable, and only at Agent and
+above — so *"read my vault and summarise it"* is available at every level that can read, and
+*"reorganise my vault"* is a level chosen deliberately. `$HOME` itself and the filesystem
+root are refused: hiding them is what the sandbox is for. A named folder that does not exist
+on this machine is left out rather than failing the command, because a policy file travels
+with a repository.
+
 ## What is next, in order
 
-**1. Autonomy levels.** Four, named, each a real configuration rather than a slider:
-
-| | Filesystem | Network | Commands | Host |
-|---|---|---|---|---|
-| Assistant | read-only | proxy | sandbox | no |
-| Developer | workspace RW | proxy | sandbox, unrestricted | no |
-| Agent | selected directories | proxy | sandbox | selected tools |
-| Unrestricted | host | host | host | yes |
-
-Developer is the default for a trusted project, and is the mode that can work for an hour
-without asking anything.
-
-**2. Project trust.** Opening `~/Projects/thing` asks once — filesystem, which domains, which
-host capabilities, which approval mode — and writes `.aether/policy.toml` in the project. The
-question is not "may I run npm", it is "does this project trust npm's registry". After that,
-no prompts.
+**~~1. Autonomy levels.~~ ~~2. Project trust.~~ Built.** See above. The file is
+`.aether/policy.json` rather than `.toml`, so that a project has one policy file and not one
+per subsystem — the proxy's domain list lives in the same document.
 
 **~~3. The network proxy.~~ Built.** The sandbox has no route of its own in either state; when
 the network is switched on it gets one unix socket bind-mounted in, a relay inside bridges
@@ -101,9 +117,7 @@ not in the sandbox and the destination is not on the list. Still to come here: t
 *allow once / allow for this project / deny* prompt in the HUD -- today a refused host is
 recorded and allowed with `aether1 code net-allow`.
 
-**4. Separate read and write per directory.** `~/Documents` readable, `~/Projects/thing`
-writable, `~/Pictures` neither. This is what turns a coding agent into an assistant: *"read
-my vault and summarise it"* without the ability to rewrite it.
+**~~4. Separate read and write per directory.~~ Built.** See above.
 
 **5. Host tools instead of host access.** `system.get_cpu()`, `system.list_processes()`,
 notifications, screenshots — narrow calls into the host rather than a shell on it. When the

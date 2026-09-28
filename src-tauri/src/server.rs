@@ -126,6 +126,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/chat", post(code_chat))
         .route("/api/code/chat/history", get(code_chat_history))
         .route("/api/code/chat/clear", post(code_chat_clear))
+        .route("/api/code/level", post(code_level))
         .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
@@ -947,6 +948,24 @@ async fn code_chat_clear(
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Browser-transport twin of code_set_level_rust.
+async fn code_level(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let level = body
+        .get("level")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let report =
+        tokio::task::spawn_blocking(move || commands::code_set_level(&state.engine, &level))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(report))
 }
 
 async fn voice_advice(State(state): State<AppState>) -> Json<crate::voice_setup::VoiceAdvice> {

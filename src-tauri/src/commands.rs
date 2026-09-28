@@ -649,6 +649,30 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
     // not a preference, and the Settings page has to be able to say so plainly rather than
     // describing a boundary that may not be there.
     let sandbox = crate::code_sandbox::detect();
+    // And the autonomy level, which is a fact about the *project* rather than this machine
+    // or these settings -- it lives in the project's own `.aether/policy.json`. It rides
+    // here so the Settings page can show what the nominated project is trusted with without
+    // a second round trip. No project folder set: `level` is null, and the page says so
+    // rather than offering a choice that would have nowhere to be written.
+    let autonomy = match crate::code_workspace::root(engine.db()) {
+        Ok(root) => {
+            let (level, matches) = crate::code_policy::effective(&root, engine.db());
+            serde_json::json!({
+                "root": root.to_string_lossy(),
+                "level": level.key(),
+                "matches": matches,
+                "trusted": crate::code_policy::is_trusted(&root),
+                "shares": crate::code_policy::mounts(&root)
+                    .into_iter()
+                    .map(|mount| serde_json::json!({
+                        "path": mount.path.to_string_lossy(),
+                        "write": mount.write,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        }
+        Err(_) => serde_json::json!({ "level": Value::Null }),
+    };
     serde_json::json!({
         "settings": settings,
         "os": setup::Os::current(),
@@ -656,7 +680,41 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
             "confines": sandbox.confines(),
             "description": sandbox.description(),
         },
+        "autonomy": autonomy,
+        // The four levels themselves, so the page describes them in the same words the CLI
+        // does rather than keeping its own copy of them.
+        "levels": crate::code_policy::ALL
+            .iter()
+            .map(|level| serde_json::json!({
+                "key": level.key(),
+                "title": level.title(),
+                "description": level.description(),
+            }))
+            .collect::<Vec<_>>(),
     })
+}
+
+/// Sets the nominated project's autonomy level -- the Settings page's twin of `aether1 code
+/// level <name>`. Both go through `code_policy::set_level`, so the project's file and the
+/// switches it means move together whichever surface asked.
+pub fn code_set_level(engine: &LlmEngine, level: &str) -> Result<Value, String> {
+    let level = crate::code_policy::Level::from_key(level).ok_or_else(|| {
+        format!(
+            "{level:?} is not a level. The four are: {}",
+            crate::code_policy::ALL
+                .iter()
+                .map(|l| l.key())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+    let root = crate::code_workspace::root(engine.db())?;
+    crate::code_policy::set_level(&root, engine.db(), level)?;
+    Ok(serde_json::json!({
+        "level": level.key(),
+        "title": level.title(),
+        "description": level.description(),
+    }))
 }
 
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {
@@ -1417,6 +1475,59 @@ mod tests {
         assert!(response["settings"]["os"].is_null());
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The Settings page shows a dropdown of levels and the one in force. Both come from
+    /// here, so that the page and `aether1 code level` describe them in the same words --
+    /// and so that a page told there is no project folder says so rather than offering a
+    /// choice that has nowhere to be written.
+    #[test]
+    fn the_settings_response_carries_the_levels_and_this_projects_answer() {
+        let dir = std::env::temp_dir().join(format!(
+            "aether1_settings_level_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("project")).expect("temp project");
+        let db = llm::MemoryDb::open(dir.join("memory.db")).expect("temp db should open");
+        let engine = LlmEngine::new(db);
+
+        // No project folder nominated yet: the four levels are still described, and the
+        // answer is null rather than a default nobody chose.
+        let response = get_settings(&engine);
+        let levels = response["levels"]
+            .as_array()
+            .expect("levels should be a list");
+        assert_eq!(levels.len(), crate::code_policy::ALL.len());
+        assert!(levels
+            .iter()
+            .any(|level| level["key"] == "developer" && level["title"] == "Developer"));
+        assert!(response["autonomy"]["level"].is_null());
+
+        let root = dir.join("project").canonicalize().expect("project root");
+        engine
+            .db()
+            .set_setting(
+                crate::code_workspace::ROOT_SETTING,
+                &serde_json::json!(root.to_string_lossy()),
+            )
+            .expect("workspace root should save");
+
+        assert_eq!(get_settings(&engine)["autonomy"]["level"], "developer");
+        code_set_level(&engine, "agent").expect("agent is a level");
+        let response = get_settings(&engine);
+        assert_eq!(response["autonomy"]["level"], "agent");
+        // And the switches it stands for really moved, which is the only reason the level
+        // is worth recording.
+        assert!(response["settings"][crate::code_sandbox::NETWORK_SETTING] == true);
+
+        // A level nobody defined is refused by name, not rounded to the nearest one.
+        let refused = code_set_level(&engine, "yolo").expect_err("yolo is not a level");
+        assert!(refused.contains("unrestricted"), "unhelpful: {refused}");
+        assert_eq!(get_settings(&engine)["autonomy"]["level"], "agent");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

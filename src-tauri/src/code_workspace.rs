@@ -451,6 +451,13 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
     }
 
     let root = root(db)?;
+    // What this project is trusted with, read from its own file every time: an operator who
+    // changes the level does not have to restart anything for the next command to honour it.
+    let level = crate::code_policy::level(&root);
+    let access = crate::code_sandbox::Access {
+        write_workspace: level.writes_the_project(),
+        extra: crate::code_policy::mounts(&root),
+    };
     let cwd = match args.get("cwd").and_then(Value::as_str) {
         None | Some("") => root.clone(),
         Some(sub) => {
@@ -498,6 +505,7 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
         &cwd,
         &root,
         &crate::code_sandbox::network_for(&sandbox, db),
+        &access,
     )
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
@@ -1178,6 +1186,102 @@ mod tests {
             run(&db, &serde_json::json!({"shell": "echo hello"})).unwrap_err()
         });
         assert!(err.contains("only available inside the sandbox"), "{err}");
+    }
+
+    /// Assistant is the level that reads and changes nothing, and it has to be the kernel
+    /// saying so rather than a tool refusing politely -- the agent has a shell in here.
+    #[test]
+    fn at_the_assistant_level_the_project_folder_is_read_only() {
+        let Some((db, project, home)) = adversarial("assistant", &["python3"]) else {
+            return;
+        };
+        std::fs::write(project.join("kept.txt"), "original\n").unwrap();
+        crate::code_policy::set_level(&project, &db, crate::code_policy::Level::Assistant).unwrap();
+
+        let out = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"shell": "echo ruined > kept.txt; cat kept.txt"}),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            std::fs::read_to_string(project.join("kept.txt")).unwrap(),
+            "original\n",
+            "the file on disk is untouched: {out}"
+        );
+
+        // And Developer, the same command, changes it -- so this is the level and not a
+        // sandbox that never writes anything.
+        crate::code_policy::set_level(&project, &db, crate::code_policy::Level::Developer).unwrap();
+        let wrote = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"shell": "echo changed > kept.txt"}),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            std::fs::read_to_string(project.join("kept.txt")).unwrap(),
+            "changed\n",
+            "{wrote}"
+        );
+    }
+
+    /// A folder the operator named: readable at Developer, writable only at Agent, and the
+    /// rest of the machine no more visible than before.
+    #[test]
+    fn a_named_folder_is_readable_and_only_writable_where_the_level_says() {
+        let Some((db, project, home)) = adversarial("named", &["python3"]) else {
+            return;
+        };
+        let notes = home.join("Notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::write(notes.join("note.txt"), "a note\n").unwrap();
+        // Something outside every named folder, to prove the mount is one folder and not a
+        // hole in the home directory.
+        std::fs::write(home.join("secret.txt"), "not shared\n").unwrap();
+
+        crate::code_policy::set_level(&project, &db, crate::code_policy::Level::Developer).unwrap();
+        crate::code_policy::add_mount(&project, &notes.to_string_lossy(), true).unwrap();
+
+        let read = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"shell": format!(
+                    "cat {}/note.txt; echo rewritten > {}/note.txt; cat {}/secret.txt",
+                    notes.display(), notes.display(), home.display()
+                )}),
+            )
+            .unwrap()
+        });
+        assert!(
+            read.contains("a note"),
+            "the named folder is readable: {read}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(notes.join("note.txt")).unwrap(),
+            "a note\n",
+            "and not writable at Developer: {read}"
+        );
+        assert!(
+            !read.contains("not shared"),
+            "and nothing else in the home directory came with it: {read}"
+        );
+
+        crate::code_policy::set_level(&project, &db, crate::code_policy::Level::Agent).unwrap();
+        let wrote = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"shell": format!("echo rewritten > {}/note.txt", notes.display())}),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            std::fs::read_to_string(notes.join("note.txt")).unwrap(),
+            "rewritten\n",
+            "Agent is the level that writes it: {wrote}"
+        );
     }
 
     /// Aether1 holds API keys in its own environment. A build script is not entitled to

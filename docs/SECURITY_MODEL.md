@@ -133,6 +133,32 @@ checkpoint and is told so rather than quietly going unprotected.
 The tests take a repository with uncommitted and untracked work, do the worst a shell could
 do to it -- overwrite, delete, `git reset --hard` -- and assert every byte comes back.
 
+## 1c. How much of the machine one project gets
+
+Everything above describes a box. This describes how big it is for a given project, and it is
+one answer rather than a stream of prompts. `.aether/policy.json` in the workspace records a
+level:
+
+| | The project folder | Other folders | Network | Commands |
+|---|---|---|---|---|
+| Assistant | read | read, where named | through the proxy | in the sandbox |
+| Developer | read and write | read, where named | through the proxy | in the sandbox |
+| Agent | read and write | as named, read or write | through the proxy | in the sandbox |
+| Unrestricted | read and write | everything you can reach | anything | as you |
+
+Developer is what a project gets when its file says nothing. The level is not enforcement of
+its own: it writes `code_perm_edit`, `code_perm_run`, `code_run_network` and
+`code_run_unconfined`, and it decides the mounts the sandbox is built with — the workspace is
+`--ro-bind` at Assistant, and a folder named with `aether1 code share` is bound read-only
+unless the level is Agent or above and the entry asked for write. Enforcement is the same
+bubblewrap invocation as everything else in section 1.
+
+Two limits worth stating plainly. **Unrestricted is not a level of the sandbox, it is the
+absence of one** — it sets `code_run_unconfined`, and a command then runs as the operator with
+everything their account can reach. And **a shared folder is genuinely shared**: a read-only
+mount is read-only against the kernel, but anything the project can read at Agent level it can
+also send anywhere the proxy allows.
+
 ## 2. What AETHER CODE may change without a sandbox
 
 `edit_file` and `create_file` do not spawn anything, so they are guarded in-process instead:
