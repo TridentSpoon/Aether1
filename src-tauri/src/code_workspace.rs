@@ -497,7 +497,7 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
         rest,
         &cwd,
         &root,
-        crate::code_sandbox::network_allowed(db),
+        crate::code_sandbox::network_for(&sandbox, db),
     )
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
@@ -1065,6 +1065,13 @@ mod tests {
         let Some((db, _project, home)) = adversarial("net", &["python3"]) else {
             return;
         };
+        // A machine that will not let bubblewrap unshare a network namespace -- a
+        // container, a CI runner -- keeps its filesystem confinement and loses this half.
+        // `Sandbox::description` says so out loud, which is the behaviour being relied on
+        // here; there is nothing to assert about a namespace that cannot exist.
+        if !crate::code_sandbox::detect().can_cut_network() {
+            return;
+        }
         assert!(!crate::code_sandbox::network_allowed(&db));
         let out = with_home(&home, || {
             run(

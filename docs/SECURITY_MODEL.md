@@ -45,7 +45,16 @@ touch.
 * the environment cleared and rebuilt from a short list, so an API key Aether1 holds cannot
   be read by a build script.
 
-This is bubblewrap (`bwrap`), which means Linux with bubblewrap installed.
+This is bubblewrap (`bwrap`), which means Linux with bubblewrap installed -- and *working*,
+which is not the same question. `detect()` starts `true` inside the real argument list rather
+than trusting that the binary exists, because every failure here is environmental: a kernel
+with unprivileged user namespaces disabled, a container, an AppArmor policy. One of those is
+worth naming, because it is common and it is partial: unsharing the network makes bubblewrap
+bring up a loopback interface, and a host that forbids that (a container, a CI runner) fails
+the whole spawn. The filesystem half works perfectly there, so that is what happens -- the
+box keeps everything it can hold, drops the network namespace, and the Confinement line says
+"this machine will not let it cut the network" instead of implying an isolation that is not
+there.
 
 **Where there is no sandbox, `run` refuses.** Windows has no implementation yet -- it wants a
 restricted token or an AppContainer with an explicit ACL boundary, and until that is written

@@ -105,7 +105,19 @@ const ENV_PASSTHROUGH: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sandbox {
     /// Real confinement, through bubblewrap at this path.
-    Bubblewrap(PathBuf),
+    Bubblewrap {
+        bwrap: PathBuf,
+        /// Whether a network namespace can be unshared here.
+        ///
+        /// Not every machine that runs bubblewrap will let it cut the network. Unsharing
+        /// the network makes bubblewrap bring up a loopback interface in the new
+        /// namespace, and a host whose policy forbids that -- a container, a CI runner, an
+        /// AppArmor profile on unprivileged user namespaces -- fails the whole spawn with
+        /// `Failed RTM_NEWADDR`. The filesystem confinement still works perfectly there, so
+        /// the answer is to keep it, drop the part that cannot work, and say so, rather
+        /// than either refusing to run or silently claiming an isolation that is not there.
+        can_unshare_net: bool,
+    },
     /// None available, with the reason to put in front of the operator.
     Unavailable(&'static str),
 }
@@ -113,17 +125,43 @@ pub enum Sandbox {
 impl Sandbox {
     /// Whether commands run confined.
     pub fn confines(&self) -> bool {
-        matches!(self, Sandbox::Bubblewrap(_))
+        matches!(self, Sandbox::Bubblewrap { .. })
+    }
+
+    /// Whether the network can be cut off, whatever the operator's setting says. A machine
+    /// that cannot unshare a network namespace reaches the network from inside the sandbox
+    /// no matter what is switched off.
+    pub fn can_cut_network(&self) -> bool {
+        matches!(
+            self,
+            Sandbox::Bubblewrap {
+                can_unshare_net: true,
+                ..
+            }
+        )
     }
 
     /// One line for a settings row, `aether1 code perms`, or a refusal.
     pub fn description(&self) -> String {
         match self {
-            Sandbox::Bubblewrap(path) => format!(
-                "confined by bubblewrap ({}): the host filesystem is read-only, your home \
-                 folder is hidden, and only the project folder can be written",
-                path.display()
-            ),
+            Sandbox::Bubblewrap {
+                bwrap,
+                can_unshare_net,
+            } => {
+                let base = format!(
+                    "confined by bubblewrap ({}): the host filesystem is read-only, your \
+                     home folder is hidden, and only the project folder can be written",
+                    bwrap.display()
+                );
+                if *can_unshare_net {
+                    base
+                } else {
+                    format!(
+                        "{base}. This machine will not let it cut the network, so commands \
+                         can reach the network from inside it"
+                    )
+                }
+            }
             Sandbox::Unavailable(why) => format!(
                 "not confined: {why}. Commands would run as you, with access to everything \
                  your account can reach"
@@ -135,6 +173,12 @@ impl Sandbox {
 /// What is available here, asked freshly each time: bubblewrap can be installed while
 /// Aether1 is running, and an operator who installs it to get the sandbox should not have
 /// to restart to be given it.
+///
+/// Installed is not the same as working, so this does not stop at finding the binary. It
+/// starts `true` inside the real argument list and looks at whether that succeeded, because
+/// the failure modes here are all environmental -- a kernel with user namespaces turned off,
+/// a container, a policy on loopback -- and every one of them would otherwise turn into a
+/// confusing failure of the operator's first command rather than an honest line in Settings.
 pub fn detect() -> Sandbox {
     if !cfg!(target_os = "linux") {
         return Sandbox::Unavailable(
@@ -142,18 +186,66 @@ pub fn detect() -> Sandbox {
              an AppContainer, which is not written)",
         );
     }
-    match crate::paths::find_installed_binary(&["bwrap"]) {
-        Some(path) => Sandbox::Bubblewrap(path),
-        None => Sandbox::Unavailable(
+    let Some(bwrap) = crate::paths::find_installed_binary(&["bwrap"]) else {
+        return Sandbox::Unavailable(
             "bubblewrap is not installed -- install it (apt install bubblewrap, pacman -S \
              bubblewrap) and commands will be confined",
-        ),
+        );
+    };
+    // The stricter arrangement first, so a machine that can have everything gets it.
+    if probe(&bwrap, true) {
+        return Sandbox::Bubblewrap {
+            bwrap,
+            can_unshare_net: true,
+        };
     }
+    if probe(&bwrap, false) {
+        return Sandbox::Bubblewrap {
+            bwrap,
+            can_unshare_net: false,
+        };
+    }
+    Sandbox::Unavailable(
+        "bubblewrap is installed but will not start here -- usually unprivileged user \
+         namespaces are disabled on this kernel or container",
+    )
+}
+
+/// Starts `true` inside the real argument list, in a throwaway directory. The cheapest
+/// possible question that has the same answer as "will the operator's next command run".
+fn probe(bwrap: &Path, network_off: bool) -> bool {
+    let dir = std::env::temp_dir().join(format!("aether1_sandbox_probe_{}", std::process::id()));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let args = bwrap_args("/bin/true", &[], &dir, &dir, !network_off);
+    let ok = Command::new(bwrap)
+        .args(&args)
+        .env_clear()
+        .envs(passthrough_env())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    let _ = std::fs::remove_dir_all(&dir);
+    ok
 }
 
 /// Whether the network is reachable from inside the sandbox.
+///
+/// The operator's switch, and the machine's own answer. A box that cannot cut the network
+/// does not pretend to: asking for it to be off there would build an argument list that
+/// fails to start at all, which is a worse answer than an honest description.
 pub fn network_allowed(db: &MemoryDb) -> bool {
-    db.get_setting_bool(NETWORK_SETTING, false)
+    network_for(&detect(), db)
+}
+
+/// The same question asked of a sandbox already in hand, so spawning a command does not
+/// probe bubblewrap twice.
+pub fn network_for(sandbox: &Sandbox, db: &MemoryDb) -> bool {
+    db.get_setting_bool(NETWORK_SETTING, false) || !sandbox.can_cut_network()
 }
 
 /// Whether the operator has said to run commands unconfined anyway.
@@ -175,7 +267,7 @@ pub fn unconfined_refusal(sandbox: &Sandbox) -> String {
         match sandbox {
             Sandbox::Unavailable(why) => *why,
             // Only reachable if a caller asks for this while confinement is available.
-            Sandbox::Bubblewrap(_) => "…it can, and this message is a bug",
+            Sandbox::Bubblewrap { .. } => "…it can, and this message is a bug",
         }
     )
 }
@@ -198,7 +290,7 @@ pub fn command(
             cmd.args(rest).current_dir(cwd);
             cmd
         }
-        Sandbox::Bubblewrap(bwrap) => {
+        Sandbox::Bubblewrap { bwrap, .. } => {
             let mut cmd = Command::new(bwrap);
             for arg in bwrap_args(program, rest, cwd, root, network) {
                 cmd.arg(arg);
@@ -364,6 +456,19 @@ mod tests {
         std::env::set_var("AETHER1_TEST_SECRET", "sk-not-for-build-scripts");
         assert!(!passthrough_env().contains_key("AETHER1_TEST_SECRET"));
         std::env::remove_var("AETHER1_TEST_SECRET");
+    }
+
+    /// A box that cannot cut the network says so in the same line that says it confines,
+    /// because an operator reading "confined" should not have to ask a second question.
+    #[test]
+    fn a_box_that_cannot_cut_the_network_says_that_too() {
+        let limited = Sandbox::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: false,
+        };
+        assert!(limited.confines());
+        assert!(!limited.can_cut_network());
+        assert!(limited.description().contains("cut the network"));
     }
 
     #[test]
