@@ -534,6 +534,30 @@ pub fn set_persona_voice(
     Ok(list_personas(engine))
 }
 
+/// How this machine says the words it keeps getting wrong.
+pub fn pronunciations(engine: &LlmEngine) -> Value {
+    serde_json::json!({
+        "words": crate::speech_words::all(engine.db()),
+        "max_entries": crate::speech_words::MAX_ENTRIES,
+        "max_length": crate::speech_words::MAX_LEN,
+    })
+}
+
+/// Stores the whole list at once rather than one row at a time.
+///
+/// The pane edits a table, and a table has no stable identity per row -- a save per keystroke
+/// on a row whose word is half typed would store `Aeth` as a rule. The reply is the list as
+/// stored, which is what the pane redraws from: it has been trimmed and de-duplicated on the
+/// way in, so a pane that trusted its own copy would be showing something speech disagrees
+/// with.
+pub fn set_pronunciations(
+    engine: &LlmEngine,
+    words: Vec<crate::speech_words::Say>,
+) -> Result<Value, String> {
+    crate::speech_words::set(engine.db(), words)?;
+    Ok(pronunciations(engine))
+}
+
 /// Puts one avatar back to the voices it was written with.
 pub fn clear_persona_voice(engine: &LlmEngine, persona: String) -> Result<Value, String> {
     crate::persona_voice::clear(engine.db(), &persona)?;
@@ -600,6 +624,11 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "lan_autostart": false,
         "voice_startup_audible": true,
         "game_mode": false,
+        // The two switches around the sandbox `run` spawns commands in. Both off: a test
+        // suite does not need the network, and a machine that cannot confine a command
+        // refuses to run one until the operator says otherwise -- see code_sandbox.rs.
+        "code_run_network": false,
+        "code_run_unconfined": false,
     });
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())
@@ -615,7 +644,77 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
     // saveable. It rides along here because the Settings page needs it for the same
     // reason the setup wizard does -- to describe *this* machine's folders and programs
     // rather than a guess drawn from whatever browser is pointed at it.
-    serde_json::json!({ "settings": settings, "os": setup::Os::current() })
+    // `sandbox` rides along for the same reason as `os`, and is the more important of the
+    // two: whether `run` is actually confined on this machine is a fact about the machine,
+    // not a preference, and the Settings page has to be able to say so plainly rather than
+    // describing a boundary that may not be there.
+    let sandbox = crate::code_sandbox::detect();
+    // And the autonomy level, which is a fact about the *project* rather than this machine
+    // or these settings -- it lives in the project's own `.aether/policy.json`. It rides
+    // here so the Settings page can show what the nominated project is trusted with without
+    // a second round trip. No project folder set: `level` is null, and the page says so
+    // rather than offering a choice that would have nowhere to be written.
+    let autonomy = match crate::code_workspace::root(engine.db()) {
+        Ok(root) => {
+            let (level, matches) = crate::code_policy::effective(&root, engine.db());
+            serde_json::json!({
+                "root": root.to_string_lossy(),
+                "level": level.key(),
+                "matches": matches,
+                "trusted": crate::code_policy::is_trusted(&root),
+                "shares": crate::code_policy::mounts(&root)
+                    .into_iter()
+                    .map(|mount| serde_json::json!({
+                        "path": mount.path.to_string_lossy(),
+                        "write": mount.write,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        }
+        Err(_) => serde_json::json!({ "level": Value::Null }),
+    };
+    serde_json::json!({
+        "settings": settings,
+        "os": setup::Os::current(),
+        "sandbox": {
+            "confines": sandbox.confines(),
+            "description": sandbox.description(),
+        },
+        "autonomy": autonomy,
+        // The four levels themselves, so the page describes them in the same words the CLI
+        // does rather than keeping its own copy of them.
+        "levels": crate::code_policy::ALL
+            .iter()
+            .map(|level| serde_json::json!({
+                "key": level.key(),
+                "title": level.title(),
+                "description": level.description(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Sets the nominated project's autonomy level -- the Settings page's twin of `aether1 code
+/// level <name>`. Both go through `code_policy::set_level`, so the project's file and the
+/// switches it means move together whichever surface asked.
+pub fn code_set_level(engine: &LlmEngine, level: &str) -> Result<Value, String> {
+    let level = crate::code_policy::Level::from_key(level).ok_or_else(|| {
+        format!(
+            "{level:?} is not a level. The four are: {}",
+            crate::code_policy::ALL
+                .iter()
+                .map(|l| l.key())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+    let root = crate::code_workspace::root(engine.db())?;
+    crate::code_policy::set_level(&root, engine.db(), level)?;
+    Ok(serde_json::json!({
+        "level": level.key(),
+        "title": level.title(),
+        "description": level.description(),
+    }))
 }
 
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {
@@ -856,12 +955,19 @@ pub fn synthesize_speech(
     let tts_engine =
         llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
 
+    // How the operator says the words, applied on the way to whichever engine speaks. It is
+    // read here, per clip, rather than held anywhere: the list is edited in Settings while
+    // the app is running, and the loop this feature lives or dies by is type it, press the
+    // test, listen.
+    let speller = crate::speech_words::speller(db);
+
     llm::generate_speech_with(
         &cache_dir,
         text,
         tts_engine,
         Some(&persona_voice),
         Some(&local_voice),
+        &speller,
     )
     .map_err(|why| {
         if local_only {
@@ -881,7 +987,7 @@ pub fn synthesize_speech(
 /// behind it. `facts` carries what only the caller knows -- the desktop process fills it in,
 /// a browser-served HUD passes what it can and the report says which rows nobody could answer.
 pub fn doctor_report(engine: &LlmEngine, facts: crate::doctor::Facts) -> Value {
-    let (observation, health) = crate::doctor::report(engine, &facts);
+    let (observation, health) = crate::doctor::report(engine.db(), &facts);
     serde_json::json!({ "health": health, "observation": observation })
 }
 
@@ -903,7 +1009,7 @@ pub fn doctor_repair(
 
     // The repair the report offered for this check, recomputed from a fresh probe: a button
     // pressed ten minutes after the panel was drawn must not act on what was true then.
-    let (observation, _) = crate::doctor::report(engine, &crate::doctor::Facts::default());
+    let (observation, _) = crate::doctor::report(engine.db(), &crate::doctor::Facts::default());
     let offered = crate::doctor::repair_for(check_id, &observation);
     match offered {
         Some(offered) if offered.id == repair_id => {}
@@ -919,6 +1025,22 @@ pub fn doctor_repair(
 
     let outcome = crate::doctor::apply_with(engine, check_id, repair_id, in_app)?;
     serde_json::to_value(outcome).map_err(|e| e.to_string())
+}
+
+/// Fixes everything AETHER1 can fix about itself, because somebody pressed the one button
+/// that says so.
+///
+/// The button rather than the switch: this is the attended path, and pressing it is the
+/// go-ahead for the whole pass in the same way pressing one repair is the go-ahead for that
+/// repair. The unattended path is `SELF_REPAIR_SETTING` and lives in main.rs's startup
+/// thread; it reaches the same `doctor::attend`, so there is one behaviour and not two.
+pub fn doctor_attend(
+    engine: &LlmEngine,
+    facts: crate::doctor::Facts,
+    in_app: Option<crate::doctor::InAppRepair>,
+) -> Result<Value, String> {
+    let attended = crate::doctor::attend(engine, &facts, in_app);
+    serde_json::to_value(attended).map_err(|e| e.to_string())
 }
 
 /// Runs diagnostics and returns a structured report with simplified output.
@@ -1157,12 +1279,17 @@ pub fn test_speech(engine: &LlmEngine) -> Result<(PathBuf, Value), Value> {
     let tts_engine =
         llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
 
+    // The test sentence goes through the operator's list like anything else. A test that
+    // took a different route through this function would be proving the wrong route works.
+    let speller = crate::speech_words::speller(db);
+
     match llm::generate_speech_reporting(
         &cache_dir,
         VOICE_TEST_SENTENCE,
         tts_engine,
         Some(&configured_voice),
         Some(&local_voice),
+        &speller,
     ) {
         Ok(speech) => {
             let report = serde_json::json!({
@@ -1348,6 +1475,59 @@ mod tests {
         assert!(response["settings"]["os"].is_null());
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The Settings page shows a dropdown of levels and the one in force. Both come from
+    /// here, so that the page and `aether1 code level` describe them in the same words --
+    /// and so that a page told there is no project folder says so rather than offering a
+    /// choice that has nowhere to be written.
+    #[test]
+    fn the_settings_response_carries_the_levels_and_this_projects_answer() {
+        let dir = std::env::temp_dir().join(format!(
+            "aether1_settings_level_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("project")).expect("temp project");
+        let db = llm::MemoryDb::open(dir.join("memory.db")).expect("temp db should open");
+        let engine = LlmEngine::new(db);
+
+        // No project folder nominated yet: the four levels are still described, and the
+        // answer is null rather than a default nobody chose.
+        let response = get_settings(&engine);
+        let levels = response["levels"]
+            .as_array()
+            .expect("levels should be a list");
+        assert_eq!(levels.len(), crate::code_policy::ALL.len());
+        assert!(levels
+            .iter()
+            .any(|level| level["key"] == "developer" && level["title"] == "Developer"));
+        assert!(response["autonomy"]["level"].is_null());
+
+        let root = dir.join("project").canonicalize().expect("project root");
+        engine
+            .db()
+            .set_setting(
+                crate::code_workspace::ROOT_SETTING,
+                &serde_json::json!(root.to_string_lossy()),
+            )
+            .expect("workspace root should save");
+
+        assert_eq!(get_settings(&engine)["autonomy"]["level"], "developer");
+        code_set_level(&engine, "agent").expect("agent is a level");
+        let response = get_settings(&engine);
+        assert_eq!(response["autonomy"]["level"], "agent");
+        // And the switches it stands for really moved, which is the only reason the level
+        // is worth recording.
+        assert!(response["settings"][crate::code_sandbox::NETWORK_SETTING] == true);
+
+        // A level nobody defined is refused by name, not rounded to the nearest one.
+        let refused = code_set_level(&engine, "yolo").expect_err("yolo is not a level");
+        assert!(refused.contains("unrestricted"), "unhelpful: {refused}");
+        assert_eq!(get_settings(&engine)["autonomy"]["level"], "agent");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

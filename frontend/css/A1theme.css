@@ -10,6 +10,8 @@
 :root {
   --bg-core: #040711;
   --bg-panel: rgba(8, 15, 30, 0.75);
+  /* The HUD panels only. See .hud-panel: this stands in for a backdrop blur. */
+  --bg-panel-solid: rgba(8, 15, 30, 0.9);
   --bg-panel-hover: rgba(14, 25, 48, 0.85);
   --border-neon: rgba(0, 240, 255, 0.35);
   --border-neon-bright: #00f0ff;
@@ -565,12 +567,23 @@ select,
 }
 
 .hud-panel {
-  background: var(--bg-panel);
+  /* Was --bg-panel (0.75 alpha) behind a 12px backdrop blur. The blur's whole job was
+     stopping you reading what sits behind the panel, and on a dark background at that
+     opacity it was doing very little of it -- while costing WebKit a snapshot of the
+     backdrop and a two-pass blur, per panel, every time anything underneath changed. A
+     slightly more opaque panel does the same job for nothing. It is its own token rather
+     than a change to --bg-panel, which some fifty other surfaces share and which are not
+     blurred and do not want moving. */
+  background: var(--bg-panel-solid);
   border: 1px solid var(--border-neon);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   position: relative;
-  transition: all 0.25s ease;
+  /* Only the two properties that actually change on hover. `all` also covered width,
+     height and the grid placement -- so every panel drag and every seam drag animated
+     its own geometry over a quarter of a second, forcing a layout and a repaint on each
+     frame of the drag while the pointer was already somewhere else. The handle felt like
+     it was being dragged through treacle for no visual gain: nothing in the design ever
+     wanted a panel to ease into its new size. */
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
 }
 
@@ -622,10 +635,9 @@ select,
     to bottom,
     rgba(0, 0, 0, 0) 0px,
     rgba(0, 0, 0, 0) 1px,
-    rgba(0, 0, 0, 0.35) 2px,
-    rgba(0, 0, 0, 0.35) 3px
+    rgba(0, 0, 0, 0.22) 2px,
+    rgba(0, 0, 0, 0.22) 3px
   );
-  mix-blend-mode: overlay;
   animation: crtFlicker 3.2s infinite steps(24);
 }
 
@@ -650,10 +662,13 @@ select,
   inset: 0;
   pointer-events: none;
   z-index: 5;
+  /* The dark scanline layer this used to carry was invisible: screen(backdrop, black)
+     is the backdrop, so under the old `mix-blend-mode: screen` it contributed nothing at
+     any alpha. Dropping the blend mode without dropping that layer would have made it
+     appear for the first time, so it goes with it, and the channel-split edges -- the
+     part you could actually see -- are raised to carry the effect on their own. */
   background:
-    repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.28) 3px, rgba(0,0,0,0.28) 4px),
-    linear-gradient(90deg, rgba(255,0,60,0.05) 0%, transparent 2%, transparent 98%, rgba(0,229,255,0.05) 100%);
-  mix-blend-mode: screen;
+    linear-gradient(90deg, rgba(255,0,60,0.09) 0%, transparent 2%, transparent 98%, rgba(0,229,255,0.09) 100%);
   animation: glitchFlicker 2.6s infinite steps(20);
 }
 
@@ -2842,6 +2857,78 @@ select,
     color: var(--text-main);
 }
 
+/* ---------- How to say a word (the Words tab of Voice & Sound) ----------
+   A row is one rule: the word, the words it should sound like, and a way to take it off the
+   list. The two fields share the row's width rather than being sized, because a respelling
+   is usually longer than what it replaces and the interesting half is the one being typed. */
+.words-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.words-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.words-from,
+.words-to {
+    flex: 1 1 0;
+    min-width: 0;
+    background: var(--panel-deep);
+    border: 1px solid var(--border-neon);
+    border-radius: 0.35rem;
+    padding: 0.4rem 0.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text-main);
+}
+
+.words-from:focus,
+.words-to:focus {
+    outline: none;
+    border-color: var(--border-neon-bright);
+}
+
+.words-arrow {
+    flex: 0 0 auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.words-remove {
+    flex: 0 0 auto;
+    width: 1.6rem;
+    height: 1.6rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.words-remove:hover {
+    border-color: rgba(255, 51, 102, 0.5);
+    color: rgba(255, 120, 150, 0.95);
+}
+
+#words-note[data-tone="good"] { color: var(--neon-green); }
+#words-note[data-tone="bad"] { color: var(--neon-amber); }
+
+/* The row stacks on a narrow window rather than squeezing two text fields and a button
+   into a phone's width, where neither field is wide enough to read what is in it. */
+@media (max-width: 820px) {
+    .words-row { flex-wrap: wrap; }
+    .words-from, .words-to { flex: 1 1 100%; }
+    .words-arrow { order: -1; }
+}
+
 .hub-blurb {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.68rem;
@@ -3416,4 +3503,30 @@ select,
   background: #b3202b;
   border-color: #d9333f;
   color: #fff;
+}
+
+/* ---- The lite tier ---------------------------------------------------------------
+   Set as data-render="lite" on <html> by the hologram engine (see core.js's quality
+   tiers), either because the operator asked for it or because this machine was measured
+   failing to hold a frame rate under load.
+
+   Everything below is garnish over the whole window: a fixed, full-viewport layer that
+   every repaint underneath has to be composited through, costing a machine with onboard
+   graphics more than the avatar itself. None of it carries information. The layout, the
+   colours, the panels, the avatar and its motion are untouched -- somebody on an Atom
+   gets the same HUD, without the film grain over it. */
+:root[data-render="lite"] .scanlines,
+:root[data-render="lite"] .vignette,
+:root[data-render="lite"] #hologram-viewport.crt-active::after,
+:root[data-render="lite"] #hologram-viewport.glitch-active::after {
+  display: none;
+}
+
+/* The decorative loops specifically. The typing cursor keeps blinking however slow the
+   machine is -- it is the only thing on screen saying a reply is still arriving, and a
+   still cursor on a slow machine reads as the app having hung, which is the exact wrong
+   message to send on the hardware this tier exists for. */
+:root[data-render="lite"] .pulse-badge,
+:root[data-render="lite"] .setup-bar-fill[data-state="unknown"] {
+  animation: none;
 }

@@ -3345,3 +3345,368 @@ sentence is usually still sitting in `pending` and this is the line that finishe
 `pending` is by construction exactly the text no chunk has taken, so it cannot be misaligned --
 it only misses a delta that never arrived, which is the narrower failure. The authoritative slice
 when the offset lines up, `pending` when it does not.
+
+### How to say a word
+
+Trident, having just updated to test the voice: "Will it be possible to have the equivalent of
+a spell check in a pronunciation check list? There are a few words that I find hard to discern
+when not using my local pronunciations."
+
+A list of *say this, as that*, applied to the text on its way to the synthesizer and to nothing
+else. What is on screen keeps the spelling it was written with -- the operator writes `Aether1`
+and reads `Aether1`; only the voice hears `eether one`. That separation is what lets an entry be
+as phonetic as it needs to be without making the conversation unreadable.
+
+**Why a respelling rather than a phoneme.** IPA or eSpeak phonemes are the obvious answer and
+they do not survive contact with the three engines: Piper takes plain text and phonemizes it
+itself with no escape hatch, the cloud engine wants SSML `<phoneme>`, and the OS engine wants
+neither. A respelling is the one instruction all three understand, because it is just words. It
+is also the thing the operator can author without notation -- "say L'KEMI as elle kemmy" -- and
+the pane's own button says immediately whether it worked. What it cannot express is stress, or a
+vowel English spelling has no letters for; when that day comes an optional phoneme field can sit
+beside this one for the engines that take it, without changing what is stored.
+
+**One place to apply it, because there is one place the text is prepared.**
+`tts::generate_speech_reporting` already sanitized every string every engine speaks, so the
+speller goes in beside `sanitize_text` -- markdown out first, then the respellings, because they
+are written against the words the operator *hears*, not against the punctuation the answer
+arrived wrapped in. It is a parameter rather than a lookup inside that function, so the compiler
+names every caller that would otherwise have quietly skipped it. The result is what feeds the
+cache key, so editing the list makes the next clip a new one and nothing has to know to throw
+the old one away.
+
+**Three decisions in the matching.**
+- *Whole words, ignoring case.* That is what "a word is said wrong" means. But `\b` on both ends
+  never matches between two non-word characters, which would make `C++`, `.NET` and `L'KEMI`
+  unmatchable -- and those are exactly the entries worth having. So a boundary is added only on
+  an end that has a word character to sit against.
+- *The replacement is inserted exactly as written, never recapitalised to match what it
+  replaced.* An engine handed `NGINX` may spell it out letter by letter, so `engine ex` has to
+  stay lower case even where it replaced a shout.
+- *Longest first.* A rule for a phrase has to beat a rule for a word inside it, rather than
+  losing to whichever branch of the alternation happened to be tried first.
+
+The regex is compiled per clip rather than cached in a static: the list is edited while the app
+is running, and a cached one would keep saying the old thing until a restart -- which for a
+feature whose whole loop is type it, press the button, listen, is the one behaviour that makes it
+feel broken. One small compile against a synthesis measured in hundreds of milliseconds is not a
+cost worth that.
+
+**The pane stores the whole list at once.** A row being typed has no identity of its own, so a
+save per keystroke would store `Aeth` as a rule; it saves on blur and on remove. Rust trims,
+drops the empty row every editor leaves behind, and collapses entries differing only in case,
+then returns the list *as stored* -- which is what the pane redraws from, so the pane and the
+voice cannot end up disagreeing. A refused save leaves the rows exactly as typed, because one
+half-filled row should not take the other nine with it.
+
+`aether1 words` is the same list from a terminal, and earns its place beyond symmetry: adding a
+word there and running `aether1 say` is the only way to check the substitution on a machine with
+no window, which is every machine this was built on.
+
+### Enough
+
+Trident, having asked a fresh build for `diagnostics`: "I need a way to stop the talking once it
+starts. This was painful with many duplicates."
+
+Two separate faults, and the transcript he sent carries both. The answer ran to fourteen hundred
+lines, most of them frame addresses from a coredump; and there was no way to stop it being read
+out other than asking something else or holding the talk key, which are both ways of *starting*
+something.
+
+**Why the answer was fourteen hundred lines.** The sweep asks journalctl for sixty lines and gets
+sixty *entries* -- and one entry can be a coredump carrying the stack of every thread in the
+process. Those continuation lines have no timestamp and no unit prefix, so the parser, which took
+the first token as a time and fell back to `the system` when it found no `unit: `, read each one
+as an error of its own. `#3` became a timestamp. `Stack trace of thread 415397:` became an error
+attributed to `the system`, which is where `Stack the system: of thread` in his transcript comes
+from. So a line is now an entry only if its first token has the shape of a date; anything else is
+a continuation of the line above it, which is already in the list.
+
+**And the duplicates.** The same error four hundred times is one thing wrong with the machine, so
+events with the same source and the same text collapse into one line with a count and the time it
+was last seen. What that deliberately does not do is normalise the text: two lines differing only
+in a pid or an address stay two kinds, because deciding which digits are incidental is how a
+summary starts misreporting what the log said. The header then carries both numbers -- the kinds
+and the total -- since "nine kinds" and "1388 lines" are different facts about the same morning
+and the second should not disappear. The report caps at forty kinds and says how many it left,
+because `SWEEP_LINES` bounds what is asked for, not what comes back.
+
+**Stopping the talking.** Everything needed was already there: `stopSpeech()` drops the queue and
+cuts the clip, and the turn counter stops the sentences still inside the synthesizer from queueing
+themselves a moment later. What was missing was a way to ask for it that does not start something
+else. Escape does it, and a button appears beside Send while there is something to stop -- hidden
+otherwise, because a dead control next to the one you press every time is clutter, and because its
+appearing is itself how the operator learns the key.
+
+Escape hushes *and stops there* when it silenced something: a press that cuts off a long answer
+should not also close the panel being read. When nothing is being spoken it is the menu key it
+always was. The button plays no click sound, it being the button you press to stop the noise.
+
+---
+
+#### Follow-up: AETHER CODE can change one folder
+
+Trident, 2026-09-27: *"I need the code side able to access the system and function similar to
+the likes of Claude Code, Google Antigravity or GPT Codex."*
+
+The coding panel could look and nothing else. Five tools, every one a read, three tool rounds
+per question, and any request to change something came back as a refusal telling the model to
+put the command in a fenced block, where a button types it into the operator's terminal and
+their Return key runs it. That is a defensible place to stand and it is not what a coding
+agent is: every one of them is the same loop -- read a file, change it, run the tests, read
+what broke, change it again -- and a panel that cannot take the second step of that loop can
+only narrate it.
+
+**What moved.** `code_workspace.rs` is the whole of the new capability, and it states five
+rules it holds itself to. One nominated folder (`code_workspace_root`, falling back to the
+project already selected for Graft). Paths canonicalised -- the parent when the file does not
+exist yet -- so a symlink out of the project resolves to where it really goes and is refused,
+with `fs_guard` checked as well, not instead. No shell anywhere: `run` is given an argv and
+spawns the program directly, so a pipe or a `;` in an argument is a literal string. A program
+must be on the operator's own list, and `git` additionally must not be one of the fifteen
+subcommands that leave the folder or destroy uncommitted work. Both new grants default off.
+
+**Three tools:** `edit_file` (exact text, and it must match *exactly once* -- a line range
+edits the wrong line silently when the model's picture of the file is stale, and an ambiguous
+match is refused with the count and told to include more context), `create_file`, and `run`
+(exit status, stdout and stderr, middle cut out of long output, killed at its timeout). A
+non-zero exit is a *result*, not an `Err`: a model told a red test suite was an error
+apologises instead of reading it.
+
+**The loop budget follows the capability.** Three rounds is right for looking -- a small model
+that has not answered after three reads is looping on a file it cannot find. An edit-and-test
+loop cannot reach the end of one in three, so with either changing grant on it gets 25.
+
+**What did not move.** The terminal isolation rule is untouched and
+`scripts/check_terminal_isolation.sh` passes unchanged: nothing here types into the operator's
+terminal or reads from it. There is still no way to write outside the nominated folder, no way
+to run a program they have not listed, and no shell. `git commit` runs; `git push` is still
+written out as a button.
+
+**Measured, not assumed.** A failing Python project in a temp folder, driven through
+`code_tools::call` exactly as a model's tool block is: `run` reported the AssertionError,
+`read_file` showed `return a - b`, `edit_file` changed it to `a + b`, and the test passed. One
+real-world trap worth knowing: the second run still failed because CPython had cached a `.pyc`
+whose source was the same length and same-second mtime. The edit had landed. It is Python's
+cache, not the tool -- but a model in that loop will see it too.
+
+---
+
+#### Follow-up: attending to what is broken, rather than reporting it
+
+Trident, 2026-09-27: *"I don't want the diagnostic for ME to work on it. I want it to be
+checked locally similar to Omarchy as that is the level I want diagnostics at."*
+
+Step 47 built the ladder and stopped one rung short of this on purpose. The startup self-check
+ran the whole list and then only *said* what it found, with a comment giving the reason: a fix
+nobody agreed to is not a fix. That reasoning is about **agreement, not timing**, and the
+thing that was missing was a way to agree once rather than per repair.
+
+**`doctor::attend`** is that pass: every failing check that has a repair AETHER1 can make
+itself, made, each one re-probed, then a list of what is still wrong with the exact command
+for the parts it will never run. Three properties it holds:
+
+- **Nothing needing root, ever.** A `RepairKind::HandOver` is not attempted at all; it comes
+  back in `remaining` with its command written out. `RepairKind::InApp` is skipped when the
+  caller has no window — `aether1 doctor --heal` in a terminal cannot register a hotkey, and
+  recording that as a failed repair would be a lie about the machine. Both rules live in
+  `to_attempt`, which is pure and is what the tests drive.
+- **One attempt each.** It calls `apply_with`, so rung 3's one-repair-per-session rule is
+  unchanged. A switch left on does not become a retry loop.
+- **The re-check decides.** A repair whose check is still broken afterwards is recorded as
+  failed, whatever the thing it ran said about itself. `Attended::headline` counts what
+  worked, not what ran, which is why "Tried 1 repair(s); none of them worked" is a sentence
+  it can say.
+
+**Four ways in, one behaviour.** The "Fix what you can" button in Diagnostics; the
+`doctor_self_repair` switch beside it, which makes the startup pass repair rather than report;
+`aether1 doctor --heal`, which is the button for a machine whose window will not open; and
+`POST /api/doctor/attend` for the browser HUD. All four reach the same function. `--fix` and
+`--heal` together are refused rather than guessed at: one asks about each repair, the other
+makes them all.
+
+**And the half that needs a model.** What deterministic repair cannot reach is offered to the
+companion, which since this same PR has `self_check` and `recent_crashes` and can read the
+logs behind them. An offer under the panel rather than an automatic question: asking a local
+model costs the operator's own graphics card for a minute, and a panel that starts doing that
+by itself is one people stop pressing buttons in.
+
+**Run here, for real:** `aether1 doctor --heal` on this container tried the one repair it had
+(the Piper voice download), reported it as not having worked because the re-check still said
+nothing can speak, and listed the other five with their reasons — including the `python3 -m
+venv` line for faster-whisper, which it will not run for you.
+
+
+---
+
+## Step 53 — `run` gets a real sandbox, because the allowlist was never one
+
+A source-level security review of `main` (2026-09-28) found one thing worth treating as
+important, and it was right. `code_workspace::run` was described as running commands "in the
+project folder and nowhere else", and the mechanism behind that sentence was
+`Command::current_dir` plus a list of allowed program names. Neither is a boundary.
+`current_dir` says where a process starts, not what it may touch, and every interpreter on
+the starter list is a general-purpose way to execute code: `python3 -c` reads
+`~/.ssh/id_ed25519` if asked, `node -e` opens sockets, `cargo` runs `build.rs`, `make` runs
+whatever the Makefile says — and the Makefile is a file the model can write. Spawning without
+a shell removes shell metacharacters and nothing else.
+
+So the effective model was *"the AI can execute arbitrary code under these trusted program
+names, with the project as its working directory"*, wearing the words of *"the AI can only
+change things inside the project"*. The gap between those two sentences is the whole of this
+step.
+
+**`code_sandbox.rs`** makes the kernel keep the promise. On Linux with bubblewrap installed:
+the host filesystem read-only, `$HOME` replaced by an empty tmpfs (so keys and credentials
+are absent, not merely unwritten), the toolchain caches bound back over that tmpfs with the
+credential files inside them masked by `/dev/null`, the project folder bind-mounted
+read-write as the only writable place, user/IPC/PID/UTS namespaces of their own, the network
+unshared unless `code_run_network` is on, and the environment cleared and rebuilt from a
+short list so an API key Aether1 is holding cannot be read by a build script.
+
+**Where there is no sandbox, `run` refuses.** Windows wants a restricted token or an
+AppContainer and does not have one yet; a Linux box without bubblewrap has nothing. The
+refusal says why and says what the alternative costs, and `code_run_unconfined` is the
+operator's deliberate answer to it. The wording on both switches, in the CLI and in Settings,
+comes from one function, so what the HUD claims and what the kernel does cannot drift apart.
+
+**Tested adversarially, which is the part that matters.** The tests do not assert that the
+allowlist contains `python3`; they hand `python3` a hostile argv and look at the disk
+afterwards — a planted key in the home directory (unreadable), a write above the workspace
+(never lands), a `make` recipe writing outside it (never lands), a socket to a public address
+(refused), Aether1's own environment (absent). On a machine with no sandbox those same tests
+assert the other half of the promise: that `run` refuses and explains itself. Worth noting
+what the write test asserts, because it is the distinction the whole step turns on: inside
+the box the write *succeeds* against a tmpfs and the command reports success, and nothing
+reaches the operator's disk. Containment, not denial.
+
+**`docs/SECURITY_MODEL.md`** is new, and holds the boundaries and their known limits in one
+place — including the ones this step does not close: the resolve-then-open gap in the
+filesystem guard, the WebSocket token in the query string, the pairing phrase as a standing
+credential, and the per-subsystem local-only checks.
+
+---
+
+## Step 54 — a real shell in the box, and a way back out of anything
+
+Trident's second review changed the target, and the sentence it turns on is: *"autonomy
+doesn't require giving the agent unrestricted access; it requires making the safe environment
+large enough that most useful work happens inside it."* An agent that must ask before every
+command is a chatbot with a confirmation dialog. The design is in `docs/AGENT_RUNTIME.md`;
+this step is the first two pieces of it, and they only became possible once step 53 made the
+kernel the boundary.
+
+**The allowlist stops pretending.** Inside the sandbox it is not consulted, and `run` takes
+`{"shell": "cargo test && cargo clippy"}`. That is not a loosening: a list permitting
+`python3`, `node`, `make` and `cargo` permits arbitrary code already — `make` runs recipes,
+`cargo` runs `build.rs`, `npm` runs lifecycle scripts — so the list never made a command
+harmless, it only read as though it did. The box does. The list survives where there is no
+box (`run-unconfined`), enforced exactly as before, and a shell is refused there for the same
+reason: there is nothing for it to be inside.
+
+**Checkpoints replace the refused-git table.** `REFUSED_GIT` protected uncommitted work by
+refusing `reset`, `clean` and the rest, which a shell walks straight around — and a guard
+that can be walked around reads as protection and is not. `code_checkpoint.rs` commits the
+whole working tree (tracked, untracked, staged, unstaged) to a ref under
+`refs/aether1/checkpoints/` before the first change of a session, through a **temporary
+index**, so taking one stages nothing, moves neither HEAD nor any branch, and does not show
+up in `git status`. One per thirty minutes of active work: a burst of edits and test runs is
+one piece of work and wants one way back, not forty.
+
+`aether1 code revert` restores **additively** — what the checkpoint held comes back, what has
+appeared since is left alone and named in the report. A revert that deleted things would be
+one more way to lose an afternoon, which is the opposite of the point. `aether1 code
+checkpoints` lists them for somebody who has just come back to a folder they left an agent
+working in.
+
+**The test that matters** takes a repository with uncommitted edits and an untracked file,
+does the worst a shell can do — overwrite, delete, `git reset --hard` — and asserts every
+byte comes back, with the agent's own new file still there and named rather than removed.
+
+---
+
+## Step 55 — the sandbox gets one way out, and it is a policy
+
+The network was the last part of the box that was still a switch: off, and `npm install`
+cannot work; on, and the box could reach anything at all, including wherever a fetched page
+told the model to post a copy of the source tree. Trident's review named the proxy as the
+piece that makes an agent's autonomy safe rather than merely large, and it is right — with
+the filesystem confined, the network is the only way anything gets out.
+
+**The shape, which is the whole argument.** The box keeps its own network namespace in both
+states, so it has a loopback interface and no route anywhere. Switching the network on does
+not give it one. It bind-mounts in a single unix socket, which crosses a network namespace
+because it is a file rather than a route. Inside, `aether1 --net-relay` (Aether1 re-entering
+itself, then running the real command as a child) listens on loopback and hands every
+connection down that socket. Outside, `code_proxy.rs` answers one question per connection:
+is this host one the project agreed to?
+
+So a program that ignores `HTTPS_PROXY` does not get out by ignoring it. There is nothing to
+get out through.
+
+**No interception, no certificate.** The decision is taken on the `CONNECT` line, which names
+the host in the clear before TLS starts. Aether1 never terminates TLS and never sees inside
+the tunnel. What it enforces is where a connection goes, which is what the policy is about.
+
+**`.aether/policy.json`** holds `allow` and `deny` over a starter set of package registries
+and source hosts, with `deny` winning — the only way to take a default away. Matching is
+exact or dot-delimited subdomain, so `crates.io` covers `static.crates.io` and not
+`crates.io.evil.example`, and credentials are stripped from an authority before the host is
+read, because `http://crates.io@evil.example/` goes to the second one. A refused host is
+recorded, so `aether1 code net` answers both "what may it reach" and "what did it just try".
+
+**The test is the claim.** A real command in a real sandbox tries the host directly and is
+blocked, then reaches an allowed host through the proxy, with the domain allowed between the
+two runs. It found two real bugs while being written: `/run` is on the read-only host bind so
+the socket could not be mounted there (it lives under the sandbox's own tmpfs now), and the
+proxy was keyed per process rather than per database.
+
+**Still to come:** the *allow once / allow for this project / deny* card in the HUD. Today
+the refusal explains itself and names the one command that fixes it.
+
+---
+
+## Step 56 — a project is trusted once, and the answer is four words long
+
+The sandbox settled how a boundary is enforced and the proxy settled how the one way out is
+policed. What was left is the question an operator actually has: *how much of my machine does
+this project get?* Answering it per command is a chatbot with a confirmation dialog; answering
+it once, in words, is an agent.
+
+**Four levels, because a slider is a question nobody can answer.** Assistant reads the project
+and changes nothing. Developer reads and writes it, which is what a coding agent needs and is
+the default. Agent adds the folders the operator named, each of them read-only or writable.
+Unrestricted turns the sandbox off and says so in those words. Each is a described
+configuration, not a position on a scale.
+
+**A level is a name for switches that already existed.** `code_perm_edit`, `code_perm_run`,
+`code_run_network`, `code_run_unconfined` — picking a level writes those four and nothing
+else. There is no fifth mechanism to reason about, and nothing new to get wrong.
+
+**The project's file is the level's only home.** `.aether/policy.json`, beside the code it
+describes, the same file the proxy reads its domains from. It has to be that way round:
+Developer and Agent set identical switches and differ only in what they do with the folder
+list, so the settings table cannot be asked which of the two was chosen. What it *can* answer
+is whether the switches still match the recorded level — and an operator who turns the network
+off by hand is told their project is no longer at the level its file claims, rather than
+having their choice quietly reinterpreted as whichever name now fits. That distinction came
+out of a test, not a design: the first version tried to identify the level by reading the
+switches back, and its own test proved it could not.
+
+**Read and write are separate answers, per folder.** `aether1 code share ~/Documents` makes a
+folder readable inside the sandbox; `share-write` makes it writable, and only Agent and above
+honour that. So *"read my vault and summarise it"* works at any level that can read, while
+*"reorganise my vault"* is a level someone chose. `$HOME` itself and the filesystem root are
+refused — hiding them is the point of the box — and a named folder that is not on this
+machine is left out rather than failing the command, because a policy file travels with a
+repository.
+
+**Enforced where everything else is.** The level becomes a `code_sandbox::Access`: the
+workspace binds read-only at Assistant, named folders bind before it as `--ro-bind-try` or
+`--bind-try`. Two tests run a real command in a real sandbox and check the host disk — the
+project folder is unwritable at Assistant, and a shared folder is readable at Developer and
+writable only at Agent.
+
+`aether1 code level` lists the four and marks the one in force; `aether1 code share`,
+`share-write` and `unshare` manage the folders. Settings has the same choice as a dropdown,
+described in the same words, because both read them from `code_policy.rs`.

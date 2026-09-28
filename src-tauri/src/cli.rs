@@ -59,6 +59,10 @@ USAGE:
     aether1 flow on|off            Turn that on or off
     aether1 flow line <NAME>       Pick a whole line instead of one avatar, so the question
                                    goes to whichever of its nodes owns it (`clear` to release)
+    aether1 words                  Show how this machine says the words the voice gets wrong
+    aether1 words <WORD> <SAID>    Say one word differently (the rest of the line is how it
+                                   sounds, so quotes are optional)
+    aether1 words drop <WORD>      Take one off the list
     aether1 signin                 Sign in to GitHub, so this copy can see new releases.
                                    Shows a code to type in at github.com; nothing else
     aether1 signout                Forget that sign-in
@@ -74,9 +78,25 @@ USAGE:
                                    conversation the HUD's Aether Code tab keeps
     aether1 code conventions       Print the house rules for a coding model to follow;
                                    redirect it into an AGENTS.md at the top of your project
-    aether1 code perms             What AETHER CODE is allowed to look at (the system,
-                                   the GitHub CLI, the internet) -- all of it read-only
-    aether1 code perms <n> on|off  Turn one of those three on or off
+    aether1 doctor --heal          Make every repair AETHER1 can make to itself, without
+                                   asking about each one. Never anything needing root.
+    aether1 code perms             What AETHER CODE is allowed to do: read the system,
+                                   the GitHub CLI, the internet, and -- off until you say
+                                   otherwise -- edit and run inside one project folder
+    aether1 code perms <n> on|off  Turn one of those on or off
+    aether1 code workspace [path]  The project folder it may change; prints the current one
+    aether1 code level [name]      How much this project is trusted with; prints all four
+    aether1 code share <folder>    Let it read one folder beyond the project
+    aether1 code share-write <folder>   ...and write it (the agent level only)
+    aether1 code unshare <folder>  Take one back
+    aether1 code net               What the sandbox may reach, and what it has asked for
+    aether1 code net-allow <domain>   Let it reach one more
+    aether1 code checkpoints       Every point AETHER CODE's work can be put back to
+    aether1 code revert [which]    Put the project folder back to one of them
+    aether1 code run-network on|off   Let commands reach the network from inside the sandbox
+    aether1 code run-unconfined on|off  Run commands on a machine with no sandbox anyway
+    aether1 code run-allow <prog>  Let it run that program in the project folder
+    aether1 code run-deny <prog>   Take that program back off the list
     aether1 discover               List other AETHER1 instances announcing themselves on
                                    the LAN (default: listens 3 seconds, then stops)
     aether1 announce               Announce this machine on the LAN for testing `discover`
@@ -142,6 +162,9 @@ pub enum Invocation {
         /// Offer the repairs. Each one is still asked about individually at the moment of
         /// acting; this flag only decides whether they are offered at all.
         fix: bool,
+        /// Make every repair AETHER1 can make, without asking about each one. Typing this
+        /// is the go-ahead for the pass -- see `doctor::attend`.
+        heal: bool,
         json: bool,
         /// Where to write the pasteable report. `Some(None)` is --report with no path, which
         /// picks one under the temp directory and prints it.
@@ -165,6 +188,52 @@ pub enum Invocation {
         grant: Option<String>,
         on: Option<bool>,
     },
+    /// `code workspace`: the project folder AETHER CODE may change, printed or set.
+    CodeWorkspace {
+        path: Option<String>,
+    },
+    /// `--net-relay`: Aether1 running inside the sandbox, bridging loopback to the proxy
+    /// socket and then running the real command. Never typed by a person.
+    NetRelay {
+        socket: String,
+        argv: Vec<String>,
+    },
+    /// `code level`: how much this project is trusted with, printed or set.
+    CodeLevel {
+        level: Option<String>,
+    },
+    /// `code share`: the folders beyond the project the sandbox may see.
+    CodeShare {
+        path: Option<String>,
+        /// True for `share-write <path>`, which asks for a writable folder.
+        write: bool,
+        /// True for `unshare <path>`.
+        remove: bool,
+    },
+    /// `code net`: what the sandbox may reach, and `code net-allow <domain>` to add one.
+    CodeNet {
+        allow: Option<String>,
+    },
+    /// `code checkpoints` / `code revert`: the way back from autonomous work.
+    CodeCheckpoints {
+        /// True for `revert`, which puts the working tree back.
+        revert: bool,
+        /// Which checkpoint, when the operator names one rather than taking the newest.
+        which: Option<String>,
+    },
+    /// `code run-network` / `code run-unconfined`: the two switches around the sandbox
+    /// commands are spawned in. Printed with no argument, set with `on`/`off`.
+    CodeSandbox {
+        /// Which switch: the network inside the box, or running with no box at all.
+        unconfined: bool,
+        on: Option<bool>,
+    },
+    /// `code run-allow`: the programs it may run inside that folder, printed or added to.
+    CodeRunAllow {
+        program: Option<String>,
+        /// True for `run-allow <p>`, false for `run-deny <p>`.
+        add: bool,
+    },
     /// `models`: which local model each speciality runs on, and with two arguments, the
     /// setting of one. See llm/routing.rs for why the key is the speciality.
     Models {
@@ -180,6 +249,13 @@ pub enum Invocation {
         /// `flow line <NAME>`: pick a whole cast rather than one of its members, so the
         /// question goes to whichever node of that line owns it. `clear` releases it.
         line: Option<String>,
+    },
+    /// `words`: the pronunciation list. With no arguments it prints it; with a word and a
+    /// respelling it adds or replaces one; `drop <WORD>` removes one.
+    Words {
+        word: Option<String>,
+        said_as: Option<String>,
+        drop: bool,
     },
     /// `signin`: the GitHub device flow, in a terminal. Prints the code, waits for it to be
     /// approved in a browser, and keeps the token in the OS keychain. See github_auth.rs for
@@ -308,6 +384,7 @@ fn parse_discover(rest: Vec<String>) -> Result<Invocation, String> {
 /// path, `--report` takes an optional one, and the two flags that take nothing are order-free.
 fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
     let mut fix = false;
+    let mut heal = false;
     let mut json = false;
     let mut report: Option<Option<String>> = None;
     let mut replay: Option<String> = None;
@@ -315,6 +392,7 @@ fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--fix" => fix = true,
+            "--heal" => heal = true,
             "--json" => json = true,
             "--replay" => match iter.next() {
                 Some(path) => replay = Some(path.clone()),
@@ -335,22 +413,33 @@ fn parse_doctor(rest: Vec<String>) -> Result<Invocation, String> {
             other => {
                 return Err(format!(
                     "doctor does not take {other:?} -- it takes --fix, --json, --report [FILE] \
-                     or --replay <FILE>"
+                     --heal, --json, --report [FILE] or --replay <FILE>"
                 ))
             }
         }
     }
-    if replay.is_some() && fix {
+    if heal && fix {
+        // Two different things: --fix asks about each repair, --heal makes them all. Asked
+        // for together, which one the operator meant is genuinely unclear, and guessing
+        // wrong means either a prompt they did not want or a repair they did not approve.
+        return Err(
+            "--fix asks about each repair and --heal makes them all, so they cannot both be \
+             meant -- pick one"
+                .into(),
+        );
+    }
+    if replay.is_some() && (fix || heal) {
         // The observation came from another machine. Repairing this one from it would be
         // acting on a fault nobody here has.
         return Err(
             "--replay judges an observation from somewhere else, so there is nothing here to \
-             fix -- run `aether1 doctor --fix` on the machine that recorded it"
+             fix -- run it on the machine that recorded it"
                 .into(),
         );
     }
     Ok(Invocation::Doctor {
         fix,
+        heal,
         json,
         report,
         replay,
@@ -375,6 +464,18 @@ fn parse_announce(rest: Vec<String>) -> Result<Invocation, String> {
 
 pub fn parse(argv: &[String]) -> Invocation {
     let args: Vec<String> = argv.iter().skip(1).cloned().collect();
+
+    // The sandbox's own entry point, checked first and documented nowhere the operator
+    // looks: `--net-relay <socket> -- <program> <args...>` is how Aether1 re-enters itself
+    // inside the box to bridge loopback to the proxy. It is not a verb anybody types.
+    if let Some(at) = args.iter().position(|a| a == "--net-relay") {
+        let socket = args.get(at + 1).cloned().unwrap_or_default();
+        let rest: Vec<String> = match args.iter().position(|a| a == "--") {
+            Some(dashes) => args[dashes + 1..].to_vec(),
+            None => Vec::new(),
+        };
+        return Invocation::NetRelay { socket, argv: rest };
+    }
 
     // Checked before anything else so the existing `--serve` behavior is unchanged: it
     // wins wherever it appears in argv.
@@ -465,6 +566,113 @@ pub fn parse(argv: &[String]) -> Invocation {
                         .to_string(),
                 ),
             },
+            // The project folder. With no path it prints the one in force, which is the
+            // question an operator asks before they trust any of this.
+            Some("workspace") => match &rest[1..] {
+                [] => Ok(Invocation::CodeWorkspace { path: None }),
+                [path] => Ok(Invocation::CodeWorkspace {
+                    path: Some(path.to_string()),
+                }),
+                _ => Err(
+                    "code workspace takes one path, or nothing to print the current one"
+                        .to_string(),
+                ),
+            },
+            // How much this project is trusted with. With no argument it prints the four
+            // and marks the one in force, because choosing needs them side by side.
+            Some("level") => match &rest[1..] {
+                [] => Ok(Invocation::CodeLevel { level: None }),
+                [level] => Ok(Invocation::CodeLevel {
+                    level: Some(level.to_string()),
+                }),
+                _ => Err("code level takes one level, or nothing to print them".to_string()),
+            },
+            Some(verb @ ("share" | "share-write" | "unshare")) => {
+                let write = verb == "share-write";
+                let remove = verb == "unshare";
+                match &rest[1..] {
+                    [] if !remove => Ok(Invocation::CodeShare {
+                        path: None,
+                        write,
+                        remove,
+                    }),
+                    [path] => Ok(Invocation::CodeShare {
+                        path: Some(path.to_string()),
+                        write,
+                        remove,
+                    }),
+                    _ => Err(format!(
+                        "code {verb} takes one folder -- for example `code {verb} ~/Documents`"
+                    )),
+                }
+            }
+            // What the sandbox may reach. `net` lists, including what has been refused so
+            // far, because "why did my build fail" and "what did it want" are one question.
+            Some("net") => Ok(Invocation::CodeNet { allow: None }),
+            Some("net-allow") => match &rest[1..] {
+                [domain] => Ok(Invocation::CodeNet {
+                    allow: Some(domain.to_string()),
+                }),
+                _ => Err(
+                    "code net-allow takes one domain -- for example `code net-allow \
+                     registry.npmjs.org`"
+                        .to_string(),
+                ),
+            },
+            // The way back. `checkpoints` lists, `revert` restores -- the newest by
+            // default, because "undo what it just did" is the question being asked.
+            Some("checkpoints") => Ok(Invocation::CodeCheckpoints {
+                revert: false,
+                which: None,
+            }),
+            Some("revert") => match &rest[1..] {
+                [] => Ok(Invocation::CodeCheckpoints {
+                    revert: true,
+                    which: None,
+                }),
+                [which] => Ok(Invocation::CodeCheckpoints {
+                    revert: true,
+                    which: Some(which.to_string()),
+                }),
+                _ => Err("code revert takes one checkpoint, or nothing for the newest".to_string()),
+            },
+            // The sandbox switches. Both print their state with no argument, because "is
+            // this confined" is the question an operator asks before they trust `run` at
+            // all, and it should be answerable without changing anything.
+            Some(verb @ ("run-network" | "run-unconfined")) => {
+                let unconfined = verb == "run-unconfined";
+                match &rest[1..] {
+                    [] => Ok(Invocation::CodeSandbox {
+                        unconfined,
+                        on: None,
+                    }),
+                    [state] => match state.to_lowercase().as_str() {
+                        "on" => Ok(Invocation::CodeSandbox {
+                            unconfined,
+                            on: Some(true),
+                        }),
+                        "off" => Ok(Invocation::CodeSandbox {
+                            unconfined,
+                            on: Some(false),
+                        }),
+                        other => Err(format!("code {verb} is `on` or `off`, not {other:?}")),
+                    },
+                    _ => Err(format!("code {verb} takes `on`, `off`, or nothing")),
+                }
+            }
+            Some(verb @ ("run-allow" | "run-deny")) => {
+                let add = verb == "run-allow";
+                match &rest[1..] {
+                    [] if add => Ok(Invocation::CodeRunAllow { program: None, add }),
+                    [program] => Ok(Invocation::CodeRunAllow {
+                        program: Some(program.to_string()),
+                        add,
+                    }),
+                    _ => Err(format!(
+                        "code {verb} takes one program name -- for example `code {verb} cargo`"
+                    )),
+                }
+            }
             _ => free_text(rest).and_then(|extra| match extra.as_deref() {
                 None => Ok(Invocation::Code {
                     conventions: false,
@@ -492,6 +700,36 @@ pub fn parse(argv: &[String]) -> Invocation {
             _ => Err(
                 "models takes either nothing, or a speciality and a model -- for example \
                  `aether1 models nexus qwen2.5-coder:7b`, or `aether1 models nexus clear`"
+                    .to_string(),
+            ),
+        },
+        "words" => match rest
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => Ok(Invocation::Words {
+                word: None,
+                said_as: None,
+                drop: false,
+            }),
+            ["drop", word @ ..] if !word.is_empty() => Ok(Invocation::Words {
+                word: Some(word.join(" ")),
+                said_as: None,
+                drop: true,
+            }),
+            // The respelling is several words far more often than not ("see plus plus"), so
+            // it is the rest of the line rather than one argument -- which also means the
+            // shell's quoting is one less thing to get right.
+            [word, said @ ..] if !said.is_empty() => Ok(Invocation::Words {
+                word: Some((*word).to_string()),
+                said_as: Some(said.join(" ")),
+                drop: false,
+            }),
+            _ => Err(
+                "words takes nothing, a word and how it sounds, or `drop <WORD>` -- \
+                      for example `aether1 words nginx engine ex`"
                     .to_string(),
             ),
         },
@@ -690,6 +928,76 @@ fn run_prompt(text: Option<String>, session: Option<String>) -> Result<String, S
 /// Reports the line hand-offs may move within as well as the mode, because FLOW with no
 /// line to move within does nothing and the operator should be able to see that rather
 /// than wonder why it is quiet.
+/// `aether1 words` -- the same list the Words tab edits, from a terminal.
+///
+/// Worth having beyond symmetry: this is the one place the substitution can be checked
+/// without a window, by adding a word here and running `aether1 say` on a sentence with it
+/// in. The window's own "hear the list" button cannot help on a machine with no window.
+fn run_words(word: Option<&str>, said_as: Option<&str>, drop: bool) -> Result<String, String> {
+    use crate::speech_words::{self, Say};
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let Some(word) = word {
+        let mut words = speech_words::all(db);
+        let at = words
+            .iter()
+            .position(|w| w.from.eq_ignore_ascii_case(word.trim()));
+        if drop {
+            match at {
+                Some(at) => {
+                    let gone = words.remove(at);
+                    speech_words::set(db, words)?;
+                    return Ok(format!("{} is said the ordinary way again.", gone.from));
+                }
+                // Said rather than errored: the end state the operator asked for is the end
+                // state they have, and a list they cannot see is not a list to be quizzed on.
+                None => return Ok(format!("{word} was not on the list.")),
+            }
+        }
+        let said_as = said_as.unwrap_or_default();
+        let entry = Say {
+            from: word.trim().to_string(),
+            to: said_as.trim().to_string(),
+        };
+        match at {
+            Some(at) => words[at] = entry,
+            None => words.push(entry),
+        }
+        speech_words::set(db, words)?;
+        return Ok(format!(
+            "{} is now said \"{}\".",
+            word.trim(),
+            said_as.trim()
+        ));
+    }
+
+    let words = speech_words::all(db);
+    if words.is_empty() {
+        return Ok(
+            "Nothing is said differently. `aether1 words <WORD> <HOW IT SOUNDS>` \
+                   adds one."
+                .to_string(),
+        );
+    }
+    let widest = words
+        .iter()
+        .map(|w| w.from.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::from("HOW THIS MACHINE SAYS THINGS\n");
+    for w in &words {
+        out.push_str(&format!(
+            "  {:<widest$}  is said  {}\n",
+            w.from,
+            w.to,
+            widest = widest
+        ));
+    }
+    out.push_str("\nOnly the voice hears these; what is written stays as it is.");
+    Ok(out)
+}
+
 fn run_flow(state: Option<&str>, line: Option<&str>) -> Result<String, String> {
     let engine = crate::build_llm_engine();
     let db = engine.db();
@@ -878,7 +1186,8 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
         let Some(grant) = Grant::from_key(&name.to_lowercase()) else {
             let known: Vec<&str> = code_perms::ALL.iter().map(|g| g.key()).collect();
             return Err(format!(
-                "there is no permission called {name:?}. There are three: {}",
+                "there is no permission called {name:?}. There are {}: {}",
+                code_perms::ALL.len(),
                 known.join(", ")
             ));
         };
@@ -903,13 +1212,356 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
             grant.description()
         ));
     }
-    out.push_str(
-        "\n  Change one with `aether1 code perms <name> on` or `... off`.\n\n\
-         Every one of these only reads. Nothing AETHER CODE can call changes a file, a\n\
-         repository or a setting -- a command that would is written into your terminal for\n\
-         you to run, and nothing enters it but your own Return key.\n",
-    );
+    out.push_str("\n  Change one with `aether1 code perms <name> on` or `... off`.\n\n");
+    if code_perms::granted(db, Grant::Edit) || code_perms::granted(db, Grant::Run) {
+        let where_it_is = match crate::code_workspace::root(db) {
+            Ok(root) => root.display().to_string(),
+            Err(_) => "not set yet -- `aether1 code workspace <path>`".to_string(),
+        };
+        out.push_str(&format!(
+            "  It can change things, inside one folder and nowhere else: {where_it_is}\n\
+             Programs it may run there: {}\n\
+             Commands are {}\n\
+             Everything outside that folder is still written into your terminal for you to\n\
+             run, and nothing enters it but your own Return key.\n",
+            match crate::code_workspace::allowlist(db) {
+                list if list.is_empty() => "none".to_string(),
+                list => list.join(", "),
+            },
+            crate::code_sandbox::detect().description(),
+        ));
+    } else {
+        out.push_str(
+            "  Everything switched on only reads. Nothing AETHER CODE can call changes a\n\
+             file, a repository or a setting -- a command that would is written into your\n\
+             terminal for you to run, and nothing enters it but your own Return key.\n",
+        );
+    }
     Ok(out)
+}
+
+/// `aether1 code level [name]` -- how much this project is trusted with.
+///
+/// Printing shows all four with the one in force marked, because a level is a choice between
+/// described configurations and choosing needs them beside each other. It also says when the
+/// switches under the level no longer match it, which is what an operator who changed one by
+/// hand needs told.
+fn run_code_level(level: Option<String>) -> Result<String, String> {
+    use crate::code_policy::{self, Level};
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let root = crate::code_workspace::root(db)?;
+
+    if let Some(asked) = level {
+        let Some(wanted) = Level::from_key(&asked) else {
+            let known: Vec<&str> = code_policy::ALL.iter().map(|l| l.key()).collect();
+            return Err(format!(
+                "there is no level called {asked:?}. There are four: {}",
+                known.join(", ")
+            ));
+        };
+        code_policy::set_level(&root, db, wanted)?;
+        return Ok(format!(
+            "  {} is now at the {} level.\n  {}\n  Written to {}.\n",
+            root.display(),
+            wanted.key(),
+            wanted.description(),
+            code_policy::FILE
+        ));
+    }
+
+    let (in_force, matches) = code_policy::effective(&root, db);
+    let mut out = format!("  {}\n\n", root.display());
+    for level in code_policy::ALL {
+        out.push_str(&format!(
+            "  {} {:<13} {}\n",
+            if *level == in_force { "->" } else { "  " },
+            level.key(),
+            level.description()
+        ));
+    }
+    if !code_policy::is_trusted(&root) {
+        out.push_str(
+            "\n  This project has not been answered for yet, so it runs at the default.\n               Set one with `aether1 code level developer`.\n",
+        );
+    }
+    if !matches {
+        out.push_str(
+            "\n  One of the switches under this level has been changed by hand, so the \
+             project\n  is not running exactly as the level describes. `aether1 code level \
+             <name>`\n  puts it back.\n",
+        );
+    }
+    let shared = code_policy::mounts(&root);
+    if !shared.is_empty() {
+        out.push_str("\n  Folders shared with it:\n");
+        for mount in &shared {
+            out.push_str(&format!(
+                "    {} ({})\n",
+                mount.path.display(),
+                if mount.write {
+                    "read and write"
+                } else {
+                    "read"
+                }
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// `aether1 code share [folder]` and its two siblings -- the folders beyond the project.
+fn run_code_share(path: Option<String>, write: bool, remove: bool) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let root = crate::code_workspace::root(db)?;
+    let Some(path) = path else {
+        let shared = crate::code_policy::mounts(&root);
+        if shared.is_empty() {
+            return Ok(
+                "  Nothing beyond the project folder is shared with it.\n  Add one with \
+                 `aether1 code share ~/Documents`.\n"
+                    .to_string(),
+            );
+        }
+        let mut out = String::from("  Shared with the sandbox:\n");
+        for mount in &shared {
+            out.push_str(&format!(
+                "    {} ({})\n",
+                mount.path.display(),
+                if mount.write {
+                    "read and write"
+                } else {
+                    "read"
+                }
+            ));
+        }
+        return Ok(out);
+    };
+    if remove {
+        return Ok(if crate::code_policy::remove_mount(&root, &path)? {
+            format!("  {path} is no longer shared.\n")
+        } else {
+            format!("  {path} was not shared.\n")
+        });
+    }
+    let resolved = crate::code_policy::add_mount(&root, &path, write)?;
+    let level = crate::code_policy::level(&root);
+    let mut out = format!(
+        "  {} is shared with the sandbox ({}).\n",
+        resolved.display(),
+        if write { "read and write" } else { "read" }
+    );
+    if write && !level.honours_writable_mounts() {
+        out.push_str(&format!(
+            "\n  At the {} level it is read-only. `aether1 code level agent` is the level \
+             that writes a shared folder.\n",
+            level.key()
+        ));
+    }
+    Ok(out)
+}
+
+/// `aether1 code net` and `aether1 code net-allow <domain>` -- what the sandbox may reach.
+///
+/// Listing shows the refused hosts as well as the allowed ones, because the question an
+/// operator arrives with is "the build said it could not reach something, what was it".
+fn run_code_net(allow: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let root = crate::code_workspace::root(db)?;
+    if let Some(domain) = allow {
+        crate::code_proxy::allow_domain(&root, &domain)?;
+        crate::code_proxy::clear_pending(db);
+        return Ok(format!(
+            "  {domain} is now allowed for {}.\n  Written to {}.\n",
+            root.display(),
+            crate::code_proxy::POLICY_FILE
+        ));
+    }
+    let allowed = crate::code_proxy::allowed(&root);
+    let pending = crate::code_proxy::pending(db);
+    let mut out = format!(
+        "  Commands are {}\n  The network inside it is {}\n\n  Allowed:\n",
+        crate::code_sandbox::detect().description(),
+        if crate::code_sandbox::network_allowed(db) {
+            "on, through the proxy"
+        } else {
+            "off -- `aether1 code run-network on`"
+        }
+    );
+    for domain in &allowed {
+        out.push_str(&format!("    {domain}\n"));
+    }
+    if !pending.is_empty() {
+        out.push_str("\n  Asked for and refused:\n");
+        for domain in &pending {
+            out.push_str(&format!("    {domain}\n"));
+        }
+        out.push_str("\n  Allow one with `aether1 code net-allow <domain>`.\n");
+    }
+    Ok(out)
+}
+
+/// `aether1 code checkpoints` and `aether1 code revert` -- the way back.
+///
+/// The question this answers is "what did it do and how do I undo it", asked by somebody who
+/// has just come back to a folder they left an agent working in, so it prints what a revert
+/// would restore before it is asked for rather than only afterwards.
+fn run_code_checkpoints(revert: bool, which: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let root = crate::code_workspace::root(engine.db())?;
+    if revert {
+        return crate::code_checkpoint::revert(&root, which.as_deref());
+    }
+    if !crate::code_checkpoint::is_repo(&root) {
+        return Ok(format!(
+            "  {} is not a git repository, so there is nothing to put work back to.\n\n\
+             Run `git init` in it and AETHER CODE will take a checkpoint before it first \
+             changes anything.\n",
+            root.display()
+        ));
+    }
+    let checkpoints = crate::code_checkpoint::list(&root)?;
+    if checkpoints.is_empty() {
+        return Ok(
+            "  No checkpoints yet. One is taken before AETHER CODE first changes \
+                   anything in the project folder.\n"
+                .to_string(),
+        );
+    }
+    let mut out = format!("  {} checkpoint(s), newest first:\n\n", checkpoints.len());
+    for point in &checkpoints {
+        let name = point
+            .reference
+            .rsplit('/')
+            .next()
+            .unwrap_or(&point.reference);
+        out.push_str(&format!("  {name}  {}\n", point.when));
+    }
+    out.push_str("\n  Put the folder back with `aether1 code revert` (newest), or name one.\n");
+    Ok(out)
+}
+
+/// `aether1 code run-network` and `aether1 code run-unconfined` -- the two answers to
+/// "what is `run` allowed to reach", printed or set.
+///
+/// `run-unconfined` is the only switch in this program that removes a boundary rather than
+/// adding one, so printing it always says what it costs, whether it is on or off.
+fn run_code_sandbox(unconfined: bool, on: Option<bool>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let key = if unconfined {
+        crate::code_sandbox::UNCONFINED_SETTING
+    } else {
+        crate::code_sandbox::NETWORK_SETTING
+    };
+    if let Some(on) = on {
+        db.set_setting(key, &serde_json::json!(on))
+            .map_err(|e: rusqlite::Error| e.to_string())?;
+    }
+    let sandbox = crate::code_sandbox::detect();
+    let state = |b: bool| if b { "on" } else { "off" };
+    Ok(if unconfined {
+        format!(
+            "  Commands are {}
+  run-unconfined is {}
+
+             With it on, a command runs as you: python3, node, cargo and make can execute              any code they are given, so they can read your keys, write anywhere you can              write, and use the network. With it off, a machine that cannot confine a              command refuses to run one.
+",
+            sandbox.description(),
+            state(crate::code_sandbox::unconfined_allowed(db)),
+        )
+    } else {
+        format!(
+            "  Commands are {}
+  run-network is {}
+
+             Off is the default: a test suite does not need the network, and a build that              wants to fetch dependencies is worth seeing rather than granting quietly.
+",
+            sandbox.description(),
+            state(crate::code_sandbox::network_allowed(db)),
+        )
+    })
+}
+
+/// `aether1 code workspace [path]` -- the one folder AETHER CODE may change.
+///
+/// Setting it validates it immediately rather than at the first edit: a path that is a
+/// typo, or is the home directory, is worth hearing about while the operator is still
+/// looking at the terminal they typed it into.
+fn run_code_workspace(path: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let Some(path) = path {
+        db.set_setting(
+            crate::code_workspace::ROOT_SETTING,
+            &serde_json::json!(path.trim()),
+        )
+        .map_err(|e| format!("cannot save the project folder: {e}"))?;
+        let root = crate::code_workspace::root(db)?;
+        return Ok(format!(
+            "AETHER CODE's project folder is {}.\n\nIt cannot change anything until you \
+             also turn the permissions on:\n  aether1 code perms edit on\n  aether1 code \
+             perms run on\n",
+            root.display()
+        ));
+    }
+
+    match crate::code_workspace::root(db) {
+        Ok(root) => Ok(format!("{}\n", root.display())),
+        Err(why) => Ok(format!(
+            "No project folder is set.\n\n{why}\n\nSet one with `aether1 code workspace \
+             /path/to/project`.\n"
+        )),
+    }
+}
+
+/// `aether1 code run-allow|run-deny <program>` -- the programs it may spawn in that folder.
+fn run_code_run_allow(program: Option<String>, add: bool) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+    let mut list = crate::code_workspace::allowlist(db);
+
+    let Some(program) = program else {
+        return Ok(if list.is_empty() {
+            "AETHER CODE may run nothing in the project folder.\n".to_string()
+        } else {
+            format!(
+                "AETHER CODE may run these in the project folder:\n\n  {}\n",
+                list.join("\n  ")
+            )
+        });
+    };
+    let program = program.trim().to_string();
+    if program.contains('/') || program.contains('\\') {
+        return Err("name the program, not a path to it -- the list matches names".to_string());
+    }
+
+    let held = list.iter().any(|entry| entry == &program);
+    if add && held {
+        return Ok(format!("{program} was already on the list.\n"));
+    }
+    if !add && !held {
+        return Ok(format!("{program} was not on the list.\n"));
+    }
+    if add {
+        list.push(program.clone());
+        list.sort();
+    } else {
+        list.retain(|entry| entry != &program);
+    }
+    db.set_setting(
+        crate::code_workspace::ALLOWLIST_SETTING,
+        &serde_json::json!(list),
+    )
+    .map_err(|e| format!("cannot save the list: {e}"))?;
+    Ok(format!(
+        "AETHER CODE may {} run {program} in the project folder.\n",
+        if add { "now" } else { "no longer" }
+    ))
 }
 
 fn run_code(conventions: bool, ask: Option<String>) -> String {
@@ -1130,6 +1782,7 @@ fn run_models(persona: Option<String>, model: Option<String>) -> Result<String, 
 /// have offered.
 fn run_doctor(
     fix: bool,
+    heal: bool,
     json: bool,
     report: Option<Option<String>>,
     replay: Option<String>,
@@ -1159,7 +1812,7 @@ fn run_doctor(
     // Facts::default(): the window, the tray registration and the watcher's poll are facts
     // about the running desktop process, and this is not it. The report says so per check
     // rather than guessing.
-    let (observation, health) = doctor::report(&engine, &doctor::Facts::default());
+    let (observation, health) = doctor::report(engine.db(), &doctor::Facts::default());
 
     if json {
         let bundle = serde_json::json!({ "observation": observation, "health": health });
@@ -1182,13 +1835,24 @@ fn run_doctor(
         ));
     }
 
+    if heal {
+        // Typing `--heal` is the go-ahead, which is why nothing is asked here. A terminal is
+        // also the one place this can be asked for on a machine whose window will not open,
+        // which is a fair part of why it exists.
+        let attended = doctor::attend(&engine, &doctor::Facts::default(), None);
+        return Ok(format!(
+            "AETHER1 -- fixing what it can\n\n{}",
+            attended.as_report()
+        ));
+    }
+
     let mut out = render_health(&health);
     if fix {
         out.push_str(&run_doctor_fixes(&engine, &health));
     } else if health.checks.iter().any(|check| check.repair.is_some()) {
         out.push_str(
             "\nSome of this AETHER1 can repair itself. Run `aether1 doctor --fix` to be asked \
-             about each one.\n",
+             about each one, or `aether1 doctor --heal` to have it make them all.\n",
         );
     }
     Ok(out)
@@ -1820,14 +2484,33 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Crashes => run_crashes(),
         Invocation::Doctor {
             fix,
+            heal,
             json,
             report,
             replay,
-        } => run_doctor(fix, json, report, replay),
+        } => run_doctor(fix, heal, json, report, replay),
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
+        Invocation::CodeWorkspace { path } => run_code_workspace(path),
+        Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
+        Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
+        Invocation::CodeNet { allow } => run_code_net(allow),
+        Invocation::CodeLevel { level } => run_code_level(level),
+        Invocation::CodeShare {
+            path,
+            write,
+            remove,
+        } => run_code_share(path, write, remove),
+        // Handled in main before this point; listed so the match stays exhaustive.
+        Invocation::NetRelay { .. } => Ok(String::new()),
+        Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),
+        Invocation::Words {
+            word,
+            said_as,
+            drop,
+        } => run_words(word.as_deref(), said_as.as_deref(), drop),
         Invocation::SignIn => run_sign_in(),
         Invocation::SignOut => Ok(run_sign_out()),
         Invocation::Update { download } => run_update(download),
@@ -1883,6 +2566,7 @@ mod tests {
             doctor(&[]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: None,
                 replay: None,
@@ -1892,6 +2576,7 @@ mod tests {
             doctor(&["--json", "--fix"]),
             Invocation::Doctor {
                 fix: true,
+                heal: false,
                 json: true,
                 report: None,
                 replay: None,
@@ -1905,6 +2590,7 @@ mod tests {
             doctor(&["--report"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: Some(None),
                 replay: None,
@@ -1914,6 +2600,7 @@ mod tests {
             doctor(&["--report", "/tmp/out.txt"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: Some(Some("/tmp/out.txt".to_string())),
                 replay: None,
@@ -1925,6 +2612,7 @@ mod tests {
             doctor(&["--report", "--fix"]),
             Invocation::Doctor {
                 fix: true,
+                heal: false,
                 json: false,
                 report: Some(None),
                 replay: None,
@@ -1942,6 +2630,7 @@ mod tests {
             doctor(&["--replay", "/tmp/obs.json"]),
             Invocation::Doctor {
                 fix: false,
+                heal: false,
                 json: false,
                 report: None,
                 replay: Some("/tmp/obs.json".to_string()),

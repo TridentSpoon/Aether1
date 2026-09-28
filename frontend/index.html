@@ -375,6 +375,12 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
                     </button>
                     <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <!-- Hush. Hidden until there is something to stop, because a dead
+                         button beside the one you press every time is clutter, and because
+                         its appearing is itself the sign that Escape will work. -->
+                    <button id="btn-hush" class="cyber-btn px-3 py-2 text-sm rounded hidden" title="Stop talking (Esc)">
+                        <span aria-hidden="true">&#9632;</span><span class="sr-only">Stop talking</span>
+                    </button>
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
                     </button>
@@ -644,7 +650,7 @@
             </div>
 
             <div class="chin-commands-group chin-commands-end">
-                <button type="button" class="quick-chip chin-cmd" data-cmd="diagnostics" title="Run the self-check and say what it found">
+                <button type="button" class="quick-chip chin-cmd" data-cmd="Run your self-check and tell me what is wrong with AETHER1 right now, and whether anything has crashed recently." title="Run the self-check and say what it found">
                     &#129658; Diagnostics
                 </button>
                 <button type="button" class="quick-chip chin-cmd" data-cmd="help" title="What can this thing do?">
@@ -1863,6 +1869,7 @@
                         <div class="hub-tabs" role="tablist">
                             <button type="button" id="vhub-tab-voices" class="hub-tab is-active" data-vhub-tab="voices" role="tab">Voices</button>
                             <button type="button" id="vhub-tab-devices" class="hub-tab" data-vhub-tab="devices" role="tab">Devices</button>
+                            <button type="button" id="vhub-tab-words" class="hub-tab" data-vhub-tab="words" role="tab">Words</button>
                         </div>
                         <div class="hub-search">
                             <span class="hub-search-icon" aria-hidden="true">🔍</span>
@@ -1926,6 +1933,33 @@
                                  selected, permitted and pointed at a muted input reports
                                  success on every other check there is. -->
                             <div id="vhub-level" class="hub-level hidden"><div id="vhub-level-fill" class="hub-level-fill"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- ------------------- WORDS -------------------
+                         Say this, as that. The list only ever reaches the synthesizer: what
+                         is on screen keeps the spelling it was written with, which is why
+                         this can be as phonetic as it needs to be without making the
+                         conversation unreadable. -->
+                    <div id="vhub-pane-words" class="hub-body hub-body-even hidden">
+                        <div class="hub-detail">
+                            <div class="hub-detail-name">🗣 How to say a word</div>
+                            <div class="hub-detail-sub">
+                                For the ones the voice gets wrong. Spell it the way it should
+                                sound — only the voice hears this, the chat keeps the real spelling.
+                            </div>
+                            <div id="words-rows" class="words-rows"></div>
+                            <div class="hub-action">
+                                <span id="words-note" class="hub-action-size">Nothing yet.</span>
+                                <button type="button" id="btn-words-add" class="cyber-btn text-[10px] py-1 px-2">+ Add a word</button>
+                                <button type="button" id="btn-words-test" class="cyber-btn text-[10px] py-1 px-2">▶ Hear the list</button>
+                            </div>
+                            <p class="hub-blurb">
+                                Whole words only, and case does not matter — "nginx" catches
+                                "NGINX" too. The replacement is said exactly as you type it, so
+                                keep it lower case: a voice handed capitals may spell them out.
+                                Saved as you go.
+                            </p>
                         </div>
                     </div>
 
@@ -2199,7 +2233,7 @@
                         <div class="net-card-heading">
                             <h4 class="net-card-title">AETHER CODE may look at</h4>
                             <p class="net-card-hint">
-                                All three only read. The coding model cannot edit a file, commit, merge or
+                                These three only read. The coding model cannot edit a file, commit, merge or
                                 install anything &mdash; <span class="font-mono">gh pr view</span> runs,
                                 <span class="font-mono">gh pr merge</span> is refused. When the next step
                                 would change something it writes the command out instead, and that command
@@ -2237,6 +2271,116 @@
                             <input id="setting-code-perm-internet" type="checkbox" class="a1-switch-input">
                             <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
                         </label>
+                    </div>
+                </div>
+
+                <!-- The other half of the coding panel's permissions, and the only place in
+                     AETHER1 where a model can write or run something. Its own card rather
+                     than two more rows above, because "may it read my code" and "may it
+                     change my code" are not the same question and should not be answered
+                     by the same glance. Both switches start off. See code_workspace.rs for
+                     the five rules that bound them. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🛠️</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">AETHER CODE may change</h4>
+                            <p class="net-card-hint">
+                                Off until you say otherwise. With these on it works the way a coding agent
+                                does &mdash; read a file, make an edit, run the tests, read what broke, go
+                                again &mdash; but only inside the one project folder you name below, and
+                                only with the programs on the list. Nothing outside that folder, nothing
+                                that leaves this machine: <span class="font-mono">git commit</span> runs,
+                                <span class="font-mono">git push</span> is still written out as a button
+                                for your terminal.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Project folder</p>
+                            <p class="net-row-hint">The one folder it may change. Leave it empty and it changes nothing.</p>
+                        </div>
+                    </div>
+                    <div class="px-3 pb-3">
+                        <input id="setting-code-workspace-root" type="text" placeholder="e.g. ~/Projects/aether1" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                    </div>
+                    <!-- The autonomy level. It is not a fifth switch: picking one writes
+                         the four switches below and beside it, and records the answer in the
+                         project's own .aether/policy.json so it travels with the project.
+                         Filled in by app.js from the autonomy and levels blocks that ride
+                         alongside the settings. -->
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Trusted with</p>
+                            <p id="code-level-hint" class="net-row-hint">Answered once per project, and it sets the switches below.</p>
+                        </div>
+                        <select id="setting-code-level" class="bg-slate-900 border border-cyan-500/40 rounded p-1 text-sm text-cyan-100"></select>
+                    </div>
+                    <div id="code-level-shares-row" class="net-row hidden">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Folders it may also see</p>
+                            <p id="code-level-shares" class="net-row-hint"></p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Edit files</p>
+                            <p class="net-row-hint">Change and create files inside that folder.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-perm-edit" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Run commands</p>
+                            <p class="net-row-hint">Build and test, in that folder, from the list below.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-perm-run" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <!-- Whether a command is actually confined is a fact about this
+                         machine, so it is stated here rather than implied by the switch
+                         above. Filled in by app.js from the sandbox block that rides
+                         alongside the settings. -->
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Confinement</p>
+                            <p id="code-sandbox-state" class="net-row-hint">Checking what this machine can do...</p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Network inside the sandbox</p>
+                            <p class="net-row-hint">Off by default. On, the sandbox still has no route of its own: it reaches the network only through a proxy that checks the destination against this project's allowed domains.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-run-network" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Run without a sandbox</p>
+                            <p class="net-row-hint">Only for a machine that has none. A command then runs as you: python3, node, cargo and make can read your keys, write anywhere you can, and use the network.</p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-code-run-unconfined" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Programs it may run</p>
+                            <p class="net-row-hint">Names, comma separated. A program that is not here is refused.</p>
+                        </div>
+                    </div>
+                    <div class="px-3 pb-3">
+                        <input id="setting-code-run-allowlist" type="text" placeholder="cargo, npm, git" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
             </section>
@@ -2573,9 +2717,30 @@
                 <div class="settings-group-body">
                     <div class="flex items-center justify-between gap-2 flex-wrap">
                         <span id="doctor-headline" class="text-xs font-mono text-slate-300">Press Diagnose to check every part of AETHER1.</span>
-                        <button id="btn-doctor-run" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
-                            🩺 Diagnose
-                        </button>
+                        <div class="flex items-center gap-2">
+                            <button id="btn-doctor-heal" class="cyber-btn text-xs py-1 px-3 text-amber-300 whitespace-nowrap">
+                                🛠 Fix what you can
+                            </button>
+                            <button id="btn-doctor-run" class="cyber-btn text-xs py-1 px-3 text-cyan-300 whitespace-nowrap">
+                                🩺 Diagnose
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Fix what it can, on its own</p>
+                            <p class="net-row-hint">
+                                At startup, without asking. Same repairs as the button: its own
+                                model server, its own downloads, its own database. Never anything
+                                needing your password &mdash; those are still shown as a command for
+                                you to run.
+                            </p>
+                        </div>
+                        <label class="a1-switch net-row-switch">
+                            <input id="setting-doctor-self-repair" type="checkbox" class="a1-switch-input">
+                            <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        </label>
                     </div>
 
                     <div id="doctor-checks" class="space-y-2"></div>
@@ -2583,11 +2748,15 @@
                     <p id="doctor-status" class="hidden text-[11px] font-mono"></p>
 
                     <p class="text-[10px] font-mono text-slate-500 leading-snug">
-                        Nothing here is changed without you pressing the button for it, and each
-                        repair is re-checked afterwards so you can see whether it worked. The
+                        Nothing here is changed without you pressing a button for it, unless you
+                        switch that on above; each repair is re-checked afterwards either way, so
+                        you can see whether it actually worked, and each is tried once per session
+                        rather than retried in a loop. The
                         same list is <span class="text-cyan-300">aether1 doctor</span> in a
                         terminal, and <span class="text-cyan-300">aether1 doctor --report</span>
                         writes it to a file you can read before sending it anywhere.
+                        <span class="text-cyan-300">aether1 doctor --heal</span> is this button in
+                        a terminal, for when the window will not open.
                     </p>
                 </div>
                 </details>

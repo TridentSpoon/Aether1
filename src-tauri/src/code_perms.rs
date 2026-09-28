@@ -6,30 +6,43 @@
 //! see the file you are asking about, or the pull request you are asking about, spends its
 //! answers asking you to paste things in.
 //!
-//! This module is the permission model that lets it look, stated as four rules rather than
-//! as whatever the code happens to do:
+//! This module is the permission model, stated as five rules rather than as whatever the
+//! code happens to do:
 //!
-//!   1. **Three grants, each named, each a switch.** The system (files and what this
-//!      machine is), the GitHub CLI, and the internet. Each is read separately and can be
-//!      turned off separately, from `aether1 code perms` or the HUD.
-//!   2. **Reads run. Writes never do.** Every capability here is read-only *by
-//!      construction*, not by intention: there is no tool that writes a file, and `gh` is
-//!      checked against a table of subcommands that only look. A request to change
-//!      something is refused with the command written out, so it can go to the terminal as
-//!      a button.
-//!   3. **The terminal is the only thing that changes this machine, and the operator's
-//!      Return key is the only thing that runs the terminal.** That boundary is older than
-//!      this module (`scripts/check_terminal_isolation.sh`) and this module does not touch
-//!      it. Nothing here can type, press, or reach a shell: `gh` is spawned directly with
-//!      an argv, so there is no shell to hand a pipe or a redirect to.
-//!   4. **Fail closed.** A subcommand this file has not heard of is a refusal, not a guess.
-//!      `gh` grows new verbs faster than this table does, and the cost of being wrong in
-//!      the permissive direction is somebody's repository.
+//!   1. **Five grants, each named, each a switch.** The system (files and what this
+//!      machine is), the GitHub CLI, the internet, editing, and running. Each is read
+//!      separately and can be turned off separately, from `aether1 code perms` or the HUD.
+//!   2. **The three reading grants default on; the two that change things default off.**
+//!      An operator who asked for a coding panel asked for one that can see their code. No
+//!      one asks for a model that edits their working tree by default.
+//!   3. **Changing anything happens in one folder, and the kernel is what says so.**
+//!      `edit` writes only inside the project folder the operator nominated, checked by
+//!      `code_workspace`. `run` spawns inside an OS-level sandbox (`code_sandbox`): the
+//!      host filesystem read-only, the home directory hidden, the network off, and the
+//!      project folder the one writable place. Where a machine has no sandbox -- Windows
+//!      today, or a Linux box without bubblewrap -- `run` refuses and says why, because
+//!      python3, node, cargo and make are general-purpose ways to execute code and an
+//!      allowlist of their names was never the boundary it read like. Outside that folder
+//!      the old refusal still stands, word for word: put the command in a fenced block and
+//!      it becomes a button.
+//!   4. **The terminal is still untouchable.** That boundary is older than this module
+//!      (`scripts/check_terminal_isolation.sh`) and neither this module nor `code_workspace`
+//!      goes near it. Nothing here can type, press, or reach a shell: `gh` and every
+//!      command `run` spawns are given an argv directly, so there is no shell to hand a
+//!      pipe or a redirect to.
+//!   5. **Fail closed.** A `gh` subcommand this file has not heard of is a refusal, not a
+//!      guess, and a program that is not on the operator's own list does not run. `gh`
+//!      grows new verbs faster than this table does, and the cost of being wrong in the
+//!      permissive direction is somebody's repository.
 //!
-//! The grants default to on, because the operator asked for these three things to be
-//! allowed and a permission you have to go and switch on after asking for it is a worse
-//! answer than the one they asked for. What does *not* default to on -- what does not exist
-//! at all -- is any way to write.
+//! **What changed, and what did not.** Until #186 this module's second rule was "reads run,
+//! writes never do", enforced by there being no write tool to gate. That was the right
+//! place to stop for one step and the wrong place to stay: the loop every coding agent runs
+//! is read, change, test, read what broke, and a panel that cannot take the second step can
+//! only narrate it. So writing exists now -- inside one nominated folder, with both switches
+//! off until the operator turns them on. What has not changed is that there is no way to
+//! write outside that folder, no way to run a program the operator has not listed, and no
+//! shell anywhere.
 
 use crate::llm::MemoryDb;
 
@@ -42,10 +55,23 @@ pub enum Grant {
     Github,
     /// Fetching a public page, for documentation the model does not carry.
     Internet,
+    /// Changing files inside the operator's nominated project folder, and nowhere else.
+    /// Off until they say otherwise -- see `code_workspace`.
+    Edit,
+    /// Running build and test commands in a sandbox whose one writable place is that
+    /// same folder, from a list of programs the operator keeps. Off until they say
+    /// otherwise, and refused outright on a machine that cannot confine them.
+    Run,
 }
 
 /// Every grant, in the order they are shown.
-pub const ALL: &[Grant] = &[Grant::System, Grant::Github, Grant::Internet];
+pub const ALL: &[Grant] = &[
+    Grant::System,
+    Grant::Github,
+    Grant::Internet,
+    Grant::Edit,
+    Grant::Run,
+];
 
 impl Grant {
     /// The word the operator types, and the stem of the settings key.
@@ -54,6 +80,8 @@ impl Grant {
             Grant::System => "system",
             Grant::Github => "github",
             Grant::Internet => "internet",
+            Grant::Edit => "edit",
+            Grant::Run => "run",
         }
     }
 
@@ -65,6 +93,8 @@ impl Grant {
             Grant::System => "code_perm_system",
             Grant::Github => "code_perm_github",
             Grant::Internet => "code_perm_internet",
+            Grant::Edit => "code_perm_edit",
+            Grant::Run => "code_perm_run",
         }
     }
 
@@ -74,6 +104,25 @@ impl Grant {
             Grant::System => "Read files and folders on this machine, and what the hardware is",
             Grant::Github => "Run read-only GitHub CLI commands (gh pr view, gh run list, ...)",
             Grant::Internet => "Fetch a public page when it needs documentation",
+            Grant::Edit => "Change files inside the project folder you nominated, and nowhere else",
+            Grant::Run => {
+                "Run build and test commands in a sandbox that can only write that folder, \
+                 from a list of programs you keep"
+            }
+        }
+    }
+
+    /// Whether this grant is on before anybody has said anything.
+    ///
+    /// The three reading grants are on because the operator asked for a coding panel that
+    /// can see their code, and a permission you have to go and switch on after asking for
+    /// it is a worse answer than the one they asked for. The two that change things are
+    /// off for exactly the mirror of that reason: nobody asked for a model that edits
+    /// their working tree by default, and the cost of being wrong here is their work.
+    pub fn default_on(self) -> bool {
+        match self {
+            Grant::System | Grant::Github | Grant::Internet => true,
+            Grant::Edit | Grant::Run => false,
         }
     }
 
@@ -90,7 +139,7 @@ impl Grant {
 /// mid-conversation, and a grant cached at the top of a turn would stay open for the rest
 /// of it.
 pub fn granted(db: &MemoryDb, grant: Grant) -> bool {
-    db.get_setting_bool(grant.setting(), true)
+    db.get_setting_bool(grant.setting(), grant.default_on())
 }
 
 /// Turns one on or off.
@@ -346,13 +395,17 @@ mod tests {
         line.split_whitespace().map(String::from).collect()
     }
 
-    /// The operator asked for these three to be allowed, so they are allowed without
-    /// anybody having to go and find a switch first.
+    /// The operator asked for the three reading grants, so they are allowed without
+    /// anybody having to go and find a switch first. Nobody asks for a model that edits
+    /// their working tree, so those two are the other way round.
     #[test]
-    fn the_three_grants_start_on() {
+    fn reading_starts_on_and_changing_starts_off() {
         let db = db();
-        for grant in ALL {
-            assert!(granted(&db, *grant), "{} should start on", grant.key());
+        for grant in [Grant::System, Grant::Github, Grant::Internet] {
+            assert!(granted(&db, grant), "{} should start on", grant.key());
+        }
+        for grant in [Grant::Edit, Grant::Run] {
+            assert!(!granted(&db, grant), "{} should start off", grant.key());
         }
     }
 

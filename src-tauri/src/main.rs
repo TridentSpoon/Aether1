@@ -22,9 +22,14 @@ mod audio_devices;
 mod background_services;
 mod cli;
 mod code_chat;
+mod code_checkpoint;
 mod code_perms;
+mod code_policy;
+mod code_proxy;
+mod code_sandbox;
 mod code_setup;
 mod code_tools;
+mod code_workspace;
 mod commands;
 mod discovery;
 mod doctor;
@@ -46,6 +51,7 @@ mod serve_auth;
 mod serve_tls;
 mod server;
 mod setup;
+mod speech_words;
 mod terminal;
 mod tools;
 mod vault;
@@ -1204,6 +1210,22 @@ fn doctor_repair_rust(
     commands::doctor_repair(&engine, &check, &repair, Some(&in_app))
 }
 
+/// Every repair AETHER1 can make to itself, because the operator pressed "Fix what you can".
+/// **This command is the go-ahead** for the pass, the way `doctor_repair_rust` is for one
+/// repair. Nothing needing root is attempted here; those come back with their command.
+#[tauri::command(async)]
+fn doctor_attend_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+) -> Result<serde_json::Value, String> {
+    let handle = app.clone();
+    let in_app = move |_repair: doctor::RepairId| -> Result<String, String> {
+        hotkey::reregister_from_settings(&handle).map(|()| "re-registered the hotkey".to_string())
+    };
+    let facts = doctor_facts(&app);
+    commands::doctor_attend(&engine, facts, Some(&in_app))
+}
+
 /// Runs diagnostics with simplified output: voice-over, status, filtered metrics, and
 /// deduplicated error logs.
 #[tauri::command(async)]
@@ -1621,6 +1643,15 @@ fn sync_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// Rust-native twin of POST /api/code/level: the project's autonomy level.
+#[tauri::command(async)]
+fn code_set_level_rust(
+    engine: tauri::State<LlmEngine>,
+    level: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_set_level(&engine, &level)
+}
+
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
 #[tauri::command(async)]
 fn save_settings_rust(
@@ -1760,6 +1791,19 @@ fn list_personas_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
 #[tauri::command(async)]
 fn voice_pickers_rust() -> serde_json::Value {
     commands::voice_pickers()
+}
+
+#[tauri::command(async)]
+fn pronunciations_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::pronunciations(&engine)
+}
+
+#[tauri::command(async)]
+fn set_pronunciations_rust(
+    engine: tauri::State<LlmEngine>,
+    words: Vec<speech_words::Say>,
+) -> Result<serde_json::Value, String> {
+    commands::set_pronunciations(&engine, words)
 }
 
 #[tauri::command(async)]
@@ -2431,6 +2475,10 @@ fn build_llm_engine() -> LlmEngine {
             // Likewise once, on the first run only: the programs the companion may ask to
             // run. See STARTER_ALLOWLIST for why the list is short and what keeps it safe.
             tools::mutating::seed_starter_allowlist(&db);
+            // And the coding panel's own list, which is a different question with a
+            // different answer -- build and test tools, confined to one project folder,
+            // and inert until the operator turns the `run` permission on.
+            code_workspace::seed_starter_allowlist(&db);
             LlmEngine::new(db)
         }
         Err(e) => {
@@ -2469,6 +2517,11 @@ fn main() {
     // `aether1 face` with nothing already running: this launch becomes the instance, and
     // the face has to be opened from setup() below rather than by the single-instance
     // handler, which only ever runs for the *second* launch.
+    // Inside the sandbox, and before anything else this process would normally do: no
+    // tray, no database, no window. It bridges one socket and runs one command.
+    if let cli::Invocation::NetRelay { socket, argv } = &invocation {
+        std::process::exit(code_proxy::relay_main(socket, argv));
+    }
     let open_face_at_launch = matches!(invocation, cli::Invocation::Face);
     match invocation {
         // `show`/`toggle`/`face` continue into the app path: the single-instance plugin
@@ -2538,6 +2591,7 @@ fn main() {
             set_flow_line_rust,
             doctor_report_rust,
             doctor_repair_rust,
+            doctor_attend_rust,
             run_diagnostics_rust,
             setup_advice_rust,
             pull_model_rust,
@@ -2583,6 +2637,7 @@ fn main() {
             graft_version_rust,
             get_settings_rust,
             save_settings_rust,
+            code_set_level_rust,
             generate_speech_rust,
             speech_clip_rust,
             transcribe_rust,
@@ -2596,6 +2651,8 @@ fn main() {
             test_speech_rust,
             list_personas_rust,
             voice_pickers_rust,
+            pronunciations_rust,
+            set_pronunciations_rust,
             set_persona_voice_rust,
             clear_persona_voice_rust,
             get_version_info,
@@ -2747,15 +2804,21 @@ fn main() {
             // after a pause, because the Ollama that autostart just started deserves a
             // moment to answer before being reported as silent.
             //
-            // It only says so. Nothing is repaired here: a fix at startup is a fix nobody
-            // agreed to, and the whole design of this rests on that not happening.
+            // It says so, and -- only when the operator has turned self-repair on -- it
+            // fixes what it can. The original rule here was that nothing is ever repaired at
+            // startup, because a fix nobody agreed to is not a fix. That rule was about
+            // agreement rather than timing, and `SELF_REPAIR_SETTING` is the agreement: a
+            // switch they read and turned on, covering this whole class of repair once,
+            // rather than a prompt they cannot answer because they are not at the machine.
+            // With the switch off this is exactly what it was. With it on, nothing needing
+            // root is run regardless, and rung 3 still holds each repair to one attempt.
             {
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(3));
                     let engine = app_handle.state::<LlmEngine>();
                     let facts = doctor_facts(&app_handle);
-                    let (_, health) = doctor::report(&engine, &facts);
+                    let (_, health) = doctor::report(engine.db(), &facts);
                     println!("[AETHER1] self-check: {}", health.headline);
                     for check in health
                         .checks
@@ -2770,11 +2833,33 @@ fn main() {
                         );
                     }
                     if health.worst() != doctor::Verdict::Ok {
-                        println!(
-                            "[AETHER1] Settings -> Diagnostics has the same list, with the \
-                             repairs AETHER1 can make to what is broken. `aether1 doctor` \
-                             prints it in a terminal."
-                        );
+                        if doctor::self_repair_enabled(engine.db()) {
+                            let handle_for_hotkey = app_handle.clone();
+                            let in_app = move |_repair: doctor::RepairId| {
+                                hotkey::reregister_from_settings(&handle_for_hotkey)
+                                    .map(|()| "re-registered the hotkey".to_string())
+                            };
+                            let attended = doctor::attend(&engine, &facts, Some(&in_app));
+                            println!("[AETHER1] self-repair: {}", attended.as_report().trim());
+                            // The HUD is told whether or not anything worked: a pass that
+                            // fixed nothing is the one the operator most needs to see,
+                            // because it is the one where the switch they turned on did not
+                            // do what they turned it on for.
+                            let _ = app_handle.emit(
+                                "self-repair-done",
+                                serde_json::json!({
+                                    "headline": attended.headline(),
+                                    "report": attended.as_report(),
+                                    "attended": attended,
+                                }),
+                            );
+                        } else {
+                            println!(
+                                "[AETHER1] Settings -> Diagnostics has the same list, with the \
+                                 repairs AETHER1 can make to what is broken. `aether1 doctor` \
+                                 prints it in a terminal."
+                            );
+                        }
                     }
                 });
             }

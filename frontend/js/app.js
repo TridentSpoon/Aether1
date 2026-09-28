@@ -85,6 +85,34 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.stopSpeech();
     }
 
+    /* Stop talking, on purpose, with nothing taking its place.
+
+       This is the same cut a new question makes, and it exists separately because the only
+       ways to get silence were to ask something else or to hold the talk key -- both of which
+       start something. Ask for `diagnostics` on a machine with a bad morning behind it and the
+       answer is minutes long; there was no way to say "enough". Escape, or the button that
+       appears beside Send while there is something to stop.
+
+       Both halves matter. `stopSpeech` drops what is queued and cuts the clip playing; the
+       turn bump is what stops the sentences still inside the synthesizer from queueing
+       themselves a moment later, which is what made an earlier attempt at this feel broken. */
+    let speaking = false;
+    function hush() {
+        if (!speaking) return false;
+        supersedeSpeech();
+        setSpeakingUi(false);
+        return true;
+    }
+
+    /* Whether there is anything to stop. Driven by the engine's own state rather than by
+       "we started a reply", so it is false again the moment the last clip drains, and the
+       button does not linger over silence. */
+    function setSpeakingUi(isSpeaking) {
+        speaking = isSpeaking;
+        const btn = document.getElementById('btn-hush');
+        if (btn) btn.classList.toggle('hidden', !isSpeaking);
+    }
+
     // DOM Elements
     const chatContainer = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
@@ -439,7 +467,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.addEventListener('click', () => closeHudMenus());
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeHudMenus();
+        if (e.key !== 'Escape') return;
+        /* Silence first, and only silence: if it was talking, Escape means "be quiet" and
+           nothing else, so a press that stops a long answer does not also close the panel
+           the operator was reading. Nothing is being spoken -- the usual case -- and Escape
+           is the menu key it always was. */
+        if (hush()) return;
+        closeHudMenus();
     });
 
     // Clock
@@ -1709,6 +1743,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Voice Callbacks
     voiceEngine.onStateChange = (state) => {
         setAvatarState(state);
+        setSpeakingUi(state === 'SPEAKING');
         if (elStatusBadge) {
             elStatusBadge.textContent = state;
             if (state === 'LISTENING') {
@@ -2399,12 +2434,58 @@ document.addEventListener('DOMContentLoaded', () => {
             playBtn.innerHTML = '▶ Replay Voice';
             playBtn.onclick = () => voiceEngine.playTTSAudio(audioUrl);
             msgDiv.appendChild(playBtn);
+            // Held so trimChatHistory can free the decoded clip when this message
+            // eventually scrolls out of the kept window. On the native transport this is
+            // a blob of the whole sentence's audio, and the Replay button is the only
+            // reason it is still alive.
+            rememberClip(msgDiv, audioUrl);
         }
 
         chatContainer.appendChild(msgDiv);
         chatContainer.scrollTop = chatContainer.scrollHeight;
         msgDiv.bodyDiv = bodyDiv;
+        trimChatHistory();
         return msgDiv;
+    }
+
+    /* How many messages stay in the page. Everything older is dropped from the DOM.
+
+       The transcript itself is not lost -- it is on disk, and the History tab reads it
+       from there -- so this is only about what the renderer is asked to hold. What it was
+       asked to hold before was everything: a session that ran all day accumulated every
+       message node, every formatted-markdown subtree, and, for every reply that was
+       spoken, the decoded audio of that reply behind its Replay button. None of it is
+       reachable by scrolling in any way a person actually does, and all of it is renderer
+       memory that only ever goes up. WebKitWebProcess is the process that pays, and when
+       it runs out it does not degrade -- it dies, and takes the window with it.
+
+       200 is far past anything anyone scrolls back through by hand and still bounds the
+       page to something flat. */
+    const CHAT_HISTORY_LIMIT = 200;
+
+    /** Notes a clip URL on its message so trimming can revoke it. */
+    function rememberClip(msgDiv, url) {
+        if (typeof url !== 'string' || !url.startsWith('blob:')) return;
+        (msgDiv.clipUrls || (msgDiv.clipUrls = [])).push(url);
+    }
+
+    /* Drops the oldest messages once the log is over the limit, freeing any audio they
+       were keeping alive on the way out. Cheap to call on every append: over the limit it
+       removes one node, and under it does nothing at all. */
+    function trimChatHistory() {
+        if (!chatContainer) return;
+        while (chatContainer.children.length > CHAT_HISTORY_LIMIT) {
+            const oldest = chatContainer.firstElementChild;
+            if (!oldest) break;
+            (oldest.clipUrls || []).forEach((url) => {
+                try {
+                    URL.revokeObjectURL(url);
+                } catch (e) {
+                    // Already revoked, or a page with no URL support -- nothing to recover.
+                }
+            });
+            oldest.remove();
+        }
     }
 
     /* Which notes went into the answer, written under it.
@@ -2454,6 +2535,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!cachedUrl) {
                     playBtn.innerHTML = '⋯ Synthesizing';
                     cachedUrl = await synthesizeSpeechUrl(text);
+                    // Synthesized on demand, and then kept for as long as the message is
+                    // on screen -- so it is the message's to free, like a clip that came
+                    // with the reply.
+                    rememberClip(msgDiv, cachedUrl);
                 }
                 playBtn.innerHTML = '▶ Replay Voice';
                 if (cachedUrl) await voiceEngine.playTTSAudio(cachedUrl);
@@ -4419,6 +4504,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const doctorChecks = document.getElementById('doctor-checks');
     const doctorStatus = document.getElementById('doctor-status');
     const btnDoctorRun = document.getElementById('btn-doctor-run');
+    const btnDoctorHeal = document.getElementById('btn-doctor-heal');
 
     function setDoctorStatus(text, tone = 'info') {
         if (!doctorStatus) return;
@@ -4441,6 +4527,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (IS_TAURI) return tauriInvoke('run_diagnostics_rust');
         const resp = await apiFetch('/api/diagnostics');
         if (!resp.ok) throw new Error(`diagnostics failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    /* Every repair it can make, in one press. The same call the startup pass makes when the
+       switch above is on, so what the button does and what the switch does cannot drift. */
+    async function requestDoctorAttend() {
+        if (IS_TAURI) return tauriInvoke('doctor_attend_rust');
+        const resp = await apiFetch('/api/doctor/attend', { method: 'POST' });
+        if (!resp.ok) throw new Error(await resp.text());
         return resp.json();
     }
 
@@ -4555,6 +4650,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrap;
     }
 
+    /* One line under the panel offering the model the things repair could not fix. An
+       offer rather than an automatic question: asking a local model costs the operator's
+       own graphics card for a minute, and a panel that starts doing that on its own is a
+       panel people stop pressing buttons in. */
+    function doctorOfferToAsk(attended) {
+        if (!doctorChecks) return;
+        const row = document.createElement('div');
+        row.className = 'pt-2';
+        const ask = document.createElement('button');
+        ask.className = 'cyber-btn text-xs py-1 px-3 text-cyan-300';
+        ask.textContent = `💬 Ask ${currentAgentName.toUpperCase()} about the rest`;
+        ask.onclick = () => {
+            ask.disabled = true;
+            const left = (attended.remaining || []).map(r => `${r.title}: ${r.detail}`).join('\n');
+            handleSendMessage(
+                'AETHER1 just repaired what it could of itself and these are still wrong. '
+                + 'Look into them and tell me what to do:\n\n' + left,
+            );
+        };
+        row.appendChild(ask);
+        doctorChecks.appendChild(row);
+    }
+
     async function refreshDoctor({ quiet = false } = {}) {
         if (!doctorChecks) return;
         if (!quiet) setDoctorStatus('Checking every part of AETHER1...', 'busy');
@@ -4586,6 +4704,39 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     btnDoctorRun?.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshDoctor(); });
+
+    btnDoctorHeal?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        btnDoctorHeal.disabled = true;
+        setDoctorStatus('Fixing what it can...', 'busy');
+        try {
+            const attended = await requestDoctorAttend();
+            // The headline is the honest summary -- including "tried three, none worked",
+            // which is the outcome most worth showing rather than hiding behind a refresh.
+            setDoctorStatus(attended.headline || 'Done.', (attended.remaining || []).length ? 'info' : 'good');
+            await refreshDoctor({ quiet: true });
+            // What deterministic repair could not reach goes to the companion, which has
+            // self_check and recent_crashes and can read the logs behind them. The pass
+            // above is the half that needs no model; this is the half that needs one.
+            if ((attended.remaining || []).length) doctorOfferToAsk(attended);
+        } catch (e) {
+            setDoctorStatus(`⚠ ${e.message || e}`, 'bad');
+        } finally {
+            btnDoctorHeal.disabled = false;
+        }
+    });
+
+    /* The startup pass, when the switch is on, reports what it did. It arrives whether or
+       not Settings is open, so it lands in the conversation rather than in a panel nobody
+       is looking at -- and only when it actually attempted something. */
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('self-repair-done', (event) => {
+            const payload = (event && event.payload) || {};
+            const attended = payload.attended || {};
+            if (!(attended.outcomes || []).length) return;
+            appendMessage('agent', `🛠 ${payload.headline}\n\n${payload.report || ''}`);
+        });
+    }
 
     // Checked when the group is opened, not when Settings is: the probe spawns processes and
     // opens connections, and most visits to Settings are not about this. Same reason the
@@ -6337,6 +6488,221 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------- How to say a word -------------------------
+       Trident: "the equivalent of a spell check in a pronunciation check list? There are a
+       few words that I find hard to discern when not using my local pronunciations."
+
+       A table of say-this-as-that, stored whole rather than row by row. A row has no
+       identity of its own while it is being typed -- saving per keystroke would store
+       `Aeth` as a rule -- so the whole list goes at once, on blur and on remove, and the
+       reply is what gets drawn back. Rust trims it, drops the empty row every editor leaves
+       behind, and collapses duplicates, so redrawing from its answer is the only way the
+       pane and the voice cannot disagree. */
+    let pronunciations = { words: [], maxEntries: 200, maxLength: 120 };
+
+    async function fetchPronunciations() {
+        if (IS_TAURI) return tauriInvoke('pronunciations_rust');
+        const resp = await apiFetch('/api/speech/pronunciations');
+        if (!resp.ok) throw new Error(`could not read the pronunciations: ${resp.status}`);
+        return resp.json();
+    }
+
+    async function storePronunciations(words) {
+        if (IS_TAURI) return tauriInvoke('set_pronunciations_rust', { words });
+        const resp = await apiFetch('/api/speech/pronunciations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ words }),
+        });
+        if (!resp.ok) throw new Error((await resp.text()) || `save failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    function takePronunciations(payload) {
+        pronunciations = {
+            words: Array.isArray(payload?.words) ? payload.words : [],
+            maxEntries: payload?.max_entries || pronunciations.maxEntries,
+            maxLength: payload?.max_length || pronunciations.maxLength,
+        };
+    }
+
+    async function refreshPronunciations() {
+        try {
+            takePronunciations(await fetchPronunciations());
+            renderPronunciations();
+        } catch (e) {
+            setPronunciationNote(`Could not read the list: ${e.message || e}`, 'bad');
+        }
+    }
+
+    function setPronunciationNote(text, tone) {
+        const note = document.getElementById('words-note');
+        if (!note) return;
+        note.textContent = text;
+        note.dataset.tone = tone || '';
+    }
+
+    /* What is on screen right now, including the row somebody is still typing into. Read
+       from the inputs rather than from `pronunciations.words`, because the point of saving
+       is to store what they typed, not what was last stored. */
+    function pronunciationsOnScreen() {
+        return Array.from(document.querySelectorAll('#words-rows .words-row')).map((row) => ({
+            from: row.querySelector('.words-from')?.value || '',
+            to: row.querySelector('.words-to')?.value || '',
+        }));
+    }
+
+    async function savePronunciations() {
+        const onScreen = pronunciationsOnScreen();
+        /* Only the rows that are finished. A row with one half filled is a row somebody is
+           still typing -- tabbing from the word to the respelling would otherwise fire a
+           save that gets refused, and flash "nothing was given for how to say Aether1" in
+           the middle of them saying it. Rust still refuses a half-filled row, which is the
+           right answer for the CLI and for anything else posting to the endpoint; it is just
+           not an error to be halfway through a sentence. */
+        const words = onScreen.filter((w) => w.from.trim() && w.to.trim());
+        const unfinished = onScreen.filter((w) => (w.from.trim() ? 1 : 0) + (w.to.trim() ? 1 : 0) === 1).length;
+        // Nothing finished and nothing stored: there is no list yet to write over.
+        if (!words.length && !pronunciations.words.length) {
+            setPronunciationNote(unfinished ? 'Fill in both halves and it saves itself.' : 'Nothing yet.', '');
+            return;
+        }
+        try {
+            takePronunciations(await storePronunciations(words));
+            renderPronunciations();
+            const total = pronunciations.words.length;
+            const tail = unfinished ? ' One row still needs its other half.' : '';
+            setPronunciationNote(
+                total
+                    ? `${total} saved. The next thing it says uses them.${tail}`
+                    : `Nothing yet.${tail}`,
+                total ? 'good' : '');
+        } catch (e) {
+            // The rows are left exactly as typed: a refused save should not take the ones
+            // that were fine with it.
+            setPronunciationNote(String(e.message || e), 'bad');
+        }
+    }
+
+    /* Always one blank row at the bottom, the way a spreadsheet has one.
+
+       It is not only for looks. Saving redraws from what Rust returned, and Rust drops the
+       blank row -- so a blank row that existed only because somebody pressed Add was being
+       erased by the save that the same click's blur had already started. The next thing they
+       typed went into the row above, over the rule they had just written. Re-creating the
+       blank row on every redraw makes that unlosable, and makes Add a convenience rather
+       than the only way to reach an empty field. */
+    function renderPronunciations() {
+        const holder = document.getElementById('words-rows');
+        if (!holder) return;
+        holder.innerHTML = '';
+        for (const word of pronunciations.words) holder.appendChild(pronunciationRow(word));
+        holder.appendChild(pronunciationRow({ from: '', to: '' }));
+        const total = pronunciations.words.length;
+        setPronunciationNote(total ? `${total} saved.` : 'Nothing yet.', '');
+    }
+
+    function pronunciationRow(word) {
+        const row = document.createElement('div');
+        row.className = 'words-row';
+
+        const from = document.createElement('input');
+        from.type = 'text';
+        from.className = 'words-from';
+        from.placeholder = 'the word';
+        from.maxLength = pronunciations.maxLength;
+        from.value = word.from || '';
+        from.setAttribute('aria-label', 'The word as it is written');
+
+        const arrow = document.createElement('span');
+        arrow.className = 'words-arrow';
+        arrow.textContent = 'is said';
+
+        const to = document.createElement('input');
+        to.type = 'text';
+        to.className = 'words-to';
+        to.placeholder = 'how it sounds';
+        to.maxLength = pronunciations.maxLength;
+        to.value = word.to || '';
+        to.setAttribute('aria-label', 'How the word should sound');
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'words-remove';
+        remove.title = 'Remove this one';
+        remove.setAttribute('aria-label', `Remove ${word.from || 'this row'}`);
+        remove.textContent = '✕';
+        remove.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            row.remove();
+            savePronunciations();
+        });
+
+        // Saved on leaving a field rather than on every keystroke: a rule is only a rule
+        // once the whole word is in it, and Enter for people who never leave the keyboard.
+        for (const field of [from, to]) {
+            field.addEventListener('blur', () => savePronunciations());
+            field.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') { event.preventDefault(); field.blur(); }
+            });
+        }
+
+        row.append(from, arrow, to, remove);
+        return row;
+    }
+
+    function addPronunciationRow() {
+        voiceEngine.playSFX('click');
+        const holder = document.getElementById('words-rows');
+        if (!holder) return;
+        // There is already a blank row at the bottom; if it is untouched, Add means "put me
+        // in it" rather than "give me another one nobody asked for".
+        const rows = Array.from(holder.querySelectorAll('.words-row'));
+        const last = rows[rows.length - 1];
+        const blank = last
+            && !last.querySelector('.words-from')?.value.trim()
+            && !last.querySelector('.words-to')?.value.trim();
+        if (blank) {
+            last.querySelector('.words-from')?.focus();
+            return;
+        }
+        if (rows.length >= pronunciations.maxEntries) {
+            setPronunciationNote(`That is as many as it holds (${pronunciations.maxEntries}).`, 'bad');
+            return;
+        }
+        const row = pronunciationRow({ from: '', to: '' });
+        holder.appendChild(row);
+        row.querySelector('.words-from')?.focus();
+    }
+
+    /* Speaks the list back, which is the only check that counts: the rest of this pane can
+       only show that the text was stored, and the question is what it sounds like. Saves
+       first, so what is heard is what is stored rather than what was stored a minute ago. */
+    async function hearPronunciations() {
+        voiceEngine.playSFX('click');
+        await savePronunciations();
+        if (!pronunciations.words.length) {
+            setPronunciationNote('Add a word first, then this will read it back.', 'bad');
+            return;
+        }
+        // The words as written, in a sentence, so what comes out of the speaker is the
+        // substitution happening rather than a recital of the replacements.
+        const sentence = `${pronunciations.words.map((w) => w.from).join(', ')}.`;
+        setPronunciationNote('Speaking...', '');
+        try {
+            const url = await synthesizeSpeechUrl(sentence, null);
+            if (!url) return; // synthesizeSpeechUrl has already shown its own card
+            const result = await voiceEngine.playTTSAudio(url);
+            setPronunciationNote(
+                result && result.played
+                    ? 'That is how it will say them. Change a spelling and press this again.'
+                    : `It could not play that: ${result?.error || 'no reason given'}`,
+                result && result.played ? 'good' : 'bad');
+        } catch (e) {
+            setPronunciationNote(String(e.message || e), 'bad');
+        }
+    }
+
     async function refreshSoundHub(options = {}) {
         if (!document.getElementById('vhub-list') || soundHub.loading) return;
         soundHub.loading = true;
@@ -6520,6 +6886,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     ?.classList.toggle('hidden', soundHub.tab !== 'voices');
                 document.getElementById('vhub-pane-devices')
                     ?.classList.toggle('hidden', soundHub.tab !== 'devices');
+                document.getElementById('vhub-pane-words')
+                    ?.classList.toggle('hidden', soundHub.tab !== 'words');
+                if (soundHub.tab === 'words') refreshPronunciations();
                 // The search box only means anything on one of the two tabs, and it is
                 // the wrapper that goes -- hiding the input alone leaves its magnifying
                 // glass sitting on the row with nothing to type into.
@@ -6538,6 +6907,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         document.getElementById('vhub-test-output')?.addEventListener('click', testOutputDevice);
         document.getElementById('vhub-test-input')?.addEventListener('click', testInputDevice);
+        document.getElementById('btn-words-add')?.addEventListener('click', addPronunciationRow);
+        document.getElementById('btn-words-test')?.addEventListener('click', hearPronunciations);
         // Choosing a device points the window at it straight away, so the next thing the
         // companion says comes out of it. Save Changes is what makes it survive a restart.
         for (const id of ['setting-audio-output', 'setting-audio-input']) {
@@ -7463,6 +7834,85 @@ document.addEventListener('DOMContentLoaded', () => {
             throw new Error('Tauri bridge unavailable');
         }
         return window.__TAURI__.core.invoke(cmd, args);
+    }
+
+    /* Step 13's last mile. The crash watcher has been finding crashes and the tray has been
+       going amber since it shipped, and the notification it raises says "AETHER1 has the
+       details. Open it to look into this together" -- but nothing in the HUD listened for
+       the event carrying those details, so opening it showed an ordinary chat window with
+       nothing in it. The promise in that notification is what this keeps.
+
+       It is a card rather than a message from the companion: no model has seen this yet, and
+       a line in AETHER1's own voice saying something crashed would be the app putting words
+       in its mouth. The card states the fact and offers the one thing worth doing next. */
+    function appendCrashCard(payload) {
+        const headline = String(payload.headline || 'Something stopped unexpectedly');
+        const context = String(payload.context || '');
+        const program = String((payload.crash && payload.crash.program) || '').trim();
+
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm leading-relaxed self-start mr-8 '
+            + 'border border-amber-500/40 bg-amber-950/20';
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 '
+            + 'border-b border-amber-500/20 text-xs font-mono text-amber-400/90';
+        const what = document.createElement('span');
+        what.textContent = '⚠ CRASH DETECTED';
+        header.appendChild(what);
+        const when = document.createElement('span');
+        when.textContent = new Date().toLocaleTimeString();
+        header.appendChild(when);
+        card.appendChild(header);
+
+        const line = document.createElement('p');
+        line.className = 'text-amber-100/90';
+        line.textContent = headline;
+        card.appendChild(line);
+
+        /* The log tail is behind a fold. It is the most useful thing here and the least
+           readable -- a wall of frames pasted into the conversation is exactly the thing
+           that made this unreadable in the first place. */
+        if (context) {
+            const fold = document.createElement('details');
+            fold.className = 'mt-2';
+            const summary = document.createElement('summary');
+            summary.className = 'text-[11px] font-mono text-amber-400/70 cursor-pointer';
+            summary.textContent = 'what it wrote before it stopped';
+            fold.appendChild(summary);
+            const pre = document.createElement('pre');
+            pre.className = 'mt-1 text-[10px] font-mono text-slate-300 whitespace-pre-wrap '
+                + 'max-h-48 overflow-y-auto';
+            pre.textContent = context;
+            fold.appendChild(pre);
+            card.appendChild(fold);
+        }
+
+        const ask = document.createElement('button');
+        ask.className = 'mt-2 text-xs font-mono text-amber-200 hover:text-amber-50 '
+            + 'border border-amber-500/40 px-2 py-0.5 rounded bg-amber-950/40 cursor-pointer';
+        ask.textContent = 'Ask ' + currentAgentName.toUpperCase() + ' about this';
+        ask.onclick = () => {
+            ask.disabled = true;
+            // The question, not the evidence: recent_crashes and self_check are in every
+            // persona's domain, so it fetches the crash itself and whatever else is wrong
+            // with the install -- which is the difference between a diagnosis and a paste.
+            handleSendMessage(program
+                ? `${program} just crashed on this machine. Look into what happened and what I should do about it.`
+                : 'Something just crashed on this machine. Look into what happened and what I should do about it.');
+        };
+        card.appendChild(ask);
+
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    if (IS_TAURI && window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen('crash-detected', (event) => {
+            const payload = (event && event.payload) || {};
+            if (!payload.headline) return;
+            appendCrashCard(payload);
+        });
     }
 
     // Step 48: another copy of AETHER1 is installed somewhere on this machine. The startup
@@ -8477,6 +8927,64 @@ document.addEventListener('DOMContentLoaded', () => {
     /// markup alone, which is why index.html ships wording that is true everywhere: a
     /// backend too old to send the field, or one built for a platform not listed above,
     /// should read vague rather than wrong.
+    // What this machine can actually do to a command, said plainly under the Run switch.
+    // The backend decides the words (code_sandbox.rs) so the CLI and the HUD cannot
+    // drift apart on the one question an operator has to be able to trust.
+    function applySandboxState(sandbox) {
+        const line = document.getElementById('code-sandbox-state');
+        if (!line || !sandbox) return;
+        line.textContent = sandbox.description;
+        line.classList.toggle('text-amber-300', sandbox.confines === false);
+    }
+
+    // The autonomy level: what this project is trusted with. The four names, their
+    // descriptions and the answer all come from the backend (code_policy.rs), so this is
+    // display and one POST -- picking a level writes the project's own file and the four
+    // switches it stands for, which is why the panel is reloaded afterwards rather than
+    // having its switches set here.
+    function applyAutonomy(autonomy, levels) {
+        const select = document.getElementById('setting-code-level');
+        const hint = document.getElementById('code-level-hint');
+        const sharesRow = document.getElementById('code-level-shares-row');
+        const shares = document.getElementById('code-level-shares');
+        if (!select || !hint) return;
+        const chosen = autonomy && autonomy.level;
+        if (!chosen) {
+            // No project folder nominated, so there is nowhere to write an answer. Say that
+            // rather than offering a choice that would go nowhere.
+            select.classList.add('hidden');
+            hint.textContent = 'Set a project folder below, and this is where you say what it may do.';
+            if (sharesRow) sharesRow.classList.add('hidden');
+            return;
+        }
+        select.classList.remove('hidden');
+        select.innerHTML = '';
+        for (const level of levels || []) {
+            const option = document.createElement('option');
+            option.value = level.key;
+            option.textContent = level.title;
+            option.title = level.description;
+            select.appendChild(option);
+        }
+        select.value = chosen;
+        const described = (levels || []).find((level) => level.key === chosen);
+        hint.textContent = described ? described.description : '';
+        // A switch moved by hand is reported, not reinterpreted: the level is still what the
+        // project's file says, and the operator is told something below it has moved.
+        const drifted = autonomy.matches === false;
+        hint.classList.toggle('text-amber-300', drifted);
+        if (drifted) {
+            hint.textContent += ' -- one of the switches below has been changed by hand, so this is no longer what is in force. Pick the level again to restore it.';
+        }
+        if (sharesRow && shares) {
+            const list = autonomy.shares || [];
+            sharesRow.classList.toggle('hidden', list.length === 0);
+            shares.textContent = list
+                .map((share) => `${share.path} (${share.write ? 'read and write' : 'read only'})`)
+                .join(', ') + '. Add one with `aether1 code share <folder>`.';
+        }
+    }
+
     function applyOsWording(os) {
         const wording = OS_WORDING[os];
         if (!wording) return;
@@ -8503,6 +9011,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Before the fields: this only rewrites static help text, but doing it first
             // means the panel is never briefly describing the wrong machine.
             applyOsWording(data.os);
+            applySandboxState(data.sandbox);
+            applyAutonomy(data.autonomy, data.levels);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
@@ -8559,6 +9069,20 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-code-perm-system').checked = s.code_perm_system !== false;
             document.getElementById('setting-code-perm-github').checked = s.code_perm_github !== false;
             document.getElementById('setting-code-perm-internet').checked = s.code_perm_internet !== false;
+            // And the mirror of that rule for the two that change things: absent means
+            // OFF, matching Grant::default_on. A switch that reads as on before anybody
+            // touched it would be the one dishonest control on this page.
+            // Absent means off, matching doctor::self_repair_enabled: repairing itself
+            // unattended is something the operator switches on, never a default.
+            document.getElementById('setting-doctor-self-repair').checked = s.doctor_self_repair === true;
+            document.getElementById('setting-code-perm-edit').checked = s.code_perm_edit === true;
+            document.getElementById('setting-code-perm-run').checked = s.code_perm_run === true;
+            document.getElementById('setting-code-run-network').checked = s.code_run_network === true;
+            document.getElementById('setting-code-run-unconfined').checked = s.code_run_unconfined === true;
+            document.getElementById('setting-code-workspace-root').value =
+                typeof s.code_workspace_root === 'string' ? s.code_workspace_root : '';
+            document.getElementById('setting-code-run-allowlist').value =
+                Array.isArray(s.code_run_allowlist) ? s.code_run_allowlist.join(', ') : '';
             document.getElementById('setting-command-allowlist').value =
                 Array.isArray(s.command_allowlist) ? s.command_allowlist.join(', ') : '';
             loadPersonaAccess();
@@ -8708,6 +9232,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 code_perm_system: document.getElementById('setting-code-perm-system').checked,
                 code_perm_github: document.getElementById('setting-code-perm-github').checked,
                 code_perm_internet: document.getElementById('setting-code-perm-internet').checked,
+                doctor_self_repair: document.getElementById('setting-doctor-self-repair').checked,
+                code_perm_edit: document.getElementById('setting-code-perm-edit').checked,
+                code_perm_run: document.getElementById('setting-code-perm-run').checked,
+                code_run_network: document.getElementById('setting-code-run-network').checked,
+                code_run_unconfined: document.getElementById('setting-code-run-unconfined').checked,
+                code_workspace_root: document.getElementById('setting-code-workspace-root').value.trim(),
+                code_run_allowlist: document.getElementById('setting-code-run-allowlist').value
+                    .split(',').map(p => p.trim()).filter(Boolean),
                 command_allowlist: document.getElementById('setting-command-allowlist').value
                     .split(',').map(p => p.trim()).filter(Boolean),
                 auto_speak: document.getElementById('setting-autospeak').checked,
@@ -9949,12 +10481,41 @@ document.addEventListener('DOMContentLoaded', () => {
         if (box) box.checked = on;
     }
 
+    /* No click SFX on this one. It is the button you press to make it stop making noise. */
+    document.getElementById('btn-hush')?.addEventListener('click', () => hush());
+
     btnSfxToggle.addEventListener('click', () => {
         applySfx(!voiceEngine.sfxEnabled);
         voiceEngine.playSFX('click');
         // Saved without closing anything or announcing it: this is a menu toggle, and the
         // one thing it must do that it did not before is survive a restart.
         saveSettings(false);
+    });
+
+    // Picking a level is its own request, not part of Save: it writes the project's file
+    // and the four switches at once, and those switches are fields on this same panel, so
+    // the panel is reloaded to show what the choice did.
+    document.getElementById('setting-code-level')?.addEventListener('change', async (e) => {
+        const level = e.target.value;
+        try {
+            if (IS_TAURI) {
+                await tauriInvoke('code_set_level_rust', { level });
+            } else {
+                const resp = await apiFetch('/api/code/level', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ level }),
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+            }
+            await loadSettings();
+        } catch (err) {
+            const hint = document.getElementById('code-level-hint');
+            if (hint) {
+                hint.textContent = `That level was not set: ${err.message || err}`;
+                hint.classList.add('text-amber-300');
+            }
+        }
     });
 
     document.getElementById('setting-sfx')?.addEventListener('change', (e) => {

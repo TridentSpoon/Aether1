@@ -72,6 +72,21 @@ const CAPABILITIES: &[Capability] = &[
         line: "fetch_url {\"url\": \"https://docs.rs/ureq/latest/ureq/\"} -- fetch a public page as text.",
     },
     Capability {
+        name: "edit_file",
+        grant: Grant::Edit,
+        line: "edit_file {\"path\": \"src/main.rs\", \"find\": \"let x = 1;\", \"replace\": \"let x = 2;\"} -- replace exact text in a file in the project folder. The text must appear exactly once; include surrounding lines if it does not.",
+    },
+    Capability {
+        name: "create_file",
+        grant: Grant::Edit,
+        line: "create_file {\"path\": \"src/new.rs\", \"content\": \"...\"} -- write a whole file in the project folder, creating it or replacing it.",
+    },
+    Capability {
+        name: "run",
+        grant: Grant::Run,
+        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. Or {\"shell\": \"cargo test && cargo clippy\"} for a shell line, which works inside the sandbox. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on, so a step that needs to fetch dependencies will fail and should be reported rather than worked around. Work freely inside that folder -- a checkpoint is taken before you change anything, so the operator can put it all back.",
+    },
+    Capability {
         name: "search_web",
         grant: Grant::Internet,
         line: "search_web {\"query\": \"rust concurrency 2024\"} -- search the web for recent information. Returns top results with title, URL, and snippet.",
@@ -102,8 +117,11 @@ pub fn any_granted(db: &MemoryDb) -> bool {
 
 /// Runs one call from the model.
 ///
-/// Every path through this function is a read. The `Err` case is what the model is told,
-/// so a refusal here is written as an instruction rather than as a complaint.
+/// Most paths through this function are reads. The three that are not -- `edit_file`,
+/// `create_file` and `run` -- are gated by grants that default off and are confined to the
+/// operator's nominated project folder by `code_workspace`, which is where their whole
+/// argument lives. The `Err` case is what the model is told, so a refusal here is written
+/// as an instruction rather than as a complaint.
 pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
     let Some(capability) = CAPABILITIES.iter().find(|cap| cap.name == name) else {
         let known: Vec<&str> = CAPABILITIES.iter().map(|cap| cap.name).collect();
@@ -114,6 +132,12 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
     };
     code_perms::require(db, capability.grant).map_err(|Refusal(why)| why)?;
 
+    // Before the first thing that changes anything, a way back. See code_checkpoint.rs for
+    // why this replaced the table of refused `git` subcommands rather than joining it.
+    if matches!(name, "edit_file" | "create_file" | "run") {
+        checkpoint_if_due(db);
+    }
+
     match name {
         "read_file" => run_builtin(db, &crate::tools::builtin::ReadFile, args),
         "list_dir" => run_builtin(db, &crate::tools::builtin::ListDir, args),
@@ -121,9 +145,51 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
         "gh" => gh(db, args),
         "fetch_url" => fetch_url(db, args),
         "search_web" => search_web(db, args),
+        "edit_file" => crate::code_workspace::edit_file(db, args),
+        "create_file" => crate::code_workspace::create_file(db, args),
+        "run" => crate::code_workspace::run(db, args),
         // Unreachable while CAPABILITIES and this match agree; a refusal rather than a
         // panic, because the cost of disagreeing is one confused turn and not a crash.
         other => Err(format!("{other} is declared but not implemented")),
+    }
+}
+
+/// How long one checkpoint covers. A burst of edits and test runs is one piece of work and
+/// wants one way back, not forty; an hour later it is a different afternoon and wants its
+/// own. Long enough that `git add -A` on a large repository is never in the way, short
+/// enough that what a revert loses is a session and not a day.
+const CHECKPOINT_EVERY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Takes a checkpoint when the newest one is old enough to be a different piece of work.
+///
+/// Best effort on purpose: a workspace that is not a git repository, or a git that will not
+/// run, must not stop the model from working. What it costs is the ability to undo, and
+/// `aether1 code checkpoints` says plainly when there is nothing to undo to.
+fn checkpoint_if_due(db: &MemoryDb) {
+    let Ok(root) = crate::code_workspace::root(db) else {
+        return;
+    };
+    let due = match crate::code_checkpoint::latest(&root) {
+        Ok(Some(newest)) => match newest
+            .reference
+            .rsplit('/')
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            Some(secs) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                now.saturating_sub(secs) >= CHECKPOINT_EVERY.as_secs()
+            }
+            None => true,
+        },
+        Ok(None) => true,
+        Err(_) => false,
+    };
+    if due {
+        let _ = crate::code_checkpoint::take(&root, "before AETHER CODE changed anything");
     }
 }
 
@@ -468,11 +534,106 @@ mod tests {
         MemoryDb::open(&path).expect("open test db")
     }
 
+    /// The loop this whole change exists for, driven through the same `call` a model's
+    /// tool block goes through: create a file, run something that proves it is there,
+    /// edit it, run again and see the change. No model involved -- this asserts the
+    /// machinery under one, which is the part that can be tested without a graphics card.
+    #[test]
+    fn it_can_create_edit_and_run_in_the_project_folder() {
+        let home = std::env::temp_dir().join(format!("aether1_code_loop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let db = MemoryDb::open(home.join("db.sqlite")).unwrap();
+        db.set_setting(
+            crate::code_workspace::ROOT_SETTING,
+            &json!(project.to_string_lossy().to_string()),
+        )
+        .unwrap();
+        db.set_setting(crate::code_workspace::ALLOWLIST_SETTING, &json!(["cat"]))
+            .unwrap();
+        // This test is about the loop -- create, run, edit, run again -- and not about the
+        // boundary, so it runs either way: confined where the machine can, and with the
+        // operator's unconfined switch where it cannot. A machine with no sandbox is the
+        // ordinary case on Windows and on a CI runner.
+        if !crate::code_sandbox::detect().confines() {
+            db.set_setting(crate::code_sandbox::UNCONFINED_SETTING, &json!(true))
+                .unwrap();
+        }
+
+        // Both grants off to begin with, which is how a fresh install ships.
+        let refused = call(
+            &db,
+            "edit_file",
+            &json!({"path": "x", "find": "a", "replace": "b"}),
+        )
+        .unwrap_err();
+        assert!(refused.contains("permission off"), "{refused}");
+
+        code_perms::set(&db, Grant::Edit, true).unwrap();
+        code_perms::set(&db, Grant::Run, true).unwrap();
+
+        let _guard = crate::tools::fs_guard::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+
+        let made = call(
+            &db,
+            "create_file",
+            &json!({"path": "note.txt", "content": "before\n"}),
+        )
+        .unwrap();
+        assert!(made.contains("created"), "{made}");
+
+        let ran = call(&db, "run", &json!({"argv": ["cat", "note.txt"]})).unwrap();
+        assert!(ran.contains("before"), "{ran}");
+
+        let edited = call(
+            &db,
+            "edit_file",
+            &json!({"path": "note.txt", "find": "before", "replace": "after"}),
+        )
+        .unwrap();
+        assert!(edited.contains("note.txt updated"), "{edited}");
+
+        let again = call(&db, "run", &json!({"argv": ["cat", "note.txt"]})).unwrap();
+        assert!(
+            again.contains("after"),
+            "the edit is what the command sees: {again}"
+        );
+
+        // And the boundary holds from in here too.
+        let out = call(
+            &db,
+            "create_file",
+            &json!({"path": "../escape.txt", "content": "no"}),
+        )
+        .unwrap_err();
+        assert!(out.contains("outside the project folder"), "{out}");
+
+        match previous {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
     /// The catalog is the model's whole picture of what it can do, so a switched-off
     /// permission has to disappear from it rather than sit there being refused.
     #[test]
     fn switching_a_permission_off_removes_it_from_the_catalog() {
         let db = db();
+        // The two changing grants start off, so the default catalog is the reads only.
+        assert_eq!(
+            catalog(&db).len(),
+            CAPABILITIES
+                .iter()
+                .filter(|cap| cap.grant.default_on())
+                .count()
+        );
+        code_perms::set(&db, Grant::Edit, true).unwrap();
+        code_perms::set(&db, Grant::Run, true).unwrap();
         assert_eq!(catalog(&db).len(), CAPABILITIES.len());
 
         code_perms::set(&db, Grant::Github, false).unwrap();

@@ -513,8 +513,13 @@ pub fn generate_speech_reporting(
     engine: Engine,
     voice: Option<&str>,
     local_voice: Option<&str>,
+    speller: &crate::speech_words::Speller,
 ) -> Result<Speech, Vec<Attempt>> {
-    let clean_text = sanitize_text(text);
+    // Markdown out first, then the operator's respellings: they are written against the
+    // words they hear, not against the punctuation the answer arrived wrapped in. The result
+    // is what goes into the cache key below, so editing the list is enough to make the next
+    // clip a new one -- nothing has to know to throw the old one away.
+    let clean_text = speller.apply(&sanitize_text(text));
     if clean_text.trim().is_empty() {
         return Err(vec![Attempt {
             engine: "nothing to say",
@@ -664,8 +669,9 @@ pub fn generate_speech_with(
     engine: Engine,
     voice: Option<&str>,
     local_voice: Option<&str>,
+    speller: &crate::speech_words::Speller,
 ) -> Result<PathBuf, String> {
-    generate_speech_reporting(cache_dir, text, engine, voice, local_voice)
+    generate_speech_reporting(cache_dir, text, engine, voice, local_voice, speller)
         .map(|speech| speech.path)
         .map_err(|attempts| {
             attempts
@@ -679,6 +685,12 @@ pub fn generate_speech_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No pronunciation list: these tests are about the engines, and a respelling would be
+    /// one more thing between the text and what came back.
+    fn plain() -> crate::speech_words::Speller {
+        crate::speech_words::Speller::none()
+    }
 
     /// The list is printed verbatim when nothing is found, so every entry has to be a
     /// place this platform could actually put the file. A Unix absolute path on Windows
@@ -740,7 +752,7 @@ mod tests {
         // directly via os_status() (see the test above).
         if cfg!(target_os = "windows") || os_status().is_ok() {
             let dir = std::env::temp_dir().join(format!("aether1_tts_auto_{}", std::process::id()));
-            let result = generate_speech_with(&dir, "hello", Engine::Auto, None, None);
+            let result = generate_speech_with(&dir, "hello", Engine::Auto, None, None, &plain());
             assert!(result.is_ok(), "{result:?}");
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -753,7 +765,8 @@ mod tests {
         // anyone noticing.
         let dir = std::env::temp_dir().join(format!("aether1_tts_local_{}", std::process::id()));
         if piper_binary().is_none() {
-            let err = generate_speech_with(&dir, "hello", Engine::Local, None, None).unwrap_err();
+            let err = generate_speech_with(&dir, "hello", Engine::Local, None, None, &plain())
+                .unwrap_err();
             assert!(err.contains("no local speech engine"), "{err}");
         }
     }
@@ -896,8 +909,15 @@ mod tests {
         }
 
         let dir = std::env::temp_dir().join(format!("aether1_tts_test_{}", std::process::id()));
-        let path = generate_speech_with(&dir, "Testing one two three.", Engine::Cloud, None, None)
-            .expect("synthesis against the live service should succeed");
+        let path = generate_speech_with(
+            &dir,
+            "Testing one two three.",
+            Engine::Cloud,
+            None,
+            None,
+            &plain(),
+        )
+        .expect("synthesis against the live service should succeed");
         let metadata = std::fs::metadata(&path).expect("output file should exist");
         assert!(metadata.len() > 0, "synthesized mp3 should not be empty");
         let _ = std::fs::remove_dir_all(&dir);

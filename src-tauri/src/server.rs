@@ -126,6 +126,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/chat", post(code_chat))
         .route("/api/code/chat/history", get(code_chat_history))
         .route("/api/code/chat/clear", post(code_chat_clear))
+        .route("/api/code/level", post(code_level))
         .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
@@ -167,12 +168,17 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/personas/voice", post(set_persona_voice))
         .route("/api/personas/voice/reset", post(clear_persona_voice))
         .route("/api/voice/pickers", get(voice_pickers))
+        .route(
+            "/api/speech/pronunciations",
+            get(pronunciations).post(set_pronunciations),
+        )
         .route("/api/flow", get(flow_mode).post(set_flow_mode))
         .route("/api/flow/line", post(set_flow_line))
         .route("/api/profile", get(profile_report))
         .route("/api/profile/revoke", post(revoke_device))
         .route("/api/doctor", get(doctor_report))
         .route("/api/doctor/repair", post(doctor_repair))
+        .route("/api/doctor/attend", post(doctor_attend))
         .route("/api/audio/{filename}", get(get_audio))
         .route("/ws/chat", get(ws_chat))
         .route("/ws/telemetry", get(ws_telemetry))
@@ -597,6 +603,15 @@ async fn doctor_repair(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
+/// Every repair this process can make, asked for from the browser HUD. Same rule as the one
+/// above: no in-app repairs, because this process holds no window to make them with, so the
+/// hotkey comes back in `remaining` rather than being silently skipped.
+async fn doctor_attend(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::doctor_attend(&state.engine, crate::doctor::Facts::default(), None)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
 /// The browser HUD's counterpart of `flow_mode_rust`, so the chin bar's STATIC/FLOW
 /// toggle is the same switch on both transports.
 async fn flow_mode(State(state): State<AppState>) -> Json<Value> {
@@ -682,6 +697,26 @@ async fn set_persona_voice(
     Json(req): Json<PersonaVoiceRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     commands::set_persona_voice(&state.engine, req.persona, req.voice, req.local_voice)
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+/// The pronunciation list, and the ceilings the pane shows rather than guesses at.
+async fn pronunciations(State(state): State<AppState>) -> Json<Value> {
+    Json(commands::pronunciations(&state.engine))
+}
+
+#[derive(Deserialize)]
+struct PronunciationsRequest {
+    words: Vec<crate::speech_words::Say>,
+}
+
+/// The whole list at once; the reply is the list as stored, for the pane to redraw from.
+async fn set_pronunciations(
+    State(state): State<AppState>,
+    Json(req): Json<PronunciationsRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::set_pronunciations(&state.engine, req.words)
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
@@ -913,6 +948,24 @@ async fn code_chat_clear(
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Browser-transport twin of code_set_level_rust.
+async fn code_level(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let level = body
+        .get("level")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let report =
+        tokio::task::spawn_blocking(move || commands::code_set_level(&state.engine, &level))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(report))
 }
 
 async fn voice_advice(State(state): State<AppState>) -> Json<crate::voice_setup::VoiceAdvice> {
