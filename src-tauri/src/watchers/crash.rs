@@ -473,6 +473,81 @@ pub fn reader_for_this_machine() -> Box<dyn CrashReader + Send + Sync> {
 /// Settings key for the off switch. Crash capture speaks unprompted, so it gets a switch,
 /// and the switch is on by default because a watcher nobody turned on watches nothing.
 pub const ENABLED_SETTING: &str = "crash_capture_enabled";
+/// Settings key holding the process AETHER1 last shut itself down on, so the copy that
+/// starts next can tell that death apart from a crash.
+pub const EXPECTED_EXIT_SETTING: &str = "crash_expected_exit";
+
+/// How long after a recorded deliberate exit an abort from that pid is still that exit.
+/// Generous, because the abort happens *during* teardown and the record is written before
+/// it: the process can spend a while in atexit handlers on the way out. Short enough that a
+/// reused pid days later is not silently swallowed.
+const EXPECTED_EXIT_WINDOW_SECS: u64 = 300;
+
+/// A shutdown AETHER1 asked for, recorded just before it happens.
+///
+/// **Why this exists.** Aether1's own renderer aborts while the process is exiting -- a
+/// WebKitGTK/Mesa teardown bug, seen as `SIGABRT, the program aborted itself` -- and the
+/// relaunch after an update means the copy that starts next is watching when it lands. So
+/// pressing update reliably produced a CRASH DETECTED card reporting the shutdown the
+/// operator had just asked for. The crash is real and the reader is right to see it; what
+/// was wrong was calling a death we caused "unexpectedly".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectedExit {
+    pub program: String,
+    pub pid: u32,
+    /// Unix seconds, taken when the exit was asked for rather than when it completed.
+    pub at: u64,
+}
+
+impl ExpectedExit {
+    /// This process, about to end on purpose. The program name comes from the running
+    /// executable so it matches what the crash reader will call it -- `coredumpctl` reports
+    /// the basename of `exe`, and so does this.
+    pub fn for_this_process() -> Self {
+        let program = std::env::current_exe()
+            .ok()
+            .map(|exe| program_name(&exe.to_string_lossy()))
+            .unwrap_or_else(|| "aether1".to_string());
+        Self {
+            program,
+            pid: std::process::id(),
+            at: now_seconds(),
+        }
+    }
+}
+
+/// Reads the record back out of settings, tolerating both the object it writes and a value
+/// left behind by something else. A record that will not parse is no record: the worst case
+/// is one card an operator has seen before, not a swallowed crash.
+pub fn expected_exit(raw: Option<serde_json::Value>) -> Option<ExpectedExit> {
+    serde_json::from_value(raw?).ok()
+}
+
+/// Whether this crash is the shutdown recorded just before it.
+///
+/// All three have to line up. The pid is the real evidence; the program name guards against
+/// a pid the system handed to something else; the window guards against the same pid coming
+/// back round much later. `at` of zero means the source gave no usable time, which
+/// `crashes_since` already treats as recent, so it is accepted here too rather than being
+/// read as 1970.
+pub fn is_expected_exit(crash: &Crash, expected: Option<&ExpectedExit>) -> bool {
+    let Some(expected) = expected else {
+        return false;
+    };
+    if crash.pid != expected.pid {
+        return false;
+    }
+    if mute_key(&crash.program) != mute_key(&expected.program) {
+        return false;
+    }
+    if crash.at == 0 {
+        return true;
+    }
+    // A few seconds of slack below, because the two clocks are not the same one: the record
+    // is stamped by this process and the crash by the system's journal.
+    crash.at + 5 >= expected.at && crash.at <= expected.at + EXPECTED_EXIT_WINDOW_SECS
+}
+
 /// Settings key for the per-program mute list: programs whose crashes are noted but never
 /// announced. The list exists because some programs crash as a matter of routine, and a
 /// companion that says so every time is one you switch off entirely -- which would lose the
@@ -552,12 +627,17 @@ impl CrashWatch {
         self.reader.availability()
     }
 
-    /// One pass. Returns only crashes that are new, are not muted, and happened since the
-    /// watch began -- which is to say, only the ones worth interrupting someone over.
+    /// One pass. Returns only crashes that are new, are not muted, are not the shutdown
+    /// AETHER1 asked for itself, and happened since the watch began -- which is to say, only
+    /// the ones worth interrupting someone over.
     ///
     /// The mute list is applied *after* the crash is recorded as seen, so unmuting a program
     /// does not suddenly announce the crash it had an hour ago.
-    pub fn poll(&mut self, muted: &[String]) -> Result<Vec<Crash>, String> {
+    pub fn poll(
+        &mut self,
+        muted: &[String],
+        expected: Option<&ExpectedExit>,
+    ) -> Result<Vec<Crash>, String> {
         let found = self.reader.crashes_since(self.since)?;
         // Recorded on the way through, and only on a sweep that actually read the machine:
         // `aether1 doctor` asks "is the watcher watching?", and a reader that errored every
@@ -569,6 +649,11 @@ impl CrashWatch {
                 continue;
             }
             if is_muted(&crash.program, muted) {
+                continue;
+            }
+            // Recorded as seen above before this test, like the mute list, so a record that
+            // is cleared later does not bring the shutdown back as news.
+            if is_expected_exit(&crash, expected) {
                 continue;
             }
             news.push(crash);
@@ -875,9 +960,9 @@ mod tests {
     #[test]
     fn a_crash_is_announced_once_however_often_the_watcher_looks() {
         let mut watch = watching(vec![a_crash("firefox", 4242)]);
-        assert_eq!(watch.poll(&[]).unwrap().len(), 1);
+        assert_eq!(watch.poll(&[], None).unwrap().len(), 1);
         assert!(
-            watch.poll(&[]).unwrap().is_empty(),
+            watch.poll(&[], None).unwrap().is_empty(),
             "the second pass sees the same crash and must say nothing"
         );
     }
@@ -885,7 +970,7 @@ mod tests {
     #[test]
     fn a_muted_program_crashes_quietly() {
         let mut watch = watching(vec![a_crash("steam", 99), a_crash("nvim", 100)]);
-        let news = watch.poll(&["steam".to_string()]).unwrap();
+        let news = watch.poll(&["steam".to_string()], None).unwrap();
         assert_eq!(news.len(), 1);
         assert_eq!(news[0].program, "nvim");
     }
@@ -893,9 +978,9 @@ mod tests {
     #[test]
     fn unmuting_a_program_does_not_announce_what_it_already_missed() {
         let mut watch = watching(vec![a_crash("steam", 99)]);
-        assert!(watch.poll(&["steam".to_string()]).unwrap().is_empty());
+        assert!(watch.poll(&["steam".to_string()], None).unwrap().is_empty());
         assert!(
-            watch.poll(&[]).unwrap().is_empty(),
+            watch.poll(&[], None).unwrap().is_empty(),
             "a crash that happened while muted is history, not a backlog to deliver"
         );
     }
@@ -908,7 +993,7 @@ mod tests {
         };
         let mut watch = watching(vec![old]);
         assert!(
-            watch.poll(&[]).unwrap().is_empty(),
+            watch.poll(&[], None).unwrap().is_empty(),
             "opening AETHER1 must not read a week of old core dumps at you"
         );
     }
@@ -938,5 +1023,97 @@ mod tests {
                 "the reason has to be something an operator can act on: {reason}"
             );
         }
+    }
+
+    fn exiting(pid: u32, at: u64) -> ExpectedExit {
+        ExpectedExit {
+            program: "aether1".to_string(),
+            pid,
+            at,
+        }
+    }
+
+    fn dying(program: &str, pid: u32, at: u64) -> Crash {
+        Crash {
+            program: program.to_string(),
+            pid,
+            cause: "SIGABRT, the program aborted itself".to_string(),
+            at,
+            log_tail: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_shutdown_we_asked_for_is_not_a_crash() {
+        let expected = exiting(4242, 1_000_000);
+        // The abort lands during teardown, a moment after the exit was asked for.
+        assert!(is_expected_exit(
+            &dying("aether1", 4242, 1_000_003),
+            Some(&expected)
+        ));
+        // And sometimes on the same second.
+        assert!(is_expected_exit(
+            &dying("aether1", 4242, 1_000_000),
+            Some(&expected)
+        ));
+    }
+
+    #[test]
+    fn everything_else_is_still_a_crash() {
+        let expected = exiting(4242, 1_000_000);
+        // Another program that happened to hold that pid number.
+        assert!(!is_expected_exit(
+            &dying("firefox", 4242, 1_000_003),
+            Some(&expected)
+        ));
+        // The same program, a different process -- the one still running, for instance.
+        assert!(!is_expected_exit(
+            &dying("aether1", 4243, 1_000_003),
+            Some(&expected)
+        ));
+        // The pid come back round long afterwards.
+        assert!(!is_expected_exit(
+            &dying("aether1", 4242, 1_000_000 + EXPECTED_EXIT_WINDOW_SECS + 1),
+            Some(&expected)
+        ));
+        // A crash from before the exit was ever asked for.
+        assert!(!is_expected_exit(
+            &dying("aether1", 4242, 999_000),
+            Some(&expected)
+        ));
+        // Nothing recorded at all, which is every machine that has not updated yet.
+        assert!(!is_expected_exit(&dying("aether1", 4242, 1_000_003), None));
+    }
+
+    #[test]
+    fn a_crash_with_no_usable_time_is_judged_on_the_pid_alone() {
+        // `crashes_since` already treats a zero timestamp as recent rather than as 1970, so
+        // reading it as "long before the exit" here would resurrect the card this removes.
+        let expected = exiting(4242, 1_000_000);
+        assert!(is_expected_exit(
+            &dying("aether1", 4242, 0),
+            Some(&expected)
+        ));
+        assert!(!is_expected_exit(&dying("aether1", 77, 0), Some(&expected)));
+    }
+
+    #[test]
+    fn a_record_that_will_not_parse_is_no_record() {
+        let written = serde_json::to_value(exiting(7, 1_000_000)).unwrap();
+        assert_eq!(expected_exit(Some(written)), Some(exiting(7, 1_000_000)));
+        assert_eq!(expected_exit(None), None);
+        assert_eq!(expected_exit(Some(serde_json::json!("nonsense"))), None);
+        assert_eq!(expected_exit(Some(serde_json::json!({"pid": 7}))), None);
+    }
+
+    #[test]
+    fn this_process_records_itself_by_the_name_the_reader_will_use() {
+        let record = ExpectedExit::for_this_process();
+        assert_eq!(record.pid, std::process::id());
+        // A basename, never a path -- coredumpctl reports the basename of exe and the two
+        // have to match for is_expected_exit to fire at all.
+        assert!(!record.program.contains(std::path::MAIN_SEPARATOR));
+        assert!(!record.program.is_empty());
+        assert!(record.at > 0);
     }
 }

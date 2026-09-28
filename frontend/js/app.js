@@ -4704,6 +4704,107 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* Verify: the self-check without a model, reported into the conversation.
+     *
+     * The chin's Diagnostics chip sends a question to the companion, which is the right
+     * thing when there is a companion -- it reads the crash and the logs behind it and
+     * says what to do. But it is useless in the one case someone most wants to press it:
+     * a machine with no model connected, or one that has just restarted after an update
+     * and put a CRASH DETECTED card on the screen. The doctor needs no model at all, so
+     * this runs it directly and lands the answer where the operator is looking.
+     *
+     * Deliberately a summary rather than the full panel: the rows, the details and the
+     * repair buttons already exist in Settings and are better there. What this answers is
+     * "is this install all right", in the smallest form that can honestly answer it. */
+    function appendVerifyCard(health) {
+        const checks = Array.isArray(health.checks) ? health.checks : [];
+        const bad = checks.filter((c) => c.verdict === 'failed' || c.verdict === 'degraded');
+        const unknown = checks.filter((c) => c.verdict === 'unknown');
+        const good = checks.length - bad.length - unknown.length;
+        const clean = bad.length === 0;
+
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm leading-relaxed self-start mr-8 border '
+            + (clean ? 'border-green-500/40 bg-green-950/20' : 'border-amber-500/40 bg-amber-950/20');
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b text-xs font-mono '
+            + (clean ? 'border-green-500/20 text-green-400/90' : 'border-amber-500/20 text-amber-400/90');
+        const what = document.createElement('span');
+        what.textContent = clean ? '✔ VERIFIED' : '⚠ VERIFIED WITH FINDINGS';
+        header.appendChild(what);
+        const when = document.createElement('span');
+        when.textContent = new Date().toLocaleTimeString();
+        header.appendChild(when);
+        card.appendChild(header);
+
+        const line = document.createElement('p');
+        line.className = clean ? 'text-green-100/90' : 'text-amber-100/90';
+        /* The doctor's own headline, not one written here: it is the same sentence the
+           Settings panel shows, and two different summaries of one report is how an
+           operator ends up not trusting either. */
+        line.textContent = health.headline
+            || (clean ? 'Everything checked out.' : 'Some checks did not pass.');
+        card.appendChild(line);
+
+        const tally = document.createElement('p');
+        tally.className = 'text-[11px] font-mono text-slate-400 mt-1';
+        const parts = [good + ' passed'];
+        if (bad.length) parts.push(bad.length + ' to look at');
+        /* Named rather than counted silently: an unknown is a check that could not look,
+           which is a different thing from a check that looked and was happy. */
+        if (unknown.length) parts.push(unknown.length + ' could not be checked from here');
+        tally.textContent = parts.join(' · ');
+        card.appendChild(tally);
+
+        for (const check of bad) {
+            const row = document.createElement('p');
+            row.className = 'text-[11px] font-mono text-amber-100 leading-snug mt-1';
+            row.textContent = '✖ ' + check.title + ' -- ' + check.detail;
+            card.appendChild(row);
+        }
+
+        if (bad.length) {
+            const where = document.createElement('p');
+            where.className = 'text-[10px] font-mono text-slate-400 mt-2';
+            where.textContent = 'Settings, under the self-check, has the detail and the repairs.';
+            card.appendChild(where);
+        }
+
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    /* Runs the self-check and puts the result in the conversation. Returns nothing and
+       throws nothing: every path it can take ends in something the operator can read, and
+       a verify that fails silently is worse than no verify at all. */
+    async function verifyInstall() {
+        /* Its own node rather than appendMessage: that one attributes everything it draws
+           to the operator or to the companion, and neither of them said this. */
+        const waiting = document.createElement('p');
+        waiting.className = 'text-[11px] font-mono text-cyan-300 my-2 self-start animate-pulse';
+        waiting.textContent = 'Verifying AETHER1...';
+        chatContainer.appendChild(waiting);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        try {
+            const report = await fetchDoctorReport();
+            appendVerifyCard(report.health || report);
+        } catch (e) {
+            const failed = document.createElement('p');
+            failed.className = 'text-[11px] font-mono text-red-400 my-2 self-start';
+            failed.textContent = `⚠ The self-check could not run: ${e.message || e}`;
+            chatContainer.appendChild(failed);
+        } finally {
+            waiting.remove();
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+    }
+
+    document.getElementById('btn-verify')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        verifyInstall();
+    });
+
     btnDoctorRun?.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshDoctor(); });
 
     btnDoctorHeal?.addEventListener('click', async () => {
@@ -7936,6 +8037,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 : 'Something just crashed on this machine. Look into what happened and what I should do about it.');
         };
         card.appendChild(ask);
+
+        /* Beside it, the answer that needs no model. The card most often appears right
+           after an update relaunch, on an install someone is now unsure about, and asking
+           the companion is no use when no companion is connected. */
+        const verify = document.createElement('button');
+        verify.className = 'mt-2 ml-2 text-xs font-mono text-amber-200 hover:text-amber-50 '
+            + 'border border-amber-500/40 px-2 py-0.5 rounded bg-amber-950/40 cursor-pointer';
+        verify.textContent = 'Verify AETHER1';
+        verify.onclick = () => {
+            verify.disabled = true;
+            verifyInstall();
+        };
+        card.appendChild(verify);
 
         chatContainer.appendChild(card);
         chatContainer.scrollTop = chatContainer.scrollHeight;
