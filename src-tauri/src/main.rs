@@ -23,6 +23,7 @@ mod background_services;
 mod cli;
 mod code_chat;
 mod code_checkpoint;
+mod code_openat;
 mod code_perms;
 mod code_policy;
 mod code_proxy;

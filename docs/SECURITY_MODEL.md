@@ -167,10 +167,27 @@ does not exist yet, so a symlink out of the project resolves to where it really 
 refused), `fs_guard`'s denied names and home-directory rule checked as well rather than
 instead, and no delete, rename or move at all. Both grants default off.
 
-The known limit: resolve, check, then open is three steps, and a hostile process on the same
-machine could in principle replace something between the second and the third. Closing that
-means `openat`-style operations against a directory file descriptor. It is not the practical
-attack path against a coding assistant, and it is on the list.
+What used to be the known limit here -- resolve, check, then hand the same string back to the
+operating system to walk again -- is closed on Unix. `code_openat` opens a file by walking
+**down from the project folder's own descriptor**: each directory below it is opened with
+`openat` from the handle above rather than by name from `/`, so swapping or renaming a
+component after it was opened cannot change where the next step happens, and every one of
+those opens carries `O_NOFOLLOW`, so a link appearing anywhere on the way is an error naming
+the component. `create_file` makes its directories the same way, one `mkdirat` per step,
+because `create_dir_all` would have followed a link standing in for one of them. Containment
+stops being a judgement about a string and becomes a property of how the file was opened;
+there is no second walk left to lose the argument.
+
+A link that stays inside the project still works: `resolve` follows it, checks where it lands,
+and hands the walk the real file.
+
+Two things worth stating. `O_NOFOLLOW` with `O_DIRECTORY` reports `ENOTDIR` rather than
+`ELOOP` on Linux for a link to a directory, so the code asks the filesystem whether the step
+is a link instead of inferring it from the errno -- otherwise the one case this exists to catch
+would be reported as "not a directory". And **Windows is not covered**: there is no `openat`,
+the equivalent is a different piece of work, and there the path is checked and then resolved
+again with the old gap intact. `aether1 code workspace` says which of the two this machine
+does, rather than leaving an operator to assume the better one.
 
 ## 3. The terminal
 
@@ -235,7 +252,8 @@ a different trust decision and a deliberate one.
 Listed here rather than implied by silence:
 
 * Windows confinement for `run` (section 1).
-* `openat`-style filesystem operations to close the resolve/open gap (section 2).
+* The same `openat` discipline on Windows, where `edit_file` and `create_file` still
+  resolve a path twice (section 2).
 * A short-lived socket ticket rather than the device token itself, and a prominent statement
   of what the pairing phrase is (section 5).
 * A Settings surface for the domain policy; today it is `aether1 code net` and the project's

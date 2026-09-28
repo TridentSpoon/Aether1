@@ -1511,7 +1511,23 @@ fn run_code_workspace(path: Option<String>) -> Result<String, String> {
     }
 
     match crate::code_workspace::root(db) {
-        Ok(root) => Ok(format!("{}\n", root.display())),
+        // Along with the folder, how a file in it gets opened. This is the one thing about
+        // editing that is a fact about the machine rather than a setting, so an operator who
+        // asks where the project is is told in the same breath whether the check that keeps
+        // an edit inside it can be raced -- see code_openat.
+        Ok(root) => Ok(format!(
+            "{}\n\n{}\n",
+            root.display(),
+            if crate::code_openat::confines() {
+                "A file here is opened by walking down from this folder without following a \
+                 link, so a path cannot be swapped for one outside it between the check and \
+                 the write."
+            } else {
+                "This platform has no openat, so a path is checked and then handed back to \
+                 the operating system to resolve again. The gap between the two is small and \
+                 it is real."
+            }
+        )),
         Err(why) => Ok(format!(
             "No project folder is set.\n\n{why}\n\nSet one with `aether1 code workspace \
              /path/to/project`.\n"
