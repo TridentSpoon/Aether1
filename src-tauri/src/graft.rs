@@ -62,6 +62,7 @@ pub fn detect_projects() -> Vec<Project> {
     // Common locations to search for projects
     let search_dirs = [
         crate::paths::home_dir(),
+        crate::paths::home_dir().map(|h| h.join("Projects")),
         crate::paths::home_dir().map(|h| h.join("projects")),
         crate::paths::home_dir().map(|h| h.join("workspace")),
         crate::paths::home_dir().map(|h| h.join("code")),
@@ -100,18 +101,13 @@ pub fn detect_projects() -> Vec<Project> {
 
 /// Check if a project has a built Graft graph
 fn check_graft_status(project_path: &Path) -> GraftStatus {
-    let graft_dir = project_path.join(".graft");
+    let graft_dir = project_path.join("graft");
     if graft_dir.exists() {
-        // Check for graph markdown files
-        if let Ok(entries) = std::fs::read_dir(&graft_dir) {
-            let has_graph = entries
-                .flatten()
-                .any(|e| e.path().extension().is_some_and(|ext| ext == "md"));
-            if has_graph {
-                return GraftStatus::Ready;
-            }
+        if graft_dir.join("INDEX.md").is_file() {
+            GraftStatus::Ready
+        } else {
+            GraftStatus::Error
         }
-        GraftStatus::Error
     } else {
         GraftStatus::NotBuilt
     }
@@ -134,7 +130,6 @@ pub fn get_graft_version() -> Result<String, String> {
 
 /// Build the Graft graph for a project
 pub fn build_graph(project_path: &Path) -> Result<(), String> {
-    // Try to run `graft build` in the project directory
     let output = Command::new("graft")
         .arg("build")
         .current_dir(project_path)
@@ -144,6 +139,10 @@ pub fn build_graph(project_path: &Path) -> Result<(), String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Graft build failed: {stderr}"));
+    }
+
+    if !project_path.join("graft").join("INDEX.md").is_file() {
+        return Err("Graft build finished but graft/INDEX.md is missing".to_string());
     }
 
     Ok(())
@@ -170,53 +169,51 @@ pub fn set_selected_project(db: &MemoryDb, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Load the Graft graph markdown files from a project
-fn load_graph_files(project_path: &Path) -> Result<Vec<(String, String)>, String> {
-    let graft_dir = project_path.join(".graft");
-    if !graft_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&graft_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "md") {
-                if let Ok(contents) = std::fs::read_to_string(&path) {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    files.push((name, contents));
-                }
-            }
+/// Ask Graft for ranked code context and include its source excerpts.
+fn query_graph(project_path: &Path, query: &str) -> Vec<String> {
+    let output = match Command::new("graft")
+        .args(["ask", query, "--source", "--json"])
+        .current_dir(project_path)
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            eprintln!(
+                "[AETHER1] Graft query failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Vec::new();
         }
-    }
-    Ok(files)
-}
-
-/// Search for relevant code nodes based on a query
-fn search_graph_nodes(files: &[(String, String)], query: &str) -> Vec<String> {
-    let query_lower = query.to_lowercase();
-    let mut results = Vec::new();
-
-    for (_filename, contents) in files {
-        // Simple search: look for lines containing the query
-        for line in contents.lines() {
-            if line.to_lowercase().contains(&query_lower) {
-                // Extract the node name (usually the first part before description)
-                let trimmed = line.trim();
-                if !trimmed.is_empty() && !results.contains(&trimmed.to_string()) {
-                    results.push(trimmed.to_string());
-                    if results.len() >= 5 {
-                        return results;
-                    }
-                }
-            }
+        Err(error) => {
+            eprintln!("[AETHER1] Could not start Graft query: {error}");
+            return Vec::new();
         }
-    }
+    };
 
-    results
+    let response: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("[AETHER1] Could not parse Graft query result: {error}");
+            return Vec::new();
+        }
+    };
+
+    response["hits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(5)
+        .filter_map(|hit| {
+            let title = hit["title"].as_str()?;
+            let pointer = hit["pointer"].as_str().unwrap_or_default();
+            let code = hit["code"].as_str().unwrap_or_default();
+            if code.is_empty() {
+                Some(format!("{title} ({pointer})"))
+            } else {
+                Some(format!("{title} ({pointer})\n{code}"))
+            }
+        })
+        .collect()
 }
 
 /// Get the last build timestamp for the selected project
@@ -307,12 +304,7 @@ pub fn prime(db: &MemoryDb, query: &str) -> String {
     // Auto-sync the graph on each LLM turn, only rebuilding if needed
     let _ = auto_sync_graph(db, &selected);
 
-    let graph_files = match load_graph_files(&selected) {
-        Ok(files) if !files.is_empty() => files,
-        _ => return String::new(),
-    };
-
-    let relevant_nodes = search_graph_nodes(&graph_files, query);
+    let relevant_nodes = query_graph(&selected, query);
     if relevant_nodes.is_empty() {
         return String::new();
     }
