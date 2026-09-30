@@ -20,6 +20,7 @@ const AgentBrowser = (() => {
 
     // Agent type enum
     const AgentType = {
+        BUILDER: 'builder',
         COLLECTOR: 'collector',
         REVIEWER: 'reviewer',
         PLANNER: 'planner'
@@ -29,75 +30,16 @@ const AgentBrowser = (() => {
      * Fetches agents from the backend
      */
     async function fetchAgents() {
-        try {
-            if (typeof window.__TAURI_INTERNALS__ !== 'undefined') {
-                // Tauri IPC
-                const { invoke } = await import('https://cdn.jsdelivr.net/npm/@tauri-apps/api@next/index.js');
-                const result = await invoke('get_agents_rust');
-                agents = result;
-            } else {
-                // HTTP fallback
-                const response = await apiFetch('/api/agents');
-                if (!response.ok) throw new Error('Failed to fetch agents');
-                agents = await response.json();
-            }
-            applyFilters();
-            return agents;
-        } catch (err) {
-            console.error('[AgentBrowser] Failed to fetch agents:', err);
-            // Use built-in agents as fallback
-            agents = getBuiltInAgents();
-            applyFilters();
-            return agents;
+        if (typeof window.__TAURI_INTERNALS__ !== 'undefined') {
+            agents = await window.__TAURI__.core.invoke('get_agents_rust');
+        } else {
+            const response = await apiFetch('/api/agents');
+            if (!response.ok) throw new Error(`Could not load profiles (${response.status})`);
+            agents = await response.json();
         }
-    }
-
-    /**
-     * Built-in agents for offline/fallback mode
-     */
-    function getBuiltInAgents() {
-        return [
-            {
-                id: 'claude-opus-reviewer',
-                name: 'Claude-Opus Code Reviewer',
-                description: 'Deep code review specialist with architectural insights.',
-                agent_type: 'reviewer',
-                model: 'claude-opus',
-                capabilities: ['code-review', 'testing'],
-                installed: false,
-                selected: false
-            },
-            {
-                id: 'gpt4o-architect',
-                name: 'GPT-4o Architect',
-                description: 'System design and architecture specialist.',
-                agent_type: 'planner',
-                model: 'gpt-4o',
-                capabilities: ['architecture', 'documentation'],
-                installed: false,
-                selected: false
-            },
-            {
-                id: 'claude-sonnet-qa',
-                name: 'Claude-Sonnet Quality Analyst',
-                description: 'Quality assurance and performance specialist.',
-                agent_type: 'reviewer',
-                model: 'claude-sonnet',
-                capabilities: ['testing', 'performance'],
-                installed: false,
-                selected: false
-            },
-            {
-                id: 'haiku-context-optimizer',
-                name: 'Haiku Context Optimizer',
-                description: 'Context and knowledge management.',
-                agent_type: 'collector',
-                model: 'claude-haiku',
-                capabilities: ['summarization', 'context'],
-                installed: false,
-                selected: false
-            }
-        ];
+        selectedAgents = new Set(agents.filter(agent => agent.selected).map(agent => agent.id));
+        applyFilters();
+        return agents;
     }
 
     /**
@@ -107,17 +49,18 @@ const AgentBrowser = (() => {
         const selectedIds = Array.from(selectedAgents);
         try {
             if (typeof window.__TAURI_INTERNALS__ !== 'undefined') {
-                const { invoke } = await import('https://cdn.jsdelivr.net/npm/@tauri-apps/api@next/index.js');
-                await invoke('set_agent_selection_rust', { selectedIds });
+                await window.__TAURI__.core.invoke('set_agent_selection_rust', { selectedIds });
             } else {
-                await apiFetch('/api/agents/selection', {
+                const response = await apiFetch('/api/agents/selection', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ selected_ids: selectedIds })
                 });
+                if (!response.ok) throw new Error((await response.text()) || `Save failed (${response.status})`);
             }
         } catch (err) {
             console.error('[AgentBrowser] Failed to save selection:', err);
+            throw err;
         }
     }
 
@@ -136,7 +79,7 @@ const AgentBrowser = (() => {
             a.selected = selectedAgents.has(a.id);
         });
 
-        saveSelection();
+        saveSelection().catch(err => showStatus(`Could not save profile selection: ${err.message || err}`, true));
     }
 
     /**
@@ -160,7 +103,8 @@ const AgentBrowser = (() => {
             const query = currentFilters.search.toLowerCase();
             result = result.filter(a =>
                 a.name.toLowerCase().includes(query) ||
-                a.description.toLowerCase().includes(query)
+                a.description.toLowerCase().includes(query) ||
+                a.capabilities.some(cap => cap.toLowerCase().includes(query))
             );
         }
 
@@ -188,7 +132,7 @@ const AgentBrowser = (() => {
             .join('');
 
         const selectedClass = agent.selected ? 'selected' : '';
-        const installedBadge = agent.installed ? '<span class="agent-installed-badge">Installed</span>' : '';
+        const installedBadge = '<span class="agent-installed-badge">AETHER CODE profile</span>';
 
         return `
             <div class="agent-card ${selectedClass}" data-agent-id="${escapeHtml(agent.id)}" role="button" tabindex="0">
@@ -213,6 +157,62 @@ const AgentBrowser = (() => {
         `;
     }
 
+    function showStatus(message, isError = false) {
+        const status = document.getElementById('agent-run-status');
+        if (!status) return;
+        status.textContent = message;
+        status.className = `text-xs ${isError ? 'text-red-300' : 'text-cyan-200'}`;
+    }
+
+    async function runSelectedAgents() {
+        const task = document.getElementById('agent-task-input')?.value.trim();
+        const status = document.getElementById('agent-run-status');
+        const results = document.getElementById('agent-run-results');
+        const button = document.getElementById('agent-run-button');
+        if (!task) return showStatus('Describe the repository or change you want analyzed.', true);
+        if (!selectedAgents.size) return showStatus('Select at least one profile first.', true);
+        button.disabled = true;
+        button.textContent = 'Analyzing…';
+        status.textContent = 'Running selected profiles one at a time with the active AETHER CODE model…';
+        status.className = 'text-xs text-cyan-200 animate-pulse';
+        results.replaceChildren();
+        try {
+            let response;
+            if (typeof window.__TAURI_INTERNALS__ !== 'undefined') {
+                response = await window.__TAURI__.core.invoke('code_agents_ask_rust', {
+                    task,
+                    selectedIds: Array.from(selectedAgents),
+                });
+            } else {
+                const resp = await apiFetch('/api/agents/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task, selected_ids: Array.from(selectedAgents) }),
+                });
+                if (!resp.ok) throw new Error((await resp.text()) || `Analysis failed (${resp.status})`);
+                response = await resp.json();
+            }
+            for (const result of response) {
+                const article = document.createElement('article');
+                article.className = 'border border-cyan-500/20 rounded p-3 bg-slate-950/60';
+                const title = document.createElement('h3');
+                title.className = 'font-mono text-cyan-200 text-sm mb-2';
+                title.textContent = result.agent_name;
+                const body = document.createElement('pre');
+                body.className = 'text-sm text-slate-200 whitespace-pre-wrap font-sans';
+                body.textContent = result.text;
+                article.append(title, body);
+                results.appendChild(article);
+            }
+            showStatus(`${response.length} profile${response.length === 1 ? '' : 's'} completed. Results are also in AETHER CODE history.`);
+        } catch (err) {
+            showStatus(err.message || String(err), true);
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Run selected profiles';
+        }
+    }
+
     /**
      * Renders the filter sidebar
      */
@@ -220,6 +220,7 @@ const AgentBrowser = (() => {
         const capabilities = getAllCapabilities();
 
         const typeOptions = [
+            { value: 'builder', label: 'Builder' },
             { value: 'collector', label: 'Collector' },
             { value: 'reviewer', label: 'Reviewer' },
             { value: 'planner', label: 'Planner' }
@@ -311,22 +312,20 @@ const AgentBrowser = (() => {
 
         container.innerHTML = html || '<div class="no-agents">No agents match your filters</div>';
 
-        // Attach card click handlers
+        // A profile is selected only through its explicit button.
         container.querySelectorAll('.agent-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                if (e.target.closest('.agent-select-btn')) {
-                    const agentId = card.getAttribute('data-agent-id');
-                    toggleAgentSelection(agentId);
-                    renderAgentGrid(container);
-                }
+            card.querySelector('.agent-select-btn')?.addEventListener('click', () => {
+                toggleAgentSelection(card.dataset.agentId);
+                renderAgentGrid(container);
+                renderHeroSection(document.getElementById('agent-hero-section'));
             });
-
             card.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+                if ((e.key === 'Enter' || e.key === ' ') && e.target === card) {
                     e.preventDefault();
                     const agentId = card.getAttribute('data-agent-id');
                     toggleAgentSelection(agentId);
                     renderAgentGrid(container);
+                    renderHeroSection(document.getElementById('agent-hero-section'));
                 }
             });
         });
@@ -364,8 +363,8 @@ const AgentBrowser = (() => {
 
         const html = `
             <div class="agent-hero">
-                <h2 class="agent-hero-title">Agent Marketplace</h2>
-                <p class="agent-hero-subtitle">Discover and install specialized AI agents</p>
+                <h2 class="agent-hero-title">AETHER CODE Profiles</h2>
+                <p class="agent-hero-subtitle">Choose focused repository analyses using the coding model configured in The Brain.</p>
                 <div class="agent-stats">
                     <div class="stat">
                         <span class="stat-label">Available</span>
@@ -392,11 +391,15 @@ const AgentBrowser = (() => {
             return;
         }
 
-        // Load agents first
-        await fetchAgents();
-
         const html = `
             <div class="agent-browser">
+                <section class="border border-cyan-500/30 rounded-lg p-4 mb-4 bg-slate-950/50">
+                    <p class="text-sm text-slate-300 mb-2">Profiles run on AETHER CODE's active model. Code Builder edits the selected workspace when Edit is enabled; checks run only when Run is enabled. Reviewer, Planner, Test Analyst, and Repository Guide focus on analysis. These profiles share AETHER CODE's workspace and permissions; they are not separate Claude or GPT accounts.</p>
+                    <label class="block text-xs font-mono text-cyan-300 mb-1" for="agent-task-input">REPOSITORY OR CHANGE TO ANALYZE</label>
+                    <textarea id="agent-task-input" rows="3" maxlength="16000" placeholder="e.g. Review the current branch diff for regressions, or explain how GitHub PR #42 affects the local code." class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100"></textarea>
+                    <div class="flex items-center gap-3 mt-2"><button id="agent-run-button" type="button" class="cyber-btn text-xs">Run selected profiles</button><span id="agent-run-status" class="text-xs text-slate-400" role="status"></span></div>
+                    <div id="agent-run-results" class="space-y-3 mt-3"></div>
+                </section>
                 <div id="agent-hero-section" class="agent-hero-section"></div>
                 <div id="agent-search-section" class="agent-search-section"></div>
                 <div class="agent-browser-main">
@@ -407,6 +410,14 @@ const AgentBrowser = (() => {
         `;
 
         container.innerHTML = html;
+
+        document.getElementById('agent-run-button').addEventListener('click', runSelectedAgents);
+        try {
+            await fetchAgents();
+        } catch (err) {
+            showStatus(err.message || 'Could not load Agent Browser profiles.', true);
+            return;
+        }
 
         // Render all sections
         renderHeroSection(document.getElementById('agent-hero-section'));

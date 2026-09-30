@@ -1,22 +1,18 @@
-//! The five things AETHER CODE can do, and the one file they are all written in.
+//! The capabilities AETHER CODE may use, each gated by a named permission.
 //!
-//! The companion has a registry (`tools/`), a consent queue, personas with fields, and an
-//! action log. None of that is here, on purpose. The coding panel's whole safety argument
-//! is that its capabilities can be read in one sitting: five entries, every one of them a
-//! read, each gated by a named permission in `code_perms`. A reader who wants to know what
-//! this panel may do to their machine should not have to assemble the answer from a
-//! registry, a persona table and a domain policy.
+//! Unlike the companion's broader registry (`tools/`), this list is specific to repository
+//! work: inspect files and GitHub, fetch documentation, edit the nominated workspace, and
+//! run commands under the workspace/sandbox rules. A reader can understand what the model
+//! may do from this catalog and `code_perms` without following a second consent system.
 //!
 //! What is shared with the companion is the part that must never be answered twice:
 //! `fs_guard` decides which paths exist as far as any model is concerned, and `read_file`
 //! and `list_dir` are the companion's own implementations rather than second copies of
 //! them. One list of denied paths, one truncation rule, one place to fix.
 //!
-//! **Nothing in this file writes, and nothing in this file can be made to.** There is no
-//! write tool to gate; `gh` is checked against a whitelist of subcommands that only look;
-//! `fetch_url` is a GET. A request to change something comes back as a refusal telling the
-//! model to put the command in a fenced block, where `code_chat::commands_in` turns it into
-//! a button that types into the operator's terminal and waits for their Return.
+//! GitHub operations remain read-only here. Local edits and commands go through
+//! `code_workspace`, which checks the project boundary, edit/run grants, and sandbox before
+//! anything is changed or spawned. The terminal is not used by these tools.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -64,7 +60,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         name: "gh",
         grant: Grant::Github,
-        line: "gh {\"args\": [\"pr\", \"view\", \"137\"]} -- the GitHub CLI, read-only subcommands only (view, list, diff, checks, status, search). Anything that changes a repository is refused; put that in a ```bash block instead.",
+        line: "gh {\"args\": [\"pr\", \"view\", \"137\", \"--repo\", \"OWNER/REPO\"]} -- the GitHub CLI, read-only subcommands only (view, list, diff, checks, status, search). For a remote repo, include --repo OWNER/REPO so the request cannot accidentally target a different checkout. Anything that changes a repository is refused; put that in a ```bash block instead.",
     },
     Capability {
         name: "fetch_url",
@@ -268,7 +264,22 @@ fn gh(db: &MemoryDb, args: &Value) -> Result<String, String> {
             .to_string()
     })?;
 
-    let mut child = Command::new(&binary)
+    let mut command = Command::new(&binary);
+    // gh otherwise inherits AETHER1's install directory as its repository context. When
+    // the operator has nominated a workspace, make the local checkout the default target;
+    // remote-only tasks can still name an explicit OWNER/REPO in the invocation.
+    let has_workspace = !db
+        .get_setting_string(crate::code_workspace::ROOT_SETTING, "")
+        .trim()
+        .is_empty()
+        || !db
+            .get_setting_string("graft_selected_project", "")
+            .trim()
+            .is_empty();
+    if has_workspace {
+        command.current_dir(crate::code_workspace::root(db)?);
+    }
+    let mut child = command
         .args(&argv)
         // No stdin at all: a gh subcommand that decides to ask a question gets EOF and
         // gives up, rather than waiting out the timeout on a prompt nobody can see.

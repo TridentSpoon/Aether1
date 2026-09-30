@@ -1235,6 +1235,65 @@ pub fn code_chat_ask(
     )
 }
 
+/// A single Agent Browser profile's analysis, using AETHER CODE's current model and its
+/// existing repository tools and grants.
+#[derive(serde::Serialize)]
+pub struct AgentAnalysis {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub text: String,
+}
+
+/// Run selected, backend-defined analysis profiles over one task. The model, GitHub access,
+/// workspace boundary, edit grant, and run sandbox are exactly the same as ordinary AETHER
+/// CODE; profiles only specialize the analysis instructions.
+pub fn code_agents_ask(
+    engine: &LlmEngine,
+    task: &str,
+    selected_ids: &[String],
+) -> Result<Vec<AgentAnalysis>, String> {
+    let task = task.trim();
+    if task.is_empty() {
+        return Err("Describe what you want the selected profiles to analyze.".to_string());
+    }
+    if task.len() > 16_000 {
+        return Err("The analysis request is too long (16,000 characters maximum).".to_string());
+    }
+    let profiles = crate::agents::built_in_agents();
+    let mut seen = std::collections::HashSet::new();
+    let mut chosen = Vec::new();
+    for id in selected_ids {
+        if !seen.insert(id.as_str()) {
+            continue;
+        }
+        let agent = profiles
+            .iter()
+            .find(|agent| agent.id == *id)
+            .ok_or_else(|| format!("Unknown Agent Browser profile: {id}"))?;
+        let instructions = crate::agents::instructions(id)
+            .ok_or_else(|| format!("Agent Browser profile {id} has no instructions"))?;
+        chosen.push((agent, instructions));
+    }
+    if chosen.is_empty() {
+        return Err("Select at least one Agent Browser profile first.".to_string());
+    }
+
+    let mut results = Vec::with_capacity(chosen.len());
+    for (agent, instructions) in chosen {
+        let prompt = format!(
+            "[Agent Browser profile: {}]\n{instructions}\n\nOperator task:\n{task}",
+            agent.name
+        );
+        let reply = code_chat_ask(engine, &prompt, &mut |_| {})?;
+        results.push(AgentAnalysis {
+            agent_id: agent.id.clone(),
+            agent_name: agent.name.clone(),
+            text: reply.text,
+        });
+    }
+    Ok(results)
+}
+
 /// What has been said in the coding conversation, for a panel that was just opened.
 pub fn code_chat_history(engine: &LlmEngine) -> Vec<serde_json::Value> {
     crate::code_chat::transcript(engine.db())
