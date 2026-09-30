@@ -405,6 +405,16 @@ pub fn seed_starter_allowlist(db: &MemoryDb) {
 /// all. Getting that distinction backwards makes a model apologise for a red test instead of
 /// reading it.
 pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    run_inner(db, args, false)
+}
+
+/// The exact-command approval path used by the operator's Allow once button. This skips
+/// the standing Run grant only; the sandbox and unconfined-run switches still apply.
+pub fn run_approved_once(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    run_inner(db, args, true)
+}
+
+fn run_inner(db: &MemoryDb, args: &Value, approved_once: bool) -> Result<String, String> {
     // The boundary, before anything is decided. What is allowed to run depends entirely on
     // whether the kernel is holding the walls up, so this is the first question asked.
     let sandbox = crate::code_sandbox::detect();
@@ -449,6 +459,19 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
     };
     if program.trim().is_empty() {
         return Err("the first entry of argv must be a program name".to_string());
+    }
+
+    if !approved_once && !crate::code_perms::granted(db, crate::code_perms::Grant::Run) {
+        if args.get("shell").is_some() {
+            return Err("Run is off, so remembered command approvals only apply to a single argv command. Show the operator a bash suggestion to approve this shell line once.".to_string());
+        }
+        let root = root(db)?;
+        if !crate::code_policy::allows_similar_argv(&root, &argv) {
+            return Err(format!(
+                "Run is off, and `{program} {}` is not covered by this project's remembered commands. Ask the operator to approve it once or choose Allow similar on a simple build/test command.",
+                rest.first().map(String::as_str).unwrap_or("")
+            ));
+        }
     }
 
     // The allowlist is policy, and it only has a job where there is nothing else. Inside
@@ -939,6 +962,7 @@ mod tests {
     #[test]
     fn a_real_command_runs_in_the_project_and_reports_how_it_went() {
         let (db, project, home) = workspace("run");
+        crate::code_perms::set(&db, crate::code_perms::Grant::Run, true).unwrap();
         std::fs::write(project.join("hello.txt"), "hi\n").unwrap();
         db.set_setting(ALLOWLIST_SETTING, &serde_json::json!(["ls", "false"]))
             .unwrap();

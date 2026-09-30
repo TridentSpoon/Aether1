@@ -1285,9 +1285,34 @@ fn code_agents_ask_rust(
     managed_ollama: tauri::State<background_services::ManagedOllama>,
     task: String,
     selected_ids: Vec<String>,
+    models_by_agent: std::collections::HashMap<String, String>,
+    run_mode: String,
 ) -> Result<Vec<commands::AgentAnalysis>, String> {
     background_services::note_use(&engine, &managed_ollama);
-    commands::code_agents_ask(&engine, &task, &selected_ids)
+    commands::code_agents_ask(&engine, &task, &selected_ids, &models_by_agent, &run_mode)
+}
+
+#[tauri::command(async)]
+fn code_local_models_rust() -> Vec<commands::LocalModelChoice> {
+    commands::code_local_models()
+}
+
+#[tauri::command(async)]
+fn code_set_model_preference_rust(
+    engine: tauri::State<LlmEngine>,
+    model: String,
+) -> Result<(), String> {
+    commands::code_set_model_preference(&engine, &model)
+}
+
+/// Runs one explicit AETHER CODE command approval from the operator.
+#[tauri::command(async)]
+fn code_run_approved_rust(
+    engine: tauri::State<LlmEngine>,
+    command: String,
+    remember_similar: bool,
+) -> Result<String, String> {
+    commands::code_run_approved(&engine, &command, remember_similar)
 }
 
 #[tauri::command(async)]
@@ -2800,6 +2825,9 @@ fn main() {
             code_advice_rust,
             code_chat_ask_rust,
             code_agents_ask_rust,
+            code_local_models_rust,
+            code_set_model_preference_rust,
+            code_run_approved_rust,
             code_chat_history_rust,
             code_chat_clear_rust,
             code_conventions_rust,

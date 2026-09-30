@@ -183,8 +183,8 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, f64, bool)] = &[
         true,
     ),
     (
-        "qwen3-coder:30b",
-        "Qwen 3 Coder (30B)",
+        "qwen3-coder:30b-a3b-q4_K_M",
+        "Qwen 3 Coder (30B, Q4_K_M)",
         "Only a fraction of it works on any one word, so it stays usable even when it does \
          not all fit in memory -- which is why it is the recommendation whenever it fits at \
          all. Reads a very long file without losing the thread.",
@@ -194,11 +194,11 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, f64, bool)] = &[
         true,
     ),
     (
-        "qwen3-coder-next",
-        "Qwen 3 Coder Next (80B)",
+        "qwen3-coder-next:q4_K_M",
+        "Qwen 3 Coder Next (80B, Q4_K_M)",
         "The strongest thing here that still runs on one machine, and it wants a lot of \
          memory to do it. Same trick as the 30B: big on disk, small per word.",
-        "about 46 GB",
+        "about 52 GB",
         56.0,
         50.0,
         true,
@@ -687,6 +687,7 @@ pub fn advise(
     local_only: bool,
     found: AgentsFound,
     aether1_model: Option<&str>,
+    preferred_model: Option<&str>,
 ) -> CodingAdvice {
     let os = Os::current();
 
@@ -714,7 +715,15 @@ pub fn advise(
         .iter()
         .find(|m| m.recommended)
         .expect("models_for always marks one");
-    let chosen = downloaded.unwrap_or(recommended);
+    let preferred = preferred_model
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .and_then(|name| {
+            models
+                .iter()
+                .find(|model| model.installed && model.name == name)
+        });
+    let chosen = preferred.or(downloaded).unwrap_or(recommended);
     let model = chosen.name.clone();
     let model_installed = chosen.installed;
 
@@ -1018,6 +1027,7 @@ mod tests {
             false,
             NO_AGENTS,
             Some("llama3.2:1b"),
+            None,
         );
         assert!(advice.aether1_model_too_small);
         assert!(advice.covers_aether1_too);
@@ -1038,6 +1048,7 @@ mod tests {
             false,
             NO_AGENTS,
             Some("qwen2.5-coder:14b"),
+            None,
         );
         assert!(!advice.aether1_model_too_small);
         assert!(!advice.covers_aether1_too);
@@ -1054,6 +1065,7 @@ mod tests {
             false,
             NO_AGENTS,
             Some("llama3.2:1b"),
+            None,
         );
         let pick = advice.models.iter().find(|m| m.recommended).unwrap();
         assert!(!pick.runs_aether1);
@@ -1089,7 +1101,7 @@ mod tests {
     fn a_workstation_is_recommended_the_largest_that_fits() {
         let models = models_for(64.0, None, &[]);
         let pick = models.iter().find(|m| m.recommended).unwrap();
-        assert_eq!(pick.name, "qwen3-coder:30b");
+        assert_eq!(pick.name, "qwen3-coder:30b-a3b-q4_K_M");
     }
 
     /// A machine under the floor still gets one. "Your computer is unsuitable" is not a
@@ -1127,7 +1139,7 @@ mod tests {
         let by_ram = models_for(64.0, None, &[]);
         assert_eq!(
             by_ram.iter().find(|m| m.recommended).unwrap().name,
-            "qwen3-coder:30b"
+            "qwen3-coder:30b-a3b-q4_K_M"
         );
 
         let by_card = models_for(64.0, Some(16.0), &[]);
@@ -1138,7 +1150,7 @@ mod tests {
         // something the card can hold.
         let bigger = by_card
             .iter()
-            .find(|m| m.name == "qwen3-coder:30b")
+            .find(|m| m.name == "qwen3-coder:30b-a3b-q4_K_M")
             .unwrap();
         assert!(bigger.fits);
         assert!(!bigger.fits_on_gpu);
@@ -1180,7 +1192,7 @@ mod tests {
         assert!(models.iter().all(|m| !m.fits_on_gpu));
         assert_eq!(
             models.iter().find(|m| m.recommended).unwrap().name,
-            "qwen3-coder:30b"
+            "qwen3-coder:30b-a3b-q4_K_M"
         );
     }
 
@@ -1208,6 +1220,7 @@ mod tests {
             false,
             NO_AGENTS,
             None,
+            None,
         );
         assert_eq!(advice.model, "qwen2.5-coder:14b");
         assert!(advice.sized_against.contains("Radeon RX 6800 XT"));
@@ -1215,7 +1228,7 @@ mod tests {
 
     #[test]
     fn nothing_running_points_back_at_the_brain() {
-        let advice = advise(&empty_scan(), 32.0, &[], false, NO_AGENTS, None);
+        let advice = advise(&empty_scan(), 32.0, &[], false, NO_AGENTS, None, None);
         assert_eq!(advice.stage, Stage::NoServer);
         assert!(advice.needs_attention);
         assert!(advice.endpoint.is_none());
@@ -1229,6 +1242,7 @@ mod tests {
             &[],
             false,
             NO_AGENTS,
+            None,
             None,
         );
         assert_eq!(advice.stage, Stage::NoCodingModel);
@@ -1244,6 +1258,7 @@ mod tests {
             &[],
             false,
             NO_AGENTS,
+            None,
             None,
         );
         assert_eq!(advice.stage, Stage::NoAgent);
@@ -1264,6 +1279,7 @@ mod tests {
             false,
             found,
             None,
+            None,
         );
         assert_eq!(advice.stage, Stage::Ready);
         assert!(!advice.needs_attention);
@@ -1279,6 +1295,7 @@ mod tests {
             &[],
             false,
             NO_AGENTS,
+            None,
             None,
         );
         let aider = advice.agents.iter().find(|a| a.key == "aider").unwrap();
@@ -1316,7 +1333,7 @@ mod tests {
             models: vec!["qwen2.5-coder:7b".to_string()],
             label: "OpenAI-compatible server".to_string(),
         }];
-        let advice = advise(&scan, 32.0, &[], false, NO_AGENTS, None);
+        let advice = advise(&scan, 32.0, &[], false, NO_AGENTS, None, None);
 
         let commands = |key: &str| -> String {
             advice
@@ -1352,6 +1369,7 @@ mod tests {
             false,
             NO_AGENTS,
             None,
+            None,
         );
         let every = advice
             .agents
@@ -1372,7 +1390,7 @@ mod tests {
     fn a_server_on_another_port_is_carried_into_the_commands() {
         let mut scan = empty_scan();
         scan.local_servers = vec![server(1234, &["qwen2.5-coder:7b"])];
-        let advice = advise(&scan, 32.0, &[], false, NO_AGENTS, None);
+        let advice = advise(&scan, 32.0, &[], false, NO_AGENTS, None, None);
         let opencode = advice.agents.iter().find(|a| a.key == "opencode").unwrap();
         let config: String = opencode
             .connect
@@ -1393,13 +1411,14 @@ mod tests {
             false,
             NO_AGENTS,
             None,
+            None,
         );
         assert_eq!(advice.model, "qwen2.5-coder:7b");
         assert!(advice.model_installed);
         // The recommendation for the machine is still the bigger one; they are different
         // questions and the panel shows both.
         let recommended = advice.models.iter().find(|m| m.recommended).unwrap();
-        assert_eq!(recommended.name, "qwen3-coder:30b");
+        assert_eq!(recommended.name, "qwen3-coder:30b-a3b-q4_K_M");
     }
 
     #[test]
@@ -1410,6 +1429,7 @@ mod tests {
             &[],
             true,
             NO_AGENTS,
+            None,
             None,
         );
         assert!(advice.local_only);
@@ -1425,11 +1445,12 @@ mod tests {
             aider: true,
         };
         let advice = advise(
-            &scan_with(&["qwen3-coder:30b"]),
+            &scan_with(&["qwen3-coder:30b-a3b-q4_K_M"]),
             64.0,
             &[],
             true,
             found,
+            None,
             None,
         );
         assert_eq!(advice.stage, Stage::Ready);

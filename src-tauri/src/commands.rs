@@ -1174,6 +1174,7 @@ pub fn code_advice(engine: &LlmEngine) -> crate::code_setup::CodingAdvice {
     let provider = db.get_setting_string("llm_provider", "offline");
     let own_model = db.get_setting_string("llm_model", "");
     let own_model = matches!(provider.as_str(), "ollama" | "lmstudio").then_some(own_model);
+    let preferred_model = db.get_setting_string("code_model_preference", "");
 
     crate::code_setup::advise(
         &scan,
@@ -1182,7 +1183,62 @@ pub fn code_advice(engine: &LlmEngine) -> crate::code_setup::CodingAdvice {
         crate::local_only::enabled(db),
         crate::code_setup::AgentsFound::probe(),
         own_model.as_deref(),
+        Some(&preferred_model),
     )
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalModelChoice {
+    pub name: String,
+    pub endpoint: String,
+    pub provider: String,
+    pub server: String,
+    pub parameter_size: Option<String>,
+    pub quantization: Option<String>,
+}
+
+/// Every downloaded model found across the responding local servers, with metadata the
+/// provider reports instead of estimates inferred from a tag.
+pub fn code_local_models() -> Vec<LocalModelChoice> {
+    let scan = model_scanner::scan_all();
+    let mut choices = Vec::new();
+    for server in scan.local_servers {
+        for name in server.models {
+            let capability = (server.api == model_scanner::LocalApi::Native)
+                .then(|| llm::providers::ollama_capability(&server.endpoint, &name))
+                .flatten();
+            choices.push(LocalModelChoice {
+                name,
+                endpoint: server.endpoint.clone(),
+                provider: server.provider_key.to_string(),
+                server: server.label.clone(),
+                parameter_size: capability
+                    .as_ref()
+                    .and_then(|info| info.parameter_size.clone()),
+                quantization: capability
+                    .as_ref()
+                    .and_then(|info| info.quantization.clone()),
+            });
+        }
+    }
+    choices.sort_by(|a, b| a.name.cmp(&b.name).then(a.endpoint.cmp(&b.endpoint)));
+    choices.dedup_by(|a, b| a.name == b.name && a.endpoint == b.endpoint);
+    choices
+}
+
+/// Selects a coding model only from models the local server currently reports as installed.
+pub fn code_set_model_preference(engine: &LlmEngine, model: &str) -> Result<(), String> {
+    let model = model.trim();
+    if !code_local_models()
+        .iter()
+        .any(|choice| choice.name == model)
+    {
+        return Err("Choose a model currently installed on a local server.".to_string());
+    }
+    engine
+        .db()
+        .set_setting("code_model_preference", &serde_json::json!(model))
+        .map_err(|e| format!("could not save the coding model choice: {e}"))
 }
 
 /// Puts a question to the coding model and streams the answer back.
@@ -1235,12 +1291,174 @@ pub fn code_chat_ask(
     )
 }
 
+/// Runs a single command the operator approved from an AETHER CODE suggestion.
+/// `remember_similar` is only honored for local build/test commands and is stored in the
+/// selected project's `.aether/policy.json`; GitHub writes and pushes are always one-shot.
+pub fn code_run_approved(
+    engine: &LlmEngine,
+    command: &str,
+    remember_similar: bool,
+) -> Result<String, String> {
+    let command = command.trim();
+    if command.is_empty()
+        || command.len() > 2_000
+        || command.chars().any(|ch| matches!(ch, '\n' | '\r' | '\0'))
+    {
+        return Err("Choose one command line, up to 2,000 characters.".to_string());
+    }
+    let argv = split_approved_command(command)?;
+    let first = argv.first().map(String::as_str).unwrap_or("");
+    if first == "gh" {
+        if remember_similar {
+            return Err("GitHub changes are always approved one at a time.".to_string());
+        }
+        return crate::code_tools::run_approved_github_command(engine.db(), &argv[1..]);
+    }
+    if first == "git" && argv.get(1).map(String::as_str) == Some("push") {
+        if remember_similar {
+            return Err("Git pushes are always approved one at a time.".to_string());
+        }
+        return code_approved_git_push(engine, &argv[2..]);
+    }
+
+    let root = crate::code_workspace::root(engine.db())?;
+    if remember_similar {
+        crate::code_policy::remember_similar_command(&root, command)?;
+    }
+    crate::code_workspace::run_approved_once(
+        engine.db(),
+        &serde_json::json!({ "argv": argv, "timeout_secs": 300 }),
+    )
+}
+
+/// A small shell-word reader for one-time approvals. Shell operators and expansions are
+/// rejected: the accepted command is passed as argv and never interpreted by a shell.
+fn split_approved_command(command: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut started = false;
+    for ch in command.chars() {
+        if escaped {
+            word.push(ch);
+            escaped = false;
+            started = true;
+            continue;
+        }
+        match quote {
+            Some('\\') if ch == '\\' => escaped = true,
+            Some(q) if ch == q => quote = None,
+            Some(_) => word.push(ch),
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                started = true;
+            }
+            None if ch == '\\' => {
+                escaped = true;
+                started = true;
+            }
+            None if ch.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            None if ";|&<>`$()\n\r".contains(ch) => {
+                return Err("Shell operators, substitutions, and compound commands cannot be approved here. Approve each command separately.".to_string());
+            }
+            None => {
+                word.push(ch);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() || escaped {
+        return Err("The command has an unfinished quote or escape.".to_string());
+    }
+    if started {
+        words.push(word);
+    }
+    if words.is_empty() {
+        return Err("The command has no program name.".to_string());
+    }
+    Ok(words)
+}
+
+fn code_approved_git_push(engine: &LlmEngine, args: &[String]) -> Result<String, String> {
+    if !crate::code_perms::granted(engine.db(), crate::code_perms::Grant::Github) {
+        return Err("GitHub access is off in Settings.".to_string());
+    }
+    if crate::local_only::enabled(engine.db()) {
+        return Err("Local-only mode is on, so AETHER1 will not push to a remote.".to_string());
+    }
+    if !code_approved_git_push_args_valid(args) {
+        return Err("One-time push approval supports `git push [--set-upstream] [remote] branch`; force, delete, mirror, and arbitrary refspec options are refused.".to_string());
+    }
+    let root = crate::code_workspace::root(engine.db())?;
+    let mut child = std::process::Command::new("git")
+        .current_dir(&root)
+        .args(["push"])
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git push could not start: {e}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if child
+            .try_wait()
+            .map_err(|e| format!("git push failed: {e}"))?
+            .is_some()
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("git push timed out after 120 seconds.".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("git push failed: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let text = if output.status.success() {
+        stdout
+    } else {
+        stderr
+    };
+    if output.status.success() {
+        Ok(if text.trim().is_empty() {
+            "git push completed.".to_string()
+        } else {
+            text.trim().to_string()
+        })
+    } else {
+        Err(format!("git push failed: {}", text.trim()))
+    }
+}
+
+fn code_approved_git_push_args_valid(args: &[String]) -> bool {
+    let positional_count = args.iter().filter(|arg| !arg.starts_with('-')).count();
+    !args.is_empty()
+        && positional_count <= 2
+        && args.iter().all(|arg| {
+            !(arg.starts_with('-') && !matches!(arg.as_str(), "-u" | "--set-upstream")
+                || arg.contains(':')
+                || arg.starts_with('/'))
+        })
+}
+
 /// A single Agent Browser profile's analysis, using AETHER CODE's current model and its
 /// existing repository tools and grants.
 #[derive(serde::Serialize)]
 pub struct AgentAnalysis {
     pub agent_id: String,
     pub agent_name: String,
+    pub model: String,
     pub text: String,
 }
 
@@ -1251,6 +1469,8 @@ pub fn code_agents_ask(
     engine: &LlmEngine,
     task: &str,
     selected_ids: &[String],
+    models_by_agent: &std::collections::HashMap<String, String>,
+    run_mode: &str,
 ) -> Result<Vec<AgentAnalysis>, String> {
     let task = task.trim();
     if task.is_empty() {
@@ -1278,18 +1498,112 @@ pub fn code_agents_ask(
         return Err("Select at least one Agent Browser profile first.".to_string());
     }
 
+    let scan = model_scanner::scan_all();
+    let default_model = code_advice(engine).model;
+    let os = llm::Telemetry::snapshot().os_name;
+    if !matches!(run_mode, "sequential" | "parallel") {
+        return Err("Agent run mode must be sequential or parallel.".to_string());
+    }
+    let parallel = run_mode == "parallel";
     let mut results = Vec::with_capacity(chosen.len());
+    let mut handoff = String::new();
+    let mut jobs = Vec::new();
     for (agent, instructions) in chosen {
+        let model = models_by_agent
+            .get(&agent.id)
+            .map(String::as_str)
+            .filter(|model| !model.trim().is_empty())
+            .unwrap_or(&default_model);
+        let server = scan
+            .local_servers
+            .iter()
+            .find(|server| server.models.iter().any(|installed| installed == model))
+            .ok_or_else(|| {
+                format!("{model} is not currently installed on a local model server.")
+            })?;
         let prompt = format!(
-            "[Agent Browser profile: {}]\n{instructions}\n\nOperator task:\n{task}",
-            agent.name
+            "[Agent Browser profile: {} | model: {}]\n{instructions}\n\nOperator task:\n{task}{}",
+            agent.name,
+            model,
+            if parallel || handoff.is_empty() {
+                String::new()
+            } else {
+                format!("\n\nHandoff from earlier selected profiles (treat as analysis, verify against the repository):\n{handoff}")
+            },
         );
-        let reply = code_chat_ask(engine, &prompt, &mut |_| {})?;
-        results.push(AgentAnalysis {
-            agent_id: agent.id.clone(),
-            agent_name: agent.name.clone(),
-            text: reply.text,
-        });
+        jobs.push((
+            agent.id.clone(),
+            agent.name.clone(),
+            model.to_string(),
+            server.endpoint.clone(),
+            server.api,
+            prompt,
+        ));
+    }
+    if parallel {
+        let db = engine.db();
+        let completed = std::thread::scope(|scope| {
+            let handles: Vec<_> = jobs
+                .iter()
+                .map(|(id, name, model, endpoint, api, prompt)| {
+                    let id = id.clone();
+                    let name = name.clone();
+                    let model = model.clone();
+                    let endpoint = endpoint.clone();
+                    let prompt = prompt.clone();
+                    let os = os.clone();
+                    scope.spawn(move || {
+                        let session = format!("aether-agent-{id}");
+                        crate::code_chat::ask_in_session(
+                            db,
+                            &endpoint,
+                            *api,
+                            &model,
+                            &os,
+                            &prompt,
+                            &mut |_| {},
+                            &session,
+                        )
+                        .map(|reply| AgentAnalysis {
+                            agent_id: id,
+                            agent_name: name,
+                            model,
+                            text: reply.text,
+                        })
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle.join().map_err(|_| {
+                        "An Agent Browser model worker stopped unexpectedly.".to_string()
+                    })?
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+        results.extend(completed);
+    } else {
+        for (id, name, model, endpoint, api, prompt) in jobs {
+            let session = format!("aether-agent-{id}");
+            let reply = crate::code_chat::ask_in_session(
+                engine.db(),
+                &endpoint,
+                api,
+                &model,
+                &os,
+                &prompt,
+                &mut |_| {},
+                &session,
+            )?;
+            handoff.push_str(&format!("\n\n{} ({model}):\n{}", name, reply.text));
+            results.push(AgentAnalysis {
+                agent_id: id,
+                agent_name: name,
+                model,
+                text: reply.text,
+            });
+        }
     }
     Ok(results)
 }
@@ -1508,6 +1822,44 @@ pub fn graft_version() -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approved_command_parser_rejects_shell_composition_and_preserves_quoted_args() {
+        assert_eq!(
+            split_approved_command("cargo test --package 'aether one'").unwrap(),
+            ["cargo", "test", "--package", "aether one"]
+        );
+        assert!(split_approved_command("cargo test; rm -rf /").is_err());
+        assert!(split_approved_command("gh pr create $(touch /tmp/x)").is_err());
+        assert!(split_approved_command("cargo test 'unfinished").is_err());
+    }
+
+    #[test]
+    fn approved_git_push_refuses_arbitrary_refspecs_and_too_many_targets() {
+        assert!(code_approved_git_push_args_valid(&[
+            "origin".into(),
+            "main".into()
+        ]));
+        assert!(code_approved_git_push_args_valid(&[
+            "--set-upstream".into(),
+            "origin".into(),
+            "main".into()
+        ]));
+        assert!(!code_approved_git_push_args_valid(&[
+            "--force".into(),
+            "origin".into(),
+            "main".into()
+        ]));
+        assert!(!code_approved_git_push_args_valid(&[
+            "origin".into(),
+            "main:other".into()
+        ]));
+        assert!(!code_approved_git_push_args_valid(&[
+            "origin".into(),
+            "main".into(),
+            "other".into()
+        ]));
+    }
 
     /// The Settings panel rewrites its own help text from this field -- which folders the
     /// companion may read, which programs it is worth naming -- so that the page describes

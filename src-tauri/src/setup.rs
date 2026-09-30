@@ -332,6 +332,14 @@ const CATALOGUE: &[(&str, &str, &str, &str, f64, f64)] = &[
         20.0,
         11.0,
     ),
+    (
+        "qwen2.5:32b-instruct-q4_K_M",
+        "Qwen 2.5 32B (Q4_K_M)",
+        "A quantised 32 billion parameter chat model for high-memory computers. Check the memory estimate before downloading.",
+        "about 20 GB",
+        36.0,
+        22.0,
+    ),
     // 64 GB and up, or a machine with a lot of video memory.
     (
         "mixtral:8x7b",
@@ -742,7 +750,7 @@ mod tests {
     fn a_big_machine_is_recommended_a_big_model() {
         let models = models_for(64.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
-        assert_eq!(pick.name, "qwen2.5:14b");
+        assert_eq!(pick.name, "qwen2.5:32b-instruct-q4_K_M");
     }
 
     /// 16 GB is the ordinary gaming PC, and the class of machine most likely to be running

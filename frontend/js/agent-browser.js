@@ -12,6 +12,10 @@ const AgentBrowser = (() => {
     let agents = [];
     let selectedAgents = new Set();
     let filteredAgents = [];
+    let localModels = [];
+    let defaultModel = '';
+    let modelAssignments = {};
+    let runMode = localStorage.getItem('aether-agent-run-mode') === 'parallel' ? 'parallel' : 'sequential';
     let currentFilters = {
         type: null,
         capability: null,
@@ -38,6 +42,26 @@ const AgentBrowser = (() => {
             agents = await response.json();
         }
         selectedAgents = new Set(agents.filter(agent => agent.selected).map(agent => agent.id));
+        try {
+            if (typeof window.__TAURI_INTERNALS__ !== 'undefined') {
+                [localModels, defaultModel] = await Promise.all([
+                    window.__TAURI__.core.invoke('code_local_models_rust'),
+                    window.__TAURI__.core.invoke('code_advice_rust').then(advice => advice.model || ''),
+                ]);
+            } else {
+                [localModels, defaultModel] = await Promise.all([
+                    apiFetch('/api/code/models').then(r => r.ok ? r.json() : []),
+                    apiFetch('/api/code/advice').then(r => r.ok ? r.json() : {}).then(advice => advice.model || ''),
+                ]);
+            }
+        } catch (_) { localModels = []; }
+        try { modelAssignments = JSON.parse(localStorage.getItem('aether-agent-models') || '{}'); } catch (_) { modelAssignments = {}; }
+        if (localModels.length && !localModels.some(model => model.name === defaultModel)) defaultModel = localModels[0].name;
+        for (const agent of agents) {
+            if (!localModels.some(model => model.name === modelAssignments[agent.id])) {
+                modelAssignments[agent.id] = defaultModel;
+            }
+        }
         applyFilters();
         return agents;
     }
@@ -133,6 +157,8 @@ const AgentBrowser = (() => {
 
         const selectedClass = agent.selected ? 'selected' : '';
         const installedBadge = '<span class="agent-installed-badge">AETHER CODE profile</span>';
+        const assignedModel = modelAssignments[agent.id] || defaultModel;
+        const modelOptions = localModels.map(model => `<option value="${escapeHtml(model.name)}" ${model.name === assignedModel ? 'selected' : ''}>${escapeHtml(model.name)}${model.parameter_size ? ` · ${escapeHtml(model.parameter_size)}` : ''}${model.quantization ? ` · ${escapeHtml(model.quantization)}` : ''}</option>`).join('');
 
         return `
             <div class="agent-card ${selectedClass}" data-agent-id="${escapeHtml(agent.id)}" role="button" tabindex="0">
@@ -142,7 +168,9 @@ const AgentBrowser = (() => {
                 </div>
                 <p class="agent-description">${escapeHtml(agent.description)}</p>
                 <div class="agent-meta">
-                    <span class="agent-model">${escapeHtml(agent.model)}</span>
+                    <label class="agent-model-picker text-xs">Model for this profile
+                        <select class="agent-model-select" data-model-agent="${escapeHtml(agent.id)}" aria-label="Model for ${escapeHtml(agent.name)}" ${localModels.length ? '' : 'disabled'}>${modelOptions || '<option>No local models found</option>'}</select>
+                    </label>
                     <span class="agent-type agent-type-${agent.agent_type}">${escapeHtml(capitalizeFirst(agent.agent_type))}</span>
                 </div>
                 <div class="agent-capabilities">
@@ -169,11 +197,15 @@ const AgentBrowser = (() => {
         const status = document.getElementById('agent-run-status');
         const results = document.getElementById('agent-run-results');
         const button = document.getElementById('agent-run-button');
+        runMode = document.getElementById('agent-run-mode')?.value || 'sequential';
+        localStorage.setItem('aether-agent-run-mode', runMode);
         if (!task) return showStatus('Describe the repository or change you want analyzed.', true);
         if (!selectedAgents.size) return showStatus('Select at least one profile first.', true);
         button.disabled = true;
         button.textContent = 'Analyzing…';
-        status.textContent = 'Running selected profiles one at a time with the active AETHER CODE model…';
+        status.textContent = runMode === 'parallel'
+            ? 'Running selected profiles in parallel. This can use substantially more memory.'
+            : 'Running selected profiles in order; each profile receives the previous analysis as a hand-off.';
         status.className = 'text-xs text-cyan-200 animate-pulse';
         results.replaceChildren();
         try {
@@ -182,12 +214,14 @@ const AgentBrowser = (() => {
                 response = await window.__TAURI__.core.invoke('code_agents_ask_rust', {
                     task,
                     selectedIds: Array.from(selectedAgents),
+                    modelsByAgent: Object.fromEntries(Array.from(selectedAgents, id => [id, modelAssignments[id] || defaultModel])),
+                    runMode,
                 });
             } else {
                 const resp = await apiFetch('/api/agents/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ task, selected_ids: Array.from(selectedAgents) }),
+                    body: JSON.stringify({ task, selected_ids: Array.from(selectedAgents), models_by_agent: Object.fromEntries(Array.from(selectedAgents, id => [id, modelAssignments[id] || defaultModel])), run_mode: runMode }),
                 });
                 if (!resp.ok) throw new Error((await resp.text()) || `Analysis failed (${resp.status})`);
                 response = await resp.json();
@@ -197,14 +231,14 @@ const AgentBrowser = (() => {
                 article.className = 'border border-cyan-500/20 rounded p-3 bg-slate-950/60';
                 const title = document.createElement('h3');
                 title.className = 'font-mono text-cyan-200 text-sm mb-2';
-                title.textContent = result.agent_name;
+                title.textContent = `${result.agent_name} · ${result.model}`;
                 const body = document.createElement('pre');
                 body.className = 'text-sm text-slate-200 whitespace-pre-wrap font-sans';
                 body.textContent = result.text;
                 article.append(title, body);
                 results.appendChild(article);
             }
-            showStatus(`${response.length} profile${response.length === 1 ? '' : 's'} completed. Results are also in AETHER CODE history.`);
+            showStatus(`${response.length} profile${response.length === 1 ? '' : 's'} completed ${runMode === 'parallel' ? 'in parallel' : 'with hand-offs'}.`);
         } catch (err) {
             showStatus(err.message || String(err), true);
         } finally {
@@ -314,6 +348,11 @@ const AgentBrowser = (() => {
 
         // A profile is selected only through its explicit button.
         container.querySelectorAll('.agent-card').forEach(card => {
+            card.querySelector('.agent-model-select')?.addEventListener('change', event => {
+                event.stopPropagation();
+                modelAssignments[card.dataset.agentId] = event.target.value;
+                localStorage.setItem('aether-agent-models', JSON.stringify(modelAssignments));
+            });
             card.querySelector('.agent-select-btn')?.addEventListener('click', () => {
                 toggleAgentSelection(card.dataset.agentId);
                 renderAgentGrid(container);
@@ -397,7 +436,7 @@ const AgentBrowser = (() => {
                     <p class="text-sm text-slate-300 mb-2">Profiles run on AETHER CODE's active model. Code Builder edits the selected workspace when Edit is enabled; checks run only when Run is enabled. Reviewer, Planner, Test Analyst, and Repository Guide focus on analysis. These profiles share AETHER CODE's workspace and permissions; they are not separate Claude or GPT accounts.</p>
                     <label class="block text-xs font-mono text-cyan-300 mb-1" for="agent-task-input">REPOSITORY OR CHANGE TO ANALYZE</label>
                     <textarea id="agent-task-input" rows="3" maxlength="16000" placeholder="e.g. Review the current branch diff for regressions, or explain how GitHub PR #42 affects the local code." class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100"></textarea>
-                    <div class="flex items-center gap-3 mt-2"><button id="agent-run-button" type="button" class="cyber-btn text-xs">Run selected profiles</button><span id="agent-run-status" class="text-xs text-slate-400" role="status"></span></div>
+                    <div class="flex items-center gap-3 mt-2 flex-wrap"><button id="agent-run-button" type="button" class="cyber-btn text-xs">Run selected profiles</button><label class="text-xs text-slate-300">Run mode <select id="agent-run-mode" class="hub-select"><option value="sequential" ${runMode === 'sequential' ? 'selected' : ''}>Sequential hand-off</option><option value="parallel" ${runMode === 'parallel' ? 'selected' : ''}>Parallel analysis</option></select></label><span id="agent-run-status" class="text-xs text-slate-400" role="status"></span></div>
                     <div id="agent-run-results" class="space-y-3 mt-3"></div>
                 </section>
                 <div id="agent-hero-section" class="agent-hero-section"></div>

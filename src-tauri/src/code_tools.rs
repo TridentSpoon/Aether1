@@ -80,7 +80,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         name: "run",
         grant: Grant::Run,
-        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. Or {\"shell\": \"cargo test && cargo clippy\"} for a shell line, which works inside the sandbox. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on, so a step that needs to fetch dependencies will fail and should be reported rather than worked around. Work freely inside that folder -- a checkpoint is taken before you change anything, so the operator can put it all back.",
+        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on. When Run is off, only command classes they explicitly remembered with Allow similar can run; use a single argv, not a shell. For a new command, give them a bash suggestion so they can approve it once or remember its command class.",
     },
     Capability {
         name: "search_web",
@@ -97,7 +97,12 @@ const CAPABILITIES: &[Capability] = &[
 pub fn catalog(db: &MemoryDb) -> Vec<&'static str> {
     CAPABILITIES
         .iter()
-        .filter(|cap| code_perms::granted(db, cap.grant))
+        .filter(|cap| {
+            if cap.name == "run" {
+                return run_tool_available(db);
+            }
+            code_perms::granted(db, cap.grant)
+        })
         .map(|cap| cap.line)
         .collect()
 }
@@ -106,9 +111,20 @@ pub fn catalog(db: &MemoryDb) -> Vec<&'static str> {
 /// left out of the prompt entirely -- telling a model about a protocol it has no tools for
 /// is a way to get it calling tools that do not exist.
 pub fn any_granted(db: &MemoryDb) -> bool {
-    CAPABILITIES
-        .iter()
-        .any(|cap| code_perms::granted(db, cap.grant))
+    CAPABILITIES.iter().any(|cap| {
+        if cap.name == "run" {
+            run_tool_available(db)
+        } else {
+            code_perms::granted(db, cap.grant)
+        }
+    })
+}
+
+fn run_tool_available(db: &MemoryDb) -> bool {
+    code_perms::granted(db, Grant::Run)
+        || crate::code_workspace::root(db)
+            .ok()
+            .is_some_and(|root| !crate::code_policy::similar_commands(&root).is_empty())
 }
 
 /// Runs one call from the model.
@@ -126,7 +142,32 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
             known.join(", ")
         ));
     };
-    code_perms::require(db, capability.grant).map_err(|Refusal(why)| why)?;
+    if name == "run" && !code_perms::granted(db, Grant::Run) {
+        let root = match crate::code_workspace::root(db) {
+            Ok(root) => root,
+            Err(_) => {
+                return Err(code_perms::require(db, Grant::Run)
+                    .expect_err("Run was checked off immediately above")
+                    .0)
+            }
+        };
+        let argv: Vec<String> = args
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if args.get("shell").is_some() || !crate::code_policy::allows_similar_argv(&root, &argv) {
+            return Err("Run is off. This project only remembers specific build/test command classes. Use a single argv covered by its Allow similar rule, or show the operator a bash command so they can approve it once or remember it.".to_string());
+        }
+    } else {
+        code_perms::require(db, capability.grant).map_err(|Refusal(why)| why)?;
+    }
 
     // Before the first thing that changes anything, a way back. See code_checkpoint.rs for
     // why this replaced the table of refused `git` subcommands rather than joining it.
@@ -258,6 +299,107 @@ fn gh(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     code_perms::check_gh(db, &argv).map_err(|Refusal(why)| why)?;
 
+    run_gh(db, &argv)
+}
+
+/// Runs one GitHub write after the operator approved this exact command in the UI.
+/// Permanent "similar command" grants are intentionally not offered for remote writes.
+pub fn run_approved_github_write(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
+    if !code_perms::granted(db, Grant::Github) {
+        return Err("GitHub access is off in Settings.".to_string());
+    }
+    if crate::local_only::enabled(db) {
+        return Err("Local-only mode is on, so AETHER1 will not contact GitHub. Turn it off before approving this action.".to_string());
+    }
+    validate_approved_github_write(argv)?;
+    run_gh(db, argv)
+}
+
+/// Runs a suggested gh invocation after the operator's exact-command approval. Only the
+/// established read-only classifier or the narrowly supported PR write validator can pass.
+pub fn run_approved_github_command(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
+    if validate_approved_github_write(argv).is_ok() {
+        return run_approved_github_write(db, argv);
+    }
+    code_perms::check_gh(db, argv).map_err(|Refusal(why)| why)?;
+    if crate::local_only::enabled(db) {
+        return Err("Local-only mode is on, so AETHER1 will not contact GitHub.".to_string());
+    }
+    run_gh(db, argv)
+}
+
+fn validate_approved_github_write(argv: &[String]) -> Result<(), String> {
+    let Some([pr, verb]) = argv.get(..2) else {
+        return Err("Only `gh pr create` and `gh pr merge` can be approved here.".to_string());
+    };
+    if pr != "pr" || !matches!(verb.as_str(), "create" | "merge") {
+        return Err("Only `gh pr create` and `gh pr merge` can be approved here.".to_string());
+    }
+    let args = &argv[2..];
+    let allowed = if verb == "create" {
+        &[
+            "--title", "-t", "--body", "-b", "--base", "-B", "--head", "--draft", "--fill",
+            "--repo",
+        ][..]
+    } else {
+        &[
+            "--merge",
+            "--squash",
+            "--rebase",
+            "--delete-branch",
+            "--auto",
+            "--repo",
+        ][..]
+    };
+    let mut positional = 0;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if verb == "merge" && positional == 0 && !arg.starts_with('-') {
+            positional += 1;
+            index += 1;
+            continue;
+        }
+        if allowed.contains(&arg.as_str()) {
+            if matches!(
+                arg.as_str(),
+                "--title" | "-t" | "--body" | "-b" | "--base" | "-B" | "--head" | "--repo"
+            ) {
+                index += 1;
+                if index >= args.len() || args[index].starts_with('-') {
+                    return Err(format!("{arg} needs a value."));
+                }
+            }
+        } else {
+            return Err(format!(
+                "`gh pr {verb}` option {arg:?} is not enabled for one-time approval."
+            ));
+        }
+        index += 1;
+    }
+    if verb == "merge" && positional != 1 {
+        return Err("`gh pr merge` needs a pull-request number or URL.".to_string());
+    }
+    if verb == "create" && positional != 0 {
+        return Err(
+            "`gh pr create` does not accept positional arguments in this approval flow."
+                .to_string(),
+        );
+    }
+    if verb == "create"
+        && !args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--title" | "-t" | "--fill"))
+    {
+        return Err(
+            "`gh pr create` needs a title or `--fill` so it can run without an interactive prompt."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn run_gh(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
     let binary = which::which("gh").map_err(|_| {
         "the GitHub CLI is not installed on this machine. `gh auth status` would be the test; \
          the operator installs it from https://cli.github.com."
@@ -280,7 +422,7 @@ fn gh(db: &MemoryDb, args: &Value) -> Result<String, String> {
         command.current_dir(crate::code_workspace::root(db)?);
     }
     let mut child = command
-        .args(&argv)
+        .args(argv)
         // No stdin at all: a gh subcommand that decides to ask a question gets EOF and
         // gives up, rather than waiting out the timeout on a prompt nobody can see.
         .stdin(Stdio::null())
@@ -543,6 +685,44 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(&path).expect("open test db")
+    }
+
+    #[test]
+    fn github_write_approval_is_limited_to_supported_pr_actions() {
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "create".into(),
+            "--title".into(),
+            "Fix".into()
+        ])
+        .is_ok());
+        assert!(
+            validate_approved_github_write(&["pr".into(), "create".into(), "--fill".into()])
+                .is_ok()
+        );
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "merge".into(),
+            "42".into(),
+            "--squash".into()
+        ])
+        .is_ok());
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "merge".into(),
+            "42".into(),
+            "43".into()
+        ])
+        .is_err());
+        assert!(validate_approved_github_write(&["repo".into(), "delete".into()]).is_err());
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "create".into(),
+            "--title".into(),
+            "Fix".into(),
+            "--web".into()
+        ])
+        .is_err());
     }
 
     /// The loop this whole change exists for, driven through the same `call` a model's
