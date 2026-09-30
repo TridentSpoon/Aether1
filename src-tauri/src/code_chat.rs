@@ -324,8 +324,23 @@ pub fn ask(
     prompt: &str,
     sink: Sink,
 ) -> Result<CodeReply, String> {
+    ask_in_session(db, endpoint, api, model, os, prompt, sink, SESSION_ID)
+}
+
+/// Asks in an independent history, used for simultaneous Agent Browser analyses.
+#[allow(clippy::too_many_arguments)]
+pub fn ask_in_session(
+    db: &MemoryDb,
+    endpoint: &str,
+    api: LocalApi,
+    model: &str,
+    os: &str,
+    prompt: &str,
+    sink: Sink,
+    session_id: &str,
+) -> Result<CodeReply, String> {
     let mut history = db
-        .get_messages(SESSION_ID, HISTORY_TURNS)
+        .get_messages(session_id, HISTORY_TURNS)
         .unwrap_or_default();
     let system = system_prompt(db, os, model);
 
@@ -415,8 +430,8 @@ pub fn ask(
 
     // Written down only once it arrived. A turn that failed halfway is not history the next
     // question should be answered against.
-    let _ = db.add_message(SESSION_ID, "user", prompt);
-    let _ = db.add_message(SESSION_ID, "agent", &text);
+    let _ = db.add_message(session_id, "user", prompt);
+    let _ = db.add_message(session_id, "agent", &text);
 
     let commands = commands_in(&text);
     Ok(CodeReply { text, commands })

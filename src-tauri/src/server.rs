@@ -150,6 +150,8 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/setup/advice", get(setup_advice))
         .route("/api/voice/advice", get(voice_advice))
         .route("/api/code/advice", get(code_advice))
+        .route("/api/code/models", get(code_local_models))
+        .route("/api/code/model", post(code_set_model_preference))
         .route("/api/code/conventions", get(code_conventions))
         .route("/api/code/chat", post(code_chat))
         .route("/api/code/chat/history", get(code_chat_history))
@@ -970,6 +972,28 @@ async fn code_advice(State(state): State<AppState>) -> Json<crate::code_setup::C
     )
 }
 
+async fn code_local_models() -> Json<Vec<commands::LocalModelChoice>> {
+    Json(
+        tokio::task::spawn_blocking(commands::code_local_models)
+            .await
+            .unwrap_or_default(),
+    )
+}
+
+#[derive(Deserialize)]
+struct CodeModelPreferenceRequest {
+    model: String,
+}
+
+async fn code_set_model_preference(
+    State(state): State<AppState>,
+    Json(req): Json<CodeModelPreferenceRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    commands::code_set_model_preference(&state.engine, &req.model)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 /// The house rules as plain text, so a browser can copy them and a terminal can redirect
 /// them straight into an AGENTS.md.
 async fn code_conventions() -> String {
@@ -1028,6 +1052,14 @@ struct AgentSelectionRequest {
 struct AgentRunRequest {
     task: String,
     selected_ids: Vec<String>,
+    #[serde(default)]
+    models_by_agent: std::collections::HashMap<String, String>,
+    #[serde(default = "default_agent_run_mode")]
+    run_mode: String,
+}
+
+fn default_agent_run_mode() -> String {
+    "sequential".to_string()
 }
 
 async fn get_agents(State(state): State<AppState>) -> Json<Vec<crate::agents::Agent>> {
@@ -1074,7 +1106,13 @@ async fn run_agents(
 ) -> Result<Json<Vec<commands::AgentAnalysis>>, (StatusCode, String)> {
     let engine = state.engine.clone();
     let result = tokio::task::spawn_blocking(move || {
-        commands::code_agents_ask(&engine, &req.task, &req.selected_ids)
+        commands::code_agents_ask(
+            &engine,
+            &req.task,
+            &req.selected_ids,
+            &req.models_by_agent,
+            &req.run_mode,
+        )
     })
     .await
     .map_err(internal_error)?

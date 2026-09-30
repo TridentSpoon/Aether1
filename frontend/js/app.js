@@ -4314,8 +4314,10 @@ document.addEventListener('DOMContentLoaded', () => {
        In a browser the button is replaced by the command alone: there is no terminal
        behind it, and a button that cannot work is worse than no button. */
     function codeCommandRow(command) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mt-1';
         const row = document.createElement('div');
-        row.className = 'flex items-center gap-2 mt-1';
+        row.className = 'flex items-center gap-2';
 
         const text = document.createElement('code');
         text.className = 'flex-1 min-w-0 truncate font-mono text-[11px] text-cyan-200 bg-slate-950/60 border border-cyan-500/20 rounded px-2 py-1';
@@ -4323,7 +4325,7 @@ document.addEventListener('DOMContentLoaded', () => {
         text.title = command;
         row.appendChild(text);
 
-        if (!IS_TAURI) return row;
+        if (!IS_TAURI) { wrapper.appendChild(row); return wrapper; }
 
         const button = document.createElement('button');
         button.type = 'button';
@@ -4339,7 +4341,77 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(() => { button.textContent = '⌨ To terminal'; }, 2500);
         });
         row.appendChild(button);
-        return row;
+
+        const githubCommand = /^\s*gh\s+/.test(command);
+        const externalWrite = /^\s*(?:gh\s+pr\s+(?:create|merge)|git\s+push)\b/.test(command);
+        const approve = document.createElement('button');
+        approve.type = 'button';
+        approve.className = 'cyber-btn cyber-btn-active text-[10px] py-1 px-2 whitespace-nowrap shrink-0';
+        approve.textContent = externalWrite ? 'Review remote action' : (githubCommand ? 'Review GitHub command' : 'Run with Aether1');
+        approve.title = 'Review the exact command before Aether1 runs it.';
+        row.appendChild(approve);
+
+        const approval = document.createElement('div');
+        approval.className = 'hidden mt-2 p-2 border border-amber-500/30 rounded bg-amber-950/20';
+        const exact = document.createElement('code');
+        exact.className = 'block break-all whitespace-pre-wrap text-[11px] font-mono text-cyan-100 bg-slate-950/80 border border-slate-600/40 rounded p-2 mb-2';
+        exact.textContent = command;
+        const explain = document.createElement('p');
+        explain.className = 'text-[10px] font-mono text-amber-200 mb-2';
+        explain.textContent = externalWrite
+            ? 'This will change a remote GitHub repository. Confirm this exact action; remote writes cannot be remembered.'
+            : githubCommand
+                ? 'This uses the GitHub CLI with your signed-in account. Confirm the exact command; GitHub commands cannot be remembered.'
+                : 'This runs the exact command above in the selected workspace and sandbox. Allow once, or remember this build/test command class for this project.';
+        const choices = document.createElement('div');
+        choices.className = 'flex items-center gap-2 flex-wrap';
+        const runOnce = document.createElement('button');
+        runOnce.type = 'button';
+        runOnce.className = 'cyber-btn cyber-btn-active text-[10px] py-1 px-2';
+        runOnce.textContent = externalWrite ? 'Approve once' : 'Allow once & run';
+        choices.appendChild(runOnce);
+        if (!externalWrite && !githubCommand) {
+            const remember = document.createElement('button');
+            remember.type = 'button';
+            remember.className = 'cyber-btn text-[10px] py-1 px-2';
+            remember.textContent = 'Allow similar & run';
+            choices.appendChild(remember);
+            remember.addEventListener('click', () => runApprovedCodeCommand(command, true, approval, choices));
+        }
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'text-[10px] font-mono text-slate-400 hover:text-slate-200';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => approval.classList.add('hidden'));
+        choices.appendChild(cancel);
+        approval.append(exact, explain, choices);
+        wrapper.append(row, approval);
+        approve.addEventListener('click', () => approval.classList.toggle('hidden'));
+        runOnce.addEventListener('click', () => runApprovedCodeCommand(command, false, approval, choices));
+        return wrapper;
+    }
+
+    async function runApprovedCodeCommand(command, rememberSimilar, approval, choices) {
+        choices.querySelectorAll('button').forEach(button => { button.disabled = true; });
+        const output = document.createElement('pre');
+        output.className = 'mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-[10px] font-mono text-slate-200';
+        output.textContent = 'Running the approved command…';
+        approval.appendChild(output);
+        try {
+            let result;
+            if (IS_TAURI) {
+                result = await tauriInvoke('code_run_approved_rust', { command, rememberSimilar });
+            } else {
+                throw new Error('Run approvals are available only in the Aether1 desktop window.');
+            }
+            output.textContent = result;
+        } catch (err) {
+            output.textContent = `Refused or failed: ${err.message || err}`;
+            output.classList.add('text-amber-300');
+        } finally {
+            choices.querySelectorAll('button').forEach(button => { button.disabled = false; });
+            approval.classList.remove('hidden');
+        }
     }
 
     function appendCodeMessage(sender, text, commands) {
@@ -7394,12 +7466,14 @@ document.addEventListener('DOMContentLoaded', () => {
         search: '',
         purpose: 'all',
         fit: 'fits',
+        scale: 'all',
         sort: 'recommended',
         // The model name the detail panel is showing. Kept across a refresh, so a probe
         // that lands while somebody is reading does not throw them back to the top.
         selected: null,
         models: [],
         installed: [],
+        localModels: [],
         endpoint: '',
         provider: '',
         canInstall: false,
@@ -7531,6 +7605,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (hub.purpose !== 'all') {
             rows = rows.filter(model => (model.purposes || []).includes(hub.purpose));
+        }
+        if (hub.scale !== 'all') {
+            rows = rows.filter(model => {
+                const local = hub.localModels.find(choice => choice.name === model.name);
+                const metadata = local?.parameter_size || model.name;
+                const billions = Number((String(metadata).match(/(\d+(?:\.\d+)?)\s*[bB]/) || [])[1] || 0);
+                const quantized = !!local?.quantization || /(?:q\d(?:_k)?(?:_m|_s|_l)?|q\d+_\d+)/i.test(model.name);
+                return quantized && (hub.scale === 'multi-quant' ? billions >= 7 : billions >= 30);
+            });
         }
         // The fit filter never hides something already downloaded: it is on the disk
         // whatever a memory heuristic thinks of it, and hiding it is how you get a hub
@@ -7721,6 +7804,15 @@ document.addEventListener('DOMContentLoaded', () => {
         sub.textContent = model.name;
         panel.appendChild(sub);
 
+        const localInfo = hub.localModels.find(choice => choice.name === model.name);
+        if (localInfo && (localInfo.parameter_size || localInfo.quantization)) {
+            const specs = document.createElement('div');
+            specs.className = 'hub-tags';
+            if (localInfo.parameter_size) specs.appendChild(hubTag(`${localInfo.parameter_size} parameters`));
+            if (localInfo.quantization) specs.appendChild(hubTag(localInfo.quantization));
+            panel.appendChild(specs);
+        }
+
         const tags = document.createElement('div');
         tags.className = 'hub-tags';
         if ((model.purposes || []).includes('chat')) tags.appendChild(hubTag('To talk to'));
@@ -7755,6 +7847,32 @@ document.addEventListener('DOMContentLoaded', () => {
             use.textContent = '✔ Use this one';
             use.addEventListener('click', () => hubUseModel(model));
             buttons.appendChild(use);
+        }
+
+        if (model.installed && (model.purposes || []).includes('code')) {
+            const code = document.createElement('button');
+            code.type = 'button';
+            code.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+            code.textContent = 'Use for coding';
+            code.addEventListener('click', async () => {
+                code.disabled = true;
+                try {
+                    if (IS_TAURI) await tauriInvoke('code_set_model_preference_rust', { model: model.name });
+                    else {
+                        const response = await apiFetch('/api/code/model', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model: model.name }),
+                        });
+                        if (!response.ok) throw new Error((await response.text()) || 'Could not set coding model.');
+                    }
+                    setHubStatus(`${model.name} is now the preferred AETHER CODE model.`, 'good');
+                    const advice = await fetchCodeAdvice().catch(() => null);
+                    if (advice) renderCodeAdvice(advice);
+                } catch (error) {
+                    setHubStatus(`⚠ ${error.message || error}`, 'bad');
+                } finally { code.disabled = false; }
+            });
+            buttons.appendChild(code);
         }
 
         if (!model.installed) {
@@ -7886,12 +8004,17 @@ document.addEventListener('DOMContentLoaded', () => {
         hub.loading = true;
         if (!options.quiet) renderHubDetail();
         try {
-            const [setup, code] = await Promise.all([
+            const [setup, code, localModels] = await Promise.all([
                 fetchSetupAdvice().catch(() => null),
                 fetchCodeAdvice().catch(() => null),
+                (IS_TAURI
+                    ? tauriInvoke('code_local_models_rust')
+                    : apiFetch('/api/code/models').then(response => response.ok ? response.json() : []))
+                    .catch(() => []),
             ]);
             hub.models = hubMergeCatalogues(setup, code);
             hub.installed = (setup && setup.installed_models) || [];
+            hub.localModels = localModels || [];
             hub.endpoint = (setup && setup.endpoint) || '';
             hub.provider = (setup && setup.provider) || '';
             hub.canInstall = !!(setup && setup.can_install_from_here);

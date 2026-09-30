@@ -221,7 +221,12 @@ pub(crate) fn parameter_billions(model: &str) -> u32 {
             .collect::<String>()
             .parse::<f64>()
         {
-            found = Some((value * 10.0).round() as u32);
+            // MoE tags such as `30b-a3b` describe total and active parameters. The
+            // leading size is the model's overall capability class; don't overwrite it
+            // with the later active-expert count.
+            if found.is_none() {
+                found = Some((value * 10.0).round() as u32);
+            }
         }
     }
     found.unwrap_or(u32::MAX)
@@ -465,6 +470,7 @@ mod tests {
     fn a_size_is_read_off_the_tag_and_not_off_the_version_number() {
         assert_eq!(parameter_billions("qwen2.5-coder:7b"), 70);
         assert_eq!(parameter_billions("qwen2.5-coder:32b-instruct-q4"), 320);
+        assert_eq!(parameter_billions("qwen3-coder:30b-a3b-q4_K_M"), 300);
         assert_eq!(parameter_billions("llama3.2:3b"), 30);
         assert_eq!(parameter_billions("Qwen2.5-Coder-7B-Instruct-GGUF"), 70);
         assert_eq!(parameter_billions("something:1.5b"), 15);
