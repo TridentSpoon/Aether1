@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
-    <link rel="stylesheet" href="css/agent-browser.css?v=1">
+    <link rel="stylesheet" href="css/agent-browser.css?v=2">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
@@ -1006,7 +1006,7 @@
                     <div class="profile-identity-fields">
                         <div class="space-y-1">
                             <label for="setting-operator-name" class="text-xs font-mono text-cyan-300 block">WHAT SHOULD IT CALL YOU?</label>
-                            <input id="setting-operator-name" type="text" placeholder="e.g. Trident" autocomplete="off" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <input id="setting-operator-name" type="text" placeholder="Your preferred name (optional)" autocomplete="off" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                             <p class="text-[10px] font-mono text-slate-400 leading-snug">
                                 Goes into the prompt alongside the live telemetry, so it knows who
                                 it is talking to. Leave it empty and it is told nothing about you
@@ -2295,13 +2295,11 @@
                         <div class="net-card-heading">
                             <h4 class="net-card-title">AETHER CODE may change</h4>
                             <p class="net-card-hint">
-                                Off until you say otherwise. With these on it works the way a coding agent
-                                does &mdash; read a file, make an edit, run the tests, read what broke, go
-                                again &mdash; but only inside the one project folder you name below, and
-                                only with the programs on the list. Nothing outside that folder, nothing
-                                that leaves this machine: <span class="font-mono">git commit</span> runs,
-                                <span class="font-mono">git push</span> is still written out as a button
-                                for your terminal.
+                                Edit and Run are separate permissions. Edit lets it change files; Run lets it
+                                build and check the project under the sandbox and command policy. Both are
+                                limited to the project folder you name below. If this machine cannot provide
+                                the sandbox, Run refuses unless you explicitly allow unconfined commands.
+                                <span class="font-mono">git push</span> is unavailable to AETHER CODE.
                             </p>
                         </div>
                     </div>
@@ -2923,9 +2921,9 @@
     <script src="vendor/xterm/xterm.js?v=1"></script>
     <script src="vendor/xterm/addon-fit.js?v=1"></script>
     <script src="js/terminal.js?v=1"></script>
-    <script src="js/agent-browser.js?v=2"></script>
+    <script src="js/agent-browser.js?v=3"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=66"></script>
+    <script src="js/app.js?v=67"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

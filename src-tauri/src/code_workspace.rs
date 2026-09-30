@@ -22,16 +22,15 @@
 //!      does not walk the path again -- `code_openat` descends from the project folder's own
 //!      descriptor without following a link, so nothing can be swapped in between the
 //!      judgement and the write.
-//!   3. **No shell, ever.** `run` takes an argv and spawns the program directly. There is no
-//!      `sh -c` anywhere in this file, so a pipe, a redirect, a `;` or a backtick in an
-//!      argument is a literal string the program will reject. This is also why the terminal
-//!      isolation rule is untouched: nothing here types into the operator's terminal, and
-//!      nothing here reads from it. `scripts/check_terminal_isolation.sh` passes unchanged.
-//!   4. **A named program, and for git a named subcommand.** The allowlist holds program
-//!      names the operator can see and edit. `git` is on it because committing is half of
-//!      what this loop is for, with the subcommands that leave the repository or destroy
-//!      uncommitted work refused by name -- `push`, `reset`, `clean`, `rebase` and the rest.
-//!      Fail closed: a program that is not on the list is refused, whatever it does.
+//!   3. **The shell stays inside the sandbox.** With a real sandbox, `run` accepts an argv
+//!      or a shell line; either executes inside the same OS-enforced boundary. Without one,
+//!      shell input is refused and argv is the only form available. Nothing here types into
+//!      or reads from the operator's terminal. `scripts/check_terminal_isolation.sh` checks
+//!      that boundary.
+//!   4. **Commands have a visible policy.** Without a sandbox, the named program allowlist
+//!      and the git subcommand refusals are the remaining policy. With a sandbox, containment
+//!      is the boundary and the allowlist does not pretend to constrain arbitrary build tools.
+//!      `git push`, history-destroying commands, and other refused operations remain blocked.
 //!   5. **Both grants default off.** `edit` and `run` are the two permissions in this
 //!      program that can change the operator's own work, so unlike the three read grants
 //!      they start switched off and are turned on deliberately, per machine.

@@ -1278,6 +1278,18 @@ fn code_chat_ask_rust(
     })
 }
 
+/// Runs the selected Agent Browser analysis profiles through AETHER CODE's shared model.
+#[tauri::command(async)]
+fn code_agents_ask_rust(
+    engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
+    task: String,
+    selected_ids: Vec<String>,
+) -> Result<Vec<commands::AgentAnalysis>, String> {
+    background_services::note_use(&engine, &managed_ollama);
+    commands::code_agents_ask(&engine, &task, &selected_ids)
+}
+
 #[tauri::command(async)]
 fn code_chat_history_rust(engine: tauri::State<LlmEngine>) -> Vec<serde_json::Value> {
     commands::code_chat_history(&engine)
@@ -2787,6 +2799,7 @@ fn main() {
             voice_advice_rust,
             code_advice_rust,
             code_chat_ask_rust,
+            code_agents_ask_rust,
             code_chat_history_rust,
             code_chat_clear_rust,
             code_conventions_rust,

@@ -1021,6 +1021,30 @@ one before installing it.
 An avatar file is a program and runs with the same access as the page, so load files you
 wrote or trust. A recipe carries no code.
 
+## Working on a repository with AETHER CODE
+
+AETHER CODE uses the coding model configured for this machine in **Settings → Agent & System
+→ The Brain**. Set the project folder under **Settings → Agent & System → Permissions** before
+asking it to inspect or change a checkout. Its read-only file and GitHub tools are available
+by default; turn on **AETHER CODE may change** only when you want it to edit files or run
+commands in that workspace. Edits stay inside that folder. Running uses the configured
+sandbox and command policy, and `git push` remains unavailable to the model.
+
+The **Agent Browser** contains task profiles (Code Builder, Code Reviewer, Implementation
+Planner, Test Analyst, and Repository Guide). Select one or more, describe a local change or a
+GitHub PR, and run them. Code Builder implements requested changes when Edit is enabled; checks
+run only when Run is enabled. The profiles use the same active AETHER CODE model and permissions;
+they are not separate Claude or GPT accounts. Install and authenticate `gh` to inspect private
+GitHub repositories.
+For remote PRs, name `OWNER/REPO` and the PR number. The local checkout should be clean or its
+existing changes should be understood before asking for edits; all tools read and write the
+same working tree used by Codex or Claude Code.
+
+This repository's shared instructions for AETHER CODE, Codex, Claude Code, and other tools are
+in [`AGENTS.md`](AGENTS.md). AETHER CODE is instructed to read the workspace's `AGENTS.md`
+before changing code; other tools that support the convention can load it when started in
+this repository.
+
 ## Command line
 
 Once installed (`./setup.sh`, or `scripts/install_desktop_app.sh`), the same binary that
@@ -1038,8 +1062,8 @@ aether1 face                             # avatar fullscreen on a spare screen (
 aether1 code                             # set this machine up to write code offline
 aether1 code ask "why won't this compile"  # ask the coding model, from a terminal
 aether1 code conventions > AGENTS.md     # house rules for a local coding model to follow
-aether1 code perms                       # what AETHER CODE may look at (all of it read-only)
-aether1 code perms github off            # ...and the switch for one of the three
+aether1 code perms                       # inspect AETHER CODE's individual permissions
+aether1 code perms github off            # turn off its read-only GitHub access
 aether1 code workspace ~/Projects/thing  # the one folder it may change
 aether1 code run-allow cargo             # a program it may run in that folder
 aether1 code run-network                 # is the network reachable from inside the sandbox?

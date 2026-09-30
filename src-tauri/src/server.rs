@@ -154,6 +154,9 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/chat", post(code_chat))
         .route("/api/code/chat/history", get(code_chat_history))
         .route("/api/code/chat/clear", post(code_chat_clear))
+        .route("/api/agents", get(get_agents))
+        .route("/api/agents/selection", post(set_agent_selection))
+        .route("/api/agents/run", post(run_agents))
         .route("/api/code/level", post(code_level))
         .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
@@ -1014,6 +1017,69 @@ async fn code_chat_clear(
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct AgentSelectionRequest {
+    selected_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AgentRunRequest {
+    task: String,
+    selected_ids: Vec<String>,
+}
+
+async fn get_agents(State(state): State<AppState>) -> Json<Vec<crate::agents::Agent>> {
+    let selected_ids: Option<Vec<String>> = state
+        .engine
+        .db()
+        .get_setting("selected_agent_ids")
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value(value).ok());
+    Json(crate::agents::get_agents(selected_ids))
+}
+
+async fn set_agent_selection(
+    State(state): State<AppState>,
+    Json(req): Json<AgentSelectionRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let valid: std::collections::HashSet<String> = crate::agents::built_in_agents()
+        .into_iter()
+        .map(|agent| agent.id)
+        .collect();
+    if let Some(id) = req.selected_ids.iter().find(|id| !valid.contains(*id)) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Unknown Agent Browser profile: {id}"),
+        ));
+    }
+    state
+        .engine
+        .db()
+        .set_setting("selected_agent_ids", &serde_json::json!(req.selected_ids))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not save selection: {e}"),
+            )
+        })?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn run_agents(
+    State(state): State<AppState>,
+    Json(req): Json<AgentRunRequest>,
+) -> Result<Json<Vec<commands::AgentAnalysis>>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        commands::code_agents_ask(&engine, &req.task, &req.selected_ids)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(result))
 }
 
 /// Browser-transport twin of code_set_level_rust.
