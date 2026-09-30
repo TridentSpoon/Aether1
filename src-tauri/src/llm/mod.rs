@@ -779,6 +779,7 @@ impl LlmEngine {
             system_prompt: "",
             history: &[],
             prompt: "Reply with just the word OK.",
+            images: &[],
             agent_name: "",
             // No tools offered and no prior rounds to replay -- this is a bare connectivity
             // probe, not a real turn, so there is nothing native tool-calling needs to see.
@@ -835,6 +836,7 @@ impl LlmEngine {
         system_prompt: &str,
         base_history: Vec<Message>,
         user_prompt: &str,
+        images: &[providers::MediaAttachment],
         preamble: &str,
         sink: providers::Sink,
     ) -> providers::Completion {
@@ -887,6 +889,7 @@ impl LlmEngine {
                 system_prompt,
                 history: &history,
                 prompt: &current_prompt,
+                images,
                 agent_name: &config.agent_name,
                 tools: if native { &schemas } else { &none },
                 exchanges: &exchanges,
@@ -1034,6 +1037,16 @@ impl LlmEngine {
         session_id: &str,
         sink: providers::Sink,
     ) -> String {
+        self.generate_response_streamed_with_media(prompt, session_id, &[], sink)
+    }
+
+    pub fn generate_response_streamed_with_media(
+        &self,
+        prompt: &str,
+        session_id: &str,
+        images: &[providers::MediaAttachment],
+        sink: providers::Sink,
+    ) -> String {
         let config = self.load_config();
         let start = Instant::now();
 
@@ -1135,6 +1148,7 @@ impl LlmEngine {
                 &system_prompt,
                 history,
                 prompt,
+                images,
                 &self.vault_trace(),
                 sink,
             );
@@ -1153,6 +1167,7 @@ impl LlmEngine {
                 system_prompt: &system_prompt,
                 history: &history,
                 prompt,
+                images,
                 agent_name: &config.agent_name,
                 tools: &[],
                 exchanges: &[],

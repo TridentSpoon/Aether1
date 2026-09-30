@@ -36,12 +36,36 @@ pub fn generate_response_streamed(
     sink: llm::Sink,
     on_handover: HandoverSink,
 ) -> Result<Value, String> {
+    generate_response_streamed_with_media(engine, prompt, session_id, &[], sink, on_handover)
+}
+
+pub fn generate_response_streamed_with_media(
+    engine: &LlmEngine,
+    prompt: String,
+    session_id: Option<String>,
+    media: &[llm::providers::MediaAttachment],
+    sink: llm::Sink,
+    on_handover: HandoverSink,
+) -> Result<Value, String> {
     if prompt.trim().is_empty() {
-        return Err("Empty message".to_string());
+        if media.is_empty() {
+            return Err("Add a message or image first".to_string());
+        }
     }
+    validate_chat_media(media)?;
     let session_id = valid_session_id(session_id)?;
 
-    engine.add_message(&session_id, "user", &prompt);
+    let stored_prompt = if media.is_empty() {
+        prompt.clone()
+    } else {
+        format!(
+            "{}{}[{} image(s) attached]",
+            prompt,
+            if prompt.is_empty() { "" } else { "\n\n" },
+            media.len()
+        )
+    };
+    engine.add_message(&session_id, "user", &stored_prompt);
 
     // Flow mode, before a word is generated: the question has to reach whoever it belongs
     // to, and the hand-off line belongs to the node on its way out, so it is said first and
@@ -65,7 +89,7 @@ pub fn generate_response_streamed(
     // belong to this answer and no other. Both are on this thread, which is the whole
     // reason the record can be a thread-local -- see vault::consulted.
     crate::vault::consulted::begin();
-    let reply = engine.generate_response_streamed(&prompt, &session_id, sink);
+    let reply = engine.generate_response_streamed_with_media(&prompt, &session_id, media, sink);
     let notes = crate::vault::consulted::taken();
     let agent_name = engine.agent_name();
     engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
@@ -75,7 +99,8 @@ pub fn generate_response_streamed(
     // operator can open, edit and keep. Failure is reported here and nowhere else -- a
     // reply that was generated has been generated, and a full disk is not a reason to
     // replace it with an error.
-    if let Err(e) = crate::vault::journal_exchange(engine.db(), &agent_name, &prompt, &reply) {
+    if let Err(e) = crate::vault::journal_exchange(engine.db(), &agent_name, &stored_prompt, &reply)
+    {
         if crate::vault::journal_enabled(engine.db()) {
             eprintln!("[AETHER1] Could not write the conversation to the vault: {e}");
         }
@@ -87,6 +112,37 @@ pub fn generate_response_streamed(
         "notes": crate::vault::consulted::to_json(&notes),
         "handover": handover.as_ref().map(handover_json),
     }))
+}
+
+fn validate_chat_media(media: &[llm::providers::MediaAttachment]) -> Result<(), String> {
+    if media.len() > 4 {
+        return Err("Attach up to four images per message".into());
+    }
+    let mut total = 0usize;
+    for image in media {
+        if !matches!(
+            image.mime_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+        ) {
+            return Err("Use PNG, JPEG, WebP, or GIF images".into());
+        }
+        let size = image.data_base64.len().saturating_mul(3) / 4;
+        if size > 8 * 1024 * 1024 {
+            return Err("Each image must be 8 MB or smaller".into());
+        }
+        if !image
+            .data_base64
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+        {
+            return Err("An attached image is not valid base64 data".into());
+        }
+        total += size;
+    }
+    if total > 16 * 1024 * 1024 {
+        return Err("Images must total 16 MB or less".into());
+    }
+    Ok(())
 }
 
 /// Tries a provider/model/endpoint/key combination with one trivial call before it's ever
@@ -625,7 +681,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // Remote & LAN: whether AETHER1 puts this machine on the network as it starts.
         // Off unless asked for -- see lan.rs.
         "lan_autostart": false,
-        "voice_startup_audible": true,
+        "voice_startup_audible": false,
         "game_mode": false,
         // The two switches around the sandbox `run` spawns commands in. Both off: a test
         // suite does not need the network, and a machine that cannot confine a command

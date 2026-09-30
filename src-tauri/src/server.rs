@@ -544,6 +544,8 @@ struct ChatRequest {
     message: String,
     session_id: Option<String>,
     generate_voice: Option<bool>,
+    #[serde(default)]
+    media: Vec<crate::llm::providers::MediaAttachment>,
 }
 
 /// Unlike generate_response_rust (the Tauri command, which leaves TTS to a separate
@@ -560,6 +562,7 @@ async fn chat(
     let relayed = headers.contains_key(crate::peers::RELAY_HEADER);
     let engine = state.engine.clone();
     let message = req.message;
+    let media = req.media;
     let session_id =
         commands::valid_session_id(req.session_id).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let session_id_for_result = session_id.clone();
@@ -571,7 +574,14 @@ async fn chat(
             // Held for the whole answer: the flag is thread-local, and this is the thread
             // the answer is produced on.
             let _relaying = relayed.then(crate::peers::Relaying::begin);
-            commands::generate_response(&engine, message, Some(session_id))
+            commands::generate_response_streamed_with_media(
+                &engine,
+                message,
+                Some(session_id),
+                &media,
+                &mut |_| {},
+                &mut |_| {},
+            )
         })
         .await
         .map_err(internal_error)?
@@ -1550,6 +1560,7 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
     };
     let engine = state.engine.clone();
     let message = req.message;
+    let media = req.media;
 
     // The engine is blocking and knows nothing about async, so it runs on a blocking task
     // and pushes deltas through a channel that this task forwards to the socket. Unbounded
@@ -1568,10 +1579,11 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
         let session_id = session_id.clone();
         let handover_tx = tx.clone();
         tokio::task::spawn_blocking(move || {
-            commands::generate_response_streamed(
+            commands::generate_response_streamed_with_media(
                 &engine,
                 message,
                 Some(session_id),
+                &media,
                 &mut |delta| {
                     let _ = tx.send(Chunk::Delta(delta.to_string()));
                 },

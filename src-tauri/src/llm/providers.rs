@@ -125,6 +125,9 @@ pub struct ChatContext<'a> {
     pub system_prompt: &'a str,
     pub history: &'a [Message],
     pub prompt: &'a str,
+    /// Image attachments for this request only. They are never written into conversation
+    /// history or the Memory vault.
+    pub images: &'a [MediaAttachment],
     pub agent_name: &'a str,
     /// The tools to offer natively. Empty means send none -- either there are no tools, or
     /// this provider is driven by the text protocol instead and the catalogue is already in
@@ -133,6 +136,12 @@ pub struct ChatContext<'a> {
     /// The tool rounds already taken *this turn*. Providers replay these in their own
     /// shape so the model sees what it asked for and what came back.
     pub exchanges: &'a [Exchange],
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MediaAttachment {
+    pub mime_type: String,
+    pub data_base64: String,
 }
 
 /// One tool call as a provider asked for it.
@@ -328,6 +337,8 @@ struct OllamaOptions {
 struct OllamaRequest {
     model: String,
     prompt: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<String>,
     stream: bool,
     options: OllamaOptions,
 }
@@ -366,6 +377,11 @@ fn ollama_payload(model: &str, ctx: &ChatContext, stream: bool) -> OllamaRequest
     OllamaRequest {
         model: if model.is_empty() { "llama3" } else { model }.to_string(),
         prompt: prompt_body,
+        images: ctx
+            .images
+            .iter()
+            .map(|image| image.data_base64.clone())
+            .collect(),
         stream,
         options: OllamaOptions {
             temperature: 0.7,
@@ -491,7 +507,7 @@ struct OpenAiFunctionDef {
 struct OpenAiMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,7 +518,21 @@ impl OpenAiMessage {
     fn plain(role: &str, content: String) -> OpenAiMessage {
         OpenAiMessage {
             role: role.to_string(),
-            content: Some(content),
+            content: Some(json!(content)),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn with_images(role: &str, content: &str, images: &[MediaAttachment]) -> OpenAiMessage {
+        let mut parts = vec![json!({"type": "text", "text": content})];
+        parts.extend(images.iter().map(|image| json!({
+            "type": "image_url",
+            "image_url": {"url": format!("data:{};base64,{}", image.mime_type, image.data_base64)},
+        })));
+        OpenAiMessage {
+            role: role.to_string(),
+            content: Some(Value::Array(parts)),
             tool_calls: None,
             tool_call_id: None,
         }
@@ -710,7 +740,11 @@ fn openai_payload(
             msg.text.clone(),
         ));
     }
-    messages.push(OpenAiMessage::plain("user", ctx.prompt.to_string()));
+    messages.push(if ctx.images.is_empty() {
+        OpenAiMessage::plain("user", ctx.prompt.to_string())
+    } else {
+        OpenAiMessage::with_images("user", ctx.prompt, ctx.images)
+    });
 
     // This turn's tool rounds. Unlike Anthropic, results are separate messages rather than
     // blocks inside one -- one `tool` message per call, each quoting the id it answers.
@@ -718,7 +752,7 @@ fn openai_payload(
         match exchange {
             Exchange::Called { text, calls } => messages.push(OpenAiMessage {
                 role: "assistant".to_string(),
-                content: (!text.trim().is_empty()).then(|| text.clone()),
+                content: (!text.trim().is_empty()).then(|| json!(text)),
                 tool_calls: Some(
                     calls
                         .iter()
@@ -741,7 +775,7 @@ fn openai_payload(
                 for result in results {
                     messages.push(OpenAiMessage {
                         role: "tool".to_string(),
-                        content: Some(result.output.clone()),
+                        content: Some(json!(result.output)),
                         tool_calls: None,
                         tool_call_id: Some(result.id.clone()),
                     });
@@ -953,6 +987,8 @@ struct GeminiPart {
     function_call: Option<Value>,
     #[serde(rename = "functionResponse", skip_serializing_if = "Option::is_none")]
     function_response: Option<Value>,
+    #[serde(rename = "inlineData", skip_serializing_if = "Option::is_none")]
+    inline_data: Option<Value>,
 }
 
 impl GeminiPart {
@@ -961,6 +997,7 @@ impl GeminiPart {
             text: Some(text.into()),
             function_call: None,
             function_response: None,
+            inline_data: None,
         }
     }
 }
@@ -1091,9 +1128,16 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
             parts: vec![GeminiPart::text(msg.text.clone())],
         });
     }
+    let mut current_parts = vec![GeminiPart::text(ctx.prompt.to_string())];
+    current_parts.extend(ctx.images.iter().map(|image| GeminiPart {
+        text: None,
+        function_call: None,
+        function_response: None,
+        inline_data: Some(json!({"mimeType": image.mime_type, "data": image.data_base64})),
+    }));
     contents.push(GeminiContent {
         role: "user".to_string(),
-        parts: vec![GeminiPart::text(ctx.prompt.to_string())],
+        parts: current_parts,
     });
 
     // This turn's tool rounds. Gemini keeps everything in `parts`, so a round is one
@@ -1113,6 +1157,7 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
                             "args": call.arguments,
                         })),
                         function_response: None,
+                        inline_data: None,
                     });
                 }
                 contents.push(GeminiContent {
@@ -1133,6 +1178,7 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
                             "response": {"result": r.output},
                         })),
                         function_call: None,
+                        inline_data: None,
                     })
                     .collect(),
             }),
@@ -1490,6 +1536,17 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
         })
         .collect();
 
+    if !ctx.images.is_empty() {
+        if let Some(user) = messages.last_mut() {
+            let mut blocks = vec![json!({"type": "text", "text": ctx.prompt})];
+            blocks.extend(ctx.images.iter().map(|image| json!({
+                "type": "image",
+                "source": {"type": "base64", "media_type": image.mime_type, "data": image.data_base64},
+            })));
+            user.content = Value::Array(blocks);
+        }
+    }
+
     // Then this turn's tool rounds, which alternate by construction: the model asks, the
     // tools answer, and nothing else is interleaved.
     for exchange in ctx.exchanges {
@@ -1784,6 +1841,7 @@ mod tests {
             system_prompt: "be useful",
             history: &history,
             prompt: "Claude you there?",
+            images: &[],
             agent_name: "R.E.D. 9000",
             tools: &[],
             exchanges: &[],
@@ -1874,6 +1932,7 @@ mod tests {
             system_prompt: "s",
             history: &[],
             prompt: "p",
+            images: &[],
             agent_name: "A1",
             tools: &[],
             exchanges: &[],
@@ -1977,6 +2036,7 @@ mod tests {
             system_prompt: "be helpful",
             history: &[],
             prompt: "hello",
+            images: &[],
             agent_name: "HALCY",
             tools: &[],
             exchanges: &[],
@@ -1995,6 +2055,7 @@ mod tests {
             system_prompt: "s",
             history: &[],
             prompt: "p",
+            images: &[],
             agent_name: "a",
             tools: &[],
             exchanges: &[],
@@ -2082,6 +2143,7 @@ mod failure_tests {
             system_prompt: "be useful",
             history: &[],
             prompt: "what is in /etc/hostname?",
+            images: &[],
             agent_name: "R.E.D. 9000",
             tools,
             exchanges,

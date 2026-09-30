@@ -1218,6 +1218,7 @@ fn generate_response_streaming_rust(
     prompt: String,
     session_id: Option<String>,
     stream_id: String,
+    media: Option<Vec<llm::providers::MediaAttachment>>,
 ) -> Result<serde_json::Value, String> {
     // A turn is about to go to a model. If the idle watch stopped the local server, this is
     // what brings it back before the request goes out; otherwise it just tells the watch the
@@ -1229,10 +1230,11 @@ fn generate_response_streaming_rust(
     // before there is anything in it.
     let handover_app = app.clone();
     let handover_stream = stream_id.clone();
-    commands::generate_response_streamed(
+    commands::generate_response_streamed_with_media(
         &engine,
         prompt,
         session_id,
+        media.as_deref().unwrap_or(&[]),
         &mut |delta| {
             let _ = app.emit(
                 "chat-delta",

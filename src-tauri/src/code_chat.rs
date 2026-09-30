@@ -358,6 +358,7 @@ pub fn ask_in_session(
             system_prompt: &system,
             history: &history,
             prompt: &current_prompt,
+            images: &[],
             agent_name: "AETHER CODE",
             // The text protocol, on both shapes. Nothing is passed as a provider tool
             // definition: see `tool_instructions`.

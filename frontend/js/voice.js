@@ -391,7 +391,21 @@ class VoiceAudioEngine {
      * this one reports itself superseded instead of joining it.
      */
     async playClip(audioUrl, opts = {}) {
-        const audible = opts.audible !== false;
+        const quiet = window.AETHER_QUIET_HOURS || {};
+        const minuteOfDay = new Date().getHours() * 60 + new Date().getMinutes();
+        const toMinute = (value, fallback) => {
+            const match = /^(\d{2}):(\d{2})$/.exec(value || '');
+            return match ? Number(match[1]) * 60 + Number(match[2]) : fallback;
+        };
+        const start = toMinute(quiet.start, 22 * 60);
+        const end = toMinute(quiet.end, 7 * 60);
+        const duringQuietHours = start === end ? true
+            : start < end ? minuteOfDay >= start && minuteOfDay < end
+                : minuteOfDay >= start || minuteOfDay < end;
+        const quietBlocked = quiet.enabled === true && duringQuietHours
+            && window.AETHER_HEADPHONES_CONNECTED !== true
+            && window.AETHER_VOICE_REQUESTED !== true;
+        const audible = opts.audible !== false && !quietBlocked;
 
         this.cutCurrentClip();
         const claim = this.playClaim;
@@ -432,6 +446,12 @@ class VoiceAudioEngine {
             // CORS-enabled, so WebKit will not grant CORS on it whatever headers come back.
             // A blob URL sidesteps the question -- it is this page's own origin.
             const audio = new Audio(audioUrl);
+            const requestedRate = Number(opts.playbackRate ?? window.AETHER_VOICE_RATE ?? 1);
+            audio.playbackRate = Number.isFinite(requestedRate)
+                ? Math.max(0.75, Math.min(1.25, requestedRate)) : 1;
+            if ('preservesPitch' in audio) audio.preservesPitch = true;
+            if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = true;
+            if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
             this.currentAudio = audio;
 
             let signalDetected = false;
