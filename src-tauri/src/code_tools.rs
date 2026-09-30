@@ -63,6 +63,16 @@ const CAPABILITIES: &[Capability] = &[
         line: "gh {\"args\": [\"pr\", \"view\", \"137\", \"--repo\", \"OWNER/REPO\"]} -- the GitHub CLI, read-only subcommands only (view, list, diff, checks, status, search). For a remote repo, include --repo OWNER/REPO so the request cannot accidentally target a different checkout. Anything that changes a repository is refused; put that in a ```bash block instead.",
     },
     Capability {
+        name: "github_search",
+        grant: Grant::Github,
+        line: "github_search {\"query\": \"NoemaNucleus\"} -- find likely GitHub repositories by name or description. Returns owner/repo names and default branches; use github_read next to inspect source.",
+    },
+    Capability {
+        name: "github_read",
+        grant: Grant::Github,
+        line: "github_read {\"repo\": \"OWNER/REPO\", \"path\": \"README.md\", \"ref\": \"main\"} -- read a file or list a directory in a GitHub repository through the signed-in gh account. Omit path for the root and ref to use the default branch. Read-only.",
+    },
+    Capability {
         name: "fetch_url",
         grant: Grant::Internet,
         line: "fetch_url {\"url\": \"https://docs.rs/ureq/latest/ureq/\"} -- fetch a public page as text.",
@@ -180,6 +190,8 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
         "list_dir" => run_builtin(db, &crate::tools::builtin::ListDir, args),
         "machine" => Ok(machine_summary()),
         "gh" => gh(db, args),
+        "github_search" => github_search(db, args),
+        "github_read" => github_read(db, args),
         "fetch_url" => fetch_url(db, args),
         "search_web" => search_web(db, args),
         "edit_file" => crate::code_workspace::edit_file(db, args),
@@ -478,6 +490,175 @@ fn run_gh(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
     }
 }
 
+/// Searches repositories using the operator's authenticated GitHub CLI session.
+fn github_search(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    ensure_github_read_allowed(db)?;
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|query| !query.is_empty() && query.len() <= 256)
+        .ok_or_else(|| "github_search needs a query between 1 and 256 characters".to_string())?;
+    let argv = vec![
+        "search".to_string(),
+        "repos".to_string(),
+        query.to_string(),
+        "--limit".to_string(),
+        "5".to_string(),
+        "--json".to_string(),
+        "fullName,description,language,url,defaultBranch".to_string(),
+    ];
+    code_perms::check_gh(db, &argv).map_err(|Refusal(why)| why)?;
+    run_gh(db, &argv)
+}
+
+/// Reads repository source without cloning or changing the operator's working tree.
+/// GitHub's Contents API returns base64 for files and a JSON array for directories.
+fn github_read(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    ensure_github_read_allowed(db)?;
+    let repo = args
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|repo| valid_repo_name(repo))
+        .ok_or_else(|| "github_read needs an owner/repository name".to_string())?;
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if !valid_repo_path(path) {
+        return Err(
+            "github_read path must be a repository-relative path without `.` or `..` segments."
+                .to_string(),
+        );
+    }
+    let reference = args.get("ref").and_then(Value::as_str).unwrap_or("").trim();
+    if reference.len() > 200 || reference.chars().any(char::is_control) {
+        return Err(
+            "github_read ref must be a branch, tag, or commit name up to 200 characters."
+                .to_string(),
+        );
+    }
+    let mut route = format!("repos/{repo}/contents");
+    if !path.is_empty() {
+        route.push('/');
+        route.push_str(path);
+    }
+    if !reference.is_empty() {
+        route.push_str("?ref=");
+        route.push_str(&urlencoding::encode(reference));
+    }
+    let argv = vec!["api".to_string(), route];
+    code_perms::check_gh(db, &argv).map_err(|Refusal(why)| why)?;
+    let response = run_gh(db, &argv)?;
+    format_github_contents(&response, repo, path, reference)
+}
+
+fn ensure_github_read_allowed(db: &MemoryDb) -> Result<(), String> {
+    if crate::local_only::enabled(db) {
+        return Err("Local-only mode is on, so AETHER1 will not contact GitHub.".to_string());
+    }
+    if !code_perms::granted(db, Grant::Github) {
+        return Err("GitHub access is off in Settings.".to_string());
+    }
+    if which::which("gh").is_err() {
+        return Err(
+            "The GitHub CLI is not installed; install gh and sign in with `gh auth login` first."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn valid_repo_name(repo: &str) -> bool {
+    let mut parts = repo.split('/');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(owner), Some(name), None)
+        if valid_github_component(owner) && valid_github_component(name))
+}
+
+fn valid_github_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 100
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value != "."
+        && value != ".."
+}
+
+fn valid_repo_path(path: &str) -> bool {
+    path.is_empty()
+        || path.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@')
+                })
+        })
+}
+
+fn format_github_contents(
+    response: &str,
+    repo: &str,
+    path: &str,
+    reference: &str,
+) -> Result<String, String> {
+    let value: Value = serde_json::from_str(response)
+        .map_err(|_| "GitHub returned content in an unexpected format.".to_string())?;
+    let at = if reference.is_empty() {
+        "default branch"
+    } else {
+        reference
+    };
+    if let Some(entries) = value.as_array() {
+        let names = entries
+            .iter()
+            .filter_map(|entry| {
+                Some(format!(
+                    "{}\t{}\t{}",
+                    entry.get("type")?.as_str()?,
+                    entry.get("path")?.as_str()?,
+                    entry.get("name")?.as_str()?
+                ))
+            })
+            .take(100)
+            .collect::<Vec<_>>();
+        let location = if path.is_empty() {
+            repo.to_string()
+        } else {
+            format!("{repo}/{path}")
+        };
+        return Ok(format!(
+            "GitHub directory {location} ({at}):\n{}",
+            names.join("\n")
+        ));
+    }
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+    if kind != "file" {
+        return Err("GitHub returned neither a file nor a directory for that path.".to_string());
+    }
+    let encoding = value.get("encoding").and_then(Value::as_str).unwrap_or("");
+    let content = value.get("content").and_then(Value::as_str).unwrap_or("");
+    if encoding != "base64" || content.trim().is_empty() {
+        return Err(
+            "GitHub did not include inline text for this file; try a smaller source file."
+                .to_string(),
+        );
+    }
+    use base64::Engine as _;
+    let compact_content: String = content.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(compact_content)
+        .map_err(|_| "GitHub returned a file with invalid base64 content.".to_string())?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(format!(
+        "GitHub file {repo}/{path} ({at}):\n{}",
+        truncate(&text, MAX_OUTPUT_BYTES)
+    ))
+}
+
 /// Fetches a public page as text.
 ///
 /// Deliberately thin: a GET, a size cap, and HTML reduced to something a model can read.
@@ -685,6 +866,31 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(&path).expect("open test db")
+    }
+
+    #[test]
+    fn github_repository_and_path_inputs_are_confined() {
+        assert!(valid_repo_name("owner/repo"));
+        assert!(valid_repo_name("some-org/repo.name"));
+        assert!(!valid_repo_name("owner/repo/extra"));
+        assert!(!valid_repo_name("../repo"));
+        assert!(valid_repo_path("src/main.rs"));
+        assert!(valid_repo_path(""));
+        assert!(!valid_repo_path("src/../secret"));
+        assert!(!valid_repo_path("/etc/passwd"));
+    }
+
+    #[test]
+    fn github_contents_format_files_and_directories() {
+        let file = r#"{"type":"file","encoding":"base64","content":"cHViIGZu\nIG1haW4oKXt9"}"#;
+        let rendered = format_github_contents(file, "owner/repo", "src/main.rs", "main").unwrap();
+        assert!(rendered.contains("GitHub file owner/repo/src/main.rs (main)"));
+        assert!(rendered.contains("pub fn main(){}"));
+
+        let directory = r#"[{"type":"file","path":"README.md","name":"README.md"}]"#;
+        let rendered = format_github_contents(directory, "owner/repo", "", "").unwrap();
+        assert!(rendered.contains("GitHub directory owner/repo (default branch)"));
+        assert!(rendered.contains("file\tREADME.md\tREADME.md"));
     }
 
     #[test]

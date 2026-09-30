@@ -70,7 +70,6 @@ const SHELL_TAGS: &[&str] = &[
     "console",
     "shell-session",
     "terminal",
-    "",
 ];
 
 /// A reply from the coding model, and what of it can be run.
@@ -103,7 +102,12 @@ pub fn system_prompt(db: &MemoryDb, os: &str, model: &str) -> String {
          When a project folder is set, check its AGENTS.md before changing code and follow \
          its repository-specific instructions. For GitHub work, use the gh tool's read-only \
          commands and include --repo OWNER/REPO when the target is not the selected local \
-         checkout. Distinguish remote PR contents from the local working tree.\n\n\
+         checkout. When asked to review, explain, or change a named repository, inspect it \
+         before answering: use the selected workspace tools for a local project, or search \
+         GitHub for an unqualified repository name and read its README and relevant source. \
+         Do not ask the operator to paste code until these tools have been tried or a specific \
+         permission/access error prevents inspection. Distinguish remote source from the local \
+         working tree.\n\n\
          When the next step is something to run, put it in a fenced block tagged `bash`, \
          one command per line, with no prompt marker and no line continuations. Each line \
          becomes a button that types that command into the operator's terminal, so a line \
@@ -615,12 +619,12 @@ mod tests {
         assert!(commands_in(reply).is_empty());
     }
 
-    /// An untagged block is the common case from a small model, and treating it as shell
-    /// is the judgement call here: the block is shown in full next to the button, and the
-    /// button types rather than runs, so a wrong guess costs a line the operator deletes.
+    /// An untagged block is ambiguous code or prose. It must not turn Rust/Python examples
+    /// into terminal buttons; only an explicit shell tag may offer commands.
     #[test]
-    fn an_untagged_block_is_treated_as_shell() {
-        assert_eq!(commands_in("```\nls -la\n```"), vec!["ls -la"]);
+    fn an_untagged_code_block_is_never_treated_as_a_command() {
+        assert!(commands_in("```\nfn main() {\n    let x = 1;\n}\n```").is_empty());
+        assert!(commands_in("```\nls -la\n```").is_empty());
     }
 
     #[test]
@@ -685,6 +689,15 @@ mod tests {
         assert!(prompt.contains("read_file"));
         assert!(prompt.contains("gh"));
         assert!(prompt.contains("```bash block instead"));
+    }
+
+    #[test]
+    fn named_repository_requests_are_inspected_before_asking_for_pasted_code() {
+        let prompt = system_prompt(&db(), "Linux", "m");
+        assert!(prompt.contains("search GitHub for an unqualified repository name"));
+        assert!(prompt.contains("read its README and relevant source"));
+        assert!(prompt
+            .contains("Do not ask the operator to paste code until these tools have been tried"));
     }
 
     /// With every permission off the panel is what #137 shipped, and the prompt has to say
