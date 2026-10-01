@@ -1938,10 +1938,14 @@
 
                     <div class="hub-detail">
                         <div class="hub-detail-name">🎚 Voice tuning</div>
-                        <div class="hub-detail-sub">Choose an engine in “How it speaks”, adjust playback speed and audition the current voice.</div>
+                        <div class="hub-detail-sub">Choose an engine in “How it speaks”, adjust speed and pitch, then audition the current voice.</div>
                         <label class="block space-y-1 text-xs font-mono text-cyan-200">Playback speed <span id="voice-speed-value">1.0×</span>
                             <input id="setting-voice-speed" type="range" min="0.75" max="1.25" step="0.05" value="1" class="w-full">
                         </label>
+                        <label class="block space-y-1 text-xs font-mono text-cyan-200 mt-2">Pitch <span id="voice-pitch-value">0 st</span>
+                            <input id="setting-voice-pitch" type="range" min="-4" max="4" step="1" value="0" class="w-full">
+                        </label>
+                        <p class="text-[10px] font-mono text-slate-500">Pitch shifting can also affect playback speed on some audio engines.</p>
                     <div class="hub-action">
                             <span class="hub-action-size">Playback speed is applied by the audio player. Save Changes keeps your choice.</span>
                             <button type="button" id="btn-voice-audition" class="cyber-btn text-[10px] py-1 px-2">▶ Test current voice</button>

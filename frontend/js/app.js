@@ -9794,6 +9794,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const voiceRateLabel = document.getElementById('voice-speed-value');
             if (voiceRateInput) voiceRateInput.value = String(window.AETHER_VOICE_RATE);
             if (voiceRateLabel) voiceRateLabel.textContent = `${window.AETHER_VOICE_RATE.toFixed(2).replace(/0$/, '')}×`;
+            window.AETHER_VOICE_PITCH = Math.max(-4, Math.min(4, Number(s.voice_pitch_semitones) || 0));
+            const voicePitchInput = document.getElementById('setting-voice-pitch');
+            const voicePitchLabel = document.getElementById('voice-pitch-value');
+            if (voicePitchInput) voicePitchInput.value = String(window.AETHER_VOICE_PITCH);
+            if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
             const quietEnabled = s.quiet_hours_enabled === true;
             const quietStart = s.quiet_hours_start || '22:00';
             const quietEnd = s.quiet_hours_end || '07:00';
@@ -9962,6 +9967,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 })(),
                 voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked,
                 voice_playback_rate: Number(document.getElementById('setting-voice-speed')?.value || 1),
+                voice_pitch_semitones: Number(document.getElementById('setting-voice-pitch')?.value || 0),
                 quiet_hours_enabled: document.getElementById('setting-quiet-hours').checked,
                 quiet_hours_start: document.getElementById('setting-quiet-start').value || '22:00',
                 quiet_hours_end: document.getElementById('setting-quiet-end').value || '07:00',
@@ -11152,9 +11158,18 @@ document.addEventListener('DOMContentLoaded', () => {
         window.AETHER_VOICE_RATE = rate;
         if (voiceRateLabel) voiceRateLabel.textContent = `${rate.toFixed(2).replace(/0$/, '')}×`;
     });
+    const voicePitchInput = document.getElementById('setting-voice-pitch');
+    const voicePitchLabel = document.getElementById('voice-pitch-value');
+    voicePitchInput?.addEventListener('input', () => {
+        window.AETHER_VOICE_PITCH = Math.max(-4, Math.min(4, Number(voicePitchInput.value) || 0));
+        if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
+    });
     document.getElementById('btn-voice-audition')?.addEventListener('click', async () => {
         const url = await synthesizeSpeechUrl('This is how the current Aether1 voice sounds.', null);
-        if (url) await voiceEngine.playTTSAudio(url, { playbackRate: window.AETHER_VOICE_RATE || 1 });
+        if (url) await voiceEngine.playTTSAudio(url, {
+            playbackRate: window.AETHER_VOICE_RATE || 1,
+            pitchSemitones: window.AETHER_VOICE_PITCH || 0,
+        });
     });
     const syncQuietHours = () => {
         window.AETHER_QUIET_HOURS = {

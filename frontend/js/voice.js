@@ -447,11 +447,16 @@ class VoiceAudioEngine {
             // A blob URL sidesteps the question -- it is this page's own origin.
             const audio = new Audio(audioUrl);
             const requestedRate = Number(opts.playbackRate ?? window.AETHER_VOICE_RATE ?? 1);
-            audio.playbackRate = Number.isFinite(requestedRate)
+            const baseRate = Number.isFinite(requestedRate)
                 ? Math.max(0.75, Math.min(1.25, requestedRate)) : 1;
-            if ('preservesPitch' in audio) audio.preservesPitch = true;
-            if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = true;
-            if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
+            const requestedPitch = Number(opts.pitchSemitones ?? window.AETHER_VOICE_PITCH ?? 0);
+            const pitchSemitones = Number.isFinite(requestedPitch)
+                ? Math.max(-4, Math.min(4, requestedPitch)) : 0;
+            audio.playbackRate = baseRate * Math.pow(2, pitchSemitones / 12);
+            const preservePitch = pitchSemitones === 0;
+            if ('preservesPitch' in audio) audio.preservesPitch = preservePitch;
+            if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = preservePitch;
+            if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = preservePitch;
             this.currentAudio = audio;
 
             let signalDetected = false;
