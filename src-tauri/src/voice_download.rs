@@ -80,6 +80,18 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
         "en/en_GB/alba/medium",
     ),
     (
+        "en_GB-alan-medium",
+        "British, English, male",
+        "about 60 MB",
+        "en/en_GB/alan/medium",
+    ),
+    (
+        "en_GB-cori-medium",
+        "British, English, female",
+        "about 60 MB",
+        "en/en_GB/cori/medium",
+    ),
+    (
         "en_GB-northern_english_male-medium",
         "British, northern English, male",
         "about 60 MB",
@@ -92,6 +104,36 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
         "en/en_US/amy/medium",
     ),
     (
+        "en_US-arctic-medium",
+        "American, multi-speaker",
+        "about 60 MB",
+        "en/en_US/arctic/medium",
+    ),
+    (
+        "en_US-hfc_female-medium",
+        "American, female",
+        "about 60 MB",
+        "en/en_US/hfc_female/medium",
+    ),
+    (
+        "en_US-hfc_male-medium",
+        "American, male",
+        "about 60 MB",
+        "en/en_US/hfc_male/medium",
+    ),
+    (
+        "en_US-john-medium",
+        "American, male",
+        "about 60 MB",
+        "en/en_US/john/medium",
+    ),
+    (
+        "en_US-kathleen-medium",
+        "American, female",
+        "about 60 MB",
+        "en/en_US/kathleen/medium",
+    ),
+    (
         "en_US-lessac-medium",
         "American, female, clear and neutral",
         "about 60 MB",
@@ -102,6 +144,18 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
         "American, male",
         "about 60 MB",
         "en/en_US/ryan/medium",
+    ),
+    (
+        "en_US-ljspeech-medium",
+        "American, female, expressive",
+        "about 60 MB",
+        "en/en_US/ljspeech/medium",
+    ),
+    (
+        "en_US-norman-medium",
+        "American, male",
+        "about 60 MB",
+        "en/en_US/norman/medium",
     ),
 ];
 

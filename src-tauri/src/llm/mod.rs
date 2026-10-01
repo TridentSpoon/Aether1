@@ -779,6 +779,7 @@ impl LlmEngine {
             system_prompt: "",
             history: &[],
             prompt: "Reply with just the word OK.",
+            images: &[],
             agent_name: "",
             // No tools offered and no prior rounds to replay -- this is a bare connectivity
             // probe, not a real turn, so there is nothing native tool-calling needs to see.
@@ -829,12 +830,16 @@ impl LlmEngine {
     /// of what actually ran. The model's raw text is still what gets parsed, and the
     /// visible text is what gets stored as the reply -- the conversation history should
     /// read the way the conversation looked.
+    // The tool-loop inputs plus request-scoped media exceed Clippy's default argument
+    // threshold; keeping them explicit makes the persisted/transient boundary clear.
+    #[allow(clippy::too_many_arguments)]
     fn tool_loop(
         &self,
         config: &Config,
         system_prompt: &str,
         base_history: Vec<Message>,
         user_prompt: &str,
+        images: &[providers::MediaAttachment],
         preamble: &str,
         sink: providers::Sink,
     ) -> providers::Completion {
@@ -887,6 +892,7 @@ impl LlmEngine {
                 system_prompt,
                 history: &history,
                 prompt: &current_prompt,
+                images,
                 agent_name: &config.agent_name,
                 tools: if native { &schemas } else { &none },
                 exchanges: &exchanges,
@@ -1024,14 +1030,13 @@ impl LlmEngine {
         done(format!("{visible}{notice}"), any_reported, total)
     }
 
-    /// Generates a reply, feeding it to `sink` in the order it arrives: one call per
-    /// delta while streaming, or a single call with the whole text for instant commands,
-    /// offline mode, and the non-streaming fallback. The returned String is always the
-    /// concatenation of everything the sink was given.
-    pub fn generate_response_streamed(
+    /// Generates a reply with request-scoped media, feeding each streamed delta to `sink`.
+    /// The returned String is always the concatenation of everything the sink was given.
+    pub fn generate_response_streamed_with_media(
         &self,
         prompt: &str,
         session_id: &str,
+        images: &[providers::MediaAttachment],
         sink: providers::Sink,
     ) -> String {
         let config = self.load_config();
@@ -1135,6 +1140,7 @@ impl LlmEngine {
                 &system_prompt,
                 history,
                 prompt,
+                images,
                 &self.vault_trace(),
                 sink,
             );
@@ -1153,6 +1159,7 @@ impl LlmEngine {
                 system_prompt: &system_prompt,
                 history: &history,
                 prompt,
+                images,
                 agent_name: &config.agent_name,
                 tools: &[],
                 exchanges: &[],
@@ -1551,10 +1558,12 @@ mod tests {
             .set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true));
 
         let mut streamed = String::new();
-        let reply =
-            engine.generate_response_streamed("what is the weather", "default", &mut |delta| {
-                streamed.push_str(delta)
-            });
+        let reply = engine.generate_response_streamed_with_media(
+            "what is the weather",
+            "default",
+            &[],
+            &mut |delta| streamed.push_str(delta),
+        );
 
         assert!(reply.contains("local-only mode is on"), "{reply}");
         assert!(reply.contains("openai was not contacted"), "{reply}");
@@ -1579,7 +1588,8 @@ mod tests {
             .db
             .set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true));
 
-        let reply = engine.generate_response_streamed("hello", "default", &mut |_| {});
+        let reply =
+            engine.generate_response_streamed_with_media("hello", "default", &[], &mut |_| {});
         assert!(reply.contains("local-only mode is on"), "{reply}");
         assert!(reply.contains("ollama.example.com"), "{reply}");
     }
@@ -1603,7 +1613,8 @@ mod tests {
         // Nothing is listening at that address in a test run, so the turn ends in the
         // normal provider-failure path -- what matters is that it was attempted at all
         // rather than refused by the mode.
-        let reply = engine.generate_response_streamed("hello", "default", &mut |_| {});
+        let reply =
+            engine.generate_response_streamed_with_media("hello", "default", &[], &mut |_| {});
         assert!(!reply.contains("local-only mode is on"), "{reply}");
     }
 
@@ -1763,8 +1774,10 @@ mod tests {
     /// are exactly the reply that was returned.
     fn generate(engine: &LlmEngine, prompt: &str, session_id: &str) -> String {
         let mut streamed = String::new();
-        let reply = engine
-            .generate_response_streamed(prompt, session_id, &mut |delta| streamed.push_str(delta));
+        let reply =
+            engine.generate_response_streamed_with_media(prompt, session_id, &[], &mut |delta| {
+                streamed.push_str(delta)
+            });
         assert_eq!(
             streamed, reply,
             "the sink's deltas must reconstruct the returned reply"

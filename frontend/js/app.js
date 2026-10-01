@@ -117,6 +117,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
     const chatContainer = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
+    const chatMediaInput = document.getElementById('chat-media-input');
+    const chatMediaButton = document.getElementById('btn-chat-media');
+    const chatMediaPreviews = document.getElementById('chat-media-previews');
+    let pendingChatImages = [];
     const btnSend = document.getElementById('btn-send');
     const btnMic = document.getElementById('btn-mic');
     const btnSettings = document.getElementById('btn-settings');
@@ -151,10 +155,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Sections that have been folded into another one. Only the remembered choice can still
     // name one, so this is what stops somebody who was last in Desktop Sprite from being
     // dropped back at the top of the rail the first time they open Settings after updating.
-    const SETTINGS_SECTION_ALIASES = { sprite: 'layout', lan: 'network' };
+    const SETTINGS_SECTION_ALIASES = { sprite: 'layout', lan: 'network', avatars: 'appearance' };
     const settingsNav = document.getElementById('settings-nav');
     const settingsNavEmpty = document.getElementById('settings-nav-empty');
     const settingsSearch = document.getElementById('settings-search');
+    const connectionsHost = document.getElementById('settings-connections-host');
+    const connectionsGroup = document.getElementById('settings-group-connections');
+    if (connectionsHost && connectionsGroup) connectionsHost.appendChild(connectionsGroup);
     const settingsNavItems = () => Array.from(document.querySelectorAll('.settings-nav-item'));
     const settingsPaneFor = (name) => document.querySelector(`.settings-pane[data-settings-section="${name}"]`);
     const settingsNavFor = (name) => document.getElementById(`settings-nav-${name}`);
@@ -166,7 +173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const settingsNavIsAdvanced = (item) => !!item && !!settingsNavAdvanced?.contains(item);
 
     function showSettingsSection(name) {
-        const item = settingsNavFor(name);
+        const item = settingsNavFor(name === 'avatars' ? 'appearance' : name);
         if (!item || item.classList.contains('hidden')) return false;
         // An entry folded inside Advanced would otherwise be marked active out of sight,
         // which is how the remembered section arrives after a restart.
@@ -190,10 +197,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Same reasoning as the avatar browser's: the stage you were on is only meaningful
         // while you are in the section. Coming back to Appearance should land on the pane,
         // not halfway inside the colour panel you left open yesterday.
-        if (name !== 'appearance') showAppearanceStage('main');
+        if (name !== 'appearance' && name !== 'avatars') showAppearanceStage('main');
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
-        try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
+        try { localStorage.setItem(SETTINGS_SECTION_KEY, name === 'avatars' ? 'appearance' : name); } catch (e) { /* private mode */ }
         // A section that fills itself when it is chosen listens for this rather than being
         // called from here: the panes are set up further down the file, and this runs
         // before them when the remembered section is restored.
@@ -219,6 +226,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!item) return;
         voiceEngine.playSFX('click');
         showSettingsSection(item.dataset.settingsSection);
+    });
+
+    settingsModal.addEventListener('click', (event) => {
+        const suggestion = event.target.closest('[data-prompt-suggestion]');
+        if (!suggestion) return;
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        input.value = suggestion.dataset.promptSuggestion;
+        settingsModal.classList.add('hidden');
+        input.focus();
     });
 
     // Filters the rail by heading, by the plain-words hint beside it, and by a list of
@@ -298,6 +315,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Version & Update Elements (native desktop app only -- see IS_TAURI below)
     const versionBadge = document.getElementById('version-badge');
+    const headerUpdateButton = document.getElementById('btn-header-update');
+    const headerUpdateProgress = document.getElementById('header-update-progress');
+    const headerUpdateProgressBar = document.getElementById('header-update-progress-bar');
+    const headerUpdateProgressText = document.getElementById('header-update-progress-text');
     const updateSection = document.getElementById('update-section');
     const settingsVersionLabel = document.getElementById('settings-version-label');
     const updateStatusBox = document.getElementById('update-status-box');
@@ -1376,6 +1397,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 voiceEngine.playSFX('click');
                 const target = btn.dataset.avatarBack;
                 if (target === 'members' && avatarBrowserGroup) openAvatarGroup(avatarBrowserGroup);
+                else if (target === 'appearance') showSettingsSection('appearance');
                 else showAvatarStage('groups');
             });
         });
@@ -2610,7 +2632,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!resp.ok) throw new Error(await resp.text());
                     return (await resp.json()).text;
                 })();
-            if (text && text.trim()) handleSendMessage(text.trim());
+            if (text && text.trim()) {
+                window.AETHER_VOICE_REQUESTED = true;
+                try { await handleSendMessage(text.trim()); }
+                finally { window.AETHER_VOICE_REQUESTED = false; }
+            }
         } catch (e) {
             appendMessage(currentAgentName, `⚠️ Could not make that out: ${e.message || e}`);
         }
@@ -3057,7 +3083,7 @@ document.addEventListener('DOMContentLoaded', () => {
     /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
     /// Resolves with the authoritative final reply -- the deltas are for display, the
     /// return value is what gets rendered as final text.
-    async function streamChat(text, sessionId, onDelta, onHandover) {
+    async function streamChat(text, sessionId, onDelta, onHandover, media = []) {
         if (IS_TAURI) {
             const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
             const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
@@ -3072,7 +3098,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             try {
                 return await tauriInvoke('generate_response_streaming_rust', {
-                    prompt: text, sessionId, streamId
+                    prompt: text, sessionId, streamId, media
                 });
             } finally {
                 unlisten();
@@ -3086,7 +3112,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
             const socket = new WebSocket(`${wsBase}/ws/chat`, apiWsProtocols());
             socket.onopen = () => socket.send(JSON.stringify({
-                message: text, session_id: sessionId, generate_voice: false
+                message: text, session_id: sessionId, generate_voice: false, media
             }));
             socket.onmessage = (event) => {
                 let data;
@@ -3186,9 +3212,47 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function renderChatImagePreviews() {
+        if (!chatMediaPreviews) return;
+        chatMediaPreviews.replaceChildren();
+        chatMediaPreviews.classList.toggle('hidden', pendingChatImages.length === 0);
+        pendingChatImages.forEach((image, index) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'relative border border-cyan-500/40 rounded overflow-hidden';
+            const img = document.createElement('img');
+            img.src = image.dataUrl;
+            img.alt = image.name || 'Image attachment preview';
+            img.className = 'w-16 h-16 object-cover';
+            const remove = document.createElement('button');
+            remove.type = 'button'; remove.textContent = '×';
+            remove.className = 'absolute top-0 right-0 bg-slate-950/90 text-cyan-200 px-1';
+            remove.setAttribute('aria-label', `Remove ${img.alt}`);
+            remove.addEventListener('click', () => { pendingChatImages.splice(index, 1); renderChatImagePreviews(); });
+            wrap.append(img, remove); chatMediaPreviews.appendChild(wrap);
+        });
+    }
+
+    async function addChatImageFiles(files) {
+        const accepted = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+        for (const file of Array.from(files || [])) {
+            if (!accepted.includes(file.type)) { alert('Attach PNG, JPEG, WebP, or GIF images.'); continue; }
+            if (file.size > 8 * 1024 * 1024) { alert(`${file.name} is larger than 8 MB.`); continue; }
+            if (pendingChatImages.length >= 4) { alert('Attach up to four images per message.'); break; }
+            if (pendingChatImages.reduce((sum, item) => sum + item.size, file.size) > 16 * 1024 * 1024) {
+                alert('Images must total 16 MB or less.'); continue;
+            }
+            const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file);
+            }).catch(() => null);
+            if (typeof dataUrl === 'string') pendingChatImages.push({ name: file.name, size: file.size, mime_type: file.type, dataUrl });
+        }
+        renderChatImagePreviews();
+    }
+
     async function handleSendMessage(customPrompt = null) {
-        const text = customPrompt || chatInput.value.trim();
-        if (!text || isWaitingForResponse) return;
+        const media = pendingChatImages.map(({ mime_type, dataUrl }) => ({ mime_type, data_base64: dataUrl.split(',', 2)[1] || '' }));
+        const text = (customPrompt || chatInput.value.trim() || (media.length ? 'Please analyze the attached image(s).' : '')).trim();
+        if ((!text && !media.length) || isWaitingForResponse) return;
 
         // Trace Protocols: a hidden egg only ever surfaces on top of The Nexus, never from
         // any other avatar -- see AVATAR_TRIGGER_RULES above. Checked before the brain
@@ -3215,7 +3279,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         chatInput.value = '';
-        appendMessage('user', text);
+        const userMessage = appendMessage('user', `${text}${media.length ? `\n\n[${media.length} image${media.length === 1 ? '' : 's'} attached]` : ''}`);
+        media.forEach((image, index) => {
+            const preview = document.createElement('img');
+            preview.src = pendingChatImages[index].dataUrl;
+            preview.alt = `Attached image ${index + 1}`;
+            preview.className = 'mt-2 mr-2 inline-block max-w-48 max-h-48 rounded border border-cyan-500/30 object-contain';
+            userMessage.bodyDiv.appendChild(preview);
+        });
+        pendingChatImages = [];
+        renderChatImagePreviews();
         voiceEngine.playSFX('click');
         // A new question supersedes anything still being spoken -- and anything still being
         // synthesized. Dropping the queue alone left the previous reply's remaining
@@ -3327,7 +3400,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         try {
-            const data = await streamChat(text, currentSessionId, onDelta, onHandover);
+            const data = await streamChat(text, currentSessionId, onDelta, onHandover, media);
             // Something came back, so whatever loading was going to happen has happened:
             // no later question in this session gets the first-run explanation.
             hasAnsweredThisSession = true;
@@ -8648,11 +8721,29 @@ document.addEventListener('DOMContentLoaded', () => {
             .forEach((btn) => btn && btn.classList.add('hidden'));
     }
 
+    function updateHeaderAction(text, action = 'check') {
+        if (!headerUpdateButton) return;
+        headerUpdateButton.textContent = text;
+        headerUpdateButton.dataset.action = action;
+        headerUpdateButton.title = action === 'check'
+            ? 'Check for Aether1 updates'
+            : action === 'download' ? 'Download the signed Aether1 update' : 'Apply the available Aether1 update';
+    }
+
+    function updateHeaderProgress(label, percent = null, indeterminate = false) {
+        if (!headerUpdateProgress || !headerUpdateProgressText || !headerUpdateProgressBar) return;
+        headerUpdateProgress.classList.remove('hidden');
+        headerUpdateProgressText.textContent = label;
+        headerUpdateProgressBar.classList.toggle('animate-pulse', indeterminate);
+        headerUpdateProgressBar.style.width = indeterminate ? '35%' : `${Math.max(0, Math.min(100, percent || 0))}%`;
+    }
+
     /* Returns the status it drew, or null if the check could not be made at all -- the
        start-up announcement (announceStartupUpdateStatus) reads the same result rather than
        asking GitHub a second time for it. */
     async function handleCheckForUpdate() {
         if (versionBadge) versionBadge.classList.add('animate-pulse');
+        updateHeaderProgress('Checking for updates…', 15, true);
         if (updateStatusBox) {
             updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Checking GitHub...</div>';
         }
@@ -8671,6 +8762,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (!status.checked) {
+                updateHeaderAction('↻ Retry', 'check');
+                updateHeaderProgress('Update check needs attention', 0, false);
                 if (updateStatusBox) {
                     // Declining is not a failure, so it is not drawn as one.
                     updateStatusBox.innerHTML = status.declined
@@ -8691,6 +8784,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (status.up_to_date) {
+                updateHeaderAction('↻ Check', 'check');
+                updateHeaderProgress(`Up to date · ${status.version}`, 100, false);
                 const against = status.latest_tag
                     ? `up to date with ${status.latest_tag}`
                     : `up to date (build ${status.built_commit_short})`;
@@ -8702,6 +8797,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     versionBadge.classList.add('border-green-500/50', 'text-green-400');
                 }
             } else if (status.latest_tag) {
+                updateHeaderAction(status.asset_name && status.asset_signed ? '⬇ Update' : '↻ Check', status.asset_name && status.asset_signed ? 'download' : 'check');
+                updateHeaderProgress(`Update available · ${status.latest_tag}`, 0, false);
                 const size = status.asset_size
                     ? ` (${(status.asset_size / 1e9).toFixed(1)} GB)`
                     : '';
@@ -8725,6 +8822,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
                 }
             } else {
+                updateHeaderAction('⬆ Update', 'apply');
+                updateHeaderProgress('Project update available', 0, false);
                 const latestShort = status.latest_commit ? status.latest_commit.slice(0, 7) : 'unknown';
                 if (updateStatusBox) {
                     updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>`;
@@ -8737,6 +8836,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             return status;
         } catch (e) {
+            updateHeaderAction('↻ Retry', 'check');
+            updateHeaderProgress('Update check failed', 0, false);
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-red-400">Update check failed: ${e.message || e}</div>`;
             }
@@ -8855,7 +8956,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function revealConnections() {
         voiceEngine.playSFX('click');
         const group = document.getElementById('settings-group-connections');
-        showSettingsSection('brain');
+        showSettingsSection('connections');
         if (group) {
             group.open = true;
             group.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -8906,9 +9007,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     const { done = 0, total = 0 } = event.payload || {};
                     const pct = total ? Math.floor((done / total) * 100) : 0;
                     render(`Downloading -- ${pct}% of ${(total / 1e9).toFixed(1)} GB`);
+                    updateHeaderProgress(`Downloading update · ${pct}%`, pct, false);
                 });
             }
+            updateHeaderProgress('Starting update download…', 0, true);
             const result = await tauriInvoke('download_update_rust');
+            updateHeaderProgress(`Verified download · ${result.tag}`, 100, false);
+            updateHeaderAction('✔ Downloaded', 'check');
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${result.tag} downloaded, and its signature checks out.</div>`
                     + `<div class="text-[11px] text-slate-400 select-all">${result.path}</div>`
@@ -8922,6 +9027,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn('[AETHER1] Could not open the downloads folder:', e);
             }
         } catch (e) {
+            updateHeaderProgress('Update download failed', 0, false);
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-red-400">⚠ ${e.message || e}</div>`;
             }
@@ -8935,6 +9041,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleApplyUpdate() {
         if (!confirm('Pull the latest changes, rebuild, and relaunch Aether1? The app will restart.')) return;
         voiceEngine.playSFX('click');
+        updateHeaderProgress('Applying update · Aether1 will restart', 35, true);
         if (updateStatusBox) {
             updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Updating -- pulling latest changes and rebuilding. This can take over a minute; the app will restart automatically when it\'s done.</div>';
         }
@@ -9044,6 +9151,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (versionBadge) versionBadge.classList.replace('hidden', 'inline-flex');
+        if (headerUpdateButton) headerUpdateButton.classList.remove('hidden');
+        updateHeaderAction('↻ Update', 'check');
         if (updateSection) updateSection.classList.remove('hidden');
         loadVersionInfo();
         // Kept rather than dropped: announceStartupUpdateStatus says the result of this very
@@ -9154,10 +9263,10 @@ document.addEventListener('DOMContentLoaded', () => {
      */
     async function runVoiceStartupSelfTest() {
         if (!IS_TAURI) return;
-        let audible = true;
+        let audible = false;
         try {
             const data = await tauriInvoke('get_settings_rust');
-            audible = data.settings.voice_startup_audible !== false;
+            audible = data.settings.voice_startup_audible === true;
         } catch (e) {
             // Fall through with the audible default -- loadSettings surfaces its own
             // failure to load settings; this self-test isn't the place to repeat it.
@@ -9377,6 +9486,17 @@ document.addEventListener('DOMContentLoaded', () => {
         window.__TAURI__.event.listen('sprite-open-hud', () => {
             tauriInvoke('show_main_window_rust').catch((e) => console.warn('Could not show the main window', e));
         }).catch((e) => console.warn('Could not listen for sprite HUD requests', e));
+
+        window.__TAURI__.event.listen('sprite-open-settings', async () => {
+            try {
+                await tauriInvoke('show_main_window_rust');
+                btnSettings.click();
+                showSettingsSection('avatars');
+                openAvatarBrowser(currentAvatar);
+            } catch (e) {
+                console.warn('Could not open avatar settings from the desktop sprite', e);
+            }
+        }).catch((e) => console.warn('Could not listen for sprite settings requests', e));
     }
 
     // Every panel's "Undock" button opens it in its own solo-panel window (see
@@ -9667,7 +9787,23 @@ document.addEventListener('DOMContentLoaded', () => {
             // Blank rather than 0 would read as "never", which is a different answer.
             document.getElementById('setting-ollama-idle-minutes').value =
                 Number.isFinite(Number(s.ollama_idle_minutes)) ? Number(s.ollama_idle_minutes) : 15;
-            document.getElementById('setting-voice-startup-audible').checked = s.voice_startup_audible !== false;
+            document.getElementById('setting-voice-startup-audible').checked = s.voice_startup_audible === true;
+            const voiceRate = Number(s.voice_playback_rate || 1);
+            window.AETHER_VOICE_RATE = Number.isFinite(voiceRate) ? Math.min(1.25, Math.max(0.75, voiceRate)) : 1;
+            const voiceRateInput = document.getElementById('setting-voice-speed');
+            const voiceRateLabel = document.getElementById('voice-speed-value');
+            if (voiceRateInput) voiceRateInput.value = String(window.AETHER_VOICE_RATE);
+            if (voiceRateLabel) voiceRateLabel.textContent = `${window.AETHER_VOICE_RATE.toFixed(2).replace(/0$/, '')}×`;
+            const quietEnabled = s.quiet_hours_enabled === true;
+            const quietStart = s.quiet_hours_start || '22:00';
+            const quietEnd = s.quiet_hours_end || '07:00';
+            const headphonesConnected = s.headphones_connected === true;
+            document.getElementById('setting-quiet-hours').checked = quietEnabled;
+            document.getElementById('setting-quiet-start').value = quietStart;
+            document.getElementById('setting-quiet-end').value = quietEnd;
+            document.getElementById('setting-headphones-connected').checked = headphonesConnected;
+            window.AETHER_QUIET_HOURS = { enabled: quietEnabled, start: quietStart, end: quietEnd };
+            window.AETHER_HEADPHONES_CONNECTED = headphonesConnected;
             setGameModeButtonState(s.game_mode === true);
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
             if (spriteModeToggle) spriteModeToggle.checked = s.desktop_sprite_enabled === true;
@@ -9824,7 +9960,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     const typed = Number(document.getElementById('setting-ollama-idle-minutes').value);
                     return Number.isInteger(typed) && typed >= 0 ? typed : 15;
                 })(),
-                voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked
+                voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked,
+                voice_playback_rate: Number(document.getElementById('setting-voice-speed')?.value || 1),
+                quiet_hours_enabled: document.getElementById('setting-quiet-hours').checked,
+                quiet_hours_start: document.getElementById('setting-quiet-start').value || '22:00',
+                quiet_hours_end: document.getElementById('setting-quiet-end').value || '07:00',
+                headphones_connected: document.getElementById('setting-headphones-connected').checked
             }
         };
         autoSpeak = payload.settings.auto_speak;
@@ -9951,6 +10092,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     btnSend.addEventListener('click', () => handleSendMessage());
+    chatMediaButton?.addEventListener('click', () => chatMediaInput?.click());
+    chatMediaInput?.addEventListener('change', async () => { await addChatImageFiles(chatMediaInput.files); chatMediaInput.value = ''; });
+    chatInput.addEventListener('paste', (event) => {
+        const images = Array.from(event.clipboardData?.items || []).filter((item) => item.type.startsWith('image/')).map((item) => item.getAsFile()).filter(Boolean);
+        if (images.length) { event.preventDefault(); void addChatImageFiles(images); }
+    });
     chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -10962,6 +11109,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (versionBadge) {
         versionBadge.addEventListener('click', () => handleCheckForUpdate());
     }
+    headerUpdateButton?.addEventListener('click', () => {
+        if (headerUpdateButton.dataset.action === 'download') handleDownloadUpdate();
+        else if (headerUpdateButton.dataset.action === 'apply') handleApplyUpdate();
+        else handleCheckForUpdate();
+    });
     if (btnCheckUpdate) {
         btnCheckUpdate.addEventListener('click', () => handleCheckForUpdate());
     }
@@ -10969,6 +11121,10 @@ document.addEventListener('DOMContentLoaded', () => {
         btnGithubSignIn.addEventListener('click', () => revealConnections());
     }
     document.getElementById('conn-github-signin')?.addEventListener('click', () => handleSignIn());
+    document.getElementById('btn-open-model-hub')?.addEventListener('click', () => {
+        settingsModal.classList.remove('hidden');
+        showSettingsSection('brain');
+    });
     document.getElementById('conn-github-signout')?.addEventListener('click', () => handleSignOut());
     if (btnGithubDecline) {
         btnGithubDecline.addEventListener('click', () => handleDeclineUpdates());
@@ -10984,6 +11140,32 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.playSFX('click');
         settingsModal.classList.add('hidden');
     });
+
+    settingsModal.addEventListener('click', (event) => {
+        if (event.target === settingsModal) settingsModal.classList.add('hidden');
+    });
+
+    const voiceRateInput = document.getElementById('setting-voice-speed');
+    const voiceRateLabel = document.getElementById('voice-speed-value');
+    voiceRateInput?.addEventListener('input', () => {
+        const rate = Math.min(1.25, Math.max(0.75, Number(voiceRateInput.value) || 1));
+        window.AETHER_VOICE_RATE = rate;
+        if (voiceRateLabel) voiceRateLabel.textContent = `${rate.toFixed(2).replace(/0$/, '')}×`;
+    });
+    document.getElementById('btn-voice-audition')?.addEventListener('click', async () => {
+        const url = await synthesizeSpeechUrl('This is how the current Aether1 voice sounds.', null);
+        if (url) await voiceEngine.playTTSAudio(url, { playbackRate: window.AETHER_VOICE_RATE || 1 });
+    });
+    const syncQuietHours = () => {
+        window.AETHER_QUIET_HOURS = {
+            enabled: document.getElementById('setting-quiet-hours').checked,
+            start: document.getElementById('setting-quiet-start').value || '22:00',
+            end: document.getElementById('setting-quiet-end').value || '07:00',
+        };
+        window.AETHER_HEADPHONES_CONNECTED = document.getElementById('setting-headphones-connected').checked;
+    };
+    ['setting-quiet-hours', 'setting-quiet-start', 'setting-quiet-end', 'setting-headphones-connected']
+        .forEach((id) => document.getElementById(id)?.addEventListener('change', syncQuietHours));
 
     btnSaveSettings.addEventListener('click', () => {
         saveSettings(true);

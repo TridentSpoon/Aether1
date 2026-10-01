@@ -167,9 +167,16 @@
                 <!-- Starts hidden and is revealed by initVersionAndUpdates, which only runs
                      in the desktop app: the browser has no version to report, and an empty
                      badge reading "--" under the wordmark forever is worse than no badge. -->
-                <button id="version-badge" title="Click to check for updates" class="hidden items-center text-[9px] leading-none font-mono text-slate-500 border border-slate-700 rounded px-1 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">
-                    --
-                </button>
+                <div class="flex items-center gap-1">
+                    <button id="version-badge" title="Click to check for updates" class="hidden items-center text-[9px] leading-none font-mono text-slate-500 border border-slate-700 rounded px-1 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">--</button>
+                    <button id="btn-header-update" type="button" class="hidden cyber-btn text-[9px] leading-none py-1 px-1.5" title="Check for Aether1 updates">↻ Update</button>
+                </div>
+                <div id="header-update-progress" class="hidden w-36 max-w-full space-y-0.5" aria-live="polite">
+                    <div id="header-update-progress-text" class="text-[8px] font-mono text-slate-500 truncate">Checking for updates…</div>
+                    <div class="h-1 rounded bg-slate-800 overflow-hidden" role="progressbar" aria-label="Aether1 update progress">
+                        <div id="header-update-progress-bar" class="h-full w-0 bg-cyan-400 transition-all duration-200"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -370,10 +377,13 @@
             <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
 
             <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
+                <div id="chat-media-previews" class="hidden flex flex-wrap gap-2 mb-2"></div>
                 <div class="flex items-center gap-2">
                     <button id="btn-mic" title="Hold to talk (or hold Space)" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
                     </button>
+                    <input id="chat-media-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden">
+                    <button id="btn-chat-media" type="button" title="Attach images for analysis (or paste an image)" aria-label="Attach images" class="cyber-btn px-3 py-2 text-cyan-300 rounded">▧</button>
                     <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
                     <!-- Hush. Hidden until there is something to stop, because a dead
                          button beside the one you press every time is clutter, and because
@@ -914,13 +924,9 @@
                         <span class="settings-nav-icon">👤</span>
                         <span class="settings-nav-text">Profile</span>
                     </button>
-                    <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar theme colour colors persona speciality hologram" data-hint="avatar, colours and which persona answers" title="avatar, colours and which persona answers">
+                    <button type="button" id="settings-nav-appearance" class="settings-nav-item" data-settings-section="appearance" data-keywords="avatar avatars theme colour colors persona speciality hologram identity name agent genesis forge" data-hint="avatar, colours, identity and which persona answers" title="avatar, colours, identity and which persona answers">
                         <span class="settings-nav-icon">🎨</span>
-                        <span class="settings-nav-text">Appearance</span>
-                    </button>
-                    <button type="button" id="settings-nav-avatars" class="settings-nav-item" data-settings-section="avatars" data-keywords="avatar hologram face group class umbrals excelsior trace protocols singular ascended persona voice who identity name agent name genesis forge" data-hint="every avatar, who it is, and what it is called" title="every avatar, who it is, and what it is called">
-                        <span class="settings-nav-icon">🎭</span>
-                        <span class="settings-nav-text">Avatars</span>
+                        <span class="settings-nav-text">Appearance &amp; Avatars</span>
                     </button>
                     <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide desktop sprite float floating always on top hologram window" data-hint="where the avatar lives, and where the panels sit" title="where the avatar lives, and where the panels sit">
                         <span class="settings-nav-icon">🧱</span>
@@ -929,6 +935,10 @@
                     <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key server ollama openai cloud local provider connections github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
                         <span class="settings-nav-icon">🧠</span>
                         <span class="settings-nav-text">The Brain</span>
+                    </button>
+                    <button type="button" id="settings-nav-connections" class="settings-nav-item" data-settings-section="connections" data-keywords="accounts sign in github openai anthropic gemini groq models api key provider connect credentials" data-hint="accounts, sign-in and AI provider connections" title="accounts, sign-in and AI provider connections">
+                        <span class="settings-nav-icon">🔗</span>
+                        <span class="settings-nav-text">Connections &amp; Accounts</span>
                     </button>
                     <button type="button" id="settings-nav-voice" class="settings-nav-item" data-settings-section="voice" data-keywords="speech piper tts microphone sound beeps sfx mute volume speaker output input audio device headset" data-hint="its voice, its speaker and its microphone" title="its voice, its speaker and its microphone">
                         <span class="settings-nav-icon">🗣</span>
@@ -977,9 +987,9 @@
                             <span class="settings-nav-icon">🩺</span>
                             <span class="settings-nav-text">Is it working?</span>
                         </button>
-                        <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="hotkey shortcut version update release" data-hint="hotkey, version, updates" title="hotkey, version, updates">
+                    <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="about help hotkey shortcut version update release guide" data-hint="what Aether1 is, help and updates" title="what Aether1 is, help and updates">
                             <span class="settings-nav-icon">🖥</span>
-                            <span class="settings-nav-text">The app itself</span>
+                        <span class="settings-nav-text">About &amp; Help</span>
                         </button>
                         </div>
                     </details>
@@ -1131,8 +1141,8 @@
             <!-- SECTION: CUSTOMISATION (Avatar, Theme, Persona -- each its own card) -->
             <section class="settings-pane" data-settings-section="appearance">
                 <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">&#127912; Appearance</h3>
-                    <p class="settings-pane-hint">avatar, colours and which persona answers</p>
+                    <h3 class="settings-pane-title">&#127912; Appearance &amp; Avatars</h3>
+                    <p class="settings-pane-hint">avatar, colours, identity and which persona answers</p>
                 </div>
 
                 <!-- Two stages, one shown at a time -- the same drill-down the Avatars pane
@@ -1301,8 +1311,9 @@
                  from the real list last time. -->
             <section class="settings-pane" data-settings-section="avatars">
                 <div class="settings-pane-head">
-                    <h3 class="settings-pane-title">&#127917; Avatars</h3>
-                    <p class="settings-pane-hint">every avatar, who it is, and what it is called</p>
+                    <button type="button" class="avatar-back" data-avatar-back="appearance">&lsaquo; Appearance</button>
+                    <h3 class="settings-pane-title">&#127917; Appearance &amp; Avatars</h3>
+                    <p class="settings-pane-hint">choose the hologram, identity and visual style</p>
                 </div>
 
                 <!-- STAGE 1: the lines. -->
@@ -1836,6 +1847,19 @@
                 </details>
             </section>
 
+            <section class="settings-pane" data-settings-section="connections">
+                <div class="settings-pane-head">
+                    <h3 class="settings-pane-title">🔗 Connections &amp; Accounts</h3>
+                    <p class="settings-pane-hint">sign in to services and connect the providers behind your models</p>
+                </div>
+                <div class="hub-detail mb-3">
+                    <div class="hub-detail-name">Accounts and providers</div>
+                    <p class="hub-blurb">Connect OpenAI, Anthropic, Google Gemini, Groq, local Ollama or OpenAI-compatible servers, and sign in to GitHub. The model browser remains in The Brain; its catalog shows supported downloads and models detected on your connected server.</p>
+                    <div class="hub-action"><span class="hub-action-size">Connected models are selected in The Brain.</span><button id="btn-open-model-hub" type="button" class="cyber-btn text-[10px] py-1 px-2">🧠 Open model hub</button></div>
+                </div>
+                <div id="settings-connections-host"></div>
+            </section>
+
             <!-- ======================= VOICE & SOUND ======================= -->
             <section class="settings-pane" data-settings-section="voice">
                 <details id="settings-group-voice" class="settings-group">
@@ -1910,6 +1934,33 @@
                              column of Download buttons invites a second sixty-megabyte
                              download nobody meant to start. -->
                         <div id="vhub-detail" class="hub-detail"></div>
+                    </div>
+
+                    <div class="hub-detail">
+                        <div class="hub-detail-name">🎚 Voice tuning</div>
+                        <div class="hub-detail-sub">Choose an engine in “How it speaks”, adjust playback speed and audition the current voice.</div>
+                        <label class="block space-y-1 text-xs font-mono text-cyan-200">Playback speed <span id="voice-speed-value">1.0×</span>
+                            <input id="setting-voice-speed" type="range" min="0.75" max="1.25" step="0.05" value="1" class="w-full">
+                        </label>
+                    <div class="hub-action">
+                            <span class="hub-action-size">Playback speed is applied by the audio player. Save Changes keeps your choice.</span>
+                            <button type="button" id="btn-voice-audition" class="cyber-btn text-[10px] py-1 px-2">▶ Test current voice</button>
+                        </div>
+                        <details class="border border-cyan-500/20 rounded p-3 mt-3">
+                            <summary class="text-xs font-mono text-cyan-200 cursor-pointer">🌙 Quiet hours / Night mode</summary>
+                            <p class="hub-blurb mt-2">During these hours Aether1 stays silent unless you mark headphones as connected or start a voice conversation. The startup voice check is silent by default.</p>
+                            <div class="flex flex-wrap items-center gap-3 mt-2">
+                                <label class="flex items-center gap-2 text-xs font-mono text-slate-300"><input id="setting-quiet-hours" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0"> Enable quiet hours</label>
+                                <label class="text-xs font-mono text-slate-300">From <input id="setting-quiet-start" type="time" value="22:00" class="bg-slate-900 border border-cyan-500/40 rounded p-1 text-cyan-100"></label>
+                                <label class="text-xs font-mono text-slate-300">Until <input id="setting-quiet-end" type="time" value="07:00" class="bg-slate-900 border border-cyan-500/40 rounded p-1 text-cyan-100"></label>
+                            </div>
+                            <label class="flex items-center gap-2 text-xs font-mono text-slate-300 mt-2"><input id="setting-headphones-connected" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0"> Headphones are connected — allow spoken replies</label>
+                            <p class="text-[10px] font-mono text-slate-500 mt-1">Headphone availability is user-confirmed; system audio device names do not reliably distinguish headphones across operating systems.</p>
+                        </details>
+                    </div>
+                    <div class="hub-detail mt-3">
+                        <div class="hub-detail-name">✨ Quirky greetings</div>
+                        <p class="hub-blurb">Aether1 can greet you with a short, characterful line. Greeting styles will have a home here later; there are no greeting settings to configure yet.</p>
                     </div>
 
                     <!-- ---- Devices ----
@@ -2148,7 +2199,8 @@
                             Graft builds a graph of your codebase to help understand its structure. The graph
                             is automatically kept in sync with your code &mdash; it rebuilds periodically or
                             when changes are detected. Once built, relevant code nodes are injected into the
-                            AI's context when answering code questions.
+                            AI's context when answering code questions. This is working context from the selected
+                            project; it does not write to the Memory vault or become a personal memory note.
                         </p>
 
                         <div class="mt-3">
@@ -2178,6 +2230,16 @@
                     <h3 class="settings-pane-title">🔐 What it may do</h3>
                     <p class="settings-pane-hint">reading this machine, running programs</p>
                 </div>
+
+                <details class="border border-cyan-500/25 rounded p-3 bg-slate-900/50">
+                    <summary class="text-xs font-mono text-cyan-200 cursor-pointer">💡 Try a request in chat</summary>
+                    <p class="text-[10px] font-mono text-slate-400 mt-2">Choose a starter prompt to place it in chat. Aether1 will still show an approval card before a gated action runs.</p>
+                    <div class="flex flex-wrap gap-2 mt-2">
+                        <button type="button" data-prompt-suggestion="List the files in my selected project and summarize its layout." class="cyber-btn text-[10px] py-1 px-2">Explore this project</button>
+                        <button type="button" data-prompt-suggestion="Review the selected project and suggest useful checks to run." class="cyber-btn text-[10px] py-1 px-2">Find checks to run</button>
+                        <button type="button" data-prompt-suggestion="Show the recent GitHub workflow runs for this repository." class="cyber-btn text-[10px] py-1 px-2">Inspect GitHub activity</button>
+                    </div>
+                </details>
 
                 <div class="net-card">
                     <div class="net-card-head">
@@ -2247,12 +2309,11 @@
                         <div class="net-card-heading">
                             <h4 class="net-card-title">AETHER CODE may look at</h4>
                             <p class="net-card-hint">
-                                These three only read. The coding model cannot edit a file, commit, merge or
-                                install anything &mdash; <span class="font-mono">gh pr view</span> runs,
-                                <span class="font-mono">gh pr merge</span> is refused. When the next step
-                                would change something it writes the command out instead, and that command
-                                becomes a button that types it into your terminal. Nothing enters your
-                                terminal but your own Return key.
+                                These switches control read access. File edits and project commands are
+                                controlled separately below. Aether Code can run an eligible command when
+                                you approve it in chat: choose <span class="font-mono">Allow once &amp; run</span>
+                                or remember similar build/test commands for this project. GitHub writes such
+                                as pull request creation or merge always need a fresh review.
                             </p>
                         </div>
                     </div>
@@ -2820,10 +2881,15 @@
             <section class="settings-pane" data-settings-section="app">
                 <details id="settings-group-app" class="settings-group">
                 <summary class="settings-group-summary">
-                    <span class="settings-group-title">🖥 The app itself</span>
-                    <span class="settings-group-hint">hotkey, version, updates</span>
+                    <span class="settings-group-title">ℹ️ About &amp; Help</span>
+                    <span class="settings-group-hint">what Aether1 is, help and updates</span>
                 </summary>
                 <div class="settings-group-body">
+                    <div class="hub-detail">
+                        <div class="hub-detail-name">Aether1</div>
+                        <p class="hub-blurb">A local-first AI companion with a configurable model hub, voice, avatar, memory and coding workspace. Use the sections in Settings to connect models, adjust privacy and find diagnostics.</p>
+                        <p class="hub-blurb">For setup and troubleshooting, open <span class="font-mono text-cyan-200">docs/GETTING_STARTED.md</span> in the project folder. “Is it working?” gathers diagnostics; “What it may do” explains tool access and approvals.</p>
+                    </div>
                     <div id="setting-hotkey-wrap" class="space-y-1">
                         <label for="setting-hotkey" class="text-xs font-mono text-cyan-300 block">KEYS THAT SUMMON IT</label>
                         <input id="setting-hotkey" type="text" placeholder="Super+Shift+A" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">

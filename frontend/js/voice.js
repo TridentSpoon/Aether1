@@ -391,7 +391,21 @@ class VoiceAudioEngine {
      * this one reports itself superseded instead of joining it.
      */
     async playClip(audioUrl, opts = {}) {
-        const audible = opts.audible !== false;
+        const quiet = window.AETHER_QUIET_HOURS || {};
+        const minuteOfDay = new Date().getHours() * 60 + new Date().getMinutes();
+        const toMinute = (value, fallback) => {
+            const match = /^(\d{2}):(\d{2})$/.exec(value || '');
+            return match ? Number(match[1]) * 60 + Number(match[2]) : fallback;
+        };
+        const start = toMinute(quiet.start, 22 * 60);
+        const end = toMinute(quiet.end, 7 * 60);
+        const duringQuietHours = start === end ? true
+            : start < end ? minuteOfDay >= start && minuteOfDay < end
+                : minuteOfDay >= start || minuteOfDay < end;
+        const quietBlocked = quiet.enabled === true && duringQuietHours
+            && window.AETHER_HEADPHONES_CONNECTED !== true
+            && window.AETHER_VOICE_REQUESTED !== true;
+        const audible = opts.audible !== false && !quietBlocked;
 
         this.cutCurrentClip();
         const claim = this.playClaim;
@@ -432,6 +446,12 @@ class VoiceAudioEngine {
             // CORS-enabled, so WebKit will not grant CORS on it whatever headers come back.
             // A blob URL sidesteps the question -- it is this page's own origin.
             const audio = new Audio(audioUrl);
+            const requestedRate = Number(opts.playbackRate ?? window.AETHER_VOICE_RATE ?? 1);
+            audio.playbackRate = Number.isFinite(requestedRate)
+                ? Math.max(0.75, Math.min(1.25, requestedRate)) : 1;
+            if ('preservesPitch' in audio) audio.preservesPitch = true;
+            if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = true;
+            if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
             this.currentAudio = audio;
 
             let signalDetected = false;
@@ -604,15 +624,14 @@ class VoiceAudioEngine {
                 osc.start(now);
                 osc.stop(now + 0.15);
             } else if (type === 'incoming') {
-                // Incoming AI message chime
+                // One soft arrival tone. A three-note arpeggio here sounded like three
+                // audio dropouts immediately before the avatar's spoken reply.
                 osc.type = 'sine';
-                osc.frequency.setValueAtTime(523.25, now); // C5
-                osc.frequency.setValueAtTime(659.25, now + 0.08); // E5
-                osc.frequency.setValueAtTime(783.99, now + 0.16); // G5
-                gain.gain.setValueAtTime(0.15, now);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                osc.frequency.setValueAtTime(659.25, now); // E5
+                gain.gain.setValueAtTime(0.08, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
                 osc.start(now);
-                osc.stop(now + 0.35);
+                osc.stop(now + 0.18);
             } else if (type === 'alert') {
                 // Approval request: deliberately unlike the message chime. Something is
                 // waiting on the operator, and it should not sound like an answer arriving.
