@@ -624,15 +624,14 @@ class VoiceAudioEngine {
                 osc.start(now);
                 osc.stop(now + 0.15);
             } else if (type === 'incoming') {
-                // Incoming AI message chime
+                // One soft arrival tone. A three-note arpeggio here sounded like three
+                // audio dropouts immediately before the avatar's spoken reply.
                 osc.type = 'sine';
-                osc.frequency.setValueAtTime(523.25, now); // C5
-                osc.frequency.setValueAtTime(659.25, now + 0.08); // E5
-                osc.frequency.setValueAtTime(783.99, now + 0.16); // G5
-                gain.gain.setValueAtTime(0.15, now);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                osc.frequency.setValueAtTime(659.25, now); // E5
+                gain.gain.setValueAtTime(0.08, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
                 osc.start(now);
-                osc.stop(now + 0.35);
+                osc.stop(now + 0.18);
             } else if (type === 'alert') {
                 // Approval request: deliberately unlike the message chime. Something is
                 // waiting on the operator, and it should not sound like an answer arriving.

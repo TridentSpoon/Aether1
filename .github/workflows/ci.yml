@@ -182,6 +182,14 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
+      # A few sandbox tests execute the ordinary app binary inside bubblewrap. Clippy
+      # builds its own lint target, not target/debug/aether1, so materialize the binary
+      # before the test harness reaches those checks.
+      - name: Build the application binary
+        if: steps.filter.outputs.rust == 'true'
+        working-directory: src-tauri
+        run: cargo build
+
       - name: Tests
         if: steps.filter.outputs.rust == 'true'
         working-directory: src-tauri
