@@ -47,10 +47,8 @@ pub fn generate_response_streamed_with_media(
     sink: llm::Sink,
     on_handover: HandoverSink,
 ) -> Result<Value, String> {
-    if prompt.trim().is_empty() {
-        if media.is_empty() {
-            return Err("Add a message or image first".to_string());
-        }
+    if prompt.trim().is_empty() && media.is_empty() {
+        return Err("Add a message or image first".to_string());
     }
     validate_chat_media(media)?;
     let session_id = valid_session_id(session_id)?;
