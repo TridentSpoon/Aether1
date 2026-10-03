@@ -280,3 +280,9 @@ jobs:
       # it is checked rather than remembered.
       - name: Check the terminal stays the operator's alone
         run: ./scripts/check_terminal_isolation.sh
+
+      # Local-only mode promises nothing leaves this machine. That used to hold because
+      # every outbound call site remembered to ask; now there is one function that asks,
+      # and this is what stops a twentieth call site appearing beside it.
+      - name: Check every outbound request goes through the egress gate
+        run: ./scripts/check_egress_gate.sh

@@ -297,6 +297,12 @@ pub struct ModelProbe {
     pub models: Option<Vec<String>>,
     pub ollama_cli_installed: bool,
     pub local_only: bool,
+    /// Whether the egress gate (src/net.rs) has been handed the settings database. It is
+    /// installed in `build_llm_engine`, so on any real run this is true; reported because
+    /// when it is false every non-local request refuses and the refusal is the only other
+    /// clue. An operator looking at a machine where nothing can reach the internet, with
+    /// local-only mode off, needs to see this line rather than guess.
+    pub egress_policy_loaded: bool,
     /// A cloud provider needs no local server; the endpoint checks do not apply to it.
     pub cloud: bool,
 }
@@ -442,7 +448,10 @@ pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
             model,
             models,
             ollama_cli_installed: which::which("ollama").is_ok(),
-            local_only: crate::local_only::enabled(db),
+            // Read from the gate rather than from the database, so that this line says
+            // what the gate will actually do rather than what the setting says it should.
+            local_only: crate::net::local_only_on(),
+            egress_policy_loaded: crate::net::policy_installed(),
             cloud,
         },
         voice: VoiceProbe {
@@ -2117,6 +2126,7 @@ mod tests {
                 models: Some(vec!["llama3.2:latest".to_string()]),
                 ollama_cli_installed: true,
                 local_only: false,
+                egress_policy_loaded: true,
                 cloud: false,
             },
             voice: VoiceProbe {
