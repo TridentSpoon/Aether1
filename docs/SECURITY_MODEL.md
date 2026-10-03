@@ -227,16 +227,29 @@ Two consequences worth stating rather than discovering:
 * **The phrase is a standing credential.** Anyone who knows it can pair a new device until it
   is rotated, and revoking a device does not revoke the phrase. `aether1 pair` rotates it and
   clears every device.
-* **A WebSocket's credential travels as a subprotocol**, not in the URL. A browser's
+* **A WebSocket is opened with a single-use ticket, not with the device token.** A browser's
   `WebSocket` constructor cannot send an `Authorization` header, but its second argument
-  becomes `Sec-WebSocket-Protocol`, which is the one handshake header a page can set. A
-  client offers `aether1.token.<token>` alongside a plain `aether1`, and the server selects
-  the plain one, so the credential travels in one direction and never comes back. `?token=`
-  is not read at all: a URL is the part of a request that gets written down, by access logs,
-  by reverse proxies and by their error pages, and this token is not a short-lived ticket but
-  the credential for every other request that device makes. A header is not immune to being
-  logged either, which is why a short-lived socket ticket would still be better; it is not
-  what was open, though, and the query string was.
+  becomes `Sec-WebSocket-Protocol`, which is the one handshake header a page can set. So the
+  credential in a handshake is whatever rides there, and the question is what it is worth to
+  whoever reads it later. `POST /api/ws-ticket`, behind the ordinary token wall, returns 32
+  bytes of randomness that open **one** socket within **one minute**; only its SHA-256 is
+  held, in memory, and the middleware consumes it before upgrading. A client offers
+  `aether1.ticket.<ticket>` alongside a plain `aether1`, and the server selects the plain
+  one, so the credential travels in one direction and never comes back.
+
+  This went through three forms, and the reasoning is the useful part. `?token=` was wrong
+  because a URL is the part of a request that gets written down -- access logs record the
+  request line, so do reverse proxies and their error pages. Moving it to the subprotocol
+  header helped but did not settle it, because logging request headers is a checkbox on
+  everything that proxies, and what was being written down was the credential for every other
+  request that device makes, good until `aether1 revoke`. A ticket settles it by making the
+  logged thing worthless rather than by hiding it better: replay the handshake and the answer
+  is 401, because the first socket spent it.
+
+  A device token offered in a handshake is now refused outright, with a refusal that says to
+  fetch a ticket -- not counted against the attempt limiter, since a stale tab is a client
+  version, not a guess. A wrong or replayed ticket **is** counted. `?token=` and `?ticket=`
+  are not read at all.
 
 `discovery.rs` announces over DNS-SD, which anyone on the network can impersonate, so a
 phrase can be typed into a convincing fake. A PAKE (SPAKE2) is the answer and is not written
@@ -245,9 +258,27 @@ yet.
 ## 6. Leaving the machine
 
 Local-only mode is enforced at the network boundary rather than in the UI: the update check,
-the cloud providers, cloud speech and model downloads each refuse. The known weakness is that
-each subsystem asks `local_only_enabled()` for itself, so a new one can forget to; a single
-outbound-policy object would make that regression impossible rather than merely unlikely.
+the cloud providers, cloud speech and model downloads each refuse.
+
+There is one place that decision is made. `net::require_online` (`src/net.rs`) owns it, and
+`net::get`/`net::post` are the only way to build an outbound request: a subsystem that wants
+the network has to ask for a request, and asking for one is passing the check. There is no
+second way, because `scripts/check_egress_gate.sh` fails the build if ureq's request verbs
+appear in any file but that one, if a second HTTP client is added to the manifest, if no
+entry point loads the policy, or if the gate stops consulting the setting. Previously each
+subsystem asked `local_only::enabled()` for itself across nineteen call sites, all of them
+correct, and the twentieth was the one that could forget silently.
+
+The gate keeps the local/remote distinction rather than flattening it: a request to loopback
+or to a private address is allowed whatever the mode says, because reaching a model server
+on this machine or on the LAN is the point of the platform. That judgement is
+`local_only::is_local_endpoint`, made on the URL rather than on the provider's name, so an
+"Ollama" endpoint pointing at a rented box is still outbound traffic. The gate is handed the
+settings database once in `build_llm_engine` -- the one path the native app, `--serve` and
+every CLI subcommand share -- and reads the setting fresh at each decision, so switching the
+mode in Settings takes effect mid-session. Before that install has run it refuses anything
+not provably local, which is the direction worth failing in; `aether1 doctor` reports whether
+it has.
 
 ## 7. Updates
 
@@ -264,9 +295,8 @@ Listed here rather than implied by silence:
 * Windows confinement for `run` (section 1).
 * The same `openat` discipline on Windows, where `edit_file` and `create_file` still
   resolve a path twice (section 2).
-* A short-lived socket ticket rather than the device token itself, and a prominent statement
-  of what the pairing phrase is (section 5).
-* One outbound network policy object rather than a check per subsystem (section 6).
+* A prominent statement of what the pairing phrase is -- it is a standing credential, and
+  the interface does not say so where an operator is reading it (section 5).
 * A PAKE for pairing, so a spoofed announcement cannot collect a phrase (section 5).
 * A second-pass audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri
   capability set, where prompt injection and tool confusion are the next class of issue.

@@ -44,6 +44,7 @@ mod lan;
 mod llm;
 mod local_only;
 mod model_scanner;
+mod net;
 mod paths;
 mod peers;
 mod persona_voice;
@@ -172,7 +173,7 @@ fn github_token() -> Option<String> {
 /// Always call this off the main thread.
 fn fetch_latest_main_sha() -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/commits/main");
-    let mut request = ureq::get(&url)
+    let mut request = net::get(&url, "the update check was not made")?
         .config()
         .timeout_global(Some(Duration::from_secs(8)))
         .build()
@@ -2676,7 +2677,18 @@ fn set_agent_selection_rust(
         .map_err(|e| format!("could not save selection: {e}"))
 }
 
+/// The one place a process gets its engine: the native app, `--serve`, and every CLI
+/// subcommand all come through here. That makes it the place to hand the egress gate the
+/// settings database (see src/net.rs) -- `net::install` is called on whichever database
+/// this ends up with, including the temp fallback, before the engine is returned and
+/// therefore before anything can reach the network.
 fn build_llm_engine() -> LlmEngine {
+    let engine = open_llm_engine();
+    net::install(engine.db());
+    engine
+}
+
+fn open_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
     // The native path creates backend/ as a side effect of setting up the audio cache in
     // setup(), but a headless run (--serve, or a CLI subcommand) reaches this first. Without
