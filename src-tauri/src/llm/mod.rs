@@ -2013,12 +2013,18 @@ mod tests {
     #[test]
     fn generate_response_against_live_ollama_if_available() {
         let _guard = env_guard();
-        let ollama_up = ureq::get("http://localhost:11434/api/tags")
-            .config()
-            .timeout_global(Some(std::time::Duration::from_millis(500)))
-            .build()
-            .call()
-            .is_ok();
+        let ollama_up = crate::net::get(
+            "http://localhost:11434/api/tags",
+            "the server was not probed",
+        )
+        .is_ok_and(|request| {
+            request
+                .config()
+                .timeout_global(Some(std::time::Duration::from_millis(500)))
+                .build()
+                .call()
+                .is_ok()
+        });
         if !ollama_up {
             eprintln!(
                 "skipping generate_response_against_live_ollama_if_available: no Ollama on :11434"

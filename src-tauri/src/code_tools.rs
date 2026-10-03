@@ -673,7 +673,10 @@ fn fetch_url(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     code_perms::check_url(db, url).map_err(|Refusal(why)| why)?;
 
-    let response = ureq::get(url.trim())
+    // `check_url` above has already asked about local-only mode for this URL. The gate
+    // is asked again here because it is the only way to get a request at all, and a
+    // second refusal costs a settings read rather than a round trip.
+    let response = crate::net::get(url.trim(), "the page was not fetched")?
         .header("User-Agent", "AETHER1")
         .call()
         .map_err(|e| format!("cannot fetch {url}: {e}"))?;
@@ -718,7 +721,7 @@ fn search_web(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     code_perms::check_url(db, &api_url).map_err(|Refusal(why)| why)?;
 
-    let response = ureq::get(&api_url)
+    let response = crate::net::get(&api_url, "the search was not made")?
         .header("User-Agent", "AETHER1")
         .call()
         .map_err(|e| format!("cannot search the web: {e}"))?;

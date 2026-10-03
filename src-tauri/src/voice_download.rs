@@ -385,7 +385,11 @@ fn rename(from: &Path, to: &Path) -> Result<(), String> {
 /// Opens a URL and returns its reader along with the size it announced, refusing an
 /// announced size no voice could have before a byte of the body is accepted.
 fn open(url: &str) -> Result<(Box<dyn Read + Send + Sync>, u64), String> {
-    let response = ureq::get(url)
+    // Every request in this file goes through `open`, so this is the only place the
+    // egress gate has to be asked. `start` refuses with local-only mode on before a
+    // download is ever registered; this is the backstop for any future path that reaches
+    // a voice URL without going through it.
+    let response = crate::net::get(url, "no voice was downloaded")?
         .call()
         .map_err(|e| format!("Could not fetch the voice: {e}"))?;
     let total: u64 = response
