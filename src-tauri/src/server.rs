@@ -183,6 +183,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
         .route("/api/audio/devices", get(audio_devices))
+        .route("/api/desktop/theme", get(desktop_theme))
         .route("/api/setup/start-server", post(start_local_server))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
@@ -1549,6 +1550,20 @@ async fn audio_devices() -> Json<serde_json::Value> {
         tokio::task::spawn_blocking(commands::audio_devices)
             .await
             .expect("audio_devices panicked"),
+    )
+}
+
+// The desktop's own light/dark setting and accent colour. Exposed over HTTP as well as IPC
+// because the browser fallback needs it more than the native app does, not less: a page
+// served to a browser has `prefers-color-scheme` and no way at all to ask for the accent.
+//
+// Spawned off the request thread because every probe behind it runs a short-lived process
+// (powershell, gdbus, defaults) that is free to be slow.
+async fn desktop_theme() -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(commands::desktop_theme)
+            .await
+            .expect("desktop_theme panicked"),
     )
 }
 

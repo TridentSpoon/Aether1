@@ -170,6 +170,17 @@ document.addEventListener('DOMContentLoaded', () => {
     hologram.setAvatar(savedAvatar);
     hologram.setColorPalette(Aether1Theme.paletteFor(savedTheme.colours));
 
+    /* Apply() above resolved the theme from storage, which is everything except the desktop's
+       accent colour: that one has to be asked for over the bridge, so it cannot be ready in
+       time for the first frame. This asks, and repaints when the answer differs from what is
+       already up. The HUD pushes 'color-theme-changed' when *it* changes the theme, but that
+       only covers a theme changed while this window is open -- a window opened afterwards has
+       to find out for itself. */
+    Aether1Theme.followDesktop((theme) => {
+        Aether1Theme.paint(document, theme.mode, theme.colours);
+        hologram.setColorPalette(Aether1Theme.paletteFor(theme.colours));
+    });
+
     // Rebuild the custom avatar when the saved design has moved on from what is on screen
     // here -- same staleness check app.js runs. build() only ever reads the recipe once
     // (when the plugin is first constructed), so without this the sprite keeps showing
