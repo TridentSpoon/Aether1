@@ -78,11 +78,18 @@ fn devices_path() -> PathBuf {
 /// so learning one says nothing about the phrase or about any other device's.
 const TOKEN_BYTES: usize = 32;
 
-fn mint_token() -> Result<String, String> {
+/// 256 bits straight from the operating system's generator, as hex. The one place randomness
+/// becomes a credential in this module, so device tokens and socket tickets share it rather
+/// than each getting their own call and their own chance to get the length wrong.
+fn mint_secret(purpose: &str) -> Result<String, String> {
     let mut bytes = [0u8; TOKEN_BYTES];
     getrandom::fill(&mut bytes)
-        .map_err(|e| format!("could not read randomness to make a device token: {e}"))?;
+        .map_err(|e| format!("could not read randomness to make {purpose}: {e}"))?;
     Ok(to_hex(&bytes))
+}
+
+fn mint_token() -> Result<String, String> {
+    mint_secret("a device token")
 }
 
 /// A short handle for one device, shown when listing and typed when revoking. Derived from
@@ -867,6 +874,138 @@ fn saturating_wait(attempts: &HashMap<IpAddr, Attempts>, now: Instant) -> Option
     Some(earliest.duration_since(now))
 }
 
+/// How long a socket ticket is good for. One minute is long enough for a page to fetch one
+/// and open a socket with it even on a slow network, and short enough that a handshake
+/// written down somewhere -- the thing a device token in the same place was vulnerable to --
+/// is worthless by the time anyone reads the log.
+pub const TICKET_TTL: Duration = Duration::from_secs(60);
+
+/// A ceiling on live tickets, for the same reason `MAX_TRACKED` exists: a paired device can
+/// ask for as many as it likes, and each one costs memory for a minute.
+///
+/// Unlike the attempt limiter, dropping the oldest entry here is safe. There, the oldest
+/// record was the live lockout, so evicting it erased the evidence of someone's failures.
+/// A ticket is the opposite: losing one costs its holder a second request and gives an
+/// attacker nothing, because a ticket that is gone is a ticket that is refused.
+const MAX_TICKETS: usize = 1024;
+
+struct Ticket {
+    /// SHA-256 of the ticket, never the ticket. The store is in memory and dies with the
+    /// process, but a core dump or a debugger attached to a running server is exactly the
+    /// kind of place a live credential should not be sitting in plain text.
+    hash: String,
+    expires: Instant,
+}
+
+/// The tickets a `/ws/*` handshake can be opened with: single-use, one minute old at most,
+/// and issued only to a device that already holds a token.
+///
+/// A device token authenticates every other request that device makes and is good until
+/// `aether1 revoke`. Carrying it in a WebSocket handshake meant a handshake someone wrote
+/// down -- a proxy configured to log request headers, a browser's network trace pasted into
+/// a bug report -- handed over lasting access. A ticket closes that: it buys one socket,
+/// once, and a minute later it buys nothing.
+///
+/// In memory on purpose. A ticket outliving a restart would be a ticket the operator cannot
+/// see or revoke, and a restart already drops every socket it could have opened.
+pub struct TicketStore {
+    live: Mutex<Vec<Ticket>>,
+}
+
+impl Default for TicketStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TicketStore {
+    pub fn new() -> Self {
+        Self {
+            live: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Mints a ticket and returns it. Only the hash is kept, so this is the one and only
+    /// moment the ticket itself exists on this side.
+    pub fn mint(&self) -> Result<String, String> {
+        self.mint_at(Instant::now())
+    }
+
+    /// `mint` with the clock passed in, so expiry can be tested without a test that sleeps
+    /// for a minute -- the same split the attempt limiter uses for the same reason.
+    fn mint_at(&self, now: Instant) -> Result<String, String> {
+        let ticket = mint_secret("a socket ticket")?;
+        let mut live = self.lock();
+        Self::sweep(&mut live, now);
+        // Expired entries are already gone, so anything still here is live and the oldest of
+        // them is the one whose holder has had the longest to use it.
+        while live.len() >= MAX_TICKETS {
+            live.remove(0);
+        }
+        live.push(Ticket {
+            hash: hash_token(&ticket),
+            expires: now + TICKET_TTL,
+        });
+        Ok(ticket)
+    }
+
+    /// Verifies a ticket and consumes it. True at most once per ticket, and only inside the
+    /// TTL -- a replayed handshake gets `false` from the same call that let the first one
+    /// through.
+    pub fn spend(&self, presented: &str) -> bool {
+        self.spend_at(presented, Instant::now())
+    }
+
+    fn spend_at(&self, presented: &str, now: Instant) -> bool {
+        let presented = hash_token(presented);
+        let mut live = self.lock();
+        // Swept before the comparison, not after: an expired ticket must not match even for
+        // the instant between the sweep that would have dropped it and the next mint.
+        Self::sweep(&mut live, now);
+        // Every entry is compared even after a match, and the index is carried rather than
+        // broken out on, so the time taken says nothing about which ticket matched or how
+        // far down the list it was -- the same discipline as `accepts`.
+        let mut found: Option<usize> = None;
+        for (index, ticket) in live.iter().enumerate() {
+            let matches = constant_time_eq(presented.as_bytes(), ticket.hash.as_bytes());
+            found = if matches { Some(index) } else { found };
+        }
+        match found {
+            Some(index) => {
+                live.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// How many tickets could still be spent. A count rather than a list, so it gives
+    /// nothing away -- but nothing reports it today, so it exists for the tests that have to
+    /// prove the store does not grow without bound.
+    #[cfg(test)]
+    pub fn live_count(&self) -> usize {
+        self.live_count_at(Instant::now())
+    }
+
+    #[cfg(test)]
+    fn live_count_at(&self, now: Instant) -> usize {
+        let mut live = self.lock();
+        Self::sweep(&mut live, now);
+        live.len()
+    }
+
+    fn sweep(live: &mut Vec<Ticket>, now: Instant) {
+        live.retain(|ticket| ticket.expires > now);
+    }
+
+    /// A poisoned lock here would mean a panic while holding it, and the only thing held is a
+    /// list of hashes. Recovering is strictly better than refusing every socket for the life
+    /// of the process.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Ticket>> {
+        self.live.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1531,5 +1670,125 @@ mod tests {
         assert!(constant_time_eq(b"same", b"same"));
         assert!(!constant_time_eq(b"same", b"diff"));
         assert!(!constant_time_eq(b"short", b"longer-string"));
+    }
+
+    /// The whole reason tickets exist. A handshake someone wrote down -- a proxy logging
+    /// request headers, a network trace in a bug report -- used to carry the device token,
+    /// which opened everything until it was revoked. Replaying it now opens nothing, because
+    /// the first socket spent the ticket.
+    #[test]
+    fn a_ticket_opens_one_socket_and_a_replay_opens_none() {
+        let store = TicketStore::new();
+        let ticket = store.mint().expect("a ticket to mint");
+
+        assert!(store.spend(&ticket), "the first handshake should be let in");
+        assert!(
+            !store.spend(&ticket),
+            "replaying the same handshake must be refused"
+        );
+        // And again, in case the refusal was the thing that put it back.
+        assert!(!store.spend(&ticket));
+        assert_eq!(store.live_count(), 0);
+    }
+
+    /// A ticket is worthless once a minute has passed, which is what makes a logged
+    /// handshake worthless. Tested against an injected clock rather than a sleeping test.
+    #[test]
+    fn a_ticket_expires_and_is_refused_after_that() {
+        let store = TicketStore::new();
+        let issued = Instant::now();
+        let ticket = store.mint_at(issued).expect("a ticket to mint");
+
+        // Good right up to the deadline.
+        assert_eq!(
+            store.live_count_at(issued + TICKET_TTL - Duration::from_millis(1)),
+            1
+        );
+        // And gone the moment it is reached, not merely some time after.
+        assert!(!store.spend_at(&ticket, issued + TICKET_TTL));
+        assert_eq!(store.live_count_at(issued), 0);
+    }
+
+    /// A ticket that was never issued is not a ticket, however well formed it looks.
+    #[test]
+    fn an_unissued_ticket_is_refused() {
+        let store = TicketStore::new();
+        let real = store.mint().expect("a ticket to mint");
+
+        assert!(!store.spend(&"a".repeat(64)));
+        assert!(!store.spend(""));
+        // And refusing those did not disturb the one that was issued.
+        assert!(store.spend(&real));
+    }
+
+    /// Several devices, or one device reconnecting while another socket is still opening,
+    /// each hold their own ticket. Spending one must not spend the others.
+    #[test]
+    fn tickets_are_independent_of_each_other() {
+        let store = TicketStore::new();
+        let tickets: Vec<String> = (0..5).map(|_| store.mint().expect("a ticket")).collect();
+
+        assert!(store.spend(&tickets[2]));
+        assert_eq!(store.live_count(), 4);
+        for (index, ticket) in tickets.iter().enumerate() {
+            assert_eq!(
+                store.spend(ticket),
+                index != 2,
+                "ticket {index} was spent when it should not have been, or the other way round"
+            );
+        }
+        assert_eq!(store.live_count(), 0);
+    }
+
+    /// The ticket itself is never kept. A core dump or a debugger on a running server finds
+    /// hashes, the same as the device file on disk does.
+    #[test]
+    fn only_the_hash_of_a_ticket_is_stored() {
+        let store = TicketStore::new();
+        let ticket = store.mint().expect("a ticket to mint");
+        let held = store.lock();
+
+        assert_eq!(held.len(), 1);
+        assert_ne!(held[0].hash, ticket);
+        assert_eq!(held[0].hash, hash_token(&ticket));
+    }
+
+    /// The key is chosen by whoever is connecting, so the store has to have a ceiling -- the
+    /// same reasoning as `MAX_TRACKED`. Unlike the limiter, dropping the oldest is safe here:
+    /// losing a ticket costs its holder one more request and gives an attacker nothing.
+    #[test]
+    fn the_store_does_not_grow_without_bound() {
+        let store = TicketStore::new();
+        let first = store.mint().expect("a ticket to mint");
+        for _ in 0..MAX_TICKETS {
+            store.mint().expect("a ticket to mint");
+        }
+
+        assert_eq!(store.live_count(), MAX_TICKETS);
+        assert!(
+            !store.spend(&first),
+            "the oldest ticket should have been dropped to make room"
+        );
+    }
+
+    /// Expired tickets go without anyone asking. A store that only swept on `spend` would
+    /// hold a minute of a quiet server's tickets forever once the sockets stopped coming.
+    #[test]
+    fn expired_tickets_are_cleaned_up_by_the_next_mint() {
+        let store = TicketStore::new();
+        let issued = Instant::now();
+        for _ in 0..10 {
+            store.mint_at(issued).expect("a ticket to mint");
+        }
+        assert_eq!(store.live_count_at(issued), 10);
+
+        store
+            .mint_at(issued + TICKET_TTL + Duration::from_secs(1))
+            .expect("a ticket to mint");
+        assert_eq!(
+            store.live_count_at(issued + TICKET_TTL + Duration::from_secs(1)),
+            1,
+            "only the fresh ticket should be left"
+        );
     }
 }

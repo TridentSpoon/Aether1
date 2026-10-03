@@ -217,16 +217,29 @@ Two consequences worth stating rather than discovering:
 * **The phrase is a standing credential.** Anyone who knows it can pair a new device until it
   is rotated, and revoking a device does not revoke the phrase. `aether1 pair` rotates it and
   clears every device.
-* **A WebSocket's credential travels as a subprotocol**, not in the URL. A browser's
+* **A WebSocket is opened with a single-use ticket, not with the device token.** A browser's
   `WebSocket` constructor cannot send an `Authorization` header, but its second argument
-  becomes `Sec-WebSocket-Protocol`, which is the one handshake header a page can set. A
-  client offers `aether1.token.<token>` alongside a plain `aether1`, and the server selects
-  the plain one, so the credential travels in one direction and never comes back. `?token=`
-  is not read at all: a URL is the part of a request that gets written down, by access logs,
-  by reverse proxies and by their error pages, and this token is not a short-lived ticket but
-  the credential for every other request that device makes. A header is not immune to being
-  logged either, which is why a short-lived socket ticket would still be better; it is not
-  what was open, though, and the query string was.
+  becomes `Sec-WebSocket-Protocol`, which is the one handshake header a page can set. So the
+  credential in a handshake is whatever rides there, and the question is what it is worth to
+  whoever reads it later. `POST /api/ws-ticket`, behind the ordinary token wall, returns 32
+  bytes of randomness that open **one** socket within **one minute**; only its SHA-256 is
+  held, in memory, and the middleware consumes it before upgrading. A client offers
+  `aether1.ticket.<ticket>` alongside a plain `aether1`, and the server selects the plain
+  one, so the credential travels in one direction and never comes back.
+
+  This went through three forms, and the reasoning is the useful part. `?token=` was wrong
+  because a URL is the part of a request that gets written down -- access logs record the
+  request line, so do reverse proxies and their error pages. Moving it to the subprotocol
+  header helped but did not settle it, because logging request headers is a checkbox on
+  everything that proxies, and what was being written down was the credential for every other
+  request that device makes, good until `aether1 revoke`. A ticket settles it by making the
+  logged thing worthless rather than by hiding it better: replay the handshake and the answer
+  is 401, because the first socket spent it.
+
+  A device token offered in a handshake is now refused outright, with a refusal that says to
+  fetch a ticket -- not counted against the attempt limiter, since a stale tab is a client
+  version, not a guess. A wrong or replayed ticket **is** counted. `?token=` and `?ticket=`
+  are not read at all.
 
 `discovery.rs` announces over DNS-SD, which anyone on the network can impersonate, so a
 phrase can be typed into a convincing fake. A PAKE (SPAKE2) is the answer and is not written
@@ -254,8 +267,8 @@ Listed here rather than implied by silence:
 * Windows confinement for `run` (section 1).
 * The same `openat` discipline on Windows, where `edit_file` and `create_file` still
   resolve a path twice (section 2).
-* A short-lived socket ticket rather than the device token itself, and a prominent statement
-  of what the pairing phrase is (section 5).
+* A prominent statement of what the pairing phrase is -- it is a standing credential, and
+  the interface does not say so where an operator is reading it (section 5).
 * A Settings surface for the domain policy; today it is `aether1 code net` and the project's
   own `.aether/policy.json` (section 1b).
 * One outbound network policy object rather than a check per subsystem (section 6).

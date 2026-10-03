@@ -62,11 +62,16 @@ function apiFetch(path, options) {
         });
 }
 
-/* The same credential for the `/ws/*` routes. It travels as a WebSocket subprotocol rather
- * than in the URL -- the constructor's second argument is the one handshake header a browser
- * lets a page set, and a URL is the part of a request that ends up in logs. */
+/* The credential for the `/ws/*` routes. Not the same one: a socket is opened with a
+ * single-use ticket, bought with the device token at `/api/ws-ticket`, so a handshake that
+ * ends up in a log is worth nothing a minute later. It travels as a WebSocket subprotocol
+ * because the constructor's second argument is the one handshake header a browser lets a
+ * page set.
+ *
+ * Asynchronous because buying the ticket is a round trip. Every caller must await it; a
+ * socket handed this Promise instead of the array it resolves to fails obscurely. */
 function apiWsProtocols() {
-    return window.LanAuth ? window.LanAuth.wsProtocols() : ['aether1'];
+    return window.LanAuth ? window.LanAuth.wsProtocols() : Promise.resolve(['aether1']);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1976,7 +1981,10 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshFlowMode();
     }
 
-    function connectTelemetry() {
+    /* Async because a browser socket now has to buy a ticket first. Both callers treat it
+       as fire-and-forget -- startup and the reconnect timer -- so nothing awaits it; what
+       matters is that the await inside happens before the socket is constructed. */
+    async function connectTelemetry() {
         if (IS_TAURI) {
             if (!window.__TAURI__ || !window.__TAURI__.event) {
                 console.error('Tauri event bridge unavailable; live telemetry will not update.');
@@ -2003,7 +2011,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
-        const ws = new WebSocket(wsUrl, apiWsProtocols());
+        /* Awaited, so the socket is opened with a ticket rather than with a Promise. The
+           reconnect below calls this function again, which buys a fresh ticket each time --
+           which is what single-use means. */
+        const ws = new WebSocket(wsUrl, await apiWsProtocols());
 
         ws.onmessage = (event) => {
             try {
@@ -3108,9 +3119,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Browser fallback: the same conversation over a WebSocket, since the socket
         // plumbing already exists here for telemetry (see /ws/chat in server.rs).
+        const chatProtocols = await apiWsProtocols();
         return await new Promise((resolve, reject) => {
             const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
-            const socket = new WebSocket(`${wsBase}/ws/chat`, apiWsProtocols());
+            const socket = new WebSocket(`${wsBase}/ws/chat`, chatProtocols);
             socket.onopen = () => socket.send(JSON.stringify({
                 message: text, session_id: sessionId, generate_voice: false, media
             }));
