@@ -6123,7 +6123,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const report = await tauriInvoke('lan_pair_with_rust', {
                     name: peer.name, address, port: peer.port, secret,
-                    expect_fingerprint: seen,
+                    expectFingerprint: seen,
                 });
                 // The row is redrawn from the fresh status, so "Paired" is the Rust side's
                 // answer rather than this side assuming the press worked.
@@ -9808,6 +9808,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Absent means on, matching vault::journal_enabled -- a setting that has never
             // been saved must not read as "off" here when the vault is in fact writing.
             document.getElementById('setting-vault-journal').checked = s.vault_journal !== false;
+            document.getElementById('setting-graft-autorefresh').checked = s.graft_auto_refresh !== false;
             document.getElementById('setting-local-only').checked = s.local_only === true;
             // Network & Remote. Saved by Save Changes with everything else rather than the
             // moment the switch moves: Settings has one Save button, and a panel that
@@ -10003,6 +10004,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 lan_autostart: document.getElementById('setting-lan-autostart')?.checked === true,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 vault_journal: document.getElementById('setting-vault-journal').checked,
+                graft_auto_refresh: document.getElementById('setting-graft-autorefresh').checked,
                 // Sent only from the native app: the browser fallback has no window for the
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.
@@ -10886,7 +10888,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     statusEl.textContent = `ℹ️ Graft status requires Tauri`;
                 }
             } catch (e) {
-                statusEl.textContent = '✗ Graft not installed. Install from https://github.com/nanonets/graft';
+                statusEl.textContent = '✗ Graft not found. Install it with: npm install -g @nanonets/graft';
             }
         } catch (e) {
             console.error('Error loading Graft status:', e);
@@ -10937,7 +10939,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             if (!IS_TAURI) return;
 
-            await tauriInvoke('graft_select_project_rust', { project_path: projectPath });
+            await tauriInvoke('graft_select_project_rust', { projectPath });
 
             // Re-enable build button
             const buildBtn = document.getElementById('btn-graft-build');
@@ -10969,7 +10971,7 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = true;
             buildBtn.textContent = '⏳ Building...';
 
-            await tauriInvoke('graft_build_graph_rust', { project_path: selected.path });
+            await tauriInvoke('graft_build_graph_rust', { projectPath: selected.path });
 
             // Reload status to show "Ready"
             await loadGraftStatus();

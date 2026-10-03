@@ -3865,3 +3865,90 @@ that sleeps for a minute; an unissued ticket; tickets independent of each other;
 stored; the cap; the sweep on mint; which routes are on the ticket path; a device token not
 being a credential; and the one that reads `frontend/js/lan-auth.js` to check it agrees on the
 subprotocol names, fetches `/api/ws-ticket`, and no longer mentions `WS_TOKEN_PREFIX` at all.
+
+---
+
+## Step 60 — the code graph stops guessing when the code moved
+
+Graft landed wired to the right folder and asking the right question. What it still carried was
+a rebuild schedule it did not need and could not get right, a binary lookup that assumed a
+shell, and two subprocesses with no time limit.
+
+**The staleness check could not see the code.** `has_code_changed` read one directory --
+`read_dir` on the project root, no recursion -- and compared mtimes of source files found
+there. Aether1's own sources are all under `src-tauri/` and `frontend/`, so the answer was
+always "nothing changed" on this repository, and on any project that keeps its code in
+subdirectories, which is most of them. The only thing that ever triggered a rebuild was the
+hour timer, which then rebuilt everything whether or not a file had been touched.
+
+**So the schedule is gone rather than fixed.** `graft ask` re-indexes the files that changed
+before it answers -- one changed file, 1.5 seconds, measured here -- and leaves the graph in
+sync, which `graft check` then confirms. That is the same job `auto_sync_graph` was trying to
+do once an hour with a full build, done per question by the tool that owns the index.
+`AUTO_REBUILD_INTERVAL_SECS`, `graft_last_build_time` and the mtime walk all go with it.
+`graft build` stays behind the Settings button, for the first build, which is the long one.
+
+**AUTO-SYNC was a checkbox wired to nothing**, promising an hourly rebuild in its label. It is
+now `graft_auto_refresh`, read by `prime`, and it chooses whether `ask` is given
+`--no-refresh`. Off means answers come from the graph as last built, where the line numbers may
+have moved -- which is the honest description of that switch, so it is what the label says.
+
+**Finding the binary.** `graft` is an npm global, and a desktop launcher does not start the app
+from the operator's shell, so npm's bin directory is routinely absent from PATH even though
+`graft` runs fine in a terminal -- nvm most of all, since what adds its bin directory is a shell
+init file a launcher never sources. PATH is asked first, through the same
+`find_installed_binary` as every other binary we shell out to; then npm's own prefixes,
+including each installed Node version under `~/.nvm`; and `GRAFT_BIN` overrides both. A spawn
+that still fails says how to install it rather than reporting a missing file.
+
+**Both commands are killed if they outstay their budget** -- 20 seconds for a question, 15
+minutes for a build -- with the same poll-and-kill as `code_workspace::run`, because a wedged
+subprocess otherwise holds a Tauri command open until the operator gives up on the window. A
+question Graft cannot answer is not a failed turn: it is logged and dropped, and the model reads
+the code itself.
+
+**The question is cut to 240 characters** and its whitespace collapsed. Ranking is lexical, and
+the whole turn was being handed over: a paragraph of prose dilutes the terms that matter instead
+of sharpening them. `prime` also returns early unless the project reports `Ready`, so a project
+nobody has built does not pay for a spawn on every turn.
+
+**A hit with no inlined source now falls back to its signature.** `--source` inlines the code at
+each pointer, but a node Graft has no span for came through as a bare title; the signature it
+always carries is more use than nothing, and the parsing is split out as `parse_query` and
+tested against real 0.21.1 output.
+
+**Measured against graft 0.21.1** on this repository: 4038 nodes, 6001 edges, 112 cards, status
+Ready, five pointers back from a question in 0.7 seconds warm and 1.5 seconds after an edit.
+
+---
+
+## Step 61 — an argument Tauri never sees, and the script that finds the next one
+
+Trident pressed a project in the Graft panel and got `missing required key projectPath`. The
+JavaScript passed `{ project_path }`; Tauri converts a snake_case parameter to camelCase across
+the boundary, so it was looking for `projectPath` and the call never arrived.
+
+**The interesting part is what this class of bug does to the rest of the checks.** Both halves
+are individually correct. `graft_select_project_rust(project_path: String)` is right, `{
+project_path }` is a perfectly ordinary object, the build passes, clippy passes, 875 tests pass,
+`node --check` passes. Nothing in the tree can see the disagreement, because nothing in the tree
+reads both sides at once. The first thing that notices is an operator clicking a button.
+
+**Three calls were wrong, and only one of them said so.** `graft_select_project_rust` and
+`graft_build_graph_rust` take a `String`, so a missing key is a hard error the operator sees.
+`lan_pair_with_rust` takes `expect_fingerprint: Option<String>`, and a missing key for an
+`Option` is `None`, not an error -- so the fingerprint the operator had just confirmed on screen
+was never passed, and the re-check at the moment of pairing that step 60's certificate binding
+added was quietly doing nothing. It paired, reported success, and skipped the check. That is the
+version of this bug worth fearing: the loud one costs a click, the silent one costs a property
+the security model claims.
+
+**So it is checked rather than remembered**, in the shape the rest of `scripts/` already uses:
+`check_invoke_arg_names.sh` walks every `invoke`/`tauriInvoke` argument object and fails on a
+top-level key containing an underscore. It is a brace-counting walk and not a grep, because the
+two things that look identical to a regex both have to stay quiet: a nested object is a payload
+being serialised, not an argument list -- `save_settings_rust` takes a map of settings whose
+names are snake_case on purpose -- and `{ deviceCode: code.device_code }` is a correct call
+whose *value* is snake_case. A grep flags four innocent lines and gets switched off; this one
+flagged exactly the three that were broken. Run against the fix in place it is quiet, and
+putting either bug back makes it fail with the file, line and command name.

@@ -654,6 +654,10 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // well so the box in Settings starts ticked on a fresh install rather than
         // starting blank and describing the opposite of what the vault actually does.
         "vault_journal": true,
+        // Whether `graft ask` may re-index the files that changed before answering. On
+        // unless switched off: a stale graph points the model at line numbers that have
+        // moved, which is worse than the second the refresh costs. See graft.rs.
+        "graft_auto_refresh": true,
         // The HUD saves this alongside its own browser copy so the two agree; without a
         // default the key simply wouldn't come back on a fresh install, and the page would
         // have nothing to reconcile against.
