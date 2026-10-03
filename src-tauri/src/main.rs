@@ -1832,6 +1832,48 @@ fn code_set_level_rust(
     commands::code_set_level(&engine, &level)
 }
 
+/// Rust-native twin of GET /api/code/net: the sandbox's domain policy and whatever is
+/// waiting on an answer. The HUD polls this, and polling it is what tells the proxy there
+/// is somebody here to ask -- see commands::code_net_status.
+#[tauri::command(async)]
+fn code_net_status_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::code_net_status(&engine)
+}
+
+/// Rust-native twin of POST /api/code/net/allow.
+#[tauri::command(async)]
+fn code_net_allow_rust(
+    engine: tauri::State<LlmEngine>,
+    domain: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_net_allow(&engine, &domain)
+}
+
+/// Rust-native twin of POST /api/code/net/forget.
+#[tauri::command(async)]
+fn code_net_forget_rust(
+    engine: tauri::State<LlmEngine>,
+    domain: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_net_forget(&engine, &domain)
+}
+
+/// Rust-native twin of POST /api/code/net/decide: the HUD card's answer.
+#[tauri::command(async)]
+fn code_net_decide_rust(
+    engine: tauri::State<LlmEngine>,
+    id: String,
+    decision: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_net_decide(&engine, &id, &decision)
+}
+
+/// Rust-native twin of POST /api/code/net/clear.
+#[tauri::command(async)]
+fn code_net_clear_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::code_net_clear_denied(&engine)
+}
+
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
 #[tauri::command(async)]
 fn save_settings_rust(
@@ -2819,6 +2861,11 @@ fn main() {
             get_settings_rust,
             save_settings_rust,
             code_set_level_rust,
+            code_net_status_rust,
+            code_net_allow_rust,
+            code_net_forget_rust,
+            code_net_decide_rust,
+            code_net_clear_rust,
             generate_speech_rust,
             speech_clip_rust,
             transcribe_rust,

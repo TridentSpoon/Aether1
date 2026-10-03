@@ -160,6 +160,11 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/agents/selection", post(set_agent_selection))
         .route("/api/agents/run", post(run_agents))
         .route("/api/code/level", post(code_level))
+        .route("/api/code/net", get(code_net))
+        .route("/api/code/net/allow", post(code_net_allow))
+        .route("/api/code/net/forget", post(code_net_forget))
+        .route("/api/code/net/decide", post(code_net_decide))
+        .route("/api/code/net/clear", post(code_net_clear))
         .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
@@ -1146,6 +1151,84 @@ async fn code_level(
             .map_err(internal_error)?
             .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(report))
+}
+
+/// Browser-transport twin of code_net_status_rust -- the domain policy, plus whatever is
+/// waiting on an answer. Polled by both the Settings page and the HUD, and polling it is
+/// what tells the proxy somebody is there to be asked.
+async fn code_net(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, String)> {
+    let status = tokio::task::spawn_blocking(move || commands::code_net_status(&state.engine))
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(status))
+}
+
+/// Reads the one `domain` field these three share.
+fn domain_of(body: &Value) -> String {
+    body.get("domain")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+async fn code_net_allow(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let domain = domain_of(&body);
+    let status =
+        tokio::task::spawn_blocking(move || commands::code_net_allow(&state.engine, &domain))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(status))
+}
+
+async fn code_net_forget(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let domain = domain_of(&body);
+    let status =
+        tokio::task::spawn_blocking(move || commands::code_net_forget(&state.engine, &domain))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(status))
+}
+
+/// Browser-transport twin of code_net_decide_rust: the HUD card's answer.
+async fn code_net_decide(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let decision = body
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let report = tokio::task::spawn_blocking(move || {
+        commands::code_net_decide(&state.engine, &id, &decision)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(report))
+}
+
+async fn code_net_clear(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let status =
+        tokio::task::spawn_blocking(move || commands::code_net_clear_denied(&state.engine))
+            .await
+            .map_err(internal_error)?;
+    Ok(Json(status))
 }
 
 async fn voice_advice(State(state): State<AppState>) -> Json<crate::voice_setup::VoiceAdvice> {

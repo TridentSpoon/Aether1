@@ -101,8 +101,18 @@ Three properties follow:
   inside the tunnel, and installs no certificate anywhere.
 * **The question is about a domain, once.** `.aether/policy.json` in the project holds
   `allow` and `deny` lists over a starter set of package registries and source hosts; `deny`
-  wins. A refused host is recorded and shown by `aether1 code net`, so "the build said it
-  could not reach something" and "what did it want" are one question.
+  wins. A refused host is recorded and shown by `aether1 code net` and in Settings, so "the
+  build said it could not reach something" and "what did it want" are one question.
+* **An unlisted host is asked about, not just refused.** With a HUD open, the proxy holds the
+  connection open and raises a card: allow once, allow for this project, or refuse. *Once*
+  writes nothing; *for this project* writes the domain into the policy file; *refuse* records
+  it. With no HUD open -- the CLI, `--serve` with nobody logged in, the tests -- nothing is
+  held and the host is refused at once, with a message that says there was nobody to ask. An
+  unanswered card is a refusal too, after 90 seconds. **No operator means no, never maybe.**
+
+  The card is a security control and not a convenience: without it, the way past a refused
+  host was to read a 403 out of a build log and type a command, and that friction is what
+  makes an operator switch on `code_run_unconfined` -- answering a boundary by removing it.
 
 What this is not: a content filter. An allowed host is allowed entirely -- which is bounded
 by the sandbox, since what the command can read is the project folder and nothing else.
@@ -256,8 +266,6 @@ Listed here rather than implied by silence:
   resolve a path twice (section 2).
 * A short-lived socket ticket rather than the device token itself, and a prominent statement
   of what the pairing phrase is (section 5).
-* A Settings surface for the domain policy; today it is `aether1 code net` and the project's
-  own `.aether/policy.json` (section 1b).
 * One outbound network policy object rather than a check per subsystem (section 6).
 * A PAKE for pairing, so a spoofed announcement cannot collect a phrase (section 5).
 * A second-pass audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri

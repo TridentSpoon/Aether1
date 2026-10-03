@@ -1401,6 +1401,15 @@ fn run_code_net(allow: Option<String>) -> Result<String, String> {
         }
         out.push_str("\n  Allow one with `aether1 code net-allow <domain>`.\n");
     }
+    // The other surface, said here because an operator reading this list is the operator
+    // who would otherwise go on typing net-allow for every host a build wants. With the
+    // HUD open the question comes to them instead; without it, this command is the whole
+    // of it, which is why the CLI never waits for an answer.
+    out.push_str(
+        "\n  With the Aether1 window open, an unlisted host raises a card there instead:\n\
+         \x20   allow once, allow for this project, or refuse. From here there is nobody to\n\
+         \x20   ask, so an unlisted host is refused at once.\n",
+    );
     Ok(out)
 }
 
