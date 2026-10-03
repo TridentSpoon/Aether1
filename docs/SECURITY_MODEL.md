@@ -241,9 +241,45 @@ Two consequences worth stating rather than discovering:
   version, not a guess. A wrong or replayed ticket **is** counted. `?token=` and `?ticket=`
   are not read at all.
 
-`discovery.rs` announces over DNS-SD, which anyone on the network can impersonate, so a
-phrase can be typed into a convincing fake. A PAKE (SPAKE2) is the answer and is not written
-yet.
+`discovery.rs` announces over DNS-SD, which anyone on the network can impersonate: a machine
+that answers in another's name appears in the scan list beside the real thing, and the name
+on the row proves nothing. The certificate does, so **a pairing credential is bound to the
+certificate of the machine it is for** and the credential itself never travels.
+
+What is sent is `HKDF(ikm = SHA-256 of the credential, salt = the fingerprint of the
+certificate on the other end of this TLS connection, info = "aether1 pairing credential
+binding v1")`, computed in `serve_auth::bind_to_certificate`. The hash is the input rather
+than the credential because it is the one form both ends hold: the pairing machine derives
+it from the phrase it was given, and the server has had it on disk since the phrase was
+minted. So nothing on disk changed shape for this, and the fingerprint is a salt rather than
+a second secret -- a leaked `serve_token.hash` still hands out nothing usable.
+
+The consequence is that an impostor collects a proof salted with *its own* certificate, which
+the machine it was impersonating cannot accept. Making a proof the real machine would accept
+needs the phrase, which never leaves the machine it was typed on.
+
+Three things follow from that:
+
+* **The standing phrase is no longer accepted in the clear at `/api/pair`.** A correct phrase
+  sent that way is refused in words that say where a phrase does work, rather than as
+  "wrong".
+* **A one-time code still is**, because a browser cannot see which certificate it reached and
+  a code is the far smaller prize: single use, ten minutes, and alive only while the operator
+  is deliberately pairing. The browser gate (`frontend/js/lan-auth.js`) asks for a code.
+* **The fingerprint is put in front of the operator either way.** `GET /api/pair` reports it,
+  the pairing box in Network & Remote shows the one read from the handshake and will not pair
+  until the operator says it matches, the serving machine shows its own in the same pane and
+  prints it at startup, and the fingerprint the operator accepted is re-checked at the moment
+  of pairing so a machine that swaps certificates in between is refused rather than pinned.
+
+A PAKE (SPAKE2) is still the stronger answer and is not written yet. What binding does not
+do is protect a phrase disclosed some other way -- read off a screen, pasted into a message --
+and it is only as good as the certificate's privacy: a machine whose `serve_key.pem` has been
+taken can make proofs for its own certificate, which is already true of everything else that
+key protects. The HMAC and HKDF are hand-rolled over `sha2` and held to the RFC 4231 and
+RFC 5869 test vectors in `serve_auth`'s tests; the end-to-end refusal is
+`peers::tests::a_proof_collected_by_an_impostor_is_refused_by_the_real_server`, which needs a
+real `--serve --lan` and so is `#[ignore]`d.
 
 ## 6. Leaving the machine
 
@@ -289,6 +325,9 @@ Listed here rather than implied by silence:
   the interface does not say so where an operator is reading it (section 5).
 * A Settings surface for the domain policy; today it is `aether1 code net` and the project's
   own `.aether/policy.json` (section 1b).
-* A PAKE for pairing, so a spoofed announcement cannot collect a phrase (section 5).
+* A PAKE for pairing. A spoofed announcement can no longer collect a usable phrase --
+  credentials are bound to the certificate they are sent to (section 5) -- but SPAKE2 would
+  remove the one-time code's remaining exposure in a browser, where no fingerprint can be
+  checked, and the need to compare a fingerprint by eye at all (section 5).
 * A second-pass audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri
   capability set, where prompt injection and tool confusion are the next class of issue.

@@ -23,6 +23,14 @@
  * 3. **The desktop shell never sees any of this.** It talks to loopback, which needs no
  *    token at all, so `IS_TAURI` short-circuits every path here rather than the app
  *    carrying a credential it has no use for.
+ *
+ * What changed since: a one-time code is all this prompt can pair with now. The standing
+ * phrase is only accepted bound to the serving machine's certificate (see
+ * `serve_auth::bind_to_certificate`), and a browser has no way to see which certificate it
+ * reached -- which is exactly the gap, since a machine found over DNS-SD can be anything
+ * that answered. The app's own pairing binds its proof and is where a phrase belongs; a
+ * code is single-use and ten minutes long, so it stays typeable here. A correct phrase
+ * typed in anyway is refused in words that say what to do instead, rather than as "wrong".
  */
 
 (function () {
@@ -190,15 +198,17 @@
                            text-transform:uppercase;color:#7dd3fc">Pair this device</h1>
                 <p style="margin:0 0 16px;font-size:0.85rem;line-height:1.5;color:#94a3b8">
                     Type the code the other machine is showing you &mdash; Settings, Network
-                    &amp; Remote, Pair a device &mdash; and this one is in. The twelve-word
-                    pairing phrase works here too, if that is what you have.
+                    &amp; Remote, Pair a device &mdash; and this one is in. A browser cannot
+                    see which certificate it reached, so the standing twelve-word phrase is
+                    not accepted here any more: pair from the AETHER1 app for that, or ask
+                    that machine for a code.
                 </p>
                 <label for="lan-pair-phrase" style="display:block;margin-bottom:6px;
                        font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;
-                       color:#64748b">Pairing code or phrase</label>
+                       color:#64748b">Pairing code</label>
                 <textarea id="lan-pair-phrase" rows="2" autocomplete="off"
                     spellcheck="false" autocapitalize="characters"
-                    placeholder="the code, or twelve words"
+                    placeholder="the code the other machine is showing"
                     style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;
                            border:1px solid rgba(148,163,184,0.35);background:rgba(2,6,12,0.8);
                            color:#e2e8f0;font-size:0.9rem;resize:vertical"></textarea>
