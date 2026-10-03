@@ -3737,10 +3737,9 @@ the only clients are the pages this repository ships.
 
 **A header is not a magic word.** Headers get logged too, where someone configures it. The
 right end state is a short-lived, single-use ticket exchanged over the authenticated HTTPS
-path, so that a leaked handshake is worth nothing a minute later; that is still on the list in
-`docs/SECURITY_MODEL.md`. What this step closes is the gap between "a credential that leaks
-where URLs leak" and "a credential that travels where every other credential here already
-travels".
+path, so that a leaked handshake is worth nothing a minute later -- which is step 59. What
+this step closes is the gap between "a credential that leaks where URLs leak" and "a
+credential that travels where every other credential here already travels".
 
 **Verified over the wire**, against a real `aether1 --serve --lan` on TLS: the handshake
 carrying the token gets `101 Switching Protocols` with `sec-websocket-protocol: aether1` in
@@ -3797,3 +3796,72 @@ Each one asserts on the host disk, not on the message.
 
 `libc` becomes a direct dependency under `cfg(unix)` for `openat`, `mkdirat` and `fstatat`. It
 was already in the tree via Tauri.
+
+---
+
+## Step 59 — the handshake's credential becomes worthless a minute later
+
+Step 57 moved the device token out of the URL and into `Sec-WebSocket-Protocol`, and said in
+as many words that this was not the end state: headers get logged too, wherever someone has
+configured that. The last finding from review 1, and the one this step closes.
+
+**What was still wrong.** The credential in a handshake was the device token -- 256 bits good
+until `aether1 revoke`, the same one that authenticates every other request that device
+makes. So the fix in step 57 was a better hiding place, not a boundary. A handshake recovered
+from a proxy configured to log request headers, or from a browser network trace pasted into a
+bug report, still handed over lasting access to the conversation and to everything `/ws/chat`
+can run.
+
+**What a ticket is.** `POST /api/ws-ticket` sits behind the ordinary token layer and returns
+32 bytes from the operating system's generator. Only its SHA-256 is kept, in a
+`TicketStore` that lives in `LanState` beside the attempt limiter, with a one-minute TTL. The
+client offers `aether1.ticket.<ticket>` alongside a plain `aether1`; `require_lan_token`
+spends the ticket and only then upgrades. Replay the same handshake and the second one is
+401, from the same call that let the first through.
+
+**In memory, on purpose.** A ticket that outlived a restart would be a credential the operator
+cannot see or revoke, and a restart already drops every socket it could have opened.
+
+**Three routing decisions worth keeping.**
+
+- `/api/ws-ticket` is merged *before* the token layer and `/api/pair` after it. That one line
+  of difference is the whole shape of the flow: asking for a ticket requires a token, and
+  asking to be paired is how a device gets one.
+- `/ws/*` takes a ticket and *only* a ticket. Accepting the device token there as well would
+  have left the weaker credential in the handshake and made the ticket decoration. A unit
+  test pins which paths are on the ticket path, because a ticket accepted on an API route
+  would be a credential for reading everything instead of for opening one socket.
+- A device token offered in a handshake gets its own refusal -- "POST /api/ws-ticket ... and
+  reload the page" -- and is **not** counted against the attempt limiter. A stale tab is a
+  client version, not a guess, and counting it would lock the operator out on reload. A wrong
+  or replayed ticket is counted, because that is a guess at 256 bits or a replay.
+
+**Dropping the oldest is safe here, and was not for the limiter.** The store is capped at 1024
+live tickets for the same reason `MAX_TRACKED` exists: the caller chooses how many to ask for.
+In the attempt limiter, evicting the oldest record was evicting a live lockout, which erased
+the evidence of someone's failures -- the bug step 45 found in its own test. A ticket is the
+opposite: losing one costs its holder one more request and gives an attacker nothing, because
+a ticket that is gone is a ticket that is refused.
+
+**The browser had to become asynchronous.** `wsProtocols()` used to read a token out of
+localStorage and return an array; it now has to buy a ticket, which is a round trip. So it is
+`async`, `apiWsProtocols()` returns a promise, and `connectTelemetry` is `async` too. Both
+call sites await it -- a socket handed the promise instead of the array fails in a way that
+takes an afternoon to read. The telemetry reconnect calls it again on every retry, which buys
+a fresh ticket each time, which is what single-use means. With no token held there is no
+fetch and the plain subprotocol goes alone: that is loopback and the desktop shell, neither of
+which is behind the token layer at all.
+
+**Verified over the wire**, against a real `aether1 --serve --lan` on TLS. A fresh ticket gets
+`101 Switching Protocols` with `sec-websocket-protocol: aether1`. **The same handshake,
+replayed, gets 401** -- which is the finding closed, stated as a result. A 70-second-old
+ticket gets 401. A device token in the handshake gets 401 and the reload message. A ticket
+presented as a bearer token on `/api/static-info` gets 401, and is still good for a socket
+afterwards, so being refused elsewhere does not spend it. `/api/ws-ticket` with no token gets
+401, and its response carries `cache-control: no-store`.
+
+Eleven unit tests: one socket, one replay; expiry against an injected clock rather than a test
+that sleeps for a minute; an unissued ticket; tickets independent of each other; only the hash
+stored; the cap; the sweep on mint; which routes are on the ticket path; a device token not
+being a credential; and the one that reads `frontend/js/lan-auth.js` to check it agrees on the
+subprotocol names, fetches `/api/ws-ticket`, and no longer mentions `WS_TOKEN_PREFIX` at all.
