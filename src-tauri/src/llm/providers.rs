@@ -395,8 +395,11 @@ fn ollama_url(endpoint: &str) -> String {
 }
 
 pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
+    // Ollama on loopback or on the LAN is what local-only mode exists to keep working,
+    // and the gate judges that by the endpoint rather than by the provider's name: an
+    // `endpoint` pointing at a rented box is outbound traffic whatever it is running.
     let response: OllamaResponse = checked(
-        ureq::post(&ollama_url(endpoint))
+        crate::net::post(&ollama_url(endpoint), "the model was not asked")?
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
             .http_status_as_error(false)
@@ -423,7 +426,7 @@ pub fn stream_ollama(
     sink: Sink,
 ) -> Result<Completion, String> {
     let response = checked(
-        ureq::post(&ollama_url(endpoint))
+        crate::net::post(&ollama_url(endpoint), "the model was not asked")?
             .config()
             .timeout_global(Some(STREAM_TIMEOUT))
             .http_status_as_error(false)
@@ -664,7 +667,8 @@ struct OllamaShowRequest<'a> {
 /// be the reason a reply feels slow.
 pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability> {
     let url = format!("{}/api/show", endpoint.trim_end_matches('/'));
-    let body: serde_json::Value = ureq::post(&url)
+    let body: serde_json::Value = crate::net::post(&url, "the model was not asked")
+        .ok()?
         .config()
         .timeout_global(Some(std::time::Duration::from_millis(2500)))
         .build()
@@ -880,8 +884,8 @@ fn openai_request(
     url: &str,
     api_key: &str,
     timeout: std::time::Duration,
-) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
-    let mut request = ureq::post(url)
+) -> Result<ureq::RequestBuilder<ureq::typestate::WithBody>, String> {
+    let mut request = crate::net::post(url, "the model was not asked")?
         .config()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
@@ -890,7 +894,7 @@ fn openai_request(
     if !api_key.is_empty() {
         request = request.header("Authorization", format!("Bearer {api_key}"));
     }
-    request
+    Ok(request)
 }
 
 pub fn call_openai_compatible(
@@ -903,7 +907,7 @@ pub fn call_openai_compatible(
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
 
     let response: OpenAiResponse =
-        checked(openai_request(&url, api_key, CALL_TIMEOUT).send_json(&payload))?
+        checked(openai_request(&url, api_key, CALL_TIMEOUT)?.send_json(&payload))?
             .into_body()
             .read_json()
             .map_err(|e| e.to_string())?;
@@ -943,7 +947,7 @@ pub fn stream_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response = checked(openai_request(&url, api_key, STREAM_TIMEOUT).send_json(&payload))?;
+    let response = checked(openai_request(&url, api_key, STREAM_TIMEOUT)?.send_json(&payload))?;
 
     let mut full = String::new();
     let mut usage = None;
@@ -1210,7 +1214,7 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Comp
     );
 
     let response: GeminiResponse = checked(
-        ureq::post(&url)
+        crate::net::post(&url, "the model was not asked")?
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
             .http_status_as_error(false)
@@ -1256,7 +1260,7 @@ pub fn stream_gemini(
     );
 
     let response = checked(
-        ureq::post(&url)
+        crate::net::post(&url, "the model was not asked")?
             .config()
             .timeout_global(Some(STREAM_TIMEOUT))
             .http_status_as_error(false)
@@ -1617,20 +1621,23 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
 fn anthropic_request(
     api_key: &str,
     timeout: std::time::Duration,
-) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
-    ureq::post("https://api.anthropic.com/v1/messages")
-        .config()
-        .timeout_global(Some(timeout))
-        .http_status_as_error(false)
-        .build()
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+) -> Result<ureq::RequestBuilder<ureq::typestate::WithBody>, String> {
+    Ok(crate::net::post(
+        "https://api.anthropic.com/v1/messages",
+        "the model was not asked",
+    )?
+    .config()
+    .timeout_global(Some(timeout))
+    .http_status_as_error(false)
+    .build()
+    .header("x-api-key", api_key)
+    .header("anthropic-version", "2023-06-01")
+    .header("content-type", "application/json"))
 }
 
 pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
     let response: AnthropicResponse = checked(
-        anthropic_request(api_key, CALL_TIMEOUT).send_json(anthropic_payload(model, ctx, false)),
+        anthropic_request(api_key, CALL_TIMEOUT)?.send_json(anthropic_payload(model, ctx, false)),
     )?
     .into_body()
     .read_json()
@@ -1669,7 +1676,7 @@ pub fn stream_anthropic(
     sink: Sink,
 ) -> Result<Completion, String> {
     let response = checked(
-        anthropic_request(api_key, STREAM_TIMEOUT).send_json(anthropic_payload(model, ctx, true)),
+        anthropic_request(api_key, STREAM_TIMEOUT)?.send_json(anthropic_payload(model, ctx, true)),
     )?;
 
     let mut full = String::new();

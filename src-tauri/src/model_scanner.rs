@@ -132,14 +132,25 @@ struct OllamaTagsResponse {
 pub fn scan_ollama() -> OllamaStatus {
     let cli_installed = which::which("ollama").is_ok();
 
-    let models = ureq::get(format!("{OLLAMA_URL}/api/tags"))
-        .config()
-        .timeout_global(Some(PROBE_TIMEOUT))
-        .build()
-        .call()
-        .ok()
-        .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
-        .map(|data| data.models.into_iter().map(|m| m.name).collect::<Vec<_>>());
+    // Loopback, so the egress gate allows this whatever the operator's mode -- probing
+    // the local engine is not leaving the machine. It goes through the gate anyway
+    // because that is the only way a request gets built here (src/net.rs), which is what
+    // lets scripts/check_egress_gate.sh be an absolute rule rather than a list.
+    let models = crate::net::get(
+        &format!("{OLLAMA_URL}/api/tags"),
+        "the local Ollama server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
+    .map(|data| data.models.into_iter().map(|m| m.name).collect::<Vec<_>>());
 
     let available = models.is_some();
     let models = models.unwrap_or_default();
@@ -171,14 +182,21 @@ struct LmStudioModelsResponse {
 /// Probes the LM Studio server on localhost:1234. Same "only a real 200 counts" rule as
 /// scan_ollama.
 pub fn scan_lmstudio() -> LmStudioStatus {
-    let models = ureq::get(format!("{LMSTUDIO_URL}/v1/models"))
-        .config()
-        .timeout_global(Some(PROBE_TIMEOUT))
-        .build()
-        .call()
-        .ok()
-        .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
-        .map(|data| data.data.into_iter().map(|m| m.id).collect::<Vec<_>>());
+    let models = crate::net::get(
+        &format!("{LMSTUDIO_URL}/v1/models"),
+        "the local LM Studio server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
+    .map(|data| data.data.into_iter().map(|m| m.id).collect::<Vec<_>>());
 
     let available = models.is_some();
     let models = models.unwrap_or_default();
@@ -279,14 +297,21 @@ fn describe_local(port: u16, models: &[String]) -> String {
 fn probe_local_port(port: u16) -> Option<LocalServer> {
     let base = format!("http://127.0.0.1:{port}");
 
-    let openai: Option<Vec<String>> = ureq::get(format!("{base}/v1/models"))
-        .config()
-        .timeout_global(Some(PROBE_TIMEOUT))
-        .build()
-        .call()
-        .ok()
-        .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
-        .map(|data| data.data.into_iter().map(|m| m.id).collect());
+    let openai: Option<Vec<String>> = crate::net::get(
+        &format!("{base}/v1/models"),
+        "the local server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
+    .map(|data| data.data.into_iter().map(|m| m.id).collect());
 
     if let Some(models) = openai {
         return Some(LocalServer {
@@ -299,14 +324,21 @@ fn probe_local_port(port: u16) -> Option<LocalServer> {
         });
     }
 
-    let native: Option<Vec<String>> = ureq::get(format!("{base}/api/tags"))
-        .config()
-        .timeout_global(Some(PROBE_TIMEOUT))
-        .build()
-        .call()
-        .ok()
-        .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
-        .map(|data| data.models.into_iter().map(|m| m.name).collect());
+    let native: Option<Vec<String>> = crate::net::get(
+        &format!("{base}/api/tags"),
+        "the local server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
+    .map(|data| data.models.into_iter().map(|m| m.name).collect());
 
     native.map(|models| LocalServer {
         endpoint: base,
@@ -339,12 +371,19 @@ pub fn models_at(endpoint: &str) -> Option<Vec<String>> {
         format!("{base}/v1/models")
     };
 
-    let openai: Option<Vec<String>> = ureq::get(openai_url)
-        .config()
-        .timeout_global(Some(PROBE_TIMEOUT))
-        .build()
-        .call()
+    // Unlike the probes above, `endpoint` is whatever the operator configured, so this
+    // one really can point off the machine -- and with local-only mode on, the gate is
+    // what stops a model list being fetched from a rented box.
+    let openai: Option<Vec<String>> = crate::net::get(&openai_url, "the server was not asked")
         .ok()
+        .and_then(|request| {
+            request
+                .config()
+                .timeout_global(Some(PROBE_TIMEOUT))
+                .build()
+                .call()
+                .ok()
+        })
         .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
         .map(|data| data.data.into_iter().map(|m| m.id).collect());
     // Only an answer with something in it short-circuits the native probe. A server that
@@ -359,14 +398,21 @@ pub fn models_at(endpoint: &str) -> Option<Vec<String>> {
     }
 
     let native_base = base.strip_suffix("/v1").unwrap_or(base);
-    let native: Option<Vec<String>> = ureq::get(format!("{native_base}/api/tags"))
-        .config()
-        .timeout_global(Some(PROBE_TIMEOUT))
-        .build()
-        .call()
-        .ok()
-        .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
-        .map(|data| data.models.into_iter().map(|m| m.name).collect());
+    let native: Option<Vec<String>> = crate::net::get(
+        &format!("{native_base}/api/tags"),
+        "the server was not asked",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
+    .map(|data| data.models.into_iter().map(|m| m.name).collect());
 
     // Either probe answering still counts as an answer, so "did not answer at all" (None)
     // stays distinct from "answered with nothing loaded" (Some(vec![])).
@@ -404,15 +450,18 @@ struct OllamaPullRequest<'a> {
 /// same 5s timeout as the Python, deliberately), then falls back to a detached CLI pull
 /// that keeps running in the background after this function returns.
 pub fn pull_model(model_name: &str) -> PullResult {
-    let http_ok = ureq::post(format!("{OLLAMA_URL}/api/pull"))
-        .config()
-        .timeout_global(Some(Duration::from_secs(5)))
-        .build()
-        .send_json(&OllamaPullRequest {
-            name: model_name,
-            stream: false,
-        })
-        .is_ok();
+    let http_ok = crate::net::post(&format!("{OLLAMA_URL}/api/pull"), "no model was downloaded")
+        .is_ok_and(|request| {
+            request
+                .config()
+                .timeout_global(Some(Duration::from_secs(5)))
+                .build()
+                .send_json(&OllamaPullRequest {
+                    name: model_name,
+                    stream: false,
+                })
+                .is_ok()
+        });
 
     // A pull that answers inside five seconds did not download several gigabytes -- it is
     // Ollama saying it already has this model. That is the only case this branch can
@@ -761,12 +810,18 @@ mod tests {
     /// skips itself (rather than failing the suite) if Ollama isn't reachable, since other
     /// dev machines / CI won't have it running.
     fn ollama_reachable() -> bool {
-        ureq::get(format!("{OLLAMA_URL}/api/tags"))
-            .config()
-            .timeout_global(Some(Duration::from_millis(500)))
-            .build()
-            .call()
-            .is_ok()
+        crate::net::get(
+            &format!("{OLLAMA_URL}/api/tags"),
+            "the server was not probed",
+        )
+        .is_ok_and(|request| {
+            request
+                .config()
+                .timeout_global(Some(Duration::from_millis(500)))
+                .build()
+                .call()
+                .is_ok()
+        })
     }
 
     #[test]

@@ -220,7 +220,15 @@ fn pick_asset(assets: &[RawAsset]) -> Option<Asset> {
 /// claim that there are no releases, and the operator can retry. Only reached on the error
 /// path, so an ordinary check still makes exactly one request.
 fn repository_is_visible(repo: &str, token: Option<&str>, agent_label: &str) -> bool {
-    let mut request = ureq::get(format!("https://api.github.com/repos/{repo}"))
+    // Refused by the egress gate reads the same as refused by GitHub: not visible from
+    // here. The caller is already on its error path and only wants the yes/no.
+    let Ok(request) = crate::net::get(
+        &format!("https://api.github.com/repos/{repo}"),
+        "the repository was not checked",
+    ) else {
+        return false;
+    };
+    let mut request = request
         .config()
         .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
@@ -240,7 +248,8 @@ pub fn latest(repo: &str, agent_label: &str) -> Result<Release, ReleaseError> {
     let token = github_auth::token_for_requests();
     let signed_in = token.is_some();
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let mut request = ureq::get(&url)
+    let mut request = crate::net::get(&url, "the release check was not made")
+        .map_err(ReleaseError::Other)?
         .config()
         .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
@@ -329,6 +338,10 @@ pub enum FetchError {
     },
     Network(String),
     Disk(String),
+    /// The egress gate said no (src/net.rs). Its message already names the mode and the
+    /// way out of it, so it is printed as it stands rather than wrapped in "the download
+    /// failed", which would read as a connection problem.
+    Refused(String),
 }
 
 impl FetchError {
@@ -358,6 +371,7 @@ impl FetchError {
             }
             FetchError::Network(e) => format!("the download failed: {e}"),
             FetchError::Disk(e) => e.clone(),
+            FetchError::Refused(e) => e.clone(),
         }
     }
 }
@@ -374,7 +388,8 @@ fn asset_url(repo: &str, id: u64) -> String {
 }
 
 fn fetch_asset_bytes(repo: &str, id: u64, agent_label: &str) -> Result<Vec<u8>, FetchError> {
-    let mut request = ureq::get(asset_url(repo, id))
+    let mut request = crate::net::get(&asset_url(repo, id), "nothing was downloaded")
+        .map_err(FetchError::Refused)?
         .config()
         .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
@@ -429,7 +444,8 @@ pub fn download_and_verify(
         .map_err(|e| FetchError::Disk(format!("could not make somewhere to download to: {e}")))?;
     let path = dir.join(&asset.name);
 
-    let mut request = ureq::get(asset_url(repo, asset.id))
+    let mut request = crate::net::get(&asset_url(repo, asset.id), "nothing was downloaded")
+        .map_err(FetchError::Refused)?
         .config()
         // No global timeout on this one: a global deadline on a half-gigabyte download over a
         // slow line is a timeout on the size of the file, not on anything being wrong.
