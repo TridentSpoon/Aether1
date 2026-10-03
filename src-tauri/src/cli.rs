@@ -2142,8 +2142,11 @@ fn run_pair() -> Result<String, String> {
     Ok(format!(
         "New --lan pairing phrase (shown once -- write it down now):\n\n    {phrase}\n\n\
          {devices}Any phrase paired before this no longer works. Type this one into another \
-         AETHER1 instance's pairing prompt, or POST it as {{\"phrase\": ...}} to /api/pair, to \
-         let it reach this machine.\n\n\
+         AETHER1 instance's pairing prompt to let it reach this machine.\n\n\
+         The phrase is only accepted bound to this machine's certificate, which is what the \
+         app's own pairing sends, so it cannot be POSTed to /api/pair as it stands and \
+         cannot be collected by anything answering on the network in this machine's name. \
+         To pair from a browser instead, ask this machine for a one-time code.\n\n\
          To cut off one machine rather than all of them, use `aether1 devices` and \
          `aether1 revoke <id>` instead."
     ))

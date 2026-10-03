@@ -554,8 +554,20 @@ fn lan_pair_with_rust(
     address: String,
     port: u16,
     secret: String,
+    // The fingerprint the operator was shown and accepted, so the certificate can be
+    // checked against it again at the moment of pairing rather than trusted from when it
+    // was drawn on screen.
+    expect_fingerprint: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    lan::pair_with_peer(&engine, &managed, &name, &address, port, &secret)
+    lan::pair_with_peer(
+        &engine,
+        &managed,
+        &name,
+        &address,
+        port,
+        &secret,
+        expect_fingerprint.as_deref(),
+    )
 }
 
 /// Chooses the paired machine that answers when this one has no model of its own, or
@@ -575,6 +587,13 @@ fn lan_set_chat_peer_rust(
 #[tauri::command(async)]
 fn lan_peer_models_rust(address: String, port: u16) -> Result<serde_json::Value, String> {
     lan::peer_models(&address, port)
+}
+
+/// The certificate fingerprint of a machine a scan found, read before anything is typed at
+/// it. What the pane shows the operator to check against the other machine's own display.
+#[tauri::command(async)]
+fn lan_peer_fingerprint_rust(address: String, port: u16) -> Result<serde_json::Value, String> {
+    lan::peer_fingerprint(&address, port)
 }
 
 /// Forgets a machine this one had paired with. Only this side; the token it was given is
@@ -2916,6 +2935,7 @@ fn main() {
             lan_clear_pairing_code_rust,
             lan_discover_rust,
             lan_pair_with_rust,
+            lan_peer_fingerprint_rust,
             lan_forget_peer_rust,
             lan_peer_models_rust,
             lan_set_chat_peer_rust,

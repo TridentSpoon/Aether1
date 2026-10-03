@@ -151,6 +151,19 @@ pub fn load_or_create() -> Result<Tls, String> {
     load_or_create_at(&cert_path(), &key_path())
 }
 
+/// The fingerprint of the certificate already on disk, or nothing when there is none.
+///
+/// Deliberately not `load_or_create`: the Network & Remote pane asks this merely because
+/// Settings was opened, and generating a key pair is not something a pane should do by
+/// being looked at. Nothing is created, so a machine that has never run `--lan` reads as
+/// having no fingerprint rather than quietly acquiring one.
+pub fn existing_fingerprint() -> Option<String> {
+    let pem = std::fs::read_to_string(cert_path()).ok()?;
+    first_certificate_der(&pem)
+        .ok()
+        .map(|der| fingerprint(&der))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
