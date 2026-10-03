@@ -6123,7 +6123,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const report = await tauriInvoke('lan_pair_with_rust', {
                     name: peer.name, address, port: peer.port, secret,
-                    expect_fingerprint: seen,
+                    expectFingerprint: seen,
                 });
                 // The row is redrawn from the fresh status, so "Paired" is the Rust side's
                 // answer rather than this side assuming the press worked.
@@ -10939,7 +10939,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             if (!IS_TAURI) return;
 
-            await tauriInvoke('graft_select_project_rust', { project_path: projectPath });
+            await tauriInvoke('graft_select_project_rust', { projectPath });
 
             // Re-enable build button
             const buildBtn = document.getElementById('btn-graft-build');
@@ -10971,7 +10971,7 @@ document.addEventListener('DOMContentLoaded', () => {
             buildBtn.disabled = true;
             buildBtn.textContent = '⏳ Building...';
 
-            await tauriInvoke('graft_build_graph_rust', { project_path: selected.path });
+            await tauriInvoke('graft_build_graph_rust', { projectPath: selected.path });
 
             // Reload status to show "Ready"
             await loadGraftStatus();

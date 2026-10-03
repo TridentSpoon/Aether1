@@ -286,3 +286,10 @@ jobs:
       # and this is what stops a twentieth call site appearing beside it.
       - name: Check every outbound request goes through the egress gate
         run: ./scripts/check_egress_gate.sh
+
+      # An argument named snake_case in JavaScript never reaches its Tauri command, and
+      # nothing else notices: both halves are individually correct, so the build, clippy
+      # and the tests all pass and the panel fails in front of the operator. Two calls in
+      # the Graft panel and the fingerprint the pairing gate re-checks all shipped that way.
+      - name: Check Tauri calls name their arguments the way Tauri reads them
+        run: ./scripts/check_invoke_arg_names.sh

@@ -3919,3 +3919,36 @@ tested against real 0.21.1 output.
 
 **Measured against graft 0.21.1** on this repository: 4038 nodes, 6001 edges, 112 cards, status
 Ready, five pointers back from a question in 0.7 seconds warm and 1.5 seconds after an edit.
+
+---
+
+## Step 61 — an argument Tauri never sees, and the script that finds the next one
+
+Trident pressed a project in the Graft panel and got `missing required key projectPath`. The
+JavaScript passed `{ project_path }`; Tauri converts a snake_case parameter to camelCase across
+the boundary, so it was looking for `projectPath` and the call never arrived.
+
+**The interesting part is what this class of bug does to the rest of the checks.** Both halves
+are individually correct. `graft_select_project_rust(project_path: String)` is right, `{
+project_path }` is a perfectly ordinary object, the build passes, clippy passes, 875 tests pass,
+`node --check` passes. Nothing in the tree can see the disagreement, because nothing in the tree
+reads both sides at once. The first thing that notices is an operator clicking a button.
+
+**Three calls were wrong, and only one of them said so.** `graft_select_project_rust` and
+`graft_build_graph_rust` take a `String`, so a missing key is a hard error the operator sees.
+`lan_pair_with_rust` takes `expect_fingerprint: Option<String>`, and a missing key for an
+`Option` is `None`, not an error -- so the fingerprint the operator had just confirmed on screen
+was never passed, and the re-check at the moment of pairing that step 60's certificate binding
+added was quietly doing nothing. It paired, reported success, and skipped the check. That is the
+version of this bug worth fearing: the loud one costs a click, the silent one costs a property
+the security model claims.
+
+**So it is checked rather than remembered**, in the shape the rest of `scripts/` already uses:
+`check_invoke_arg_names.sh` walks every `invoke`/`tauriInvoke` argument object and fails on a
+top-level key containing an underscore. It is a brace-counting walk and not a grep, because the
+two things that look identical to a regex both have to stay quiet: a nested object is a payload
+being serialised, not an argument list -- `save_settings_rust` takes a map of settings whose
+names are snake_case on purpose -- and `{ deviceCode: code.device_code }` is a correct call
+whose *value* is snake_case. A grep flags four innocent lines and gets switched off; this one
+flagged exactly the three that were broken. Run against the fix in place it is quiet, and
+putting either bug back makes it fail with the file, line and command name.
