@@ -2460,6 +2460,62 @@
                         <input id="setting-code-run-allowlist" type="text" placeholder="cargo, npm, git" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
+
+                <!-- The domain policy. Until now this existed only as `aether1 code net`,
+                     which meant that the way to get a build past a refused host was to
+                     read a 403 out of a build log, work out which host it was about, and
+                     type a command. That friction is what makes people switch on "Run
+                     without a sandbox", so it is a security control that was being
+                     answered by turning the boundary off.
+
+                     Three sources, shown apart because only two of them can be edited: the
+                     starter list (compiled in, removable by writing a `deny` row), the
+                     project's own `allow` rows, and its `deny` rows. Filled in by app.js
+                     from GET /api/code/net. See src-tauri/src/code_proxy.rs. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🌐</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">Where the sandbox may connect</h4>
+                            <p class="net-card-hint">
+                                With the network on, the sandbox still has no route of its own: every
+                                connection goes through a proxy that checks the destination against this
+                                list. An unlisted host raises a card in the HUD, where you can allow it
+                                once, allow it for this project, or refuse. Allowing a domain allows it
+                                entirely — what it can be told is whatever the sandbox can read, which is
+                                this project's folder.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">This project's list</p>
+                            <p id="code-net-state" class="net-row-hint">Reading the project's policy…</p>
+                        </div>
+                    </div>
+                    <div id="code-net-domains" class="px-3 pb-2 flex flex-wrap gap-1"></div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Allow another</p>
+                            <p class="net-row-hint">A host name, no scheme and no path. It covers its subdomains.</p>
+                        </div>
+                    </div>
+                    <div class="px-3 pb-3 flex gap-2">
+                        <input id="code-net-add" type="text" placeholder="e.g. registry.yarnpkg.com" class="flex-1 bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <button id="code-net-add-btn" type="button" class="cyber-btn text-[10px] py-1 px-3 whitespace-nowrap">Allow</button>
+                    </div>
+                    <p id="code-net-hint" class="px-3 pb-2 text-[10px] font-mono text-slate-400 hidden"></p>
+                    <!-- What a build asked for and did not get. The question an operator
+                         arrives with is "something could not be reached, what was it", and
+                         before this the only answer was in a build log. -->
+                    <div id="code-net-refused-row" class="net-row hidden">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Asked for and refused</p>
+                            <p id="code-net-refused" class="net-row-hint"></p>
+                        </div>
+                        <button id="code-net-clear-btn" type="button" class="cyber-btn text-[10px] py-1 px-2 whitespace-nowrap">Clear</button>
+                    </div>
+                </div>
             </section>
 
             <!-- ======================= NETWORK & REMOTE ======================= -->

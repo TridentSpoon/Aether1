@@ -9762,6 +9762,12 @@ document.addEventListener('DOMContentLoaded', () => {
             applyOsWording(data.os);
             applySandboxState(data.sandbox);
             applyAutonomy(data.autonomy, data.levels);
+            // The domain policy is its own request: it lives in the project's file rather
+            // than in settings, and it is the one block on this panel that can change
+            // without anybody touching the panel. Asking here also restarts the poll, so
+            // switching the sandbox network on and saving starts the cards working without
+            // a restart.
+            refreshNetPolicy().then(syncNetPoll);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
@@ -11352,6 +11358,325 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
+
+
+    // --- The sandbox's domain policy --------------------------------------------------
+    //
+    // Two surfaces over one thing. The Settings card lists what this project's sandbox may
+    // connect to and lets a domain be added or taken away. The HUD card is what appears
+    // when a command asks for a host that is not on the list: the proxy holds the
+    // connection open while the card is up, and the choice on it is what releases or
+    // refuses the connection.
+    //
+    // Before this, the only way past a refused host was to read a 403 out of a build log,
+    // work out which host it was about, and type `aether1 code net-allow`. That friction
+    // is what makes people switch on "Run without a sandbox" -- so the card is a security
+    // control, not a convenience. See src-tauri/src/code_proxy.rs.
+
+    /* The last status seen, which is what the poll below is gated on. */
+    let lastNetStatus = null;
+
+    /* The one transport split, in one place. Every call below returns the same status
+       object -- the read does, and so does each write, so that a change is drawn from what
+       the backend says is now true rather than from what the frontend asked for. */
+    async function netPolicyApi(path, tauriCommand, body) {
+        if (IS_TAURI) return tauriInvoke(tauriCommand, body || {});
+        const options = body
+            ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+            : (path === '/api/code/net' ? {} : { method: 'POST' });
+        const resp = await apiFetch(path, options);
+        if (!resp.ok) throw new Error((await resp.text()) || `request failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    function netPolicyHint(text, bad) {
+        const hint = document.getElementById('code-net-hint');
+        if (!hint) return;
+        hint.textContent = text || '';
+        hint.classList.toggle('hidden', !text);
+        hint.classList.toggle('text-amber-300', !!bad);
+        hint.classList.toggle('text-slate-400', !bad);
+    }
+
+    /* One domain, as a chip. A starter domain and one the operator typed look the same in
+       the effective list but are not removed the same way, so the chip says which it is --
+       and a `deny` row is shown too, because a starter domain that has been taken away is
+       invisible otherwise and looks like a bug. */
+    function netDomainChip(domain, kind) {
+        const chip = document.createElement('span');
+        const tone = kind === 'removed'
+            ? 'border-rose-500/40 text-rose-300/80 bg-rose-950/20 line-through'
+            : kind === 'added'
+                ? 'border-emerald-500/40 text-emerald-200 bg-emerald-950/20'
+                : 'border-cyan-500/30 text-cyan-200/80 bg-slate-900/60';
+        chip.className = `inline-flex items-center gap-1 text-[10px] font-mono border rounded px-1.5 py-0.5 ${tone}`;
+        chip.title = kind === 'removed'
+            ? `${domain} is refused: this project's policy takes it away.`
+            : kind === 'added'
+                ? `${domain} was allowed for this project.`
+                : `${domain} is on the starter list -- a host a build reaches on its own.`;
+        const label = document.createElement('span');
+        label.textContent = domain;
+        chip.appendChild(label);
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'opacity-60 hover:opacity-100 cursor-pointer';
+        // Taking away and putting back are the same button in two directions, because the
+        // chip already says which state it is in.
+        button.textContent = kind === 'removed' ? '+' : '×';
+        button.title = kind === 'removed' ? `Allow ${domain} again` : `Stop allowing ${domain}`;
+        button.onclick = async () => {
+            button.disabled = true;
+            try {
+                const status = kind === 'removed'
+                    ? await netPolicyApi('/api/code/net/allow', 'code_net_allow_rust', { domain })
+                    : await netPolicyApi('/api/code/net/forget', 'code_net_forget_rust', { domain });
+                applyNetPolicy(status);
+                netPolicyHint(kind === 'removed' ? `${domain} is allowed again.` : `${domain} is no longer allowed.`, false);
+            } catch (e) {
+                button.disabled = false;
+                netPolicyHint(`That did not change: ${e.message || e}`, true);
+            }
+        };
+        chip.appendChild(button);
+        return chip;
+    }
+
+    /* Draws the Settings card from a status object. */
+    function applyNetPolicy(status) {
+        if (!status) return;
+        lastNetStatus = status;
+        const state = document.getElementById('code-net-state');
+        const list = document.getElementById('code-net-domains');
+        const add = document.getElementById('code-net-add');
+        const addBtn = document.getElementById('code-net-add-btn');
+        if (!state || !list) return;
+
+        // No project folder, so there is no file to hold a policy. Say that rather than
+        // listing the starter domains as though they applied to something.
+        if (!status.root) {
+            state.textContent = 'Set a project folder above, and the policy lives in that project’s own .aether/policy.json.';
+            state.classList.add('text-amber-300');
+            list.innerHTML = '';
+            if (add) add.disabled = true;
+            if (addBtn) addBtn.disabled = true;
+            return;
+        }
+        if (add) add.disabled = false;
+        if (addBtn) addBtn.disabled = false;
+        state.classList.remove('text-amber-300');
+        const where = `Kept in ${status.file} under ${status.root}.`;
+        // An allowed-domain list is a confusing thing to read while the sandbox has no
+        // network at all, so the switch above is reported here rather than left to be
+        // inferred from a list that is not in force.
+        state.textContent = status.network
+            ? where
+            : `${where} The network switch above is off, so nothing reaches any of these yet.`;
+
+        list.innerHTML = '';
+        const starter = new Set(status.starter || []);
+        const added = new Set(status.added || []);
+        for (const domain of status.allowed || []) {
+            list.appendChild(netDomainChip(domain, added.has(domain) && !starter.has(domain) ? 'added' : 'starter'));
+        }
+        for (const domain of status.removed || []) {
+            list.appendChild(netDomainChip(domain, 'removed'));
+        }
+
+        // What a build asked for and did not get, which is the question an operator
+        // arrives with. `pending` is "it wanted this"; `denied` is "and the answer was
+        // no, for this reason" -- the reason matters, because "nobody answered" sends you
+        // to the HUD and "refused" sends you here.
+        const refusedRow = document.getElementById('code-net-refused-row');
+        const refused = document.getElementById('code-net-refused');
+        if (refusedRow && refused) {
+            const words = { refused: 'you refused it', unanswered: 'the card went unanswered', 'not asked': 'no window was open to ask' };
+            const lines = (status.denied || []).slice().reverse()
+                .map((entry) => `${entry.host} — ${words[entry.why] || entry.why}`);
+            // A host that asked and was never decided on at all still belongs here.
+            const decided = new Set((status.denied || []).map((entry) => entry.host));
+            for (const host of status.pending || []) {
+                if (!decided.has(host)) lines.push(`${host} — asked for, not allowed`);
+            }
+            refusedRow.classList.toggle('hidden', lines.length === 0);
+            refused.textContent = lines.join('; ');
+        }
+    }
+
+    /* The HUD card. Three choices and no default: the connection is being held open while
+       this is on screen, and picking for the operator is the thing this whole mechanism
+       exists not to do. */
+    function renderNetAskCard(ask) {
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm msg-agent self-start mr-8 border border-amber-500/50 bg-amber-950/20';
+        card.dataset.netAskId = ask.id;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-amber-500/30 text-xs font-mono text-amber-300';
+        header.innerHTML = `<span>🌐 <strong>A COMMAND WANTS THE NETWORK</strong></span><span>${new Date().toLocaleTimeString()}</span>`;
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'text-cyan-100 font-mono text-xs my-2 break-all';
+        body.textContent = ask.port === 443 || ask.port === 80 ? ask.host : `${ask.host}:${ask.port}`;
+        card.appendChild(body);
+
+        const reason = document.createElement('div');
+        reason.className = 'text-[10px] font-mono text-amber-200/80 my-1';
+        // Said on the card, not left in the docs: allowing a domain allows it entirely,
+        // and what the sandbox can read is the thing the operator is actually risking.
+        reason.textContent = `A command in the sandbox is trying to reach ${ask.host}, which is not on this project’s allowed list. `
+            + 'Allowing it allows that host entirely — it can be sent whatever the sandbox can read, which is this project’s folder.'
+            + (ask.waiting > 1 ? ` ${ask.waiting} connections are waiting on this.` : '');
+        card.appendChild(reason);
+
+        const status = document.createElement('div');
+        status.className = 'text-xs font-mono text-slate-400 mt-2';
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex flex-wrap gap-2 mt-2';
+        const choices = [
+            ['once', '↻ Allow once', 'border-amber-500/50 text-amber-200 bg-amber-950/40 hover:bg-amber-900/40', 'Lets this attempt through and writes nothing. The next one asks again.'],
+            ['project', '✔ Allow for this project', 'border-emerald-500/50 text-emerald-300 bg-emerald-950/40 hover:bg-emerald-900/40', 'Writes the domain into this project’s .aether/policy.json. Nothing asks again.'],
+            ['deny', '✖ Refuse', 'border-rose-500/50 text-rose-300 bg-rose-950/40 hover:bg-rose-900/40', 'Refuses the connection and records it in Settings.'],
+        ];
+        const made = choices.map(([key, label, tone, title]) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `text-xs font-mono border px-3 py-1 rounded cursor-pointer ${tone}`;
+            button.textContent = label;
+            button.title = title;
+            button.dataset.decision = key;
+            buttons.appendChild(button);
+            return button;
+        });
+
+        const settle = (text, tone) => {
+            buttons.remove();
+            status.className = `text-xs font-mono mt-2 ${tone}`;
+            status.textContent = text;
+        };
+
+        for (const button of made) {
+            button.onclick = async () => {
+                for (const other of made) other.disabled = true;
+                status.textContent = 'Telling the command…';
+                try {
+                    const report = await netPolicyApi('/api/code/net/decide', 'code_net_decide_rust', {
+                        id: ask.id,
+                        decision: button.dataset.decision,
+                    });
+                    applyNetPolicy(report.status);
+                    // "settled" is false when the command gave up between the click and
+                    // the answer reaching it. For `project` the policy was still written,
+                    // and saying "allowed" about a command that has already failed would
+                    // send the operator looking for output that never comes.
+                    if (!report.settled) {
+                        settle(button.dataset.decision === 'project'
+                            ? `${ask.host} is allowed for this project now, but the command had already given up waiting. Run it again.`
+                            : 'The command gave up waiting before this was answered. Run it again.', 'text-amber-300');
+                        return;
+                    }
+                    settle({
+                        once: `↻ ${ask.host} allowed for this attempt only`,
+                        project: `✔ ${ask.host} allowed for this project`,
+                        deny: `✖ ${ask.host} refused`,
+                    }[button.dataset.decision], button.dataset.decision === 'deny' ? 'text-slate-400' : 'text-emerald-300');
+                } catch (e) {
+                    settle(`✖ Failed: ${e.message || e}`, 'text-rose-300');
+                }
+            };
+        }
+
+        card.appendChild(buttons);
+        card.appendChild(status);
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        voiceEngine.playSFX('alert');
+        return card;
+    }
+
+    /* Fetches the policy and draws a card for anything waiting that isn't already up.
+       Asking is also what marks this window as present -- see commands::code_net_status --
+       so this is the heartbeat the proxy holds connections open against. */
+    async function refreshNetPolicy() {
+        let status;
+        try {
+            status = await netPolicyApi('/api/code/net', 'code_net_status_rust');
+        } catch (e) {
+            console.warn('[AETHER1] could not read the sandbox network policy:', e);
+            return null;
+        }
+        applyNetPolicy(status);
+        for (const ask of status.asks || []) {
+            if (!chatContainer.querySelector(`[data-net-ask-id="${ask.id}"]`)) {
+                renderNetAskCard(ask);
+            }
+        }
+        return status;
+    }
+
+    document.getElementById('code-net-add-btn')?.addEventListener('click', async () => {
+        const box = document.getElementById('code-net-add');
+        const domain = (box?.value || '').trim();
+        if (!domain) return;
+        voiceEngine.playSFX('click');
+        try {
+            applyNetPolicy(await netPolicyApi('/api/code/net/allow', 'code_net_allow_rust', { domain }));
+            if (box) box.value = '';
+            netPolicyHint(`${domain} is allowed for this project.`, false);
+        } catch (e) {
+            netPolicyHint(`${domain} was not added: ${e.message || e}`, true);
+        }
+    });
+
+    document.getElementById('code-net-add')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('code-net-add-btn')?.click();
+        }
+    });
+
+    document.getElementById('code-net-clear-btn')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        try {
+            applyNetPolicy(await netPolicyApi('/api/code/net/clear', 'code_net_clear_rust', null));
+        } catch (e) {
+            netPolicyHint(`That list was not cleared: ${e.message || e}`, true);
+        }
+    });
+
+    /* The poll, gated twice.
+       The sandbox's network switch being off means the proxy can never be asked anything,
+       so there is nothing to poll for -- and `document.hidden` keeps a parked window out
+       of it, for the same reason the telemetry sampler parks: a HUD behind a game should
+       cost nothing. One consequence worth knowing: with no window polling, the proxy does
+       not wait at all. An unlisted host is refused immediately, with a message that says
+       so. That is the fail-closed direction, and it is what keeps the CLI and the test
+       suite behaving as they did before any of this existed. */
+    let netPollTimer = null;
+    const NET_POLL_MS = 5000;
+
+    function syncNetPoll() {
+        const wanted = !document.hidden && !!(lastNetStatus && lastNetStatus.network);
+        if (wanted && !netPollTimer) {
+            netPollTimer = setInterval(() => { refreshNetPolicy().then(syncNetPoll); }, NET_POLL_MS);
+        } else if (!wanted && netPollTimer) {
+            clearInterval(netPollTimer);
+            netPollTimer = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        // Coming back from hidden: ask once straight away rather than waiting out an
+        // interval, because a command may have been blocked the whole time the window was
+        // parked.
+        if (!document.hidden) refreshNetPolicy().then(syncNetPoll);
+        else syncNetPoll();
+    });
+
+    refreshNetPolicy().then(syncNetPoll);
 
     document.getElementById('setting-sfx')?.addEventListener('change', (e) => {
         applySfx(e.target.checked);

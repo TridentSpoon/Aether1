@@ -774,6 +774,131 @@ pub fn code_set_level(engine: &LlmEngine, level: &str) -> Result<Value, String> 
     }))
 }
 
+// ------------------------------------------------------------------ the domain policy
+//
+// The sandbox's network policy, which until now existed only as `aether1 code net` and
+// `aether1 code net-allow`. The CLI is still the whole of it on a headless machine; these
+// are what the Settings page and the HUD card ask, and they go through the same
+// `code_proxy` functions so the two surfaces cannot drift apart.
+
+/// What the sandbox may reach, what it has asked for, and what is waiting on an answer.
+///
+/// Calling this marks the operator as present (`note_watcher`), which is what lets the
+/// proxy hold a connection open while a card is on screen. That is deliberate and it is
+/// why the CLI does not call this: a window that is polling can be asked, and anything
+/// else cannot.
+pub fn code_net_status(engine: &LlmEngine) -> Value {
+    crate::code_proxy::note_watcher();
+    let db = engine.db();
+    let asks = crate::code_proxy::open_asks();
+    let root = match crate::code_workspace::root(db) {
+        Ok(root) => root,
+        // No project folder named. There is nothing to show a policy for -- it lives in
+        // the project's own file -- so the page says that rather than listing the starter
+        // domains as though they applied to something.
+        Err(_) => {
+            return serde_json::json!({
+                "root": Value::Null,
+                "network": crate::code_sandbox::network_allowed(db),
+                "allowed": Vec::<String>::new(),
+                "starter": crate::code_proxy::STARTER_DOMAINS,
+                "added": Vec::<String>::new(),
+                "removed": Vec::<String>::new(),
+                "pending": Vec::<String>::new(),
+                "denied": Vec::<Value>::new(),
+                "asks": asks,
+            });
+        }
+    };
+    let (added, removed) = crate::code_proxy::policy_lists(&root);
+    serde_json::json!({
+        "root": root.to_string_lossy(),
+        "file": crate::code_proxy::POLICY_FILE,
+        // Whether the switch is even on. An allowed-domain list is a confusing thing to
+        // read while the sandbox has no network at all, so the page can say so.
+        "network": crate::code_sandbox::network_allowed(db),
+        // The merged, effective list -- what the proxy will actually say yes to.
+        "allowed": crate::code_proxy::allowed(&root).into_iter().collect::<Vec<_>>(),
+        // And the three sources it is made of, because only two of them can be edited.
+        // A starter domain is removed by writing a `removed` row, not by deleting an
+        // `added` one, and the page cannot offer the right button without knowing which
+        // is which.
+        "starter": crate::code_proxy::STARTER_DOMAINS,
+        "added": added,
+        "removed": removed,
+        "pending": crate::code_proxy::pending(db),
+        "denied": crate::code_proxy::denied(db),
+        "asks": asks,
+    })
+}
+
+/// Adds a domain to the project's policy -- the Settings page's twin of `aether1 code
+/// net-allow <domain>`.
+pub fn code_net_allow(engine: &LlmEngine, domain: &str) -> Result<Value, String> {
+    let db = engine.db();
+    let root = crate::code_workspace::root(db)?;
+    crate::code_proxy::allow_domain(&root, domain)?;
+    crate::code_proxy::clear_pending(db);
+    Ok(code_net_status(engine))
+}
+
+/// Takes a domain back out. See `code_proxy::forget_domain` for why this can mean writing
+/// a row rather than deleting one.
+pub fn code_net_forget(engine: &LlmEngine, domain: &str) -> Result<Value, String> {
+    let root = crate::code_workspace::root(engine.db())?;
+    crate::code_proxy::forget_domain(&root, domain)?;
+    Ok(code_net_status(engine))
+}
+
+/// Answers a card: allow this attempt, allow the domain for this project, or refuse.
+///
+/// The order matters and is the reason this is one function rather than two calls from the
+/// frontend. For `project` the policy file is written *first* and the waiting connections
+/// are released *second*, so a connection can never wake up, re-read the policy, and find
+/// the domain not in it yet.
+pub fn code_net_decide(engine: &LlmEngine, id: &str, decision: &str) -> Result<Value, String> {
+    let choice = crate::code_proxy::Decision::from_key(decision).ok_or_else(|| {
+        format!("{decision:?} is not a choice. The three are: once, project, deny")
+    })?;
+    // The host the card was about, taken from the open question rather than from the
+    // frontend: an id names one question, and a host sent alongside it would be a second
+    // claim about which one, which could disagree.
+    let host = crate::code_proxy::open_asks()
+        .into_iter()
+        .find(|ask| ask.id == id)
+        .map(|ask| ask.host)
+        .ok_or_else(|| {
+            "that question is no longer waiting -- it was answered elsewhere, or the \
+             command gave up before anybody chose."
+                .to_string()
+        })?;
+
+    if choice == crate::code_proxy::Decision::Project {
+        let root = crate::code_workspace::root(engine.db())?;
+        crate::code_proxy::allow_domain(&root, &host)?;
+        crate::code_proxy::clear_pending(engine.db());
+    }
+
+    // Releases whatever is waiting. A `None` here means the question timed out between the
+    // card being clicked and this line, which is reported rather than passed off as done:
+    // for `project` the policy was still written, and saying "allowed" about a command
+    // that has already failed would send the operator looking for output that never comes.
+    let settled = crate::code_proxy::settle(id, choice).is_some();
+    Ok(serde_json::json!({
+        "host": host,
+        "decision": choice.key(),
+        "settled": settled,
+        "status": code_net_status(engine),
+    }))
+}
+
+/// Forgets the refusal log the Settings page shows.
+pub fn code_net_clear_denied(engine: &LlmEngine) -> Value {
+    crate::code_proxy::clear_denied(engine.db());
+    crate::code_proxy::clear_pending(engine.db());
+    code_net_status(engine)
+}
+
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {
     let Some(map) = settings.as_object() else {
         return Err("settings payload must be a JSON object".to_string());
