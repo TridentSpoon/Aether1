@@ -2140,21 +2140,22 @@
                         </div>
 
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Graft builds a graph of your codebase to help understand its structure. The graph
-                            is automatically kept in sync with your code &mdash; it rebuilds periodically or
-                            when changes are detected. Once built, relevant code nodes are injected into the
-                            AI's context when answering code questions.
+                            Graft builds a graph of your codebase to help understand its structure. Install it
+                            with <span class="text-cyan-300">npm install -g @nanonets/graft</span>, then pick a
+                            project and build its graph. Once built, the code nodes relevant to a question are
+                            injected into the AI's context, each with the file and line to read.
                         </p>
 
                         <div class="mt-3">
-                            <label for="setting-graft-autosync" class="text-xs font-mono text-cyan-300 block mb-1">AUTO-SYNC</label>
+                            <label for="setting-graft-autorefresh" class="text-xs font-mono text-cyan-300 block mb-1">AUTO-SYNC</label>
                             <div class="flex items-center gap-2">
-                                <input id="setting-graft-autosync" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                                <label for="setting-graft-autosync" class="text-xs font-mono text-slate-300">Auto-rebuild every hour or when code changes</label>
+                                <input id="setting-graft-autorefresh" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                                <label for="setting-graft-autorefresh" class="text-xs font-mono text-slate-300">Re-index changed files before answering</label>
                             </div>
                             <p class="text-[10px] font-mono text-slate-400 leading-snug mt-1">
-                                Graft automatically detects code changes and rebuilds the graph. Disable this to
-                                only rebuild manually via the "Build Graph" button.
+                                Graft re-indexes the files that changed since the last question, which takes
+                                about a second. Switch this off to answer from the graph as it was last built,
+                                where the line numbers may have moved.
                             </p>
                         </div>
                     </div>

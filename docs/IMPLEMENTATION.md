@@ -3797,3 +3797,48 @@ Each one asserts on the host disk, not on the message.
 
 `libc` becomes a direct dependency under `cfg(unix)` for `openat`, `mkdirat` and `fstatat`. It
 was already in the tree via Tauri.
+
+## Step 59 — Graft is wired to the tool that actually exists
+
+**Before.** `graft.rs` looked for the graph in `<project>/.graft` and read the Markdown files
+sitting directly in it. Graft has never written that folder: `graft build` writes
+`<project>/graft`, with `INDEX.md` at the top and the cards in a tree underneath. So a project
+with a perfectly good graph reported "Not built", the Build Graph button appeared to do nothing,
+and `prime` returned an empty string on every turn. Nothing about the feature worked, on any
+machine, however Graft was installed.
+
+**The staleness check was broken too**, in a way the folder bug hid. `has_code_changed` read one
+directory -- `read_dir` on the project root, no recursion -- and compared mtimes of source files
+found there. Aether1's own sources are all under `src-tauri/` and `frontend/`, so the answer was
+always "nothing changed"; the only thing that ever triggered a rebuild was the hour timer.
+
+**Now it asks Graft the question instead of reading its files.** `graft ask --json -n 5` ranks
+the nodes that bear on the turn and returns each one's `file:line` and signature, which is
+better than the line-grep over Markdown it replaces -- the model gets a pointer it can open
+rather than a line of prose. `ask` re-indexes the files that changed before it answers (one file,
+about a second, measured on this repo), so the rebuild schedule, the mtime walk and the stored
+last-build timestamp are all gone rather than fixed. `graft build` stays behind the Settings
+button for the first build, which is the long one.
+
+**AUTO-SYNC was a checkbox wired to nothing.** It is now `graft_auto_refresh`, read by `prime`,
+and it chooses whether `ask` gets `--no-refresh`. Off means answers come from the graph as last
+built, where the line numbers may have moved -- which is the honest description of what that
+switch does, so that is what it says.
+
+**Finding the binary.** `graft` is an npm global, and a desktop launcher does not start the app
+from the operator's shell, so npm's bin directory is routinely absent from PATH even though
+`graft` runs fine in a terminal -- nvm most of all, since a shell init file is what adds it.
+PATH is asked first, through the same `find_installed_binary` as every other binary we shell out
+to; then npm's own prefixes, including each installed Node version under `~/.nvm`; and
+`GRAFT_BIN` overrides both. A spawn that still fails says how to install it.
+
+**Both commands are killed if they outstay their budget** -- 20 seconds for a question, 15
+minutes for a build -- using the same poll-and-kill as `code_workspace::run`, because a wedged
+subprocess otherwise holds a Tauri command open until the operator gives up on the window. A
+question Graft cannot answer is not a failed turn: it is logged and dropped, and the model reads
+the code itself.
+
+**Measured against graft 0.21.1** on this repository: 4038 nodes, 6001 edges, 112 cards. The
+status now reads Ready, a question returns five pointers, and the two failure modes worth telling
+apart -- no `graft/` folder at all, and a `graft/` folder with no index, which is what a build
+that died halfway leaves -- report differently, because the fix for each is different.

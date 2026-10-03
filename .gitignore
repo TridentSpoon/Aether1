@@ -25,3 +25,8 @@ backend/serve_devices.json
 # committable than the token hash beside it.
 backend/serve_pair_code.json
 backend/serve_peers.json
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+# and the .ignore graft writes beside it, which re-admits that cache to ripgrep.
+/.ignore
