@@ -32,6 +32,7 @@ mod code_setup;
 mod code_tools;
 mod code_workspace;
 mod commands;
+mod desktop_theme;
 mod discovery;
 mod doctor;
 mod downloads;
@@ -1534,6 +1535,11 @@ fn audio_devices_rust() -> serde_json::Value {
 }
 
 #[tauri::command(async)]
+fn desktop_theme_rust() -> serde_json::Value {
+    commands::desktop_theme()
+}
+
+#[tauri::command(async)]
 fn start_local_server_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::start_local_server(&engine)
 }
@@ -2857,6 +2863,7 @@ fn main() {
             voice_download_status_rust,
             forget_voice_download_rust,
             audio_devices_rust,
+            desktop_theme_rust,
             start_local_server_rust,
             get_static_info_rust,
             get_tools_rust,

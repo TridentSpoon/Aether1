@@ -150,6 +150,17 @@
         if (engine) engine.setColorPalette(Aether1Theme.paletteFor(activeColours()));
     });
 
+    /* "Your theme (as set in the HUD)" has to mean the same thing here as it does there, and
+       while the HUD is following the desktop that includes the desktop's own accent colour --
+       which is not in localStorage and cannot be, so it has to be asked for over the bridge.
+       Skipped while a preset is being previewed, for the same reason the storage event above
+       is: a preview is a deliberate override. */
+    Aether1Theme.followDesktop(() => {
+        if (currentTheme) return;
+        paintLabTheme();
+        if (engine) engine.setColorPalette(Aether1Theme.paletteFor(activeColours()));
+    });
+
     $('lab-theme').addEventListener('change', (e) => {
         currentTheme = e.target.value;
         engine.setColorPalette(Aether1Theme.paletteFor(activeColours()));
