@@ -59,6 +59,10 @@ struct AppState {
 struct LanState {
     auth: Arc<ServeAuth>,
     limiter: Arc<AttemptLimiter>,
+    /// This machine's own certificate fingerprint, which is the salt every bound pairing
+    /// proof is made with. Carried on the state because `/api/pair` has to recompute the
+    /// proof it expects on each attempt, and the certificate is loaded once at startup.
+    fingerprint: Arc<String>,
 }
 
 /// The port both modes listen on. Named here because it is the one thing start.sh,
@@ -237,22 +241,31 @@ pub async fn run(engine: LlmEngine, lan: bool) {
                  one. Run `aether1 pair` later to generate a new phrase and revoke this one.\n"
             );
         }
-        let lan_state = LanState {
-            auth: Arc::new(auth),
-            limiter: Arc::new(AttemptLimiter::new()),
-        };
-        let pair_router = Router::new()
-            .route("/api/pair", post(pair))
-            .with_state(lan_state.clone());
-        app = app
-            .route_layer(middleware::from_fn_with_state(lan_state, require_lan_token))
-            .merge(pair_router);
-
+        // Loaded before the pairing state is built, not after: a bound pairing proof is
+        // salted with this machine's fingerprint, so `/api/pair` cannot check one without
+        // the certificate already in hand.
         let certificate =
             serve_tls::load_or_create().expect("could not set up the --lan certificate");
         if matches!(certificate.origin, serve_tls::Origin::New) {
             println!("[AETHER1] --lan: made this machine a certificate to identify itself by.");
         }
+
+        let lan_state = LanState {
+            auth: Arc::new(auth),
+            limiter: Arc::new(AttemptLimiter::new()),
+            fingerprint: Arc::new(certificate.fingerprint.clone()),
+        };
+        let pair_router = Router::new()
+            // GET says which certificate this machine identifies itself by, POST pairs. The
+            // GET is deliberately open: it tells a caller nothing the TLS handshake has not
+            // already told them, and a device about to pair needs the fingerprint to bind
+            // its proof to -- taken from the handshake it actually made, with this as the
+            // thing an operator can read back and compare by eye.
+            .route("/api/pair", get(pairing_identity).post(pair))
+            .with_state(lan_state.clone());
+        app = app
+            .route_layer(middleware::from_fn_with_state(lan_state, require_lan_token))
+            .merge(pair_router);
         println!(
             "\n[AETHER1] --lan certificate fingerprint (SHA-256):\n\n    {}\n\n\
              Your browser will warn that nobody vouches for this certificate, which is true: \
@@ -287,10 +300,11 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         // still be told what it means on the day they run it somewhere unfamiliar.
         println!(
             "[AETHER1] --lan: reachable from your network over TLS, but every request needs \
-             a token of its own -- a device gets one by POSTing the pairing phrase to \
-             /api/pair, and until then AETHER1 refuses to show your conversation or run \
-             anything. `aether1 devices` lists what is paired; `aether1 revoke <id>` cuts \
-             one off straight away."
+             a token of its own -- a device gets one by proving the pairing phrase or a \
+             one-time code at /api/pair, bound to the certificate above so that nothing \
+             answering in this machine's name can collect it, and until then AETHER1 \
+             refuses to show your conversation or run anything. `aether1 devices` lists \
+             what is paired; `aether1 revoke <id>` cuts one off straight away."
         );
     } else {
         println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
@@ -442,11 +456,26 @@ async fn require_lan_token(
 
 #[derive(Deserialize)]
 struct PairRequest {
-    /// The twelve-word phrase, or the eight-character code the pairing sequence put on
-    /// screen. One field for both because a device is answering one question -- "what did
-    /// the other machine tell you" -- and which kind of secret it is, is for this end to
-    /// work out, not for the person typing.
+    /// A secret as typed, which is now only ever the eight-character code the pairing
+    /// sequence put on screen. It stays one field rather than becoming two because a
+    /// device is still answering one question -- "what did the other machine tell you" --
+    /// and which kind of secret it is, is for this end to work out, not for the person
+    /// typing.
+    ///
+    /// The twelve-word phrase used to be accepted here too. It is not any more: see `pair`
+    /// for why, and for what is sent in its place.
+    #[serde(default)]
     phrase: String,
+    /// The pairing phrase bound to this machine's certificate --
+    /// `serve_auth::bind_to_certificate(phrase hash, fingerprint)`. What AETHER1's own
+    /// pairing sends in place of the phrase, so that the words themselves never leave the
+    /// machine they were typed on and a proof collected by an impostor is a proof for the
+    /// impostor's certificate.
+    #[serde(default)]
+    phrase_proof: Option<String>,
+    /// The one-time code bound the same way.
+    #[serde(default)]
+    code_proof: Option<String>,
     /// What to call this device in the list. Optional: a browser will not send one, so the
     /// User-Agent stands in, and an operator can always tell one entry from another by when
     /// it paired even if both are called the same thing.
@@ -478,10 +507,21 @@ fn label_from_user_agent(request_headers: &header::HeaderMap, peer: SocketAddr) 
     }
 }
 
-/// The one route under `--lan` that needs no token -- it's what produces one. `phrase` is
-/// checked and discarded here; only the derived token it resolves to ever goes back over the
-/// wire, matching serve_auth's rule that the phrase itself never leaves the two ends that
-/// already know it (the person who read it off this machine, and whoever they typed it into).
+/// What certificate this machine identifies itself by, so a device can bind its pairing
+/// proof to the machine it is actually talking to and an operator can check the two agree.
+///
+/// Not a secret: anyone who completes a TLS handshake here has already been handed the
+/// whole certificate, and this is a digest of it.
+async fn pairing_identity(State(lan): State<LanState>) -> Response {
+    Json(serde_json::json!({ "fingerprint": lan.fingerprint.as_str() })).into_response()
+}
+
+/// The one route under `--lan` that needs no token -- it's what produces one. Nothing a
+/// device sends here is a credential in the clear: what it proves is knowledge of one,
+/// bound to this machine's certificate, and only the device token it earns ever goes back
+/// over the wire. That keeps serve_auth's rule that the phrase itself never leaves the two
+/// ends that already know it (the person who read it off this machine, and whoever they
+/// typed it into) -- and makes it true of the network in between as well.
 async fn pair(
     State(lan): State<LanState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -492,26 +532,66 @@ async fn pair(
     if let Some(wait) = lan.limiter.retry_after(ip) {
         return too_many_attempts(wait);
     }
-    // The one-time code is tried first, and a code that works ends the matter. It is the
-    // shorter of the two and cannot be mistaken for a mnemonic, so there is no case where
-    // one secret has to be told apart from the other.
-    let by_code = lan.auth.code_matches(&req.phrase);
-    if !by_code {
-        // A phrase that isn't valid BIP-39 counts as a failure too: it is still a guess, and
-        // letting malformed ones through free would make the budget trivial to avoid.
-        let Ok(token) = serve_auth::derive_token_from_phrase(&req.phrase) else {
-            lan.limiter.record_failure(ip);
+    // Bound proofs first, because that is what AETHER1's own pairing sends and the only
+    // form the standing phrase is accepted in at all. The code is tried before the phrase
+    // for the same reason it always was: it is the shorter of the two and cannot be
+    // mistaken for a mnemonic.
+    let by_code_proof = req
+        .code_proof
+        .as_deref()
+        .is_some_and(|proof| lan.auth.code_proof_matches(proof, &lan.fingerprint));
+    let by_phrase_proof = !by_code_proof
+        && req
+            .phrase_proof
+            .as_deref()
+            .is_some_and(|proof| lan.auth.phrase_proof_matches(proof, &lan.fingerprint));
+    let offered_a_proof = req.phrase_proof.is_some() || req.code_proof.is_some();
+
+    // A raw secret in the body can only ever be a one-time code now. The standing phrase
+    // used to be accepted here too, and that is exactly what made an impostor on the
+    // network worth being: machines are found over DNS-SD, which anyone can answer, so a
+    // convincing fake in the scan list collected the phrase in the clear and then paired
+    // with the real machine at its leisure. A one-time code is a far smaller prize -- single
+    // use, ten minutes, and only alive while the operator is deliberately pairing -- so it
+    // stays typeable in a browser, which has no way to see a certificate fingerprint.
+    let by_raw_code = !by_code_proof
+        && !by_phrase_proof
+        && !req.phrase.trim().is_empty()
+        && lan.auth.code_matches(&req.phrase);
+
+    if !by_code_proof && !by_phrase_proof && !by_raw_code {
+        lan.limiter.record_failure(ip);
+        // A raw phrase that is otherwise correct gets told what to do about it, rather than
+        // being called wrong: it is the one refusal here an honest operator will hit.
+        let correct_phrase_unbound = !offered_a_proof
+            && serve_auth::derive_token_from_phrase(&req.phrase)
+                .is_ok_and(|token| lan.auth.phrase_matches(&token));
+        if correct_phrase_unbound {
             return (
-                StatusCode::BAD_REQUEST,
-                "that is not the pairing code or the pairing phrase".to_string(),
+                StatusCode::UNAUTHORIZED,
+                "that is the right phrase, but a phrase typed into a browser cannot prove \
+                 which machine it reached. Pair from the AETHER1 app, which checks this \
+                 machine's certificate, or ask this machine for a one-time code and type \
+                 that instead."
+                    .to_string(),
             )
                 .into_response();
-        };
-        if !lan.auth.phrase_matches(&token) {
-            lan.limiter.record_failure(ip);
-            return (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response();
         }
+        if offered_a_proof {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "that machine did not accept the code or phrase for this certificate".to_string(),
+            )
+                .into_response();
+        }
+        return (
+            StatusCode::BAD_REQUEST,
+            "that is not a live pairing code for this machine".to_string(),
+        )
+            .into_response();
     }
+
+    let by_code = by_code_proof || by_raw_code;
 
     lan.limiter.record_success(ip);
     // Spent on the way in, so the code lets exactly one device through. The phrase is not

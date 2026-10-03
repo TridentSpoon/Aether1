@@ -5419,6 +5419,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const lanPhraseStateEl = document.getElementById('lan-phrase-state');
     const lanNoticeEl = document.getElementById('lan-notice');
     const lanAddressEl = document.getElementById('lan-address');
+    const lanFingerprintEl = document.getElementById('lan-fingerprint');
     const lanPortEl = document.getElementById('lan-port');
     const lanDevicesEl = document.getElementById('lan-devices');
     const btnLanToggle = document.getElementById('btn-lan-toggle');
@@ -5492,6 +5493,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 : 'no network address on this machine';
         }
         if (lanPortEl) lanPortEl.textContent = String(report.port ?? 8378);
+        if (lanFingerprintEl) {
+            // Null until --lan has run once: the certificate is made the first time this
+            // machine goes on the network, and a pane being looked at should not make one.
+            lanFingerprintEl.textContent = report.fingerprint
+                || 'made the first time this machine goes on the network';
+        }
 
         renderDevices(devices, lanDevicesEl, btnLanRevokeAll, refreshLan);
     }
@@ -6024,6 +6031,29 @@ document.addEventListener('DOMContentLoaded', () => {
         label.textContent =
             `On ${peer.name}, open Settings, Network & Remote, Pair a device. Type the code `
             + 'it shows here. Its twelve-word phrase works too.';
+
+        /* A machine is found by asking the network who is out there, and anything on the
+           network can answer in anyone's name. So the name on this row proves nothing and
+           the fingerprint is the only thing that does: it is a digest of a certificate
+           whose private key that machine has, which an impostor cannot copy. The other
+           machine prints it when it starts and shows it in its own pane, so the two can be
+           compared by eye -- and until they have been, there is nothing to press. */
+        const identity = document.createElement('div');
+        identity.className = 'net-peer-identity';
+        const identityLabel = document.createElement('p');
+        identityLabel.className = 'net-row-hint';
+        identityLabel.textContent = 'Checking which machine this is…';
+        const print = document.createElement('p');
+        print.className = 'net-peer-print hidden';
+        const confirmRow = document.createElement('label');
+        confirmRow.className = 'net-peer-confirm hidden';
+        const confirm = document.createElement('input');
+        confirm.type = 'checkbox';
+        const confirmText = document.createElement('span');
+        confirmText.textContent = `This is what ${peer.name} shows`;
+        confirmRow.append(confirm, confirmText);
+        identity.append(identityLabel, print, confirmRow);
+
         const field = document.createElement('input');
         field.type = 'text';
         // The same field the phrase box uses, so it is the one input style in the pane.
@@ -6035,6 +6065,8 @@ document.addEventListener('DOMContentLoaded', () => {
         go.type = 'button';
         go.className = 'net-card-action';
         go.textContent = 'Pair';
+        // Nothing is typed at a machine whose identity has not been read back yet.
+        go.disabled = true;
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'net-card-action net-card-action-quiet';
@@ -6045,9 +6077,33 @@ document.addEventListener('DOMContentLoaded', () => {
         const close = () => { box.remove(); pairButton.disabled = false; };
         cancel.addEventListener('click', close);
 
+        /* Read before anything secret is typed, and kept: what goes to the Rust side with
+           the code is the fingerprint the operator actually looked at, so a machine that
+           swaps certificates between the look and the press is refused rather than pinned. */
+        let seen = '';
+        confirm.addEventListener('change', () => {
+            go.disabled = !(confirm.checked && seen);
+        });
+        tauriInvoke('lan_peer_fingerprint_rust', { address, port: peer.port })
+            .then(report => {
+                seen = String(report?.fingerprint || '');
+                if (!seen) throw new Error('that machine did not identify itself');
+                identityLabel.textContent =
+                    `Check this against the fingerprint ${peer.name} shows under Network & `
+                    + 'Remote, or printed when it started:';
+                print.textContent = seen;
+                print.classList.remove('hidden');
+                confirmRow.classList.remove('hidden');
+            })
+            .catch(e => {
+                identityLabel.textContent =
+                    `Could not ask ${peer.name} which machine it is: ${e.message || e}`;
+                identityLabel.dataset.tone = 'bad';
+            });
+
         async function submit() {
             const secret = field.value.trim();
-            if (!secret) return;
+            if (!secret || go.disabled) return;
             go.disabled = true;
             field.disabled = true;
             go.textContent = 'Pairing…';
@@ -6055,6 +6111,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const report = await tauriInvoke('lan_pair_with_rust', {
                     name: peer.name, address, port: peer.port, secret,
+                    expect_fingerprint: seen,
                 });
                 // The row is redrawn from the fresh status, so "Paired" is the Rust side's
                 // answer rather than this side assuming the press worked.
@@ -6079,7 +6136,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const controls = document.createElement('div');
         controls.className = 'net-field-row';
         controls.append(field, go, cancel);
-        box.append(label, controls, outcome);
+        box.append(label, identity, controls, outcome);
         row.append(box);
         field.focus();
     }
