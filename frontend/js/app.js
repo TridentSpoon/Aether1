@@ -62,11 +62,16 @@ function apiFetch(path, options) {
         });
 }
 
-/* The same credential for the `/ws/*` routes. It travels as a WebSocket subprotocol rather
- * than in the URL -- the constructor's second argument is the one handshake header a browser
- * lets a page set, and a URL is the part of a request that ends up in logs. */
+/* The credential for the `/ws/*` routes. Not the same one: a socket is opened with a
+ * single-use ticket, bought with the device token at `/api/ws-ticket`, so a handshake that
+ * ends up in a log is worth nothing a minute later. It travels as a WebSocket subprotocol
+ * because the constructor's second argument is the one handshake header a browser lets a
+ * page set.
+ *
+ * Asynchronous because buying the ticket is a round trip. Every caller must await it; a
+ * socket handed this Promise instead of the array it resolves to fails obscurely. */
 function apiWsProtocols() {
-    return window.LanAuth ? window.LanAuth.wsProtocols() : ['aether1'];
+    return window.LanAuth ? window.LanAuth.wsProtocols() : Promise.resolve(['aether1']);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -117,6 +122,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
     const chatContainer = document.getElementById('chat-messages');
     const chatInput = document.getElementById('chat-input');
+    const chatMediaInput = document.getElementById('chat-media-input');
+    const chatMediaButton = document.getElementById('btn-chat-media');
+    const chatMediaPreviews = document.getElementById('chat-media-previews');
+    let pendingChatImages = [];
     const btnSend = document.getElementById('btn-send');
     const btnMic = document.getElementById('btn-mic');
     const btnSettings = document.getElementById('btn-settings');
@@ -151,10 +160,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Sections that have been folded into another one. Only the remembered choice can still
     // name one, so this is what stops somebody who was last in Desktop Sprite from being
     // dropped back at the top of the rail the first time they open Settings after updating.
-    const SETTINGS_SECTION_ALIASES = { sprite: 'layout', lan: 'network' };
+    const SETTINGS_SECTION_ALIASES = { sprite: 'layout', lan: 'network', avatars: 'appearance' };
     const settingsNav = document.getElementById('settings-nav');
     const settingsNavEmpty = document.getElementById('settings-nav-empty');
     const settingsSearch = document.getElementById('settings-search');
+    const connectionsHost = document.getElementById('settings-connections-host');
+    const connectionsGroup = document.getElementById('settings-group-connections');
+    if (connectionsHost && connectionsGroup) connectionsHost.appendChild(connectionsGroup);
     const settingsNavItems = () => Array.from(document.querySelectorAll('.settings-nav-item'));
     const settingsPaneFor = (name) => document.querySelector(`.settings-pane[data-settings-section="${name}"]`);
     const settingsNavFor = (name) => document.getElementById(`settings-nav-${name}`);
@@ -166,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const settingsNavIsAdvanced = (item) => !!item && !!settingsNavAdvanced?.contains(item);
 
     function showSettingsSection(name) {
-        const item = settingsNavFor(name);
+        const item = settingsNavFor(name === 'avatars' ? 'appearance' : name);
         if (!item || item.classList.contains('hidden')) return false;
         // An entry folded inside Advanced would otherwise be marked active out of sight,
         // which is how the remembered section arrives after a restart.
@@ -190,10 +202,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Same reasoning as the avatar browser's: the stage you were on is only meaningful
         // while you are in the section. Coming back to Appearance should land on the pane,
         // not halfway inside the colour panel you left open yesterday.
-        if (name !== 'appearance') showAppearanceStage('main');
+        if (name !== 'appearance' && name !== 'avatars') showAppearanceStage('main');
         const detail = document.getElementById('settings-detail');
         if (detail) detail.scrollTop = 0;
-        try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) { /* private mode */ }
+        try { localStorage.setItem(SETTINGS_SECTION_KEY, name === 'avatars' ? 'appearance' : name); } catch (e) { /* private mode */ }
         // A section that fills itself when it is chosen listens for this rather than being
         // called from here: the panes are set up further down the file, and this runs
         // before them when the remembered section is restored.
@@ -219,6 +231,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!item) return;
         voiceEngine.playSFX('click');
         showSettingsSection(item.dataset.settingsSection);
+    });
+
+    settingsModal.addEventListener('click', (event) => {
+        const suggestion = event.target.closest('[data-prompt-suggestion]');
+        if (!suggestion) return;
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        input.value = suggestion.dataset.promptSuggestion;
+        settingsModal.classList.add('hidden');
+        input.focus();
     });
 
     // Filters the rail by heading, by the plain-words hint beside it, and by a list of
@@ -298,6 +320,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Version & Update Elements (native desktop app only -- see IS_TAURI below)
     const versionBadge = document.getElementById('version-badge');
+    const headerUpdateButton = document.getElementById('btn-header-update');
+    const headerUpdateProgress = document.getElementById('header-update-progress');
+    const headerUpdateProgressBar = document.getElementById('header-update-progress-bar');
+    const headerUpdateProgressText = document.getElementById('header-update-progress-text');
     const updateSection = document.getElementById('update-section');
     const settingsVersionLabel = document.getElementById('settings-version-label');
     const updateStatusBox = document.getElementById('update-status-box');
@@ -1376,6 +1402,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 voiceEngine.playSFX('click');
                 const target = btn.dataset.avatarBack;
                 if (target === 'members' && avatarBrowserGroup) openAvatarGroup(avatarBrowserGroup);
+                else if (target === 'appearance') showSettingsSection('appearance');
                 else showAvatarStage('groups');
             });
         });
@@ -1954,7 +1981,10 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshFlowMode();
     }
 
-    function connectTelemetry() {
+    /* Async because a browser socket now has to buy a ticket first. Both callers treat it
+       as fire-and-forget -- startup and the reconnect timer -- so nothing awaits it; what
+       matters is that the await inside happens before the socket is constructed. */
+    async function connectTelemetry() {
         if (IS_TAURI) {
             if (!window.__TAURI__ || !window.__TAURI__.event) {
                 console.error('Tauri event bridge unavailable; live telemetry will not update.');
@@ -1981,7 +2011,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
-        const ws = new WebSocket(wsUrl, apiWsProtocols());
+        /* Awaited, so the socket is opened with a ticket rather than with a Promise. The
+           reconnect below calls this function again, which buys a fresh ticket each time --
+           which is what single-use means. */
+        const ws = new WebSocket(wsUrl, await apiWsProtocols());
 
         ws.onmessage = (event) => {
             try {
@@ -2610,7 +2643,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!resp.ok) throw new Error(await resp.text());
                     return (await resp.json()).text;
                 })();
-            if (text && text.trim()) handleSendMessage(text.trim());
+            if (text && text.trim()) {
+                window.AETHER_VOICE_REQUESTED = true;
+                try { await handleSendMessage(text.trim()); }
+                finally { window.AETHER_VOICE_REQUESTED = false; }
+            }
         } catch (e) {
             appendMessage(currentAgentName, `⚠️ Could not make that out: ${e.message || e}`);
         }
@@ -3057,7 +3094,7 @@ document.addEventListener('DOMContentLoaded', () => {
     /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
     /// Resolves with the authoritative final reply -- the deltas are for display, the
     /// return value is what gets rendered as final text.
-    async function streamChat(text, sessionId, onDelta, onHandover) {
+    async function streamChat(text, sessionId, onDelta, onHandover, media = []) {
         if (IS_TAURI) {
             const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
             const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
@@ -3072,7 +3109,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             try {
                 return await tauriInvoke('generate_response_streaming_rust', {
-                    prompt: text, sessionId, streamId
+                    prompt: text, sessionId, streamId, media
                 });
             } finally {
                 unlisten();
@@ -3082,11 +3119,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Browser fallback: the same conversation over a WebSocket, since the socket
         // plumbing already exists here for telemetry (see /ws/chat in server.rs).
+        const chatProtocols = await apiWsProtocols();
         return await new Promise((resolve, reject) => {
             const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
-            const socket = new WebSocket(`${wsBase}/ws/chat`, apiWsProtocols());
+            const socket = new WebSocket(`${wsBase}/ws/chat`, chatProtocols);
             socket.onopen = () => socket.send(JSON.stringify({
-                message: text, session_id: sessionId, generate_voice: false
+                message: text, session_id: sessionId, generate_voice: false, media
             }));
             socket.onmessage = (event) => {
                 let data;
@@ -3186,9 +3224,47 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function renderChatImagePreviews() {
+        if (!chatMediaPreviews) return;
+        chatMediaPreviews.replaceChildren();
+        chatMediaPreviews.classList.toggle('hidden', pendingChatImages.length === 0);
+        pendingChatImages.forEach((image, index) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'relative border border-cyan-500/40 rounded overflow-hidden';
+            const img = document.createElement('img');
+            img.src = image.dataUrl;
+            img.alt = image.name || 'Image attachment preview';
+            img.className = 'w-16 h-16 object-cover';
+            const remove = document.createElement('button');
+            remove.type = 'button'; remove.textContent = '×';
+            remove.className = 'absolute top-0 right-0 bg-slate-950/90 text-cyan-200 px-1';
+            remove.setAttribute('aria-label', `Remove ${img.alt}`);
+            remove.addEventListener('click', () => { pendingChatImages.splice(index, 1); renderChatImagePreviews(); });
+            wrap.append(img, remove); chatMediaPreviews.appendChild(wrap);
+        });
+    }
+
+    async function addChatImageFiles(files) {
+        const accepted = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+        for (const file of Array.from(files || [])) {
+            if (!accepted.includes(file.type)) { alert('Attach PNG, JPEG, WebP, or GIF images.'); continue; }
+            if (file.size > 8 * 1024 * 1024) { alert(`${file.name} is larger than 8 MB.`); continue; }
+            if (pendingChatImages.length >= 4) { alert('Attach up to four images per message.'); break; }
+            if (pendingChatImages.reduce((sum, item) => sum + item.size, file.size) > 16 * 1024 * 1024) {
+                alert('Images must total 16 MB or less.'); continue;
+            }
+            const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file);
+            }).catch(() => null);
+            if (typeof dataUrl === 'string') pendingChatImages.push({ name: file.name, size: file.size, mime_type: file.type, dataUrl });
+        }
+        renderChatImagePreviews();
+    }
+
     async function handleSendMessage(customPrompt = null) {
-        const text = customPrompt || chatInput.value.trim();
-        if (!text || isWaitingForResponse) return;
+        const media = pendingChatImages.map(({ mime_type, dataUrl }) => ({ mime_type, data_base64: dataUrl.split(',', 2)[1] || '' }));
+        const text = (customPrompt || chatInput.value.trim() || (media.length ? 'Please analyze the attached image(s).' : '')).trim();
+        if ((!text && !media.length) || isWaitingForResponse) return;
 
         // Trace Protocols: a hidden egg only ever surfaces on top of The Nexus, never from
         // any other avatar -- see AVATAR_TRIGGER_RULES above. Checked before the brain
@@ -3215,7 +3291,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         chatInput.value = '';
-        appendMessage('user', text);
+        const userMessage = appendMessage('user', `${text}${media.length ? `\n\n[${media.length} image${media.length === 1 ? '' : 's'} attached]` : ''}`);
+        media.forEach((image, index) => {
+            const preview = document.createElement('img');
+            preview.src = pendingChatImages[index].dataUrl;
+            preview.alt = `Attached image ${index + 1}`;
+            preview.className = 'mt-2 mr-2 inline-block max-w-48 max-h-48 rounded border border-cyan-500/30 object-contain';
+            userMessage.bodyDiv.appendChild(preview);
+        });
+        pendingChatImages = [];
+        renderChatImagePreviews();
         voiceEngine.playSFX('click');
         // A new question supersedes anything still being spoken -- and anything still being
         // synthesized. Dropping the queue alone left the previous reply's remaining
@@ -3327,7 +3412,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         try {
-            const data = await streamChat(text, currentSessionId, onDelta, onHandover);
+            const data = await streamChat(text, currentSessionId, onDelta, onHandover, media);
             // Something came back, so whatever loading was going to happen has happened:
             // no later question in this session gets the first-run explanation.
             hasAnsweredThisSession = true;
@@ -4314,8 +4399,10 @@ document.addEventListener('DOMContentLoaded', () => {
        In a browser the button is replaced by the command alone: there is no terminal
        behind it, and a button that cannot work is worse than no button. */
     function codeCommandRow(command) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mt-1';
         const row = document.createElement('div');
-        row.className = 'flex items-center gap-2 mt-1';
+        row.className = 'flex items-center gap-2';
 
         const text = document.createElement('code');
         text.className = 'flex-1 min-w-0 truncate font-mono text-[11px] text-cyan-200 bg-slate-950/60 border border-cyan-500/20 rounded px-2 py-1';
@@ -4323,7 +4410,7 @@ document.addEventListener('DOMContentLoaded', () => {
         text.title = command;
         row.appendChild(text);
 
-        if (!IS_TAURI) return row;
+        if (!IS_TAURI) { wrapper.appendChild(row); return wrapper; }
 
         const button = document.createElement('button');
         button.type = 'button';
@@ -4339,7 +4426,77 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(() => { button.textContent = '⌨ To terminal'; }, 2500);
         });
         row.appendChild(button);
-        return row;
+
+        const githubCommand = /^\s*gh\s+/.test(command);
+        const externalWrite = /^\s*(?:gh\s+pr\s+(?:create|merge)|git\s+push)\b/.test(command);
+        const approve = document.createElement('button');
+        approve.type = 'button';
+        approve.className = 'cyber-btn cyber-btn-active text-[10px] py-1 px-2 whitespace-nowrap shrink-0';
+        approve.textContent = externalWrite ? 'Review remote action' : (githubCommand ? 'Review GitHub command' : 'Run with Aether1');
+        approve.title = 'Review the exact command before Aether1 runs it.';
+        row.appendChild(approve);
+
+        const approval = document.createElement('div');
+        approval.className = 'hidden mt-2 p-2 border border-amber-500/30 rounded bg-amber-950/20';
+        const exact = document.createElement('code');
+        exact.className = 'block break-all whitespace-pre-wrap text-[11px] font-mono text-cyan-100 bg-slate-950/80 border border-slate-600/40 rounded p-2 mb-2';
+        exact.textContent = command;
+        const explain = document.createElement('p');
+        explain.className = 'text-[10px] font-mono text-amber-200 mb-2';
+        explain.textContent = externalWrite
+            ? 'This will change a remote GitHub repository. Confirm this exact action; remote writes cannot be remembered.'
+            : githubCommand
+                ? 'This uses the GitHub CLI with your signed-in account. Confirm the exact command; GitHub commands cannot be remembered.'
+                : 'This runs the exact command above in the selected workspace and sandbox. Allow once, or remember this build/test command class for this project.';
+        const choices = document.createElement('div');
+        choices.className = 'flex items-center gap-2 flex-wrap';
+        const runOnce = document.createElement('button');
+        runOnce.type = 'button';
+        runOnce.className = 'cyber-btn cyber-btn-active text-[10px] py-1 px-2';
+        runOnce.textContent = externalWrite ? 'Approve once' : 'Allow once & run';
+        choices.appendChild(runOnce);
+        if (!externalWrite && !githubCommand) {
+            const remember = document.createElement('button');
+            remember.type = 'button';
+            remember.className = 'cyber-btn text-[10px] py-1 px-2';
+            remember.textContent = 'Allow similar & run';
+            choices.appendChild(remember);
+            remember.addEventListener('click', () => runApprovedCodeCommand(command, true, approval, choices));
+        }
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'text-[10px] font-mono text-slate-400 hover:text-slate-200';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => approval.classList.add('hidden'));
+        choices.appendChild(cancel);
+        approval.append(exact, explain, choices);
+        wrapper.append(row, approval);
+        approve.addEventListener('click', () => approval.classList.toggle('hidden'));
+        runOnce.addEventListener('click', () => runApprovedCodeCommand(command, false, approval, choices));
+        return wrapper;
+    }
+
+    async function runApprovedCodeCommand(command, rememberSimilar, approval, choices) {
+        choices.querySelectorAll('button').forEach(button => { button.disabled = true; });
+        const output = document.createElement('pre');
+        output.className = 'mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-[10px] font-mono text-slate-200';
+        output.textContent = 'Running the approved command…';
+        approval.appendChild(output);
+        try {
+            let result;
+            if (IS_TAURI) {
+                result = await tauriInvoke('code_run_approved_rust', { command, rememberSimilar });
+            } else {
+                throw new Error('Run approvals are available only in the Aether1 desktop window.');
+            }
+            output.textContent = result;
+        } catch (err) {
+            output.textContent = `Refused or failed: ${err.message || err}`;
+            output.classList.add('text-amber-300');
+        } finally {
+            choices.querySelectorAll('button').forEach(button => { button.disabled = false; });
+            approval.classList.remove('hidden');
+        }
     }
 
     function appendCodeMessage(sender, text, commands) {
@@ -5274,6 +5431,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const lanPhraseStateEl = document.getElementById('lan-phrase-state');
     const lanNoticeEl = document.getElementById('lan-notice');
     const lanAddressEl = document.getElementById('lan-address');
+    const lanFingerprintEl = document.getElementById('lan-fingerprint');
     const lanPortEl = document.getElementById('lan-port');
     const lanDevicesEl = document.getElementById('lan-devices');
     const btnLanToggle = document.getElementById('btn-lan-toggle');
@@ -5347,6 +5505,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 : 'no network address on this machine';
         }
         if (lanPortEl) lanPortEl.textContent = String(report.port ?? 8378);
+        if (lanFingerprintEl) {
+            // Null until --lan has run once: the certificate is made the first time this
+            // machine goes on the network, and a pane being looked at should not make one.
+            lanFingerprintEl.textContent = report.fingerprint
+                || 'made the first time this machine goes on the network';
+        }
 
         renderDevices(devices, lanDevicesEl, btnLanRevokeAll, refreshLan);
     }
@@ -5879,6 +6043,29 @@ document.addEventListener('DOMContentLoaded', () => {
         label.textContent =
             `On ${peer.name}, open Settings, Network & Remote, Pair a device. Type the code `
             + 'it shows here. Its twelve-word phrase works too.';
+
+        /* A machine is found by asking the network who is out there, and anything on the
+           network can answer in anyone's name. So the name on this row proves nothing and
+           the fingerprint is the only thing that does: it is a digest of a certificate
+           whose private key that machine has, which an impostor cannot copy. The other
+           machine prints it when it starts and shows it in its own pane, so the two can be
+           compared by eye -- and until they have been, there is nothing to press. */
+        const identity = document.createElement('div');
+        identity.className = 'net-peer-identity';
+        const identityLabel = document.createElement('p');
+        identityLabel.className = 'net-row-hint';
+        identityLabel.textContent = 'Checking which machine this is…';
+        const print = document.createElement('p');
+        print.className = 'net-peer-print hidden';
+        const confirmRow = document.createElement('label');
+        confirmRow.className = 'net-peer-confirm hidden';
+        const confirm = document.createElement('input');
+        confirm.type = 'checkbox';
+        const confirmText = document.createElement('span');
+        confirmText.textContent = `This is what ${peer.name} shows`;
+        confirmRow.append(confirm, confirmText);
+        identity.append(identityLabel, print, confirmRow);
+
         const field = document.createElement('input');
         field.type = 'text';
         // The same field the phrase box uses, so it is the one input style in the pane.
@@ -5890,6 +6077,8 @@ document.addEventListener('DOMContentLoaded', () => {
         go.type = 'button';
         go.className = 'net-card-action';
         go.textContent = 'Pair';
+        // Nothing is typed at a machine whose identity has not been read back yet.
+        go.disabled = true;
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'net-card-action net-card-action-quiet';
@@ -5900,9 +6089,33 @@ document.addEventListener('DOMContentLoaded', () => {
         const close = () => { box.remove(); pairButton.disabled = false; };
         cancel.addEventListener('click', close);
 
+        /* Read before anything secret is typed, and kept: what goes to the Rust side with
+           the code is the fingerprint the operator actually looked at, so a machine that
+           swaps certificates between the look and the press is refused rather than pinned. */
+        let seen = '';
+        confirm.addEventListener('change', () => {
+            go.disabled = !(confirm.checked && seen);
+        });
+        tauriInvoke('lan_peer_fingerprint_rust', { address, port: peer.port })
+            .then(report => {
+                seen = String(report?.fingerprint || '');
+                if (!seen) throw new Error('that machine did not identify itself');
+                identityLabel.textContent =
+                    `Check this against the fingerprint ${peer.name} shows under Network & `
+                    + 'Remote, or printed when it started:';
+                print.textContent = seen;
+                print.classList.remove('hidden');
+                confirmRow.classList.remove('hidden');
+            })
+            .catch(e => {
+                identityLabel.textContent =
+                    `Could not ask ${peer.name} which machine it is: ${e.message || e}`;
+                identityLabel.dataset.tone = 'bad';
+            });
+
         async function submit() {
             const secret = field.value.trim();
-            if (!secret) return;
+            if (!secret || go.disabled) return;
             go.disabled = true;
             field.disabled = true;
             go.textContent = 'Pairing…';
@@ -5910,6 +6123,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const report = await tauriInvoke('lan_pair_with_rust', {
                     name: peer.name, address, port: peer.port, secret,
+                    expect_fingerprint: seen,
                 });
                 // The row is redrawn from the fresh status, so "Paired" is the Rust side's
                 // answer rather than this side assuming the press worked.
@@ -5934,7 +6148,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const controls = document.createElement('div');
         controls.className = 'net-field-row';
         controls.append(field, go, cancel);
-        box.append(label, controls, outcome);
+        box.append(label, identity, controls, outcome);
         row.append(box);
         field.focus();
     }
@@ -7394,12 +7608,14 @@ document.addEventListener('DOMContentLoaded', () => {
         search: '',
         purpose: 'all',
         fit: 'fits',
+        scale: 'all',
         sort: 'recommended',
         // The model name the detail panel is showing. Kept across a refresh, so a probe
         // that lands while somebody is reading does not throw them back to the top.
         selected: null,
         models: [],
         installed: [],
+        localModels: [],
         endpoint: '',
         provider: '',
         canInstall: false,
@@ -7531,6 +7747,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (hub.purpose !== 'all') {
             rows = rows.filter(model => (model.purposes || []).includes(hub.purpose));
+        }
+        if (hub.scale !== 'all') {
+            rows = rows.filter(model => {
+                const local = hub.localModels.find(choice => choice.name === model.name);
+                const metadata = local?.parameter_size || model.name;
+                const billions = Number((String(metadata).match(/(\d+(?:\.\d+)?)\s*[bB]/) || [])[1] || 0);
+                const quantized = !!local?.quantization || /(?:q\d(?:_k)?(?:_m|_s|_l)?|q\d+_\d+)/i.test(model.name);
+                return quantized && (hub.scale === 'multi-quant' ? billions >= 7 : billions >= 30);
+            });
         }
         // The fit filter never hides something already downloaded: it is on the disk
         // whatever a memory heuristic thinks of it, and hiding it is how you get a hub
@@ -7721,6 +7946,15 @@ document.addEventListener('DOMContentLoaded', () => {
         sub.textContent = model.name;
         panel.appendChild(sub);
 
+        const localInfo = hub.localModels.find(choice => choice.name === model.name);
+        if (localInfo && (localInfo.parameter_size || localInfo.quantization)) {
+            const specs = document.createElement('div');
+            specs.className = 'hub-tags';
+            if (localInfo.parameter_size) specs.appendChild(hubTag(`${localInfo.parameter_size} parameters`));
+            if (localInfo.quantization) specs.appendChild(hubTag(localInfo.quantization));
+            panel.appendChild(specs);
+        }
+
         const tags = document.createElement('div');
         tags.className = 'hub-tags';
         if ((model.purposes || []).includes('chat')) tags.appendChild(hubTag('To talk to'));
@@ -7755,6 +7989,32 @@ document.addEventListener('DOMContentLoaded', () => {
             use.textContent = '✔ Use this one';
             use.addEventListener('click', () => hubUseModel(model));
             buttons.appendChild(use);
+        }
+
+        if (model.installed && (model.purposes || []).includes('code')) {
+            const code = document.createElement('button');
+            code.type = 'button';
+            code.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+            code.textContent = 'Use for coding';
+            code.addEventListener('click', async () => {
+                code.disabled = true;
+                try {
+                    if (IS_TAURI) await tauriInvoke('code_set_model_preference_rust', { model: model.name });
+                    else {
+                        const response = await apiFetch('/api/code/model', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model: model.name }),
+                        });
+                        if (!response.ok) throw new Error((await response.text()) || 'Could not set coding model.');
+                    }
+                    setHubStatus(`${model.name} is now the preferred AETHER CODE model.`, 'good');
+                    const advice = await fetchCodeAdvice().catch(() => null);
+                    if (advice) renderCodeAdvice(advice);
+                } catch (error) {
+                    setHubStatus(`⚠ ${error.message || error}`, 'bad');
+                } finally { code.disabled = false; }
+            });
+            buttons.appendChild(code);
         }
 
         if (!model.installed) {
@@ -7886,12 +8146,17 @@ document.addEventListener('DOMContentLoaded', () => {
         hub.loading = true;
         if (!options.quiet) renderHubDetail();
         try {
-            const [setup, code] = await Promise.all([
+            const [setup, code, localModels] = await Promise.all([
                 fetchSetupAdvice().catch(() => null),
                 fetchCodeAdvice().catch(() => null),
+                (IS_TAURI
+                    ? tauriInvoke('code_local_models_rust')
+                    : apiFetch('/api/code/models').then(response => response.ok ? response.json() : []))
+                    .catch(() => []),
             ]);
             hub.models = hubMergeCatalogues(setup, code);
             hub.installed = (setup && setup.installed_models) || [];
+            hub.localModels = localModels || [];
             hub.endpoint = (setup && setup.endpoint) || '';
             hub.provider = (setup && setup.provider) || '';
             hub.canInstall = !!(setup && setup.can_install_from_here);
@@ -8525,11 +8790,29 @@ document.addEventListener('DOMContentLoaded', () => {
             .forEach((btn) => btn && btn.classList.add('hidden'));
     }
 
+    function updateHeaderAction(text, action = 'check') {
+        if (!headerUpdateButton) return;
+        headerUpdateButton.textContent = text;
+        headerUpdateButton.dataset.action = action;
+        headerUpdateButton.title = action === 'check'
+            ? 'Check for Aether1 updates'
+            : action === 'download' ? 'Download the signed Aether1 update' : 'Apply the available Aether1 update';
+    }
+
+    function updateHeaderProgress(label, percent = null, indeterminate = false) {
+        if (!headerUpdateProgress || !headerUpdateProgressText || !headerUpdateProgressBar) return;
+        headerUpdateProgress.classList.remove('hidden');
+        headerUpdateProgressText.textContent = label;
+        headerUpdateProgressBar.classList.toggle('animate-pulse', indeterminate);
+        headerUpdateProgressBar.style.width = indeterminate ? '35%' : `${Math.max(0, Math.min(100, percent || 0))}%`;
+    }
+
     /* Returns the status it drew, or null if the check could not be made at all -- the
        start-up announcement (announceStartupUpdateStatus) reads the same result rather than
        asking GitHub a second time for it. */
     async function handleCheckForUpdate() {
         if (versionBadge) versionBadge.classList.add('animate-pulse');
+        updateHeaderProgress('Checking for updates…', 15, true);
         if (updateStatusBox) {
             updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Checking GitHub...</div>';
         }
@@ -8548,6 +8831,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (!status.checked) {
+                updateHeaderAction('↻ Retry', 'check');
+                updateHeaderProgress('Update check needs attention', 0, false);
                 if (updateStatusBox) {
                     // Declining is not a failure, so it is not drawn as one.
                     updateStatusBox.innerHTML = status.declined
@@ -8568,6 +8853,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (status.up_to_date) {
+                updateHeaderAction('↻ Check', 'check');
+                updateHeaderProgress(`Up to date · ${status.version}`, 100, false);
                 const against = status.latest_tag
                     ? `up to date with ${status.latest_tag}`
                     : `up to date (build ${status.built_commit_short})`;
@@ -8579,6 +8866,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     versionBadge.classList.add('border-green-500/50', 'text-green-400');
                 }
             } else if (status.latest_tag) {
+                updateHeaderAction(status.asset_name && status.asset_signed ? '⬇ Update' : '↻ Check', status.asset_name && status.asset_signed ? 'download' : 'check');
+                updateHeaderProgress(`Update available · ${status.latest_tag}`, 0, false);
                 const size = status.asset_size
                     ? ` (${(status.asset_size / 1e9).toFixed(1)} GB)`
                     : '';
@@ -8602,6 +8891,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     versionBadge.classList.add('border-yellow-500/50', 'text-yellow-400');
                 }
             } else {
+                updateHeaderAction('⬆ Update', 'apply');
+                updateHeaderProgress('Project update available', 0, false);
                 const latestShort = status.latest_commit ? status.latest_commit.slice(0, 7) : 'unknown';
                 if (updateStatusBox) {
                     updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>`;
@@ -8614,6 +8905,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             return status;
         } catch (e) {
+            updateHeaderAction('↻ Retry', 'check');
+            updateHeaderProgress('Update check failed', 0, false);
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-red-400">Update check failed: ${e.message || e}</div>`;
             }
@@ -8732,7 +9025,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function revealConnections() {
         voiceEngine.playSFX('click');
         const group = document.getElementById('settings-group-connections');
-        showSettingsSection('brain');
+        showSettingsSection('connections');
         if (group) {
             group.open = true;
             group.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -8783,9 +9076,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     const { done = 0, total = 0 } = event.payload || {};
                     const pct = total ? Math.floor((done / total) * 100) : 0;
                     render(`Downloading -- ${pct}% of ${(total / 1e9).toFixed(1)} GB`);
+                    updateHeaderProgress(`Downloading update · ${pct}%`, pct, false);
                 });
             }
+            updateHeaderProgress('Starting update download…', 0, true);
             const result = await tauriInvoke('download_update_rust');
+            updateHeaderProgress(`Verified download · ${result.tag}`, 100, false);
+            updateHeaderAction('✔ Downloaded', 'check');
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${result.tag} downloaded, and its signature checks out.</div>`
                     + `<div class="text-[11px] text-slate-400 select-all">${result.path}</div>`
@@ -8799,6 +9096,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn('[AETHER1] Could not open the downloads folder:', e);
             }
         } catch (e) {
+            updateHeaderProgress('Update download failed', 0, false);
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-red-400">⚠ ${e.message || e}</div>`;
             }
@@ -8812,6 +9110,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleApplyUpdate() {
         if (!confirm('Pull the latest changes, rebuild, and relaunch Aether1? The app will restart.')) return;
         voiceEngine.playSFX('click');
+        updateHeaderProgress('Applying update · Aether1 will restart', 35, true);
         if (updateStatusBox) {
             updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Updating -- pulling latest changes and rebuilding. This can take over a minute; the app will restart automatically when it\'s done.</div>';
         }
@@ -8921,6 +9220,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (versionBadge) versionBadge.classList.replace('hidden', 'inline-flex');
+        if (headerUpdateButton) headerUpdateButton.classList.remove('hidden');
+        updateHeaderAction('↻ Update', 'check');
         if (updateSection) updateSection.classList.remove('hidden');
         loadVersionInfo();
         // Kept rather than dropped: announceStartupUpdateStatus says the result of this very
@@ -9031,10 +9332,10 @@ document.addEventListener('DOMContentLoaded', () => {
      */
     async function runVoiceStartupSelfTest() {
         if (!IS_TAURI) return;
-        let audible = true;
+        let audible = false;
         try {
             const data = await tauriInvoke('get_settings_rust');
-            audible = data.settings.voice_startup_audible !== false;
+            audible = data.settings.voice_startup_audible === true;
         } catch (e) {
             // Fall through with the audible default -- loadSettings surfaces its own
             // failure to load settings; this self-test isn't the place to repeat it.
@@ -9254,6 +9555,17 @@ document.addEventListener('DOMContentLoaded', () => {
         window.__TAURI__.event.listen('sprite-open-hud', () => {
             tauriInvoke('show_main_window_rust').catch((e) => console.warn('Could not show the main window', e));
         }).catch((e) => console.warn('Could not listen for sprite HUD requests', e));
+
+        window.__TAURI__.event.listen('sprite-open-settings', async () => {
+            try {
+                await tauriInvoke('show_main_window_rust');
+                btnSettings.click();
+                showSettingsSection('avatars');
+                openAvatarBrowser(currentAvatar);
+            } catch (e) {
+                console.warn('Could not open avatar settings from the desktop sprite', e);
+            }
+        }).catch((e) => console.warn('Could not listen for sprite settings requests', e));
     }
 
     // Every panel's "Undock" button opens it in its own solo-panel window (see
@@ -9450,6 +9762,12 @@ document.addEventListener('DOMContentLoaded', () => {
             applyOsWording(data.os);
             applySandboxState(data.sandbox);
             applyAutonomy(data.autonomy, data.levels);
+            // The domain policy is its own request: it lives in the project's file rather
+            // than in settings, and it is the one block on this panel that can change
+            // without anybody touching the panel. Asking here also restarts the poll, so
+            // switching the sandbox network on and saving starts the cards working without
+            // a restart.
+            refreshNetPolicy().then(syncNetPoll);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
@@ -9545,7 +9863,28 @@ document.addEventListener('DOMContentLoaded', () => {
             // Blank rather than 0 would read as "never", which is a different answer.
             document.getElementById('setting-ollama-idle-minutes').value =
                 Number.isFinite(Number(s.ollama_idle_minutes)) ? Number(s.ollama_idle_minutes) : 15;
-            document.getElementById('setting-voice-startup-audible').checked = s.voice_startup_audible !== false;
+            document.getElementById('setting-voice-startup-audible').checked = s.voice_startup_audible === true;
+            const voiceRate = Number(s.voice_playback_rate || 1);
+            window.AETHER_VOICE_RATE = Number.isFinite(voiceRate) ? Math.min(1.25, Math.max(0.75, voiceRate)) : 1;
+            const voiceRateInput = document.getElementById('setting-voice-speed');
+            const voiceRateLabel = document.getElementById('voice-speed-value');
+            if (voiceRateInput) voiceRateInput.value = String(window.AETHER_VOICE_RATE);
+            if (voiceRateLabel) voiceRateLabel.textContent = `${window.AETHER_VOICE_RATE.toFixed(2).replace(/0$/, '')}×`;
+            window.AETHER_VOICE_PITCH = Math.max(-4, Math.min(4, Number(s.voice_pitch_semitones) || 0));
+            const voicePitchInput = document.getElementById('setting-voice-pitch');
+            const voicePitchLabel = document.getElementById('voice-pitch-value');
+            if (voicePitchInput) voicePitchInput.value = String(window.AETHER_VOICE_PITCH);
+            if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
+            const quietEnabled = s.quiet_hours_enabled === true;
+            const quietStart = s.quiet_hours_start || '22:00';
+            const quietEnd = s.quiet_hours_end || '07:00';
+            const headphonesConnected = s.headphones_connected === true;
+            document.getElementById('setting-quiet-hours').checked = quietEnabled;
+            document.getElementById('setting-quiet-start').value = quietStart;
+            document.getElementById('setting-quiet-end').value = quietEnd;
+            document.getElementById('setting-headphones-connected').checked = headphonesConnected;
+            window.AETHER_QUIET_HOURS = { enabled: quietEnabled, start: quietStart, end: quietEnd };
+            window.AETHER_HEADPHONES_CONNECTED = headphonesConnected;
             setGameModeButtonState(s.game_mode === true);
             const spriteModeToggle = document.getElementById('setting-sprite-mode');
             if (spriteModeToggle) spriteModeToggle.checked = s.desktop_sprite_enabled === true;
@@ -9703,7 +10042,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     const typed = Number(document.getElementById('setting-ollama-idle-minutes').value);
                     return Number.isInteger(typed) && typed >= 0 ? typed : 15;
                 })(),
-                voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked
+                voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked,
+                voice_playback_rate: Number(document.getElementById('setting-voice-speed')?.value || 1),
+                voice_pitch_semitones: Number(document.getElementById('setting-voice-pitch')?.value || 0),
+                quiet_hours_enabled: document.getElementById('setting-quiet-hours').checked,
+                quiet_hours_start: document.getElementById('setting-quiet-start').value || '22:00',
+                quiet_hours_end: document.getElementById('setting-quiet-end').value || '07:00',
+                headphones_connected: document.getElementById('setting-headphones-connected').checked
             }
         };
         autoSpeak = payload.settings.auto_speak;
@@ -9830,6 +10175,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     btnSend.addEventListener('click', () => handleSendMessage());
+    chatMediaButton?.addEventListener('click', () => chatMediaInput?.click());
+    chatMediaInput?.addEventListener('change', async () => { await addChatImageFiles(chatMediaInput.files); chatMediaInput.value = ''; });
+    chatInput.addEventListener('paste', (event) => {
+        const images = Array.from(event.clipboardData?.items || []).filter((item) => item.type.startsWith('image/')).map((item) => item.getAsFile()).filter(Boolean);
+        if (images.length) { event.preventDefault(); void addChatImageFiles(images); }
+    });
     chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -10841,6 +11192,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (versionBadge) {
         versionBadge.addEventListener('click', () => handleCheckForUpdate());
     }
+    headerUpdateButton?.addEventListener('click', () => {
+        if (headerUpdateButton.dataset.action === 'download') handleDownloadUpdate();
+        else if (headerUpdateButton.dataset.action === 'apply') handleApplyUpdate();
+        else handleCheckForUpdate();
+    });
     if (btnCheckUpdate) {
         btnCheckUpdate.addEventListener('click', () => handleCheckForUpdate());
     }
@@ -10848,6 +11204,10 @@ document.addEventListener('DOMContentLoaded', () => {
         btnGithubSignIn.addEventListener('click', () => revealConnections());
     }
     document.getElementById('conn-github-signin')?.addEventListener('click', () => handleSignIn());
+    document.getElementById('btn-open-model-hub')?.addEventListener('click', () => {
+        settingsModal.classList.remove('hidden');
+        showSettingsSection('brain');
+    });
     document.getElementById('conn-github-signout')?.addEventListener('click', () => handleSignOut());
     if (btnGithubDecline) {
         btnGithubDecline.addEventListener('click', () => handleDeclineUpdates());
@@ -10863,6 +11223,41 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceEngine.playSFX('click');
         settingsModal.classList.add('hidden');
     });
+
+    settingsModal.addEventListener('click', (event) => {
+        if (event.target === settingsModal) settingsModal.classList.add('hidden');
+    });
+
+    const voiceRateInput = document.getElementById('setting-voice-speed');
+    const voiceRateLabel = document.getElementById('voice-speed-value');
+    voiceRateInput?.addEventListener('input', () => {
+        const rate = Math.min(1.25, Math.max(0.75, Number(voiceRateInput.value) || 1));
+        window.AETHER_VOICE_RATE = rate;
+        if (voiceRateLabel) voiceRateLabel.textContent = `${rate.toFixed(2).replace(/0$/, '')}×`;
+    });
+    const voicePitchInput = document.getElementById('setting-voice-pitch');
+    const voicePitchLabel = document.getElementById('voice-pitch-value');
+    voicePitchInput?.addEventListener('input', () => {
+        window.AETHER_VOICE_PITCH = Math.max(-4, Math.min(4, Number(voicePitchInput.value) || 0));
+        if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
+    });
+    document.getElementById('btn-voice-audition')?.addEventListener('click', async () => {
+        const url = await synthesizeSpeechUrl('This is how the current Aether1 voice sounds.', null);
+        if (url) await voiceEngine.playTTSAudio(url, {
+            playbackRate: window.AETHER_VOICE_RATE || 1,
+            pitchSemitones: window.AETHER_VOICE_PITCH || 0,
+        });
+    });
+    const syncQuietHours = () => {
+        window.AETHER_QUIET_HOURS = {
+            enabled: document.getElementById('setting-quiet-hours').checked,
+            start: document.getElementById('setting-quiet-start').value || '22:00',
+            end: document.getElementById('setting-quiet-end').value || '07:00',
+        };
+        window.AETHER_HEADPHONES_CONNECTED = document.getElementById('setting-headphones-connected').checked;
+    };
+    ['setting-quiet-hours', 'setting-quiet-start', 'setting-quiet-end', 'setting-headphones-connected']
+        .forEach((id) => document.getElementById(id)?.addEventListener('change', syncQuietHours));
 
     btnSaveSettings.addEventListener('click', () => {
         saveSettings(true);
@@ -10965,6 +11360,325 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
+
+
+    // --- The sandbox's domain policy --------------------------------------------------
+    //
+    // Two surfaces over one thing. The Settings card lists what this project's sandbox may
+    // connect to and lets a domain be added or taken away. The HUD card is what appears
+    // when a command asks for a host that is not on the list: the proxy holds the
+    // connection open while the card is up, and the choice on it is what releases or
+    // refuses the connection.
+    //
+    // Before this, the only way past a refused host was to read a 403 out of a build log,
+    // work out which host it was about, and type `aether1 code net-allow`. That friction
+    // is what makes people switch on "Run without a sandbox" -- so the card is a security
+    // control, not a convenience. See src-tauri/src/code_proxy.rs.
+
+    /* The last status seen, which is what the poll below is gated on. */
+    let lastNetStatus = null;
+
+    /* The one transport split, in one place. Every call below returns the same status
+       object -- the read does, and so does each write, so that a change is drawn from what
+       the backend says is now true rather than from what the frontend asked for. */
+    async function netPolicyApi(path, tauriCommand, body) {
+        if (IS_TAURI) return tauriInvoke(tauriCommand, body || {});
+        const options = body
+            ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+            : (path === '/api/code/net' ? {} : { method: 'POST' });
+        const resp = await apiFetch(path, options);
+        if (!resp.ok) throw new Error((await resp.text()) || `request failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    function netPolicyHint(text, bad) {
+        const hint = document.getElementById('code-net-hint');
+        if (!hint) return;
+        hint.textContent = text || '';
+        hint.classList.toggle('hidden', !text);
+        hint.classList.toggle('text-amber-300', !!bad);
+        hint.classList.toggle('text-slate-400', !bad);
+    }
+
+    /* One domain, as a chip. A starter domain and one the operator typed look the same in
+       the effective list but are not removed the same way, so the chip says which it is --
+       and a `deny` row is shown too, because a starter domain that has been taken away is
+       invisible otherwise and looks like a bug. */
+    function netDomainChip(domain, kind) {
+        const chip = document.createElement('span');
+        const tone = kind === 'removed'
+            ? 'border-rose-500/40 text-rose-300/80 bg-rose-950/20 line-through'
+            : kind === 'added'
+                ? 'border-emerald-500/40 text-emerald-200 bg-emerald-950/20'
+                : 'border-cyan-500/30 text-cyan-200/80 bg-slate-900/60';
+        chip.className = `inline-flex items-center gap-1 text-[10px] font-mono border rounded px-1.5 py-0.5 ${tone}`;
+        chip.title = kind === 'removed'
+            ? `${domain} is refused: this project's policy takes it away.`
+            : kind === 'added'
+                ? `${domain} was allowed for this project.`
+                : `${domain} is on the starter list -- a host a build reaches on its own.`;
+        const label = document.createElement('span');
+        label.textContent = domain;
+        chip.appendChild(label);
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'opacity-60 hover:opacity-100 cursor-pointer';
+        // Taking away and putting back are the same button in two directions, because the
+        // chip already says which state it is in.
+        button.textContent = kind === 'removed' ? '+' : '×';
+        button.title = kind === 'removed' ? `Allow ${domain} again` : `Stop allowing ${domain}`;
+        button.onclick = async () => {
+            button.disabled = true;
+            try {
+                const status = kind === 'removed'
+                    ? await netPolicyApi('/api/code/net/allow', 'code_net_allow_rust', { domain })
+                    : await netPolicyApi('/api/code/net/forget', 'code_net_forget_rust', { domain });
+                applyNetPolicy(status);
+                netPolicyHint(kind === 'removed' ? `${domain} is allowed again.` : `${domain} is no longer allowed.`, false);
+            } catch (e) {
+                button.disabled = false;
+                netPolicyHint(`That did not change: ${e.message || e}`, true);
+            }
+        };
+        chip.appendChild(button);
+        return chip;
+    }
+
+    /* Draws the Settings card from a status object. */
+    function applyNetPolicy(status) {
+        if (!status) return;
+        lastNetStatus = status;
+        const state = document.getElementById('code-net-state');
+        const list = document.getElementById('code-net-domains');
+        const add = document.getElementById('code-net-add');
+        const addBtn = document.getElementById('code-net-add-btn');
+        if (!state || !list) return;
+
+        // No project folder, so there is no file to hold a policy. Say that rather than
+        // listing the starter domains as though they applied to something.
+        if (!status.root) {
+            state.textContent = 'Set a project folder above, and the policy lives in that project’s own .aether/policy.json.';
+            state.classList.add('text-amber-300');
+            list.innerHTML = '';
+            if (add) add.disabled = true;
+            if (addBtn) addBtn.disabled = true;
+            return;
+        }
+        if (add) add.disabled = false;
+        if (addBtn) addBtn.disabled = false;
+        state.classList.remove('text-amber-300');
+        const where = `Kept in ${status.file} under ${status.root}.`;
+        // An allowed-domain list is a confusing thing to read while the sandbox has no
+        // network at all, so the switch above is reported here rather than left to be
+        // inferred from a list that is not in force.
+        state.textContent = status.network
+            ? where
+            : `${where} The network switch above is off, so nothing reaches any of these yet.`;
+
+        list.innerHTML = '';
+        const starter = new Set(status.starter || []);
+        const added = new Set(status.added || []);
+        for (const domain of status.allowed || []) {
+            list.appendChild(netDomainChip(domain, added.has(domain) && !starter.has(domain) ? 'added' : 'starter'));
+        }
+        for (const domain of status.removed || []) {
+            list.appendChild(netDomainChip(domain, 'removed'));
+        }
+
+        // What a build asked for and did not get, which is the question an operator
+        // arrives with. `pending` is "it wanted this"; `denied` is "and the answer was
+        // no, for this reason" -- the reason matters, because "nobody answered" sends you
+        // to the HUD and "refused" sends you here.
+        const refusedRow = document.getElementById('code-net-refused-row');
+        const refused = document.getElementById('code-net-refused');
+        if (refusedRow && refused) {
+            const words = { refused: 'you refused it', unanswered: 'the card went unanswered', 'not asked': 'no window was open to ask' };
+            const lines = (status.denied || []).slice().reverse()
+                .map((entry) => `${entry.host} — ${words[entry.why] || entry.why}`);
+            // A host that asked and was never decided on at all still belongs here.
+            const decided = new Set((status.denied || []).map((entry) => entry.host));
+            for (const host of status.pending || []) {
+                if (!decided.has(host)) lines.push(`${host} — asked for, not allowed`);
+            }
+            refusedRow.classList.toggle('hidden', lines.length === 0);
+            refused.textContent = lines.join('; ');
+        }
+    }
+
+    /* The HUD card. Three choices and no default: the connection is being held open while
+       this is on screen, and picking for the operator is the thing this whole mechanism
+       exists not to do. */
+    function renderNetAskCard(ask) {
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm msg-agent self-start mr-8 border border-amber-500/50 bg-amber-950/20';
+        card.dataset.netAskId = ask.id;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-amber-500/30 text-xs font-mono text-amber-300';
+        header.innerHTML = `<span>🌐 <strong>A COMMAND WANTS THE NETWORK</strong></span><span>${new Date().toLocaleTimeString()}</span>`;
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'text-cyan-100 font-mono text-xs my-2 break-all';
+        body.textContent = ask.port === 443 || ask.port === 80 ? ask.host : `${ask.host}:${ask.port}`;
+        card.appendChild(body);
+
+        const reason = document.createElement('div');
+        reason.className = 'text-[10px] font-mono text-amber-200/80 my-1';
+        // Said on the card, not left in the docs: allowing a domain allows it entirely,
+        // and what the sandbox can read is the thing the operator is actually risking.
+        reason.textContent = `A command in the sandbox is trying to reach ${ask.host}, which is not on this project’s allowed list. `
+            + 'Allowing it allows that host entirely — it can be sent whatever the sandbox can read, which is this project’s folder.'
+            + (ask.waiting > 1 ? ` ${ask.waiting} connections are waiting on this.` : '');
+        card.appendChild(reason);
+
+        const status = document.createElement('div');
+        status.className = 'text-xs font-mono text-slate-400 mt-2';
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex flex-wrap gap-2 mt-2';
+        const choices = [
+            ['once', '↻ Allow once', 'border-amber-500/50 text-amber-200 bg-amber-950/40 hover:bg-amber-900/40', 'Lets this attempt through and writes nothing. The next one asks again.'],
+            ['project', '✔ Allow for this project', 'border-emerald-500/50 text-emerald-300 bg-emerald-950/40 hover:bg-emerald-900/40', 'Writes the domain into this project’s .aether/policy.json. Nothing asks again.'],
+            ['deny', '✖ Refuse', 'border-rose-500/50 text-rose-300 bg-rose-950/40 hover:bg-rose-900/40', 'Refuses the connection and records it in Settings.'],
+        ];
+        const made = choices.map(([key, label, tone, title]) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `text-xs font-mono border px-3 py-1 rounded cursor-pointer ${tone}`;
+            button.textContent = label;
+            button.title = title;
+            button.dataset.decision = key;
+            buttons.appendChild(button);
+            return button;
+        });
+
+        const settle = (text, tone) => {
+            buttons.remove();
+            status.className = `text-xs font-mono mt-2 ${tone}`;
+            status.textContent = text;
+        };
+
+        for (const button of made) {
+            button.onclick = async () => {
+                for (const other of made) other.disabled = true;
+                status.textContent = 'Telling the command…';
+                try {
+                    const report = await netPolicyApi('/api/code/net/decide', 'code_net_decide_rust', {
+                        id: ask.id,
+                        decision: button.dataset.decision,
+                    });
+                    applyNetPolicy(report.status);
+                    // "settled" is false when the command gave up between the click and
+                    // the answer reaching it. For `project` the policy was still written,
+                    // and saying "allowed" about a command that has already failed would
+                    // send the operator looking for output that never comes.
+                    if (!report.settled) {
+                        settle(button.dataset.decision === 'project'
+                            ? `${ask.host} is allowed for this project now, but the command had already given up waiting. Run it again.`
+                            : 'The command gave up waiting before this was answered. Run it again.', 'text-amber-300');
+                        return;
+                    }
+                    settle({
+                        once: `↻ ${ask.host} allowed for this attempt only`,
+                        project: `✔ ${ask.host} allowed for this project`,
+                        deny: `✖ ${ask.host} refused`,
+                    }[button.dataset.decision], button.dataset.decision === 'deny' ? 'text-slate-400' : 'text-emerald-300');
+                } catch (e) {
+                    settle(`✖ Failed: ${e.message || e}`, 'text-rose-300');
+                }
+            };
+        }
+
+        card.appendChild(buttons);
+        card.appendChild(status);
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        voiceEngine.playSFX('alert');
+        return card;
+    }
+
+    /* Fetches the policy and draws a card for anything waiting that isn't already up.
+       Asking is also what marks this window as present -- see commands::code_net_status --
+       so this is the heartbeat the proxy holds connections open against. */
+    async function refreshNetPolicy() {
+        let status;
+        try {
+            status = await netPolicyApi('/api/code/net', 'code_net_status_rust');
+        } catch (e) {
+            console.warn('[AETHER1] could not read the sandbox network policy:', e);
+            return null;
+        }
+        applyNetPolicy(status);
+        for (const ask of status.asks || []) {
+            if (!chatContainer.querySelector(`[data-net-ask-id="${ask.id}"]`)) {
+                renderNetAskCard(ask);
+            }
+        }
+        return status;
+    }
+
+    document.getElementById('code-net-add-btn')?.addEventListener('click', async () => {
+        const box = document.getElementById('code-net-add');
+        const domain = (box?.value || '').trim();
+        if (!domain) return;
+        voiceEngine.playSFX('click');
+        try {
+            applyNetPolicy(await netPolicyApi('/api/code/net/allow', 'code_net_allow_rust', { domain }));
+            if (box) box.value = '';
+            netPolicyHint(`${domain} is allowed for this project.`, false);
+        } catch (e) {
+            netPolicyHint(`${domain} was not added: ${e.message || e}`, true);
+        }
+    });
+
+    document.getElementById('code-net-add')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('code-net-add-btn')?.click();
+        }
+    });
+
+    document.getElementById('code-net-clear-btn')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        try {
+            applyNetPolicy(await netPolicyApi('/api/code/net/clear', 'code_net_clear_rust', null));
+        } catch (e) {
+            netPolicyHint(`That list was not cleared: ${e.message || e}`, true);
+        }
+    });
+
+    /* The poll, gated twice.
+       The sandbox's network switch being off means the proxy can never be asked anything,
+       so there is nothing to poll for -- and `document.hidden` keeps a parked window out
+       of it, for the same reason the telemetry sampler parks: a HUD behind a game should
+       cost nothing. One consequence worth knowing: with no window polling, the proxy does
+       not wait at all. An unlisted host is refused immediately, with a message that says
+       so. That is the fail-closed direction, and it is what keeps the CLI and the test
+       suite behaving as they did before any of this existed. */
+    let netPollTimer = null;
+    const NET_POLL_MS = 5000;
+
+    function syncNetPoll() {
+        const wanted = !document.hidden && !!(lastNetStatus && lastNetStatus.network);
+        if (wanted && !netPollTimer) {
+            netPollTimer = setInterval(() => { refreshNetPolicy().then(syncNetPoll); }, NET_POLL_MS);
+        } else if (!wanted && netPollTimer) {
+            clearInterval(netPollTimer);
+            netPollTimer = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        // Coming back from hidden: ask once straight away rather than waiting out an
+        // interval, because a command may have been blocked the whole time the window was
+        // parked.
+        if (!document.hidden) refreshNetPolicy().then(syncNetPoll);
+        else syncNetPoll();
+    });
+
+    refreshNetPolicy().then(syncNetPoll);
 
     document.getElementById('setting-sfx')?.addEventListener('change', (e) => {
         applySfx(e.target.checked);

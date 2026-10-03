@@ -125,6 +125,9 @@ pub struct ChatContext<'a> {
     pub system_prompt: &'a str,
     pub history: &'a [Message],
     pub prompt: &'a str,
+    /// Image attachments for this request only. They are never written into conversation
+    /// history or the Memory vault.
+    pub images: &'a [MediaAttachment],
     pub agent_name: &'a str,
     /// The tools to offer natively. Empty means send none -- either there are no tools, or
     /// this provider is driven by the text protocol instead and the catalogue is already in
@@ -133,6 +136,12 @@ pub struct ChatContext<'a> {
     /// The tool rounds already taken *this turn*. Providers replay these in their own
     /// shape so the model sees what it asked for and what came back.
     pub exchanges: &'a [Exchange],
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MediaAttachment {
+    pub mime_type: String,
+    pub data_base64: String,
 }
 
 /// One tool call as a provider asked for it.
@@ -328,6 +337,8 @@ struct OllamaOptions {
 struct OllamaRequest {
     model: String,
     prompt: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<String>,
     stream: bool,
     options: OllamaOptions,
 }
@@ -366,6 +377,11 @@ fn ollama_payload(model: &str, ctx: &ChatContext, stream: bool) -> OllamaRequest
     OllamaRequest {
         model: if model.is_empty() { "llama3" } else { model }.to_string(),
         prompt: prompt_body,
+        images: ctx
+            .images
+            .iter()
+            .map(|image| image.data_base64.clone())
+            .collect(),
         stream,
         options: OllamaOptions {
             temperature: 0.7,
@@ -379,8 +395,11 @@ fn ollama_url(endpoint: &str) -> String {
 }
 
 pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
+    // Ollama on loopback or on the LAN is what local-only mode exists to keep working,
+    // and the gate judges that by the endpoint rather than by the provider's name: an
+    // `endpoint` pointing at a rented box is outbound traffic whatever it is running.
     let response: OllamaResponse = checked(
-        ureq::post(&ollama_url(endpoint))
+        crate::net::post(&ollama_url(endpoint), "the model was not asked")?
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
             .http_status_as_error(false)
@@ -407,7 +426,7 @@ pub fn stream_ollama(
     sink: Sink,
 ) -> Result<Completion, String> {
     let response = checked(
-        ureq::post(&ollama_url(endpoint))
+        crate::net::post(&ollama_url(endpoint), "the model was not asked")?
             .config()
             .timeout_global(Some(STREAM_TIMEOUT))
             .http_status_as_error(false)
@@ -491,7 +510,7 @@ struct OpenAiFunctionDef {
 struct OpenAiMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,7 +521,21 @@ impl OpenAiMessage {
     fn plain(role: &str, content: String) -> OpenAiMessage {
         OpenAiMessage {
             role: role.to_string(),
-            content: Some(content),
+            content: Some(json!(content)),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn with_images(role: &str, content: &str, images: &[MediaAttachment]) -> OpenAiMessage {
+        let mut parts = vec![json!({"type": "text", "text": content})];
+        parts.extend(images.iter().map(|image| json!({
+            "type": "image_url",
+            "image_url": {"url": format!("data:{};base64,{}", image.mime_type, image.data_base64)},
+        })));
+        OpenAiMessage {
+            role: role.to_string(),
+            content: Some(Value::Array(parts)),
             tool_calls: None,
             tool_call_id: None,
         }
@@ -634,7 +667,8 @@ struct OllamaShowRequest<'a> {
 /// be the reason a reply feels slow.
 pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability> {
     let url = format!("{}/api/show", endpoint.trim_end_matches('/'));
-    let body: serde_json::Value = ureq::post(&url)
+    let body: serde_json::Value = crate::net::post(&url, "the model was not asked")
+        .ok()?
         .config()
         .timeout_global(Some(std::time::Duration::from_millis(2500)))
         .build()
@@ -710,7 +744,11 @@ fn openai_payload(
             msg.text.clone(),
         ));
     }
-    messages.push(OpenAiMessage::plain("user", ctx.prompt.to_string()));
+    messages.push(if ctx.images.is_empty() {
+        OpenAiMessage::plain("user", ctx.prompt.to_string())
+    } else {
+        OpenAiMessage::with_images("user", ctx.prompt, ctx.images)
+    });
 
     // This turn's tool rounds. Unlike Anthropic, results are separate messages rather than
     // blocks inside one -- one `tool` message per call, each quoting the id it answers.
@@ -718,7 +756,7 @@ fn openai_payload(
         match exchange {
             Exchange::Called { text, calls } => messages.push(OpenAiMessage {
                 role: "assistant".to_string(),
-                content: (!text.trim().is_empty()).then(|| text.clone()),
+                content: (!text.trim().is_empty()).then(|| json!(text)),
                 tool_calls: Some(
                     calls
                         .iter()
@@ -741,7 +779,7 @@ fn openai_payload(
                 for result in results {
                     messages.push(OpenAiMessage {
                         role: "tool".to_string(),
-                        content: Some(result.output.clone()),
+                        content: Some(json!(result.output)),
                         tool_calls: None,
                         tool_call_id: Some(result.id.clone()),
                     });
@@ -846,8 +884,8 @@ fn openai_request(
     url: &str,
     api_key: &str,
     timeout: std::time::Duration,
-) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
-    let mut request = ureq::post(url)
+) -> Result<ureq::RequestBuilder<ureq::typestate::WithBody>, String> {
+    let mut request = crate::net::post(url, "the model was not asked")?
         .config()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
@@ -856,7 +894,7 @@ fn openai_request(
     if !api_key.is_empty() {
         request = request.header("Authorization", format!("Bearer {api_key}"));
     }
-    request
+    Ok(request)
 }
 
 pub fn call_openai_compatible(
@@ -869,7 +907,7 @@ pub fn call_openai_compatible(
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
 
     let response: OpenAiResponse =
-        checked(openai_request(&url, api_key, CALL_TIMEOUT).send_json(&payload))?
+        checked(openai_request(&url, api_key, CALL_TIMEOUT)?.send_json(&payload))?
             .into_body()
             .read_json()
             .map_err(|e| e.to_string())?;
@@ -909,7 +947,7 @@ pub fn stream_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response = checked(openai_request(&url, api_key, STREAM_TIMEOUT).send_json(&payload))?;
+    let response = checked(openai_request(&url, api_key, STREAM_TIMEOUT)?.send_json(&payload))?;
 
     let mut full = String::new();
     let mut usage = None;
@@ -953,6 +991,8 @@ struct GeminiPart {
     function_call: Option<Value>,
     #[serde(rename = "functionResponse", skip_serializing_if = "Option::is_none")]
     function_response: Option<Value>,
+    #[serde(rename = "inlineData", skip_serializing_if = "Option::is_none")]
+    inline_data: Option<Value>,
 }
 
 impl GeminiPart {
@@ -961,6 +1001,7 @@ impl GeminiPart {
             text: Some(text.into()),
             function_call: None,
             function_response: None,
+            inline_data: None,
         }
     }
 }
@@ -1091,9 +1132,16 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
             parts: vec![GeminiPart::text(msg.text.clone())],
         });
     }
+    let mut current_parts = vec![GeminiPart::text(ctx.prompt.to_string())];
+    current_parts.extend(ctx.images.iter().map(|image| GeminiPart {
+        text: None,
+        function_call: None,
+        function_response: None,
+        inline_data: Some(json!({"mimeType": image.mime_type, "data": image.data_base64})),
+    }));
     contents.push(GeminiContent {
         role: "user".to_string(),
-        parts: vec![GeminiPart::text(ctx.prompt.to_string())],
+        parts: current_parts,
     });
 
     // This turn's tool rounds. Gemini keeps everything in `parts`, so a round is one
@@ -1113,6 +1161,7 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
                             "args": call.arguments,
                         })),
                         function_response: None,
+                        inline_data: None,
                     });
                 }
                 contents.push(GeminiContent {
@@ -1133,6 +1182,7 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
                             "response": {"result": r.output},
                         })),
                         function_call: None,
+                        inline_data: None,
                     })
                     .collect(),
             }),
@@ -1164,7 +1214,7 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Comp
     );
 
     let response: GeminiResponse = checked(
-        ureq::post(&url)
+        crate::net::post(&url, "the model was not asked")?
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
             .http_status_as_error(false)
@@ -1210,7 +1260,7 @@ pub fn stream_gemini(
     );
 
     let response = checked(
-        ureq::post(&url)
+        crate::net::post(&url, "the model was not asked")?
             .config()
             .timeout_global(Some(STREAM_TIMEOUT))
             .http_status_as_error(false)
@@ -1490,6 +1540,17 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
         })
         .collect();
 
+    if !ctx.images.is_empty() {
+        if let Some(user) = messages.last_mut() {
+            let mut blocks = vec![json!({"type": "text", "text": ctx.prompt})];
+            blocks.extend(ctx.images.iter().map(|image| json!({
+                "type": "image",
+                "source": {"type": "base64", "media_type": image.mime_type, "data": image.data_base64},
+            })));
+            user.content = Value::Array(blocks);
+        }
+    }
+
     // Then this turn's tool rounds, which alternate by construction: the model asks, the
     // tools answer, and nothing else is interleaved.
     for exchange in ctx.exchanges {
@@ -1560,20 +1621,23 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
 fn anthropic_request(
     api_key: &str,
     timeout: std::time::Duration,
-) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
-    ureq::post("https://api.anthropic.com/v1/messages")
-        .config()
-        .timeout_global(Some(timeout))
-        .http_status_as_error(false)
-        .build()
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+) -> Result<ureq::RequestBuilder<ureq::typestate::WithBody>, String> {
+    Ok(crate::net::post(
+        "https://api.anthropic.com/v1/messages",
+        "the model was not asked",
+    )?
+    .config()
+    .timeout_global(Some(timeout))
+    .http_status_as_error(false)
+    .build()
+    .header("x-api-key", api_key)
+    .header("anthropic-version", "2023-06-01")
+    .header("content-type", "application/json"))
 }
 
 pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
     let response: AnthropicResponse = checked(
-        anthropic_request(api_key, CALL_TIMEOUT).send_json(anthropic_payload(model, ctx, false)),
+        anthropic_request(api_key, CALL_TIMEOUT)?.send_json(anthropic_payload(model, ctx, false)),
     )?
     .into_body()
     .read_json()
@@ -1612,7 +1676,7 @@ pub fn stream_anthropic(
     sink: Sink,
 ) -> Result<Completion, String> {
     let response = checked(
-        anthropic_request(api_key, STREAM_TIMEOUT).send_json(anthropic_payload(model, ctx, true)),
+        anthropic_request(api_key, STREAM_TIMEOUT)?.send_json(anthropic_payload(model, ctx, true)),
     )?;
 
     let mut full = String::new();
@@ -1784,6 +1848,7 @@ mod tests {
             system_prompt: "be useful",
             history: &history,
             prompt: "Claude you there?",
+            images: &[],
             agent_name: "R.E.D. 9000",
             tools: &[],
             exchanges: &[],
@@ -1874,6 +1939,7 @@ mod tests {
             system_prompt: "s",
             history: &[],
             prompt: "p",
+            images: &[],
             agent_name: "A1",
             tools: &[],
             exchanges: &[],
@@ -1977,6 +2043,7 @@ mod tests {
             system_prompt: "be helpful",
             history: &[],
             prompt: "hello",
+            images: &[],
             agent_name: "HALCY",
             tools: &[],
             exchanges: &[],
@@ -1995,6 +2062,7 @@ mod tests {
             system_prompt: "s",
             history: &[],
             prompt: "p",
+            images: &[],
             agent_name: "a",
             tools: &[],
             exchanges: &[],
@@ -2082,6 +2150,7 @@ mod failure_tests {
             system_prompt: "be useful",
             history: &[],
             prompt: "what is in /etc/hostname?",
+            images: &[],
             agent_name: "R.E.D. 9000",
             tools,
             exchanges,

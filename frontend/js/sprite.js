@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const viewportEl = document.getElementById('hologram-viewport');
     const btnHud = document.getElementById('sprite-btn-hud');
+    const btnSettings = document.getElementById('sprite-btn-settings');
     const btnPower = document.getElementById('sprite-btn-power');
 
     async function tauriInvoke(cmd, args) {
@@ -103,6 +104,12 @@ document.addEventListener('DOMContentLoaded', () => {
     btnHud.addEventListener('click', (e) => {
         e.stopPropagation();
         showMainHud();
+    });
+
+    btnSettings?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await showMainHud();
+        tauriEmit('sprite-open-settings').catch((err) => reportFailure(btnSettings, 'Could not open avatar settings', err));
     });
 
     // Always visible, unlike the topbar (which only fades in on hover): this is the one

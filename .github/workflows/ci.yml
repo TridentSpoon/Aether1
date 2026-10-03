@@ -182,6 +182,14 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
+      # A few sandbox tests execute the ordinary app binary inside bubblewrap. Clippy
+      # builds its own lint target, not target/debug/aether1, so materialize the binary
+      # before the test harness reaches those checks.
+      - name: Build the application binary
+        if: steps.filter.outputs.rust == 'true'
+        working-directory: src-tauri
+        run: cargo build
+
       - name: Tests
         if: steps.filter.outputs.rust == 'true'
         working-directory: src-tauri
@@ -272,3 +280,9 @@ jobs:
       # it is checked rather than remembered.
       - name: Check the terminal stays the operator's alone
         run: ./scripts/check_terminal_isolation.sh
+
+      # Local-only mode promises nothing leaves this machine. That used to hold because
+      # every outbound call site remembered to ask; now there is one function that asks,
+      # and this is what stops a twentieth call site appearing beside it.
+      - name: Check every outbound request goes through the egress gate
+        run: ./scripts/check_egress_gate.sh

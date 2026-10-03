@@ -80,6 +80,18 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
         "en/en_GB/alba/medium",
     ),
     (
+        "en_GB-alan-medium",
+        "British, English, male",
+        "about 60 MB",
+        "en/en_GB/alan/medium",
+    ),
+    (
+        "en_GB-cori-medium",
+        "British, English, female",
+        "about 60 MB",
+        "en/en_GB/cori/medium",
+    ),
+    (
         "en_GB-northern_english_male-medium",
         "British, northern English, male",
         "about 60 MB",
@@ -92,6 +104,36 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
         "en/en_US/amy/medium",
     ),
     (
+        "en_US-arctic-medium",
+        "American, multi-speaker",
+        "about 60 MB",
+        "en/en_US/arctic/medium",
+    ),
+    (
+        "en_US-hfc_female-medium",
+        "American, female",
+        "about 60 MB",
+        "en/en_US/hfc_female/medium",
+    ),
+    (
+        "en_US-hfc_male-medium",
+        "American, male",
+        "about 60 MB",
+        "en/en_US/hfc_male/medium",
+    ),
+    (
+        "en_US-john-medium",
+        "American, male",
+        "about 60 MB",
+        "en/en_US/john/medium",
+    ),
+    (
+        "en_US-kathleen-medium",
+        "American, female",
+        "about 60 MB",
+        "en/en_US/kathleen/medium",
+    ),
+    (
         "en_US-lessac-medium",
         "American, female, clear and neutral",
         "about 60 MB",
@@ -102,6 +144,18 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
         "American, male",
         "about 60 MB",
         "en/en_US/ryan/medium",
+    ),
+    (
+        "en_US-ljspeech-medium",
+        "American, female, expressive",
+        "about 60 MB",
+        "en/en_US/ljspeech/medium",
+    ),
+    (
+        "en_US-norman-medium",
+        "American, male",
+        "about 60 MB",
+        "en/en_US/norman/medium",
     ),
 ];
 
@@ -331,7 +385,11 @@ fn rename(from: &Path, to: &Path) -> Result<(), String> {
 /// Opens a URL and returns its reader along with the size it announced, refusing an
 /// announced size no voice could have before a byte of the body is accepted.
 fn open(url: &str) -> Result<(Box<dyn Read + Send + Sync>, u64), String> {
-    let response = ureq::get(url)
+    // Every request in this file goes through `open`, so this is the only place the
+    // egress gate has to be asked. `start` refuses with local-only mode on before a
+    // download is ever registered; this is the backstop for any future path that reaches
+    // a voice URL without going through it.
+    let response = crate::net::get(url, "no voice was downloaded")?
         .call()
         .map_err(|e| format!("Could not fetch the voice: {e}"))?;
     let total: u64 = response

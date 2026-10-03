@@ -316,6 +316,7 @@
                drop shadow. */
             Object.assign(vars, {
                 '--bg-panel': rgba(raise(background, 2.0, 4), 0.8),
+                '--bg-panel-solid': rgba(raise(background, 2.0, 4), 0.9),
                 '--bg-panel-hover': rgba(raise(background, 3.3, 10), 0.9),
                 '--border-neon': rgba(main, 0.4),
                 '--neon-green': '#00ffaa',
@@ -340,6 +341,7 @@
                amber theme. */
             Object.assign(vars, {
                 '--bg-panel': light ? rgba(mix(background, '#ffffff', 0.75), 0.9) : rgba(raise(background, 1.0, 11), 0.9),
+                '--bg-panel-solid': light ? rgba(mix(background, '#ffffff', 0.75), 0.9) : rgba(raise(background, 1.0, 11), 0.9),
                 '--bg-panel-hover': light ? '#ffffff' : raise(background, 1.0, 24),
                 '--border-neon': light ? 'rgba(0, 0, 0, 0.10)' : 'rgba(255, 255, 255, 0.09)',
                 '--neon-green': light ? '#0f7b0f' : '#6ccb5f',

@@ -61,6 +61,178 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// Binds a credential to the certificate of the machine it is being typed into, so that
+/// what travels over the wire is useless to anyone but that machine.
+///
+/// This is the answer to the one hole the rest of this module leaves open. Machines are
+/// found over DNS-SD (`discovery.rs`), which anyone on the network can answer: a laptop
+/// that announces itself under the right name appears in the scan list beside the real
+/// thing. Before binding, pairing with the wrong one handed it the phrase in the clear, and
+/// a phrase is the standing credential -- it would then pair with the real machine at
+/// leisure. The one-time code was no better: collected and spent inside its ten minutes, it
+/// buys a device token, which is standing access by another route.
+///
+/// What is sent now is `HKDF(ikm = the credential's hash, salt = the certificate
+/// fingerprint of the machine actually on the other end of the TLS connection)`. A machine
+/// can only check a proof that was bound to *its own* certificate, so a proof collected by
+/// an impostor is a proof for the impostor's certificate and nothing else. The phrase itself
+/// never leaves the machine it is typed on.
+///
+/// The hash is the input, not the credential, because the hash is the one form both sides
+/// have: the client derives it from the phrase it was given, and the server has had it on
+/// disk since the phrase was minted. Binding the credential itself would leave the server
+/// with nothing to compare against, since it has never held anything but the hash.
+/// Nothing on disk changes shape for this, and the fingerprint is public -- it is a salt,
+/// not a second secret -- so a leaked `serve_token.hash` still hands out nothing usable.
+mod binding {
+    use sha2::{Digest, Sha256};
+
+    /// SHA-256's block size, which is what HMAC pads its key out to.
+    const BLOCK: usize = 64;
+
+    /// HMAC-SHA256, by hand (RFC 2104). Hand-rolled rather than brought in as a dependency
+    /// for the same reason `serve_tls::first_certificate_der` is: it is a dozen lines over
+    /// a hash this crate already has, and the RFC's own test vectors are in the tests below
+    /// to prove the dozen lines are right.
+    fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+        let mut padded = [0u8; BLOCK];
+        if key.len() > BLOCK {
+            padded[..32].copy_from_slice(&Sha256::digest(key));
+        } else {
+            padded[..key.len()].copy_from_slice(key);
+        }
+        let mut inner = Sha256::new();
+        let mut outer = Sha256::new();
+        inner.update(padded.map(|byte| byte ^ 0x36));
+        inner.update(message);
+        outer.update(padded.map(|byte| byte ^ 0x5c));
+        outer.update(inner.finalize());
+        outer.finalize().into()
+    }
+
+    /// HKDF-SHA256 (RFC 5869) for exactly one 32-byte output, which is all this needs: one
+    /// extract, then one expand round, because 32 bytes is the hash's own width.
+    pub fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8]) -> [u8; 32] {
+        let prk = hmac_sha256(salt, ikm);
+        let mut block = Vec::with_capacity(info.len() + 1);
+        block.extend_from_slice(info);
+        block.push(1);
+        hmac_sha256(&prk, &block)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
+
+        #[test]
+        fn hmac_agrees_with_rfc_2104_case_1() {
+            // RFC 4231 test case 1: a 20-byte key of 0x0b over "Hi There".
+            let mac = hmac_sha256(&[0x0b; 20], b"Hi There");
+            assert_eq!(
+                hex(&mac),
+                "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+            );
+        }
+
+        #[test]
+        fn hmac_agrees_with_rfc_4231_case_2() {
+            let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+            assert_eq!(
+                hex(&mac),
+                "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+            );
+        }
+
+        #[test]
+        fn hmac_hashes_a_key_longer_than_a_block() {
+            // RFC 4231 test case 4-with-long-key (case 5 in the RFC's numbering): a
+            // 131-byte key, which is the branch that pre-hashes.
+            let mac = hmac_sha256(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First",
+            );
+            assert_eq!(
+                hex(&mac),
+                "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+            );
+        }
+
+        #[test]
+        fn hkdf_agrees_with_rfc_5869_case_1() {
+            // RFC 5869 appendix A.1, truncated to the first 32 bytes of its 42-byte OKM --
+            // which is exactly the first expand block this produces.
+            let okm = hkdf_sha256(
+                &[
+                    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+                ],
+                &[0x0b; 22],
+                &[0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9],
+            );
+            assert_eq!(
+                hex(&okm),
+                "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
+            );
+        }
+    }
+}
+
+/// What the binding is for, mixed in so that a proof made for pairing can never be
+/// mistaken for one made for some later use of the same machinery.
+const BINDING_INFO: &[u8] = b"aether1 pairing credential binding v1";
+
+/// How long a SHA-256 fingerprint is once reduced to hex: thirty-two bytes, two characters
+/// each.
+const FINGERPRINT_HEX_LENGTH: usize = 64;
+
+/// A fingerprint reduced to the hex it means, so the grouping `serve_tls::fingerprint`
+/// prints it with -- and anything an operator's copy and paste adds -- cannot change what a
+/// proof comes out as. Both sides normalise, so both sides agree.
+fn normalise_fingerprint(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// The proof to send in place of a credential, bound to the certificate of the machine it
+/// is for. Empty when there is no fingerprint to bind to: a proof bound to nothing would be
+/// a credential in the clear with extra steps, so this fails closed instead.
+pub fn bind_to_certificate(credential_hash: &str, fingerprint: &str) -> String {
+    let salt = normalise_fingerprint(fingerprint);
+    // A SHA-256 fingerprint is sixty-four hex characters and nothing else is one. Checked
+    // rather than assumed because `normalise_fingerprint` throws away everything that is
+    // not hex: without the length, a sentence with a few a-f letters in it would come
+    // through as a short salt and bind to it quite happily.
+    if salt.len() != FINGERPRINT_HEX_LENGTH || credential_hash.is_empty() {
+        return String::new();
+    }
+    to_hex(&binding::hkdf_sha256(
+        salt.as_bytes(),
+        credential_hash.as_bytes(),
+        BINDING_INFO,
+    ))
+}
+
+/// The stored-hash form of a pairing phrase, derived on the machine doing the pairing so
+/// that it has the same input to bind that the server has had on disk all along. An error
+/// here means the words are not a valid phrase, which is the caller's cue to treat what was
+/// typed as a one-time code instead.
+pub fn phrase_credential_hash(phrase: &str) -> Result<String, String> {
+    Ok(hash_token(&derive_token(&derive_token_from_phrase_inner(
+        phrase,
+    )?)))
+}
+
+/// The stored-hash form of a one-time pairing code. Any string at all can be offered as a
+/// code, so unlike a phrase this cannot fail -- a wrong one simply will not match.
+pub fn code_credential_hash(code: &str) -> String {
+    hash_token(&normalise_code(code))
+}
+
 fn hash_path() -> PathBuf {
     crate::project_root()
         .join("backend")
@@ -78,11 +250,18 @@ fn devices_path() -> PathBuf {
 /// so learning one says nothing about the phrase or about any other device's.
 const TOKEN_BYTES: usize = 32;
 
-fn mint_token() -> Result<String, String> {
+/// 256 bits straight from the operating system's generator, as hex. The one place randomness
+/// becomes a credential in this module, so device tokens and socket tickets share it rather
+/// than each getting their own call and their own chance to get the length wrong.
+fn mint_secret(purpose: &str) -> Result<String, String> {
     let mut bytes = [0u8; TOKEN_BYTES];
     getrandom::fill(&mut bytes)
-        .map_err(|e| format!("could not read randomness to make a device token: {e}"))?;
+        .map_err(|e| format!("could not read randomness to make {purpose}: {e}"))?;
     Ok(to_hex(&bytes))
+}
+
+fn mint_token() -> Result<String, String> {
+    mint_secret("a device token")
 }
 
 /// A short handle for one device, shown when listing and typed when revoking. Derived from
@@ -187,6 +366,40 @@ impl ServeAuth {
         };
         let presented = hash_token(&normalise_code(presented));
         constant_time_eq(presented.as_bytes(), stored.hash.as_bytes())
+    }
+
+    /// Whether this is the live one-time code, bound to this machine's own certificate.
+    ///
+    /// The bound form of `code_matches`, and the only form the app's own pairing uses. A
+    /// proof made for another machine's certificate -- which is what an impostor on the
+    /// network would come away with -- cannot match here, because the salt is this
+    /// machine's fingerprint and nothing else.
+    pub fn code_proof_matches(&self, presented_proof: &str, fingerprint: &str) -> bool {
+        let Some(stored) = read_pairing_code(&self.code_file) else {
+            return false;
+        };
+        let expected = bind_to_certificate(&stored.hash, fingerprint);
+        // An empty expectation is a missing fingerprint, not a match waiting to happen.
+        if expected.is_empty() {
+            return false;
+        }
+        constant_time_eq(presented_proof.as_bytes(), expected.as_bytes())
+    }
+
+    /// Whether this is the pairing phrase, bound to this machine's own certificate. The
+    /// bound form of `phrase_matches`, with the same reasoning as `code_proof_matches`.
+    pub fn phrase_proof_matches(&self, presented_proof: &str, fingerprint: &str) -> bool {
+        self.reload_phrase_if_changed();
+        let stored = self
+            .phrase_hash
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let expected = bind_to_certificate(&stored, fingerprint);
+        if expected.is_empty() {
+            return false;
+        }
+        constant_time_eq(presented_proof.as_bytes(), expected.as_bytes())
     }
 
     /// Spends the code, so it lets exactly one device in. A code that could be typed twice
@@ -867,6 +1080,138 @@ fn saturating_wait(attempts: &HashMap<IpAddr, Attempts>, now: Instant) -> Option
     Some(earliest.duration_since(now))
 }
 
+/// How long a socket ticket is good for. One minute is long enough for a page to fetch one
+/// and open a socket with it even on a slow network, and short enough that a handshake
+/// written down somewhere -- the thing a device token in the same place was vulnerable to --
+/// is worthless by the time anyone reads the log.
+pub const TICKET_TTL: Duration = Duration::from_secs(60);
+
+/// A ceiling on live tickets, for the same reason `MAX_TRACKED` exists: a paired device can
+/// ask for as many as it likes, and each one costs memory for a minute.
+///
+/// Unlike the attempt limiter, dropping the oldest entry here is safe. There, the oldest
+/// record was the live lockout, so evicting it erased the evidence of someone's failures.
+/// A ticket is the opposite: losing one costs its holder a second request and gives an
+/// attacker nothing, because a ticket that is gone is a ticket that is refused.
+const MAX_TICKETS: usize = 1024;
+
+struct Ticket {
+    /// SHA-256 of the ticket, never the ticket. The store is in memory and dies with the
+    /// process, but a core dump or a debugger attached to a running server is exactly the
+    /// kind of place a live credential should not be sitting in plain text.
+    hash: String,
+    expires: Instant,
+}
+
+/// The tickets a `/ws/*` handshake can be opened with: single-use, one minute old at most,
+/// and issued only to a device that already holds a token.
+///
+/// A device token authenticates every other request that device makes and is good until
+/// `aether1 revoke`. Carrying it in a WebSocket handshake meant a handshake someone wrote
+/// down -- a proxy configured to log request headers, a browser's network trace pasted into
+/// a bug report -- handed over lasting access. A ticket closes that: it buys one socket,
+/// once, and a minute later it buys nothing.
+///
+/// In memory on purpose. A ticket outliving a restart would be a ticket the operator cannot
+/// see or revoke, and a restart already drops every socket it could have opened.
+pub struct TicketStore {
+    live: Mutex<Vec<Ticket>>,
+}
+
+impl Default for TicketStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TicketStore {
+    pub fn new() -> Self {
+        Self {
+            live: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Mints a ticket and returns it. Only the hash is kept, so this is the one and only
+    /// moment the ticket itself exists on this side.
+    pub fn mint(&self) -> Result<String, String> {
+        self.mint_at(Instant::now())
+    }
+
+    /// `mint` with the clock passed in, so expiry can be tested without a test that sleeps
+    /// for a minute -- the same split the attempt limiter uses for the same reason.
+    fn mint_at(&self, now: Instant) -> Result<String, String> {
+        let ticket = mint_secret("a socket ticket")?;
+        let mut live = self.lock();
+        Self::sweep(&mut live, now);
+        // Expired entries are already gone, so anything still here is live and the oldest of
+        // them is the one whose holder has had the longest to use it.
+        while live.len() >= MAX_TICKETS {
+            live.remove(0);
+        }
+        live.push(Ticket {
+            hash: hash_token(&ticket),
+            expires: now + TICKET_TTL,
+        });
+        Ok(ticket)
+    }
+
+    /// Verifies a ticket and consumes it. True at most once per ticket, and only inside the
+    /// TTL -- a replayed handshake gets `false` from the same call that let the first one
+    /// through.
+    pub fn spend(&self, presented: &str) -> bool {
+        self.spend_at(presented, Instant::now())
+    }
+
+    fn spend_at(&self, presented: &str, now: Instant) -> bool {
+        let presented = hash_token(presented);
+        let mut live = self.lock();
+        // Swept before the comparison, not after: an expired ticket must not match even for
+        // the instant between the sweep that would have dropped it and the next mint.
+        Self::sweep(&mut live, now);
+        // Every entry is compared even after a match, and the index is carried rather than
+        // broken out on, so the time taken says nothing about which ticket matched or how
+        // far down the list it was -- the same discipline as `accepts`.
+        let mut found: Option<usize> = None;
+        for (index, ticket) in live.iter().enumerate() {
+            let matches = constant_time_eq(presented.as_bytes(), ticket.hash.as_bytes());
+            found = if matches { Some(index) } else { found };
+        }
+        match found {
+            Some(index) => {
+                live.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// How many tickets could still be spent. A count rather than a list, so it gives
+    /// nothing away -- but nothing reports it today, so it exists for the tests that have to
+    /// prove the store does not grow without bound.
+    #[cfg(test)]
+    pub fn live_count(&self) -> usize {
+        self.live_count_at(Instant::now())
+    }
+
+    #[cfg(test)]
+    fn live_count_at(&self, now: Instant) -> usize {
+        let mut live = self.lock();
+        Self::sweep(&mut live, now);
+        live.len()
+    }
+
+    fn sweep(live: &mut Vec<Ticket>, now: Instant) {
+        live.retain(|ticket| ticket.expires > now);
+    }
+
+    /// A poisoned lock here would mean a panic while holding it, and the only thing held is a
+    /// list of hashes. Recovering is strictly better than refusing every socket for the life
+    /// of the process.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Ticket>> {
+        self.live.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -892,6 +1237,144 @@ mod tests {
         let token = derive_token_from_phrase(phrase).unwrap();
         assert!(auth.phrase_matches(&token), "the phrase should be accepted");
         auth.add_device(label).unwrap()
+    }
+
+    /// The fingerprints of two machines, as `serve_tls::fingerprint` formats them.
+    const THIS_MACHINE: &str =
+        "1A2B3C4D 5E6F7081 92A3B4C5 D6E7F809 1A2B3C4D 5E6F7081 92A3B4C5 D6E7F809";
+    const AN_IMPOSTOR: &str =
+        "99887766 55443322 11009988 77665544 33221100 99887766 55443322 11009988";
+
+    /// What the scenario this binding exists for actually looks like, with nothing mocked
+    /// but the two fingerprints.
+    ///
+    /// Machines are found over DNS-SD, which anyone on the network can answer in anyone
+    /// else's name. So an impostor appears in the scan list, the operator pairs with it,
+    /// and it comes away with whatever was sent. Before binding that was the phrase in the
+    /// clear, and the phrase is the standing credential: the impostor could then pair with
+    /// the real machine whenever it liked. What it comes away with now is a proof salted
+    /// with *its own* certificate, which the real machine cannot accept -- and this is the
+    /// test that says so.
+    #[test]
+    fn a_proof_collected_by_an_impostor_is_no_use_against_the_real_machine() {
+        let (hash_file, devices_file) = temp_paths("impostor_phrase");
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let phrase = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+        let hash = phrase_credential_hash(&phrase).unwrap();
+
+        // The operator pairs with something that answered in the real machine's name. This
+        // is everything that machine learns.
+        let collected = bind_to_certificate(&hash, AN_IMPOSTOR);
+
+        assert!(
+            !auth.phrase_proof_matches(&collected, THIS_MACHINE),
+            "a proof made for another certificate must not open this machine"
+        );
+        // And the proof the real machine would accept is one the impostor cannot make,
+        // because making it needs the phrase, which never left the operator's machine.
+        assert!(
+            auth.phrase_proof_matches(&bind_to_certificate(&hash, THIS_MACHINE), THIS_MACHINE),
+            "the phrase bound to this machine should pair"
+        );
+    }
+
+    /// The same for the one-time code. It is the smaller prize -- single use, ten minutes --
+    /// but an impostor that collects one inside its life spends it for a device token,
+    /// which is standing access by another route.
+    #[test]
+    fn a_code_collected_by_an_impostor_is_no_use_either() {
+        let (hash_file, devices_file) = temp_paths("impostor_code");
+        // A directory of its own: the code file sits beside the device list, and tests run
+        // side by side, so sharing the temp directory would mean sharing the one code.
+        let dir = devices_file.with_extension("dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let devices_file = dir.join("serve_devices.json");
+        let (auth, _setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let (code, _expires) = mint_pairing_code_at(&dir.join("serve_pair_code.json")).unwrap();
+        let hash = code_credential_hash(&code);
+
+        assert!(
+            !auth.code_proof_matches(&bind_to_certificate(&hash, AN_IMPOSTOR), THIS_MACHINE),
+            "a code proof made for another certificate must not open this machine"
+        );
+        assert!(
+            auth.code_proof_matches(&bind_to_certificate(&hash, THIS_MACHINE), THIS_MACHINE),
+            "the code bound to this machine should pair"
+        );
+    }
+
+    /// The credential itself, offered where a proof belongs, is not a proof. Worth stating
+    /// outright: the whole point is that the thing that used to travel no longer works.
+    #[test]
+    fn the_credential_in_the_clear_is_not_a_proof() {
+        let (hash_file, devices_file) = temp_paths("clear_is_not_proof");
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let phrase = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+
+        assert!(!auth.phrase_proof_matches(&phrase, THIS_MACHINE));
+        assert!(
+            !auth.phrase_proof_matches(&derive_token_from_phrase(&phrase).unwrap(), THIS_MACHINE)
+        );
+        assert!(!auth.phrase_proof_matches(&phrase_credential_hash(&phrase).unwrap(), THIS_MACHINE));
+    }
+
+    /// A fingerprint is read off a screen and typed, or copied with whatever spacing came
+    /// with it. Both ends reduce it to the hex it means, so none of that changes the proof.
+    #[test]
+    fn how_a_fingerprint_is_written_does_not_change_the_proof() {
+        let hash = "abc123";
+        let grouped = bind_to_certificate(hash, THIS_MACHINE);
+        assert_eq!(
+            grouped,
+            bind_to_certificate(hash, &THIS_MACHINE.replace(' ', ""))
+        );
+        assert_eq!(
+            grouped,
+            bind_to_certificate(hash, &THIS_MACHINE.to_lowercase())
+        );
+        assert_eq!(
+            grouped,
+            bind_to_certificate(hash, &format!("  {THIS_MACHINE}  \n"))
+        );
+        // A different certificate is a different proof, which is the entire mechanism.
+        assert_ne!(grouped, bind_to_certificate(hash, AN_IMPOSTOR));
+    }
+
+    /// No certificate means no proof, rather than a proof bound to nothing. A machine with
+    /// no fingerprint to bind to cannot be told apart from any other, so this fails closed.
+    #[test]
+    fn with_no_fingerprint_there_is_no_proof_and_nothing_matches() {
+        let (hash_file, devices_file) = temp_paths("no_fingerprint");
+        let (auth, setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
+        let phrase = match setup {
+            Setup::New { phrase } => phrase,
+            Setup::Existing => panic!("a fresh path should be new"),
+        };
+        let hash = phrase_credential_hash(&phrase).unwrap();
+
+        assert_eq!(bind_to_certificate(&hash, ""), "");
+        assert_eq!(bind_to_certificate(&hash, "no hex in this string"), "");
+        // A sentence with a few hex letters in it is not a fingerprint either, which is
+        // what the length check is for.
+        assert_eq!(bind_to_certificate(&hash, "paired with the laptop"), "");
+        // Nor is half a fingerprint, or two of them run together.
+        assert_eq!(bind_to_certificate(&hash, &THIS_MACHINE[..20]), "");
+        assert_eq!(
+            bind_to_certificate(&hash, &format!("{THIS_MACHINE}{THIS_MACHINE}")),
+            ""
+        );
+        assert_eq!(bind_to_certificate("", THIS_MACHINE), "");
+        // An empty proof against an empty fingerprint must not read as two empty strings
+        // being equal.
+        assert!(!auth.phrase_proof_matches("", ""));
+        assert!(!auth.phrase_proof_matches(&bind_to_certificate(&hash, THIS_MACHINE), ""));
     }
 
     /// The bug that made "connecting via LAN doesn't work, regardless of the phrase" true:
@@ -1531,5 +2014,125 @@ mod tests {
         assert!(constant_time_eq(b"same", b"same"));
         assert!(!constant_time_eq(b"same", b"diff"));
         assert!(!constant_time_eq(b"short", b"longer-string"));
+    }
+
+    /// The whole reason tickets exist. A handshake someone wrote down -- a proxy logging
+    /// request headers, a network trace in a bug report -- used to carry the device token,
+    /// which opened everything until it was revoked. Replaying it now opens nothing, because
+    /// the first socket spent the ticket.
+    #[test]
+    fn a_ticket_opens_one_socket_and_a_replay_opens_none() {
+        let store = TicketStore::new();
+        let ticket = store.mint().expect("a ticket to mint");
+
+        assert!(store.spend(&ticket), "the first handshake should be let in");
+        assert!(
+            !store.spend(&ticket),
+            "replaying the same handshake must be refused"
+        );
+        // And again, in case the refusal was the thing that put it back.
+        assert!(!store.spend(&ticket));
+        assert_eq!(store.live_count(), 0);
+    }
+
+    /// A ticket is worthless once a minute has passed, which is what makes a logged
+    /// handshake worthless. Tested against an injected clock rather than a sleeping test.
+    #[test]
+    fn a_ticket_expires_and_is_refused_after_that() {
+        let store = TicketStore::new();
+        let issued = Instant::now();
+        let ticket = store.mint_at(issued).expect("a ticket to mint");
+
+        // Good right up to the deadline.
+        assert_eq!(
+            store.live_count_at(issued + TICKET_TTL - Duration::from_millis(1)),
+            1
+        );
+        // And gone the moment it is reached, not merely some time after.
+        assert!(!store.spend_at(&ticket, issued + TICKET_TTL));
+        assert_eq!(store.live_count_at(issued), 0);
+    }
+
+    /// A ticket that was never issued is not a ticket, however well formed it looks.
+    #[test]
+    fn an_unissued_ticket_is_refused() {
+        let store = TicketStore::new();
+        let real = store.mint().expect("a ticket to mint");
+
+        assert!(!store.spend(&"a".repeat(64)));
+        assert!(!store.spend(""));
+        // And refusing those did not disturb the one that was issued.
+        assert!(store.spend(&real));
+    }
+
+    /// Several devices, or one device reconnecting while another socket is still opening,
+    /// each hold their own ticket. Spending one must not spend the others.
+    #[test]
+    fn tickets_are_independent_of_each_other() {
+        let store = TicketStore::new();
+        let tickets: Vec<String> = (0..5).map(|_| store.mint().expect("a ticket")).collect();
+
+        assert!(store.spend(&tickets[2]));
+        assert_eq!(store.live_count(), 4);
+        for (index, ticket) in tickets.iter().enumerate() {
+            assert_eq!(
+                store.spend(ticket),
+                index != 2,
+                "ticket {index} was spent when it should not have been, or the other way round"
+            );
+        }
+        assert_eq!(store.live_count(), 0);
+    }
+
+    /// The ticket itself is never kept. A core dump or a debugger on a running server finds
+    /// hashes, the same as the device file on disk does.
+    #[test]
+    fn only_the_hash_of_a_ticket_is_stored() {
+        let store = TicketStore::new();
+        let ticket = store.mint().expect("a ticket to mint");
+        let held = store.lock();
+
+        assert_eq!(held.len(), 1);
+        assert_ne!(held[0].hash, ticket);
+        assert_eq!(held[0].hash, hash_token(&ticket));
+    }
+
+    /// The key is chosen by whoever is connecting, so the store has to have a ceiling -- the
+    /// same reasoning as `MAX_TRACKED`. Unlike the limiter, dropping the oldest is safe here:
+    /// losing a ticket costs its holder one more request and gives an attacker nothing.
+    #[test]
+    fn the_store_does_not_grow_without_bound() {
+        let store = TicketStore::new();
+        let first = store.mint().expect("a ticket to mint");
+        for _ in 0..MAX_TICKETS {
+            store.mint().expect("a ticket to mint");
+        }
+
+        assert_eq!(store.live_count(), MAX_TICKETS);
+        assert!(
+            !store.spend(&first),
+            "the oldest ticket should have been dropped to make room"
+        );
+    }
+
+    /// Expired tickets go without anyone asking. A store that only swept on `spend` would
+    /// hold a minute of a quiet server's tickets forever once the sockets stopped coming.
+    #[test]
+    fn expired_tickets_are_cleaned_up_by_the_next_mint() {
+        let store = TicketStore::new();
+        let issued = Instant::now();
+        for _ in 0..10 {
+            store.mint_at(issued).expect("a ticket to mint");
+        }
+        assert_eq!(store.live_count_at(issued), 10);
+
+        store
+            .mint_at(issued + TICKET_TTL + Duration::from_secs(1))
+            .expect("a ticket to mint");
+        assert_eq!(
+            store.live_count_at(issued + TICKET_TTL + Duration::from_secs(1)),
+            1,
+            "only the fresh ticket should be left"
+        );
     }
 }

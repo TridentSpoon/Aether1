@@ -238,6 +238,89 @@ pub fn effective(root: &Path, db: &MemoryDb) -> (Level, bool) {
     (level, level.applied(db))
 }
 
+/// A deliberately narrow command class for the "allow similar" choice. The first two
+/// words identify an ordinary build/test task such as `cargo test` or `npm test`; shell
+/// syntax, quoting, paths, and remote repository operations are never remembered this way.
+pub fn similar_command_prefix(command: &str) -> Option<String> {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    if words.len() < 2
+        || words.iter().any(|word| {
+            word.is_empty()
+                || !word
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._:-/".contains(&byte))
+        })
+    {
+        return None;
+    }
+    if words[0].contains('/') || words[0].contains('\\') {
+        return None;
+    }
+    if matches!((words[0], words[1]), ("git", "push") | ("gh", "pr")) {
+        return None;
+    }
+    Some(format!("{} {}", words[0], words[1]))
+}
+
+/// The project-local command classes the operator explicitly allowed.
+pub fn similar_commands(root: &Path) -> Vec<String> {
+    document(root)
+        .get("similar_commands")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|entry| similar_command_prefix(entry).as_deref() == Some(*entry))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether an argv request is covered by one of this project's command classes.
+pub fn allows_similar_argv(root: &Path, argv: &[String]) -> bool {
+    if argv.len() < 2
+        || argv[0].contains('/')
+        || argv[0].contains('\\')
+        || argv.iter().any(|part| {
+            part.is_empty()
+                || part
+                    .bytes()
+                    .any(|byte| !(byte.is_ascii_alphanumeric() || b"._:-/".contains(&byte)))
+        })
+    {
+        return false;
+    }
+    let prefix = format!("{} {}", argv[0], argv[1]);
+    similar_commands(root)
+        .iter()
+        .any(|allowed| allowed == &prefix)
+}
+
+/// Remembers only an ordinary two-word command class and scopes it to this project file.
+pub fn remember_similar_command(root: &Path, command: &str) -> Result<String, String> {
+    let prefix = similar_command_prefix(command).ok_or_else(|| {
+        "This command cannot be remembered as a similar-command rule. Choose Allow once, or use a simple build/test command such as `cargo test`.".to_string()
+    })?;
+    let mut policy = document(root);
+    let list = policy
+        .as_object_mut()
+        .ok_or_else(|| format!("{FILE} is not a JSON object"))?
+        .entry("similar_commands")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| "the `similar_commands` entry must be a list".to_string())?;
+    if !list
+        .iter()
+        .any(|entry| entry.as_str() == Some(prefix.as_str()))
+    {
+        list.push(Value::String(prefix.clone()));
+        write_document(root, &policy)?;
+    }
+    Ok(prefix)
+}
+
 /// The folders this project names beyond the workspace, as the current level allows them.
 ///
 /// A folder that does not exist is left out rather than reported: a policy file that travels
@@ -439,5 +522,28 @@ mod tests {
         );
         write_document(&root, &policy).unwrap();
         assert!(mounts(&root).is_empty());
+    }
+
+    #[test]
+    fn similar_command_rules_are_narrow_and_project_scoped() {
+        let (_db, root) = project("similar");
+        let rule = remember_similar_command(&root, "cargo test --workspace").unwrap();
+        assert_eq!(rule, "cargo test");
+        assert!(allows_similar_argv(
+            &root,
+            &["cargo".into(), "test".into(), "-p".into(), "aether1".into()]
+        ));
+        assert!(!allows_similar_argv(
+            &root,
+            &["cargo".into(), "install".into(), "malware".into()]
+        ));
+        assert!(similar_command_prefix("cargo test && git push").is_none());
+        assert!(similar_command_prefix("git push origin main").is_none());
+        let other = root.parent().unwrap().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        assert!(!allows_similar_argv(
+            &other,
+            &["cargo".into(), "test".into()]
+        ));
     }
 }

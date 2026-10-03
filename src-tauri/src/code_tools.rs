@@ -1,22 +1,18 @@
-//! The five things AETHER CODE can do, and the one file they are all written in.
+//! The capabilities AETHER CODE may use, each gated by a named permission.
 //!
-//! The companion has a registry (`tools/`), a consent queue, personas with fields, and an
-//! action log. None of that is here, on purpose. The coding panel's whole safety argument
-//! is that its capabilities can be read in one sitting: five entries, every one of them a
-//! read, each gated by a named permission in `code_perms`. A reader who wants to know what
-//! this panel may do to their machine should not have to assemble the answer from a
-//! registry, a persona table and a domain policy.
+//! Unlike the companion's broader registry (`tools/`), this list is specific to repository
+//! work: inspect files and GitHub, fetch documentation, edit the nominated workspace, and
+//! run commands under the workspace/sandbox rules. A reader can understand what the model
+//! may do from this catalog and `code_perms` without following a second consent system.
 //!
 //! What is shared with the companion is the part that must never be answered twice:
 //! `fs_guard` decides which paths exist as far as any model is concerned, and `read_file`
 //! and `list_dir` are the companion's own implementations rather than second copies of
 //! them. One list of denied paths, one truncation rule, one place to fix.
 //!
-//! **Nothing in this file writes, and nothing in this file can be made to.** There is no
-//! write tool to gate; `gh` is checked against a whitelist of subcommands that only look;
-//! `fetch_url` is a GET. A request to change something comes back as a refusal telling the
-//! model to put the command in a fenced block, where `code_chat::commands_in` turns it into
-//! a button that types into the operator's terminal and waits for their Return.
+//! GitHub operations remain read-only here. Local edits and commands go through
+//! `code_workspace`, which checks the project boundary, edit/run grants, and sandbox before
+//! anything is changed or spawned. The terminal is not used by these tools.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -64,7 +60,17 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         name: "gh",
         grant: Grant::Github,
-        line: "gh {\"args\": [\"pr\", \"view\", \"137\"]} -- the GitHub CLI, read-only subcommands only (view, list, diff, checks, status, search). Anything that changes a repository is refused; put that in a ```bash block instead.",
+        line: "gh {\"args\": [\"pr\", \"view\", \"137\", \"--repo\", \"OWNER/REPO\"]} -- the GitHub CLI, read-only subcommands only (view, list, diff, checks, status, search). For a remote repo, include --repo OWNER/REPO so the request cannot accidentally target a different checkout. Anything that changes a repository is refused; put that in a ```bash block instead.",
+    },
+    Capability {
+        name: "github_search",
+        grant: Grant::Github,
+        line: "github_search {\"query\": \"NoemaNucleus\"} -- find likely GitHub repositories by name or description. Returns owner/repo names and default branches; use github_read next to inspect source.",
+    },
+    Capability {
+        name: "github_read",
+        grant: Grant::Github,
+        line: "github_read {\"repo\": \"OWNER/REPO\", \"path\": \"README.md\", \"ref\": \"main\"} -- read a file or list a directory in a GitHub repository through the signed-in gh account. Omit path for the root and ref to use the default branch. Read-only.",
     },
     Capability {
         name: "fetch_url",
@@ -84,7 +90,7 @@ const CAPABILITIES: &[Capability] = &[
     Capability {
         name: "run",
         grant: Grant::Run,
-        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. Or {\"shell\": \"cargo test && cargo clippy\"} for a shell line, which works inside the sandbox. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on, so a step that needs to fetch dependencies will fail and should be reported rather than worked around. Work freely inside that folder -- a checkpoint is taken before you change anything, so the operator can put it all back.",
+        line: "run {\"argv\": [\"cargo\", \"test\"], \"cwd\": \"\", \"timeout_secs\": 120} -- run a build or test command in the project folder. A non-zero exit is a result to read, not an error. The command runs in a sandbox: the project folder is the only writable place, the home directory is not there, and the network is off unless the operator turned it on. When Run is off, only command classes they explicitly remembered with Allow similar can run; use a single argv, not a shell. For a new command, give them a bash suggestion so they can approve it once or remember its command class.",
     },
     Capability {
         name: "search_web",
@@ -101,7 +107,12 @@ const CAPABILITIES: &[Capability] = &[
 pub fn catalog(db: &MemoryDb) -> Vec<&'static str> {
     CAPABILITIES
         .iter()
-        .filter(|cap| code_perms::granted(db, cap.grant))
+        .filter(|cap| {
+            if cap.name == "run" {
+                return run_tool_available(db);
+            }
+            code_perms::granted(db, cap.grant)
+        })
         .map(|cap| cap.line)
         .collect()
 }
@@ -110,9 +121,20 @@ pub fn catalog(db: &MemoryDb) -> Vec<&'static str> {
 /// left out of the prompt entirely -- telling a model about a protocol it has no tools for
 /// is a way to get it calling tools that do not exist.
 pub fn any_granted(db: &MemoryDb) -> bool {
-    CAPABILITIES
-        .iter()
-        .any(|cap| code_perms::granted(db, cap.grant))
+    CAPABILITIES.iter().any(|cap| {
+        if cap.name == "run" {
+            run_tool_available(db)
+        } else {
+            code_perms::granted(db, cap.grant)
+        }
+    })
+}
+
+fn run_tool_available(db: &MemoryDb) -> bool {
+    code_perms::granted(db, Grant::Run)
+        || crate::code_workspace::root(db)
+            .ok()
+            .is_some_and(|root| !crate::code_policy::similar_commands(&root).is_empty())
 }
 
 /// Runs one call from the model.
@@ -130,7 +152,32 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
             known.join(", ")
         ));
     };
-    code_perms::require(db, capability.grant).map_err(|Refusal(why)| why)?;
+    if name == "run" && !code_perms::granted(db, Grant::Run) {
+        let root = match crate::code_workspace::root(db) {
+            Ok(root) => root,
+            Err(_) => {
+                return Err(code_perms::require(db, Grant::Run)
+                    .expect_err("Run was checked off immediately above")
+                    .0)
+            }
+        };
+        let argv: Vec<String> = args
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if args.get("shell").is_some() || !crate::code_policy::allows_similar_argv(&root, &argv) {
+            return Err("Run is off. This project only remembers specific build/test command classes. Use a single argv covered by its Allow similar rule, or show the operator a bash command so they can approve it once or remember it.".to_string());
+        }
+    } else {
+        code_perms::require(db, capability.grant).map_err(|Refusal(why)| why)?;
+    }
 
     // Before the first thing that changes anything, a way back. See code_checkpoint.rs for
     // why this replaced the table of refused `git` subcommands rather than joining it.
@@ -143,6 +190,8 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
         "list_dir" => run_builtin(db, &crate::tools::builtin::ListDir, args),
         "machine" => Ok(machine_summary()),
         "gh" => gh(db, args),
+        "github_search" => github_search(db, args),
+        "github_read" => github_read(db, args),
         "fetch_url" => fetch_url(db, args),
         "search_web" => search_web(db, args),
         "edit_file" => crate::code_workspace::edit_file(db, args),
@@ -262,14 +311,130 @@ fn gh(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     code_perms::check_gh(db, &argv).map_err(|Refusal(why)| why)?;
 
+    run_gh(db, &argv)
+}
+
+/// Runs one GitHub write after the operator approved this exact command in the UI.
+/// Permanent "similar command" grants are intentionally not offered for remote writes.
+pub fn run_approved_github_write(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
+    if !code_perms::granted(db, Grant::Github) {
+        return Err("GitHub access is off in Settings.".to_string());
+    }
+    if crate::local_only::enabled(db) {
+        return Err("Local-only mode is on, so AETHER1 will not contact GitHub. Turn it off before approving this action.".to_string());
+    }
+    validate_approved_github_write(argv)?;
+    run_gh(db, argv)
+}
+
+/// Runs a suggested gh invocation after the operator's exact-command approval. Only the
+/// established read-only classifier or the narrowly supported PR write validator can pass.
+pub fn run_approved_github_command(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
+    if validate_approved_github_write(argv).is_ok() {
+        return run_approved_github_write(db, argv);
+    }
+    code_perms::check_gh(db, argv).map_err(|Refusal(why)| why)?;
+    if crate::local_only::enabled(db) {
+        return Err("Local-only mode is on, so AETHER1 will not contact GitHub.".to_string());
+    }
+    run_gh(db, argv)
+}
+
+fn validate_approved_github_write(argv: &[String]) -> Result<(), String> {
+    let Some([pr, verb]) = argv.get(..2) else {
+        return Err("Only `gh pr create` and `gh pr merge` can be approved here.".to_string());
+    };
+    if pr != "pr" || !matches!(verb.as_str(), "create" | "merge") {
+        return Err("Only `gh pr create` and `gh pr merge` can be approved here.".to_string());
+    }
+    let args = &argv[2..];
+    let allowed = if verb == "create" {
+        &[
+            "--title", "-t", "--body", "-b", "--base", "-B", "--head", "--draft", "--fill",
+            "--repo",
+        ][..]
+    } else {
+        &[
+            "--merge",
+            "--squash",
+            "--rebase",
+            "--delete-branch",
+            "--auto",
+            "--repo",
+        ][..]
+    };
+    let mut positional = 0;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if verb == "merge" && positional == 0 && !arg.starts_with('-') {
+            positional += 1;
+            index += 1;
+            continue;
+        }
+        if allowed.contains(&arg.as_str()) {
+            if matches!(
+                arg.as_str(),
+                "--title" | "-t" | "--body" | "-b" | "--base" | "-B" | "--head" | "--repo"
+            ) {
+                index += 1;
+                if index >= args.len() || args[index].starts_with('-') {
+                    return Err(format!("{arg} needs a value."));
+                }
+            }
+        } else {
+            return Err(format!(
+                "`gh pr {verb}` option {arg:?} is not enabled for one-time approval."
+            ));
+        }
+        index += 1;
+    }
+    if verb == "merge" && positional != 1 {
+        return Err("`gh pr merge` needs a pull-request number or URL.".to_string());
+    }
+    if verb == "create" && positional != 0 {
+        return Err(
+            "`gh pr create` does not accept positional arguments in this approval flow."
+                .to_string(),
+        );
+    }
+    if verb == "create"
+        && !args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--title" | "-t" | "--fill"))
+    {
+        return Err(
+            "`gh pr create` needs a title or `--fill` so it can run without an interactive prompt."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn run_gh(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
     let binary = which::which("gh").map_err(|_| {
         "the GitHub CLI is not installed on this machine. `gh auth status` would be the test; \
          the operator installs it from https://cli.github.com."
             .to_string()
     })?;
 
-    let mut child = Command::new(&binary)
-        .args(&argv)
+    let mut command = Command::new(&binary);
+    // gh otherwise inherits AETHER1's install directory as its repository context. When
+    // the operator has nominated a workspace, make the local checkout the default target;
+    // remote-only tasks can still name an explicit OWNER/REPO in the invocation.
+    let has_workspace = !db
+        .get_setting_string(crate::code_workspace::ROOT_SETTING, "")
+        .trim()
+        .is_empty()
+        || !db
+            .get_setting_string("graft_selected_project", "")
+            .trim()
+            .is_empty();
+    if has_workspace {
+        command.current_dir(crate::code_workspace::root(db)?);
+    }
+    let mut child = command
+        .args(argv)
         // No stdin at all: a gh subcommand that decides to ask a question gets EOF and
         // gives up, rather than waiting out the timeout on a prompt nobody can see.
         .stdin(Stdio::null())
@@ -325,6 +490,175 @@ fn gh(db: &MemoryDb, args: &Value) -> Result<String, String> {
     }
 }
 
+/// Searches repositories using the operator's authenticated GitHub CLI session.
+fn github_search(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    ensure_github_read_allowed(db)?;
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|query| !query.is_empty() && query.len() <= 256)
+        .ok_or_else(|| "github_search needs a query between 1 and 256 characters".to_string())?;
+    let argv = vec![
+        "search".to_string(),
+        "repos".to_string(),
+        query.to_string(),
+        "--limit".to_string(),
+        "5".to_string(),
+        "--json".to_string(),
+        "fullName,description,language,url,defaultBranch".to_string(),
+    ];
+    code_perms::check_gh(db, &argv).map_err(|Refusal(why)| why)?;
+    run_gh(db, &argv)
+}
+
+/// Reads repository source without cloning or changing the operator's working tree.
+/// GitHub's Contents API returns base64 for files and a JSON array for directories.
+fn github_read(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    ensure_github_read_allowed(db)?;
+    let repo = args
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|repo| valid_repo_name(repo))
+        .ok_or_else(|| "github_read needs an owner/repository name".to_string())?;
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if !valid_repo_path(path) {
+        return Err(
+            "github_read path must be a repository-relative path without `.` or `..` segments."
+                .to_string(),
+        );
+    }
+    let reference = args.get("ref").and_then(Value::as_str).unwrap_or("").trim();
+    if reference.len() > 200 || reference.chars().any(char::is_control) {
+        return Err(
+            "github_read ref must be a branch, tag, or commit name up to 200 characters."
+                .to_string(),
+        );
+    }
+    let mut route = format!("repos/{repo}/contents");
+    if !path.is_empty() {
+        route.push('/');
+        route.push_str(path);
+    }
+    if !reference.is_empty() {
+        route.push_str("?ref=");
+        route.push_str(&urlencoding::encode(reference));
+    }
+    let argv = vec!["api".to_string(), route];
+    code_perms::check_gh(db, &argv).map_err(|Refusal(why)| why)?;
+    let response = run_gh(db, &argv)?;
+    format_github_contents(&response, repo, path, reference)
+}
+
+fn ensure_github_read_allowed(db: &MemoryDb) -> Result<(), String> {
+    if crate::local_only::enabled(db) {
+        return Err("Local-only mode is on, so AETHER1 will not contact GitHub.".to_string());
+    }
+    if !code_perms::granted(db, Grant::Github) {
+        return Err("GitHub access is off in Settings.".to_string());
+    }
+    if which::which("gh").is_err() {
+        return Err(
+            "The GitHub CLI is not installed; install gh and sign in with `gh auth login` first."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn valid_repo_name(repo: &str) -> bool {
+    let mut parts = repo.split('/');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(owner), Some(name), None)
+        if valid_github_component(owner) && valid_github_component(name))
+}
+
+fn valid_github_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 100
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value != "."
+        && value != ".."
+}
+
+fn valid_repo_path(path: &str) -> bool {
+    path.is_empty()
+        || path.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@')
+                })
+        })
+}
+
+fn format_github_contents(
+    response: &str,
+    repo: &str,
+    path: &str,
+    reference: &str,
+) -> Result<String, String> {
+    let value: Value = serde_json::from_str(response)
+        .map_err(|_| "GitHub returned content in an unexpected format.".to_string())?;
+    let at = if reference.is_empty() {
+        "default branch"
+    } else {
+        reference
+    };
+    if let Some(entries) = value.as_array() {
+        let names = entries
+            .iter()
+            .filter_map(|entry| {
+                Some(format!(
+                    "{}\t{}\t{}",
+                    entry.get("type")?.as_str()?,
+                    entry.get("path")?.as_str()?,
+                    entry.get("name")?.as_str()?
+                ))
+            })
+            .take(100)
+            .collect::<Vec<_>>();
+        let location = if path.is_empty() {
+            repo.to_string()
+        } else {
+            format!("{repo}/{path}")
+        };
+        return Ok(format!(
+            "GitHub directory {location} ({at}):\n{}",
+            names.join("\n")
+        ));
+    }
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+    if kind != "file" {
+        return Err("GitHub returned neither a file nor a directory for that path.".to_string());
+    }
+    let encoding = value.get("encoding").and_then(Value::as_str).unwrap_or("");
+    let content = value.get("content").and_then(Value::as_str).unwrap_or("");
+    if encoding != "base64" || content.trim().is_empty() {
+        return Err(
+            "GitHub did not include inline text for this file; try a smaller source file."
+                .to_string(),
+        );
+    }
+    use base64::Engine as _;
+    let compact_content: String = content.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(compact_content)
+        .map_err(|_| "GitHub returned a file with invalid base64 content.".to_string())?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(format!(
+        "GitHub file {repo}/{path} ({at}):\n{}",
+        truncate(&text, MAX_OUTPUT_BYTES)
+    ))
+}
+
 /// Fetches a public page as text.
 ///
 /// Deliberately thin: a GET, a size cap, and HTML reduced to something a model can read.
@@ -339,7 +673,10 @@ fn fetch_url(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     code_perms::check_url(db, url).map_err(|Refusal(why)| why)?;
 
-    let response = ureq::get(url.trim())
+    // `check_url` above has already asked about local-only mode for this URL. The gate
+    // is asked again here because it is the only way to get a request at all, and a
+    // second refusal costs a settings read rather than a round trip.
+    let response = crate::net::get(url.trim(), "the page was not fetched")?
         .header("User-Agent", "AETHER1")
         .call()
         .map_err(|e| format!("cannot fetch {url}: {e}"))?;
@@ -384,7 +721,7 @@ fn search_web(db: &MemoryDb, args: &Value) -> Result<String, String> {
 
     code_perms::check_url(db, &api_url).map_err(|Refusal(why)| why)?;
 
-    let response = ureq::get(&api_url)
+    let response = crate::net::get(&api_url, "the search was not made")?
         .header("User-Agent", "AETHER1")
         .call()
         .map_err(|e| format!("cannot search the web: {e}"))?;
@@ -532,6 +869,69 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(&path).expect("open test db")
+    }
+
+    #[test]
+    fn github_repository_and_path_inputs_are_confined() {
+        assert!(valid_repo_name("owner/repo"));
+        assert!(valid_repo_name("some-org/repo.name"));
+        assert!(!valid_repo_name("owner/repo/extra"));
+        assert!(!valid_repo_name("../repo"));
+        assert!(valid_repo_path("src/main.rs"));
+        assert!(valid_repo_path(""));
+        assert!(!valid_repo_path("src/../secret"));
+        assert!(!valid_repo_path("/etc/passwd"));
+    }
+
+    #[test]
+    fn github_contents_format_files_and_directories() {
+        let file = r#"{"type":"file","encoding":"base64","content":"cHViIGZu\nIG1haW4oKXt9"}"#;
+        let rendered = format_github_contents(file, "owner/repo", "src/main.rs", "main").unwrap();
+        assert!(rendered.contains("GitHub file owner/repo/src/main.rs (main)"));
+        assert!(rendered.contains("pub fn main(){}"));
+
+        let directory = r#"[{"type":"file","path":"README.md","name":"README.md"}]"#;
+        let rendered = format_github_contents(directory, "owner/repo", "", "").unwrap();
+        assert!(rendered.contains("GitHub directory owner/repo (default branch)"));
+        assert!(rendered.contains("file\tREADME.md\tREADME.md"));
+    }
+
+    #[test]
+    fn github_write_approval_is_limited_to_supported_pr_actions() {
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "create".into(),
+            "--title".into(),
+            "Fix".into()
+        ])
+        .is_ok());
+        assert!(
+            validate_approved_github_write(&["pr".into(), "create".into(), "--fill".into()])
+                .is_ok()
+        );
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "merge".into(),
+            "42".into(),
+            "--squash".into()
+        ])
+        .is_ok());
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "merge".into(),
+            "42".into(),
+            "43".into()
+        ])
+        .is_err());
+        assert!(validate_approved_github_write(&["repo".into(), "delete".into()]).is_err());
+        assert!(validate_approved_github_write(&[
+            "pr".into(),
+            "create".into(),
+            "--title".into(),
+            "Fix".into(),
+            "--web".into()
+        ])
+        .is_err());
     }
 
     /// The loop this whole change exists for, driven through the same `call` a model's

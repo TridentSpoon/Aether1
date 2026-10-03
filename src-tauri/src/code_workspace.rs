@@ -22,16 +22,15 @@
 //!      does not walk the path again -- `code_openat` descends from the project folder's own
 //!      descriptor without following a link, so nothing can be swapped in between the
 //!      judgement and the write.
-//!   3. **No shell, ever.** `run` takes an argv and spawns the program directly. There is no
-//!      `sh -c` anywhere in this file, so a pipe, a redirect, a `;` or a backtick in an
-//!      argument is a literal string the program will reject. This is also why the terminal
-//!      isolation rule is untouched: nothing here types into the operator's terminal, and
-//!      nothing here reads from it. `scripts/check_terminal_isolation.sh` passes unchanged.
-//!   4. **A named program, and for git a named subcommand.** The allowlist holds program
-//!      names the operator can see and edit. `git` is on it because committing is half of
-//!      what this loop is for, with the subcommands that leave the repository or destroy
-//!      uncommitted work refused by name -- `push`, `reset`, `clean`, `rebase` and the rest.
-//!      Fail closed: a program that is not on the list is refused, whatever it does.
+//!   3. **The shell stays inside the sandbox.** With a real sandbox, `run` accepts an argv
+//!      or a shell line; either executes inside the same OS-enforced boundary. Without one,
+//!      shell input is refused and argv is the only form available. Nothing here types into
+//!      or reads from the operator's terminal. `scripts/check_terminal_isolation.sh` checks
+//!      that boundary.
+//!   4. **Commands have a visible policy.** Without a sandbox, the named program allowlist
+//!      and the git subcommand refusals are the remaining policy. With a sandbox, containment
+//!      is the boundary and the allowlist does not pretend to constrain arbitrary build tools.
+//!      `git push`, history-destroying commands, and other refused operations remain blocked.
 //!   5. **Both grants default off.** `edit` and `run` are the two permissions in this
 //!      program that can change the operator's own work, so unlike the three read grants
 //!      they start switched off and are turned on deliberately, per machine.
@@ -406,6 +405,16 @@ pub fn seed_starter_allowlist(db: &MemoryDb) {
 /// all. Getting that distinction backwards makes a model apologise for a red test instead of
 /// reading it.
 pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    run_inner(db, args, false)
+}
+
+/// The exact-command approval path used by the operator's Allow once button. This skips
+/// the standing Run grant only; the sandbox and unconfined-run switches still apply.
+pub fn run_approved_once(db: &MemoryDb, args: &Value) -> Result<String, String> {
+    run_inner(db, args, true)
+}
+
+fn run_inner(db: &MemoryDb, args: &Value, approved_once: bool) -> Result<String, String> {
     // The boundary, before anything is decided. What is allowed to run depends entirely on
     // whether the kernel is holding the walls up, so this is the first question asked.
     let sandbox = crate::code_sandbox::detect();
@@ -450,6 +459,19 @@ pub fn run(db: &MemoryDb, args: &Value) -> Result<String, String> {
     };
     if program.trim().is_empty() {
         return Err("the first entry of argv must be a program name".to_string());
+    }
+
+    if !approved_once && !crate::code_perms::granted(db, crate::code_perms::Grant::Run) {
+        if args.get("shell").is_some() {
+            return Err("Run is off, so remembered command approvals only apply to a single argv command. Show the operator a bash suggestion to approve this shell line once.".to_string());
+        }
+        let root = root(db)?;
+        if !crate::code_policy::allows_similar_argv(&root, &argv) {
+            return Err(format!(
+                "Run is off, and `{program} {}` is not covered by this project's remembered commands. Ask the operator to approve it once or choose Allow similar on a simple build/test command.",
+                rest.first().map(String::as_str).unwrap_or("")
+            ));
+        }
     }
 
     // The allowlist is policy, and it only has a job where there is nothing else. Inside
@@ -940,6 +962,7 @@ mod tests {
     #[test]
     fn a_real_command_runs_in_the_project_and_reports_how_it_went() {
         let (db, project, home) = workspace("run");
+        crate::code_perms::set(&db, crate::code_perms::Grant::Run, true).unwrap();
         std::fs::write(project.join("hello.txt"), "hi\n").unwrap();
         db.set_setting(ALLOWLIST_SETTING, &serde_json::json!(["ls", "false"]))
             .unwrap();

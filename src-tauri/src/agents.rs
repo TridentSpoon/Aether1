@@ -1,8 +1,4 @@
-// Agent Browser: discovery and management of AI agents
-//
-// Provides the agent catalogue, selection state persistence, and filtering logic
-// for the Agent Browser UI. Built-in agents cover common use cases: code review,
-// architecture planning, quality analysis, and context optimization.
+// Agent Browser: task-focused AETHER CODE profiles.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +19,7 @@ pub struct Agent {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentType {
+    Builder,
     Collector,
     Reviewer,
     Planner,
@@ -31,6 +28,7 @@ pub enum AgentType {
 impl std::fmt::Display for AgentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AgentType::Builder => write!(f, "Builder"),
             AgentType::Collector => write!(f, "Collector"),
             AgentType::Reviewer => write!(f, "Reviewer"),
             AgentType::Planner => write!(f, "Planner"),
@@ -38,50 +36,74 @@ impl std::fmt::Display for AgentType {
     }
 }
 
-/// Built-in agent catalogue for MVP
+/// The bundled profiles all run through AETHER CODE's configured coding model. They are
+/// prompt profiles, not claims that Claude/GPT accounts or separate model processes exist.
 pub fn built_in_agents() -> Vec<Agent> {
     vec![
         Agent {
-            id: "claude-opus-reviewer".to_string(),
-            name: "Claude-Opus Code Reviewer".to_string(),
-            description: "Deep code review specialist with architectural insights. Analyzes design patterns, performance bottlenecks, and security vulnerabilities with detailed feedback.".to_string(),
-            agent_type: AgentType::Reviewer,
-            model: "claude-opus".to_string(),
-            capabilities: vec!["code-review".to_string(), "testing".to_string()],
-            installed: false,
+            id: "code-builder".to_string(),
+            name: "Code Builder".to_string(),
+            description: "Implements requested changes in the selected workspace, follows AGENTS.md, and verifies the result when AETHER CODE's Edit and Run permissions allow it.".to_string(),
+            agent_type: AgentType::Builder,
+            model: "active AETHER CODE model".to_string(),
+            capabilities: vec!["implementation".to_string(), "refactoring".to_string(), "testing".to_string()],
+            installed: true,
             selected: false,
         },
         Agent {
-            id: "gpt4o-architect".to_string(),
-            name: "GPT-4o Architect".to_string(),
-            description: "System design and architecture specialist. Plans scalable solutions, evaluates technology choices, and guides long-term architectural decisions.".to_string(),
+            id: "code-reviewer".to_string(),
+            name: "Code Reviewer".to_string(),
+            description: "Reviews the selected repository or changes for correctness, security, regressions, and maintainability. Reports actionable findings with file and line references.".to_string(),
+            agent_type: AgentType::Reviewer,
+            model: "active AETHER CODE model".to_string(),
+            capabilities: vec!["code-review".to_string(), "security".to_string(), "regressions".to_string()],
+            installed: true,
+            selected: false,
+        },
+        Agent {
+            id: "implementation-planner".to_string(),
+            name: "Implementation Planner".to_string(),
+            description: "Maps the repository structure and turns a requested change into a small, ordered implementation plan with risks and verification steps.".to_string(),
             agent_type: AgentType::Planner,
-            model: "gpt-4o".to_string(),
-            capabilities: vec!["architecture".to_string(), "documentation".to_string()],
-            installed: false,
+            model: "active AETHER CODE model".to_string(),
+            capabilities: vec!["architecture".to_string(), "implementation".to_string()],
+            installed: true,
             selected: false,
         },
         Agent {
-            id: "claude-sonnet-qa".to_string(),
-            name: "Claude-Sonnet Quality Analyst".to_string(),
-            description: "Quality assurance and performance specialist. Tests edge cases, validates performance requirements, and identifies regressions before production.".to_string(),
+            id: "test-analyst".to_string(),
+            name: "Test Analyst".to_string(),
+            description: "Traces behavior and edge cases, checks existing test coverage, and recommends or runs focused checks when AETHER CODE's run permission is enabled.".to_string(),
             agent_type: AgentType::Reviewer,
-            model: "claude-sonnet".to_string(),
-            capabilities: vec!["testing".to_string(), "performance".to_string()],
-            installed: false,
+            model: "active AETHER CODE model".to_string(),
+            capabilities: vec!["testing".to_string(), "edge-cases".to_string()],
+            installed: true,
             selected: false,
         },
         Agent {
-            id: "haiku-context-optimizer".to_string(),
-            name: "Haiku Context Optimizer".to_string(),
-            description: "Context and knowledge management. Summarizes discussions, maintains context windows, and identifies key information to preserve across sessions.".to_string(),
+            id: "repository-guide".to_string(),
+            name: "Repository Guide".to_string(),
+            description: "Explores the codebase and explains its architecture, key files, data flow, and conventions with references to the source.".to_string(),
             agent_type: AgentType::Collector,
-            model: "claude-haiku".to_string(),
-            capabilities: vec!["summarization".to_string(), "context".to_string()],
-            installed: false,
+            model: "active AETHER CODE model".to_string(),
+            capabilities: vec!["architecture".to_string(), "documentation".to_string()],
+            installed: true,
             selected: false,
         },
     ]
+}
+
+/// The profile instructions are applied by the backend; a browser client cannot invent
+/// arbitrary system capabilities by submitting its own profile text.
+pub fn instructions(id: &str) -> Option<&'static str> {
+    match id {
+        "code-reviewer" => Some("Act as a senior code reviewer and perform your own analysis. Inspect the relevant repository files and diffs before judging. Prioritize concrete bugs, security issues, data loss, and regressions. Report findings first, highest severity first, with file paths and line numbers. If you find no issues, say so and mention any remaining uncertainty. Do not edit files unless the task explicitly asks you to implement a fix."),
+        "code-builder" => Some("Act as a coding agent implementing the operator's requested change. First inspect the workspace AGENTS.md, then read the relevant code and callers; inspect git status and diff when Run is enabled. Make the requested minimal code changes with edit_file or create_file; do not stop at a plan when implementation was requested. Preserve unrelated work and never reset, clean, or rewrite history. Run focused checks when the operator requests them or approves the exact command. When the operator explicitly asks you to open or merge a PR, you may propose git push and gh pr create/merge commands; those remote writes must always be approved one at a time in the confirmation panel. Finish with a concise summary of changed files, checks actually run, and anything still unverified."),
+        "implementation-planner" => Some("Act as a software architect planning this change. Inspect the relevant code and repository conventions. Give a concise ordered plan, name the files and interfaces involved, call out compatibility risks, and define how success can be verified. Do not edit files."),
+        "test-analyst" => Some("Act as a test and reliability analyst. Trace the requested behavior through the code, inspect existing tests, and identify edge cases or regressions. Run focused checks only when the operator has enabled run permission. Report concrete findings and missing coverage with file references. Do not edit files unless explicitly asked."),
+        "repository-guide" => Some("Act as a repository guide. Inspect the code rather than guessing. Explain the relevant architecture, entry points, data flow, and conventions with file references, then answer the task directly. Do not edit files."),
+        _ => None,
+    }
 }
 
 /// Retrieves all agents, with selection state persisted and merged
@@ -173,6 +195,7 @@ pub fn all_capabilities() -> Vec<String> {
 #[allow(dead_code)]
 pub fn all_types() -> Vec<AgentType> {
     vec![
+        AgentType::Builder,
         AgentType::Collector,
         AgentType::Reviewer,
         AgentType::Planner,
@@ -185,7 +208,22 @@ mod tests {
 
     #[test]
     fn test_built_in_agents_count() {
-        assert_eq!(built_in_agents().len(), 4);
+        assert_eq!(built_in_agents().len(), 5);
+    }
+
+    #[test]
+    fn every_browser_profile_has_a_backend_instruction_set() {
+        for agent in built_in_agents() {
+            let instructions = instructions(&agent.id)
+                .unwrap_or_else(|| panic!("{} has no executable profile", agent.id));
+            assert!(!instructions.is_empty());
+            assert_eq!(agent.model, "active AETHER CODE model");
+        }
+    }
+
+    #[test]
+    fn unknown_profiles_are_not_executable() {
+        assert!(instructions("arbitrary-prompt").is_none());
     }
 
     #[test]

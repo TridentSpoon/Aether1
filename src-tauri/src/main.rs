@@ -44,6 +44,7 @@ mod lan;
 mod llm;
 mod local_only;
 mod model_scanner;
+mod net;
 mod paths;
 mod peers;
 mod persona_voice;
@@ -172,7 +173,7 @@ fn github_token() -> Option<String> {
 /// Always call this off the main thread.
 fn fetch_latest_main_sha() -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/commits/main");
-    let mut request = ureq::get(&url)
+    let mut request = net::get(&url, "the update check was not made")?
         .config()
         .timeout_global(Some(Duration::from_secs(8)))
         .build()
@@ -553,8 +554,20 @@ fn lan_pair_with_rust(
     address: String,
     port: u16,
     secret: String,
+    // The fingerprint the operator was shown and accepted, so the certificate can be
+    // checked against it again at the moment of pairing rather than trusted from when it
+    // was drawn on screen.
+    expect_fingerprint: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    lan::pair_with_peer(&engine, &managed, &name, &address, port, &secret)
+    lan::pair_with_peer(
+        &engine,
+        &managed,
+        &name,
+        &address,
+        port,
+        &secret,
+        expect_fingerprint.as_deref(),
+    )
 }
 
 /// Chooses the paired machine that answers when this one has no model of its own, or
@@ -574,6 +587,13 @@ fn lan_set_chat_peer_rust(
 #[tauri::command(async)]
 fn lan_peer_models_rust(address: String, port: u16) -> Result<serde_json::Value, String> {
     lan::peer_models(&address, port)
+}
+
+/// The certificate fingerprint of a machine a scan found, read before anything is typed at
+/// it. What the pane shows the operator to check against the other machine's own display.
+#[tauri::command(async)]
+fn lan_peer_fingerprint_rust(address: String, port: u16) -> Result<serde_json::Value, String> {
+    lan::peer_fingerprint(&address, port)
 }
 
 /// Forgets a machine this one had paired with. Only this side; the token it was given is
@@ -1218,6 +1238,7 @@ fn generate_response_streaming_rust(
     prompt: String,
     session_id: Option<String>,
     stream_id: String,
+    media: Option<Vec<llm::providers::MediaAttachment>>,
 ) -> Result<serde_json::Value, String> {
     // A turn is about to go to a model. If the idle watch stopped the local server, this is
     // what brings it back before the request goes out; otherwise it just tells the watch the
@@ -1229,10 +1250,11 @@ fn generate_response_streaming_rust(
     // before there is anything in it.
     let handover_app = app.clone();
     let handover_stream = stream_id.clone();
-    commands::generate_response_streamed(
+    commands::generate_response_streamed_with_media(
         &engine,
         prompt,
         session_id,
+        media.as_deref().unwrap_or(&[]),
         &mut |delta| {
             let _ = app.emit(
                 "chat-delta",
@@ -1276,6 +1298,43 @@ fn code_chat_ask_rust(
             serde_json::json!({ "stream_id": stream_id, "delta": delta }),
         );
     })
+}
+
+/// Runs the selected Agent Browser analysis profiles through AETHER CODE's shared model.
+#[tauri::command(async)]
+fn code_agents_ask_rust(
+    engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
+    task: String,
+    selected_ids: Vec<String>,
+    models_by_agent: std::collections::HashMap<String, String>,
+    run_mode: String,
+) -> Result<Vec<commands::AgentAnalysis>, String> {
+    background_services::note_use(&engine, &managed_ollama);
+    commands::code_agents_ask(&engine, &task, &selected_ids, &models_by_agent, &run_mode)
+}
+
+#[tauri::command(async)]
+fn code_local_models_rust() -> Vec<commands::LocalModelChoice> {
+    commands::code_local_models()
+}
+
+#[tauri::command(async)]
+fn code_set_model_preference_rust(
+    engine: tauri::State<LlmEngine>,
+    model: String,
+) -> Result<(), String> {
+    commands::code_set_model_preference(&engine, &model)
+}
+
+/// Runs one explicit AETHER CODE command approval from the operator.
+#[tauri::command(async)]
+fn code_run_approved_rust(
+    engine: tauri::State<LlmEngine>,
+    command: String,
+    remember_similar: bool,
+) -> Result<String, String> {
+    commands::code_run_approved(&engine, &command, remember_similar)
 }
 
 #[tauri::command(async)]
@@ -1791,6 +1850,48 @@ fn code_set_level_rust(
     level: String,
 ) -> Result<serde_json::Value, String> {
     commands::code_set_level(&engine, &level)
+}
+
+/// Rust-native twin of GET /api/code/net: the sandbox's domain policy and whatever is
+/// waiting on an answer. The HUD polls this, and polling it is what tells the proxy there
+/// is somebody here to ask -- see commands::code_net_status.
+#[tauri::command(async)]
+fn code_net_status_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::code_net_status(&engine)
+}
+
+/// Rust-native twin of POST /api/code/net/allow.
+#[tauri::command(async)]
+fn code_net_allow_rust(
+    engine: tauri::State<LlmEngine>,
+    domain: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_net_allow(&engine, &domain)
+}
+
+/// Rust-native twin of POST /api/code/net/forget.
+#[tauri::command(async)]
+fn code_net_forget_rust(
+    engine: tauri::State<LlmEngine>,
+    domain: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_net_forget(&engine, &domain)
+}
+
+/// Rust-native twin of POST /api/code/net/decide: the HUD card's answer.
+#[tauri::command(async)]
+fn code_net_decide_rust(
+    engine: tauri::State<LlmEngine>,
+    id: String,
+    decision: String,
+) -> Result<serde_json::Value, String> {
+    commands::code_net_decide(&engine, &id, &decision)
+}
+
+/// Rust-native twin of POST /api/code/net/clear.
+#[tauri::command(async)]
+fn code_net_clear_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::code_net_clear_denied(&engine)
 }
 
 /// Rust-native equivalent of POST /api/settings (backend/main.py).
@@ -2595,7 +2696,18 @@ fn set_agent_selection_rust(
         .map_err(|e| format!("could not save selection: {e}"))
 }
 
+/// The one place a process gets its engine: the native app, `--serve`, and every CLI
+/// subcommand all come through here. That makes it the place to hand the egress gate the
+/// settings database (see src/net.rs) -- `net::install` is called on whichever database
+/// this ends up with, including the temp fallback, before the engine is returned and
+/// therefore before anything can reach the network.
 fn build_llm_engine() -> LlmEngine {
+    let engine = open_llm_engine();
+    net::install(engine.db());
+    engine
+}
+
+fn open_llm_engine() -> LlmEngine {
     let db_path = project_root().join("backend").join("aether1_memory.db");
     // The native path creates backend/ as a side effect of setting up the audio cache in
     // setup(), but a headless run (--serve, or a CLI subcommand) reaches this first. Without
@@ -2780,6 +2892,11 @@ fn main() {
             get_settings_rust,
             save_settings_rust,
             code_set_level_rust,
+            code_net_status_rust,
+            code_net_allow_rust,
+            code_net_forget_rust,
+            code_net_decide_rust,
+            code_net_clear_rust,
             generate_speech_rust,
             speech_clip_rust,
             transcribe_rust,
@@ -2787,6 +2904,10 @@ fn main() {
             voice_advice_rust,
             code_advice_rust,
             code_chat_ask_rust,
+            code_agents_ask_rust,
+            code_local_models_rust,
+            code_set_model_preference_rust,
+            code_run_approved_rust,
             code_chat_history_rust,
             code_chat_clear_rust,
             code_conventions_rust,
@@ -2814,6 +2935,7 @@ fn main() {
             lan_clear_pairing_code_rust,
             lan_discover_rust,
             lan_pair_with_rust,
+            lan_peer_fingerprint_rust,
             lan_forget_peer_rust,
             lan_peer_models_rust,
             lan_set_chat_peer_rust,

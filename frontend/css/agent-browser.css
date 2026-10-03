@@ -360,6 +360,11 @@
     color: #64c8ff;
 }
 
+.agent-type-builder {
+    background: rgba(80, 220, 180, 0.2);
+    color: #6ee7c8;
+}
+
 .agent-type-collector {
     background: rgba(100, 255, 150, 0.2);
     color: #64ff96;

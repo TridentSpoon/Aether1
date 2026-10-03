@@ -1,38 +1,16 @@
-//! Talking to the coding model, and handing what it says to the operator's terminal.
+//! A separate coding conversation backed by the installed coding model.
 //!
-//! Step 49 set a coding agent up and stopped there, on the grounds that driving an
-//! edit-and-test loop over a repository is what `opencode` and `aider` already do. That is
-//! still true, and this does not undo it. What it adds is the thing that was missing in
-//! between: somewhere to *ask* the model that was just downloaded, without leaving the HUD
-//! and without a project checked out -- how do I write this, why does this not compile,
-//! what is the flag for that -- and a way to get the command it answers with into the
-//! terminal without retyping it.
+//! It shares neither persona nor history with the companion. It does have its own bounded
+//! repository tools: reads and read-only GitHub access, plus workspace-scoped file edits and
+//! sandboxed commands when the corresponding permissions are enabled. `code_tools` and
+//! `code_workspace` enforce those capabilities on every call; prompt wording is not the
+//! boundary.
 //!
-//! **Two rules this module exists to hold.**
-//!
-//! *The companion's conversation and this one are separate.* Different model, different
-//! system prompt, different history (`SESSION_ID` below), no persona, no flow, no tools. A
-//! coding question asked of the avatar gets the avatar, which is the right answer for the
-//! avatar and the wrong one for a compiler error; and a coding model asked to be a
-//! companion is worse at both.
-//!
-//! *Nothing here changes anything.* Since #138 it can look -- at files, at the machine, at
-//! GitHub through `gh`, at a public page -- because a coding assistant that cannot see the
-//! file you are asking about spends its answers asking you to paste things in. What it
-//! cannot do is write, and that is structural rather than careful: `code_tools` has no
-//! write tool to gate, and `code_perms` checks every `gh` invocation against a whitelist of
-//! subcommands that only look. See `code_perms` for the four rules.
-//!
-//! *Nothing here runs anything.* `commands_in` reads the shell commands out of a reply so
-//! the HUD can offer each one to the terminal as a button, and a press of that button types
-//! the command in -- exactly what the keyboard does, byte for byte, with no newline. The
-//! operator's own Return key is what runs it. That is not timidity: `terminal.rs` exists
-//! because handing a model a shell is the single change that turns a prompt injection into
-//! an unrecoverable afternoon, and a model that can put text in front of you is a different
-//! thing from one that can execute it. `scripts/check_terminal_isolation.sh` still passes
-//! unchanged -- nothing in this file, in `commands.rs`, in `server.rs` or in `tools/` names
-//! the terminal module, and the button lives in the native window, which is the only place
-//! a terminal exists at all.
+//! Replies can also contain shell commands. `commands_in` turns those into buttons that type
+//! into the operator's terminal without pressing Return. This terminal hand-off is separate
+//! from the model's `run` tool, which executes only inside the configured project boundary.
+//! Neither path can press keys or read terminal output. The Agent Browser uses this same
+//! coding-model and permission path with backend-defined task profiles.
 
 use serde::Serialize;
 
@@ -92,7 +70,6 @@ const SHELL_TAGS: &[&str] = &[
     "console",
     "shell-session",
     "terminal",
-    "",
 ];
 
 /// A reply from the coding model, and what of it can be run.
@@ -122,6 +99,15 @@ pub fn system_prompt(db: &MemoryDb, os: &str, model: &str) -> String {
          Answer the question asked. Prefer a short answer with the code in it to a long one \
          about the code. If you do not know, say so -- a guess that looks like an answer \
          costs more than an admission.\n\n\
+         When a project folder is set, check its AGENTS.md before changing code and follow \
+         its repository-specific instructions. For GitHub work, use the gh tool's read-only \
+         commands and include --repo OWNER/REPO when the target is not the selected local \
+         checkout. When asked to review, explain, or change a named repository, inspect it \
+         before answering: use the selected workspace tools for a local project, or search \
+         GitHub for an unqualified repository name and read its README and relevant source. \
+         Do not ask the operator to paste code until these tools have been tried or a specific \
+         permission/access error prevents inspection. Distinguish remote source from the local \
+         working tree.\n\n\
          When the next step is something to run, put it in a fenced block tagged `bash`, \
          one command per line, with no prompt marker and no line continuations. Each line \
          becomes a button that types that command into the operator's terminal, so a line \
@@ -160,27 +146,42 @@ fn tool_instructions(db: &MemoryDb, catalog: &[&'static str]) -> String {
     // every time, because what it says has to be *true*: with both changing grants off
     // this panel still cannot alter anything, and telling a model otherwise is how it ends
     // up claiming to have edited a file it never touched.
-    let acting = if can_act(db) {
+    let can_edit = crate::code_perms::granted(db, crate::code_perms::Grant::Edit);
+    let can_run = crate::code_perms::granted(db, crate::code_perms::Grant::Run);
+    let acting = if can_edit || can_run {
         let where_it_works = match crate::code_workspace::root(db) {
             Ok(root) => format!(
                 "The project folder is {}. Paths you give are relative to it.",
                 root.display()
             ),
-            Err(_) => "No project folder is set yet, so edit_file, create_file and run will \
-                       refuse until the operator sets one. Tell them that is what you need."
+            Err(_) => "No project folder is set yet, so file changes and commands will refuse \
+                       until the operator sets one. Tell them that is what you need."
                 .to_string(),
         };
+        let mut available = Vec::new();
+        if can_edit {
+            available.push("You can edit or create files, but only inside the project folder.");
+        } else {
+            available.push("You cannot edit files because Edit is disabled.");
+        }
+        if can_run {
+            available
+                .push("You can run commands using the listed run tool and its sandbox policy.");
+        } else {
+            available.push("You cannot run commands because Run is disabled; provide commands as bash suggestions instead.");
+        }
         format!(
-            "\n         - You can change files and run commands, but only inside one folder. \
-             {where_it_works}\n\
-             - Work the way a developer does: read what is there, make one small edit, run \
-             the build or the tests, read what came back, go again. Do not write a large \
-             file blind.\n\
-             - A command that exits non-zero is a result, not a failure of yours. Read its \
-             output and fix the cause.\n\
+            "\n         - {}\n\
+             - {}\n\
+             - {where_it_works}\n\
+             - Work the way a developer does: inspect the existing code and diff, make \
+             focused edits when Edit is enabled, and run relevant checks only when Run is \
+             enabled. Read the result before deciding the change is complete.\n\
              - Anything outside that folder, and anything that leaves this machine -- \
-             pushing, installing system packages, changing settings -- is still refused. \
-             Write those in a ```bash block instead and the operator presses Return."
+             pushing, installing system packages, changing settings -- remains unavailable \
+             to these tools. Put a suggested command in a ```bash block for the operator. \
+             Never claim an edit or check that did not happen.",
+            available[0], available[1],
         )
     } else {
         "\n         - Everything above only reads. Nothing you can call changes a file, a \
@@ -327,8 +328,23 @@ pub fn ask(
     prompt: &str,
     sink: Sink,
 ) -> Result<CodeReply, String> {
+    ask_in_session(db, endpoint, api, model, os, prompt, sink, SESSION_ID)
+}
+
+/// Asks in an independent history, used for simultaneous Agent Browser analyses.
+#[allow(clippy::too_many_arguments)]
+pub fn ask_in_session(
+    db: &MemoryDb,
+    endpoint: &str,
+    api: LocalApi,
+    model: &str,
+    os: &str,
+    prompt: &str,
+    sink: Sink,
+    session_id: &str,
+) -> Result<CodeReply, String> {
     let mut history = db
-        .get_messages(SESSION_ID, HISTORY_TURNS)
+        .get_messages(session_id, HISTORY_TURNS)
         .unwrap_or_default();
     let system = system_prompt(db, os, model);
 
@@ -342,6 +358,7 @@ pub fn ask(
             system_prompt: &system,
             history: &history,
             prompt: &current_prompt,
+            images: &[],
             agent_name: "AETHER CODE",
             // The text protocol, on both shapes. Nothing is passed as a provider tool
             // definition: see `tool_instructions`.
@@ -418,8 +435,8 @@ pub fn ask(
 
     // Written down only once it arrived. A turn that failed halfway is not history the next
     // question should be answered against.
-    let _ = db.add_message(SESSION_ID, "user", prompt);
-    let _ = db.add_message(SESSION_ID, "agent", &text);
+    let _ = db.add_message(session_id, "user", prompt);
+    let _ = db.add_message(session_id, "agent", &text);
 
     let commands = commands_in(&text);
     Ok(CodeReply { text, commands })
@@ -603,12 +620,12 @@ mod tests {
         assert!(commands_in(reply).is_empty());
     }
 
-    /// An untagged block is the common case from a small model, and treating it as shell
-    /// is the judgement call here: the block is shown in full next to the button, and the
-    /// button types rather than runs, so a wrong guess costs a line the operator deletes.
+    /// An untagged block is ambiguous code or prose. It must not turn Rust/Python examples
+    /// into terminal buttons; only an explicit shell tag may offer commands.
     #[test]
-    fn an_untagged_block_is_treated_as_shell() {
-        assert_eq!(commands_in("```\nls -la\n```"), vec!["ls -la"]);
+    fn an_untagged_code_block_is_never_treated_as_a_command() {
+        assert!(commands_in("```\nfn main() {\n    let x = 1;\n}\n```").is_empty());
+        assert!(commands_in("```\nls -la\n```").is_empty());
     }
 
     #[test]
@@ -675,6 +692,15 @@ mod tests {
         assert!(prompt.contains("```bash block instead"));
     }
 
+    #[test]
+    fn named_repository_requests_are_inspected_before_asking_for_pasted_code() {
+        let prompt = system_prompt(&db(), "Linux", "m");
+        assert!(prompt.contains("search GitHub for an unqualified repository name"));
+        assert!(prompt.contains("read its README and relevant source"));
+        assert!(prompt
+            .contains("Do not ask the operator to paste code until these tools have been tried"));
+    }
+
     /// With every permission off the panel is what #137 shipped, and the prompt has to say
     /// so -- a model told about tools it does not have spends a round finding that out.
     #[test]
@@ -686,6 +712,23 @@ mod tests {
         let prompt = system_prompt(&db, "Linux", "m");
         assert!(!prompt.contains("[WHAT YOU CAN LOOK AT]"));
         assert!(prompt.contains("cannot run anything"));
+    }
+
+    #[test]
+    fn edit_and_run_permissions_are_described_separately() {
+        let db = db();
+        crate::code_perms::set(&db, crate::code_perms::Grant::Edit, true).unwrap();
+        let prompt = system_prompt(&db, "Linux", "coder");
+        assert!(prompt.contains("You can edit or create files"));
+        assert!(prompt.contains("Run is disabled"));
+        assert!(!prompt.contains("You can run commands using the listed run tool"));
+
+        crate::code_perms::set(&db, crate::code_perms::Grant::Edit, false).unwrap();
+        crate::code_perms::set(&db, crate::code_perms::Grant::Run, true).unwrap();
+        let prompt = system_prompt(&db, "Linux", "coder");
+        assert!(prompt.contains("Edit is disabled"));
+        assert!(prompt.contains("You can run commands using the listed run tool"));
+        assert!(!prompt.contains("You can edit or create files"));
     }
 
     fn filtered(text: &str) -> String {
