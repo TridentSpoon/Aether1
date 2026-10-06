@@ -279,6 +279,16 @@ pub fn audio_devices() -> Value {
     serde_json::json!({ "devices": crate::audio_devices::scan() })
 }
 
+/// What the desktop around this window is wearing: light or dark, and the accent colour.
+///
+/// Asked for rather than cached, and for the same reason the device list above is: the HUD
+/// asks when it opens and again whenever the desktop says something changed, and a cached
+/// answer would be the one thing this cannot afford -- the stale colour is exactly the bug
+/// following the desktop theme is meant to fix.
+pub fn desktop_theme() -> Value {
+    serde_json::to_value(crate::desktop_theme::read()).unwrap_or_else(|_| serde_json::json!({}))
+}
+
 /// Starts the local model server when it is installed but not running.
 ///
 /// This is the one case where the app can fix a missing dependency itself rather than

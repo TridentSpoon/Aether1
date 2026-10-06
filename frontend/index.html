@@ -150,6 +150,11 @@
                 </div>
 
                 <div id="theme-menu" class="hud-slideout hud-slideout-narrow hidden" role="menu" aria-labelledby="btn-theme-menu">
+                    <!-- First, because it is what a fresh install is already doing and the one
+                         most people want: light or dark and the accent colour, all of it taken
+                         from the desktop's own settings. The three below it are a choice to
+                         stop following. -->
+                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="system" role="menuitem">🖥️ Desktop theme</button>
                     <button class="theme-mode-btn hud-slideout-action" data-theme-mode="solar" role="menuitem">☀️ Daylight</button>
                     <button class="theme-mode-btn hud-slideout-action" data-theme-mode="eclipse" role="menuitem">🌙 Midnight</button>
                     <button class="theme-mode-btn hud-slideout-action" data-theme-mode="cyberpunk" role="menuitem">⚡ Cyberpunk</button>
@@ -1227,11 +1232,19 @@
                             <div class="space-y-1.5">
                                 <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#127912; MODE</label>
                                 <div class="flex flex-col gap-1">
+                                    <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="system">&#128421;&#65039; Desktop theme</button>
                                     <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="solar">&#9728;&#65039; Daylight</button>
                                     <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="eclipse">&#127769; Midnight</button>
                                     <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="cyberpunk">&#9889; Cyberpunk</button>
                                 </div>
                                 <p id="theme-mode-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
+                                <!-- Only filled while the desktop is being followed: which of
+                                     the three it is asking for, and where the accent came from.
+                                     When a probe could not answer -- an older Windows with no
+                                     accent set, a Linux desktop with no appearance portal, a
+                                     platform this is not implemented on -- it says so here
+                                     rather than appearing to do nothing. -->
+                                <p id="theme-desktop-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
                             </div>
 
                             <!-- RIGHT COLUMNS: COLOUR OPTIONS -->

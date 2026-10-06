@@ -1551,9 +1551,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const gameModeBtn = document.getElementById('btn-game-mode');
         if (gameModeBtn) setGameModeButtonState(gameModeBtn.dataset.active === 'true');
 
-        // Covers both the three buttons in Settings and the three in the top bar's slide-out.
+        /* Covers both rows of mode buttons -- the four in Settings and the same four in the top
+           bar's slide-out. The Desktop one is the active one while the desktop is the
+           authority, and *only* then: when it is on, the mode being painted is still solar or
+           eclipse, so lighting that one up as well would show two buttons pressed and leave
+           nobody able to tell whether the shell was chosen or inherited. */
+        const following = theme.following === true;
         document.querySelectorAll('.theme-mode-btn').forEach(btn => {
-            btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
+            const value = btn.getAttribute('data-theme-mode');
+            const active = value === Aether1Theme.SYSTEM_MODE ? following : (!following && value === theme.mode);
+            btn.classList.toggle('cyber-btn-active', active);
         });
 
         Object.keys(themeColourInputs).forEach(slot => {
@@ -1647,9 +1654,31 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (themeModeNote) {
-            themeModeNote.textContent = Aether1Theme.followingSystem()
-                ? 'Following your system\u2019s light/dark setting. Picking a mode stops that.'
+            themeModeNote.textContent = following
+                ? 'Following your desktop. Picking a mode below, or a colour of your own, stops that.'
                 : '';
+        }
+
+        /* What following actually produced, in the operator's terms: which shell the desktop
+           asked for, and whether an accent came with it. The probe's own note is appended
+           rather than replacing this, because "no accent colour is set" and "the shell is
+           Midnight" are both true and both worth knowing. */
+        const desktopNote = document.getElementById('theme-desktop-note');
+        if (desktopNote) {
+            if (!following) {
+                desktopNote.textContent = '';
+            } else {
+                const info = Aether1Theme.desktopTheme();
+                /* "Your desktop is set to midnight" would be wrong twice over: Midnight is
+                   this app's name for its own dark shell, not a setting anybody has on their
+                   desktop. So both names appear, each for the thing it actually names. */
+                const shell = Aether1Theme.MODE_LABELS[theme.mode];
+                const lines = [info.accent
+                    ? `Your desktop is set to ${info.mode || (theme.mode === 'solar' ? 'light' : 'dark')}, so this is ${shell} wearing your desktop's accent colour, ${info.accent}.`
+                    : `Your desktop is set to ${info.mode || (theme.mode === 'solar' ? 'light' : 'dark')}, so this is ${shell}.`];
+                if (info.note) lines.push(info.note);
+                desktopNote.textContent = lines.join(' ');
+            }
         }
     }
 
@@ -11739,10 +11768,21 @@ document.addEventListener('DOMContentLoaded', () => {
     hologram.setZoom(currentZoom);
     paintTheme(currentTheme);
 
-    /* Nothing chosen yet means the OS is still the authority, so a switch to dark mode while
-       the window is open should be followed rather than waiting for a restart. Aether1Theme
-       stops calling this the moment a mode is picked. */
-    Aether1Theme.followSystem(paintTheme);
+    /* Nothing chosen yet means the desktop is still the authority, so a switch to dark mode --
+       or a new accent colour picked in the system's own settings -- should be followed rather
+       than waiting for a restart. Aether1Theme stops calling this the moment a mode is picked.
+       
+       The fetcher is passed because the accent can only come from the native side, and the HTTP
+       path to it wants the device token that apiFetch carries; without one the browser fallback
+       would be refused by a LAN server and the window would quietly keep the designed accent.
+       Not awaited: the window is already painted with a correct theme, and the probe only
+       refines it. */
+    Aether1Theme.followDesktop(paintTheme, async () => {
+        if (IS_TAURI) return tauriInvoke('desktop_theme_rust');
+        const resp = await apiFetch('/api/desktop/theme');
+        if (!resp.ok) throw new Error(`desktop theme failed: ${resp.status}`);
+        return resp.json();
+    });
     loadStaticInfo();
     loadSettings();
     // A proposal outlives the conversation that made it, so anything still waiting from a
