@@ -2224,17 +2224,32 @@
 
                         <div class="flex items-center gap-2 mb-3">
                             <button id="btn-graft-detect" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🔍 Detect Projects</button>
-                            <button id="btn-graft-build" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer" disabled>🔨 Build Graph</button>
+                            <button id="btn-graft-build-all" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🔨 Build All Missing</button>
                         </div>
 
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
                             Graft builds a graph of your codebase to help understand its structure. Install it
-                            with <span class="text-cyan-300">npm install -g @nanonets/graft</span>, then pick a
-                            project and build its graph. Once built, the code nodes relevant to a question are
-                            injected into the AI's context, each with the file and line to read. This is working
-                            context from the selected project; it does not write to the Memory vault or become a
-                            personal memory note.
+                            with <span class="text-cyan-300">npm install -g @nanonets/graft</span>, then build a
+                            graph for each project you want it to know about. Every ticked project is asked when
+                            you ask a code question, and the nodes that match best across all of them are
+                            injected into the AI's context, each labelled with its project and the file and line
+                            to read. This is working context from your repositories; it does not write to the
+                            Memory vault or become a personal memory note.
                         </p>
+
+                        <div class="mt-3">
+                            <label for="setting-graft-track-all" class="text-xs font-mono text-cyan-300 block mb-1">TRACK EVERY PROJECT</label>
+                            <div class="flex items-center gap-2">
+                                <input id="setting-graft-track-all" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                                <label for="setting-graft-track-all" class="text-xs font-mono text-slate-300">Ask every repository, including ones added later</label>
+                            </div>
+                            <p class="text-[10px] font-mono text-slate-400 leading-snug mt-1">
+                                On, every repository found in your project folders is asked, and a new one is
+                                picked up as soon as it has a graph &mdash; nothing to tick when you start
+                                something. Untick a single project in the list above and this switches off,
+                                leaving the ones still ticked.
+                            </p>
+                        </div>
 
                         <div class="mt-3">
                             <label for="setting-graft-autorefresh" class="text-xs font-mono text-cyan-300 block mb-1">AUTO-SYNC</label>

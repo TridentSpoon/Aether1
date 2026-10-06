@@ -1790,8 +1790,10 @@ fn vault_search_rust(engine: tauri::State<LlmEngine>, query: String) -> serde_js
 
 /// Detect projects with Graft available
 #[tauri::command(async)]
-fn graft_detect_projects_rust() -> Result<serde_json::Value, String> {
-    commands::graft_detect_projects()
+fn graft_detect_projects_rust(
+    engine: tauri::State<LlmEngine>,
+) -> Result<serde_json::Value, String> {
+    commands::graft_detect_projects(&engine)
 }
 
 /// Build Graft graph for a selected project
@@ -1803,21 +1805,14 @@ fn graft_build_graph_rust(
     commands::graft_build_graph(&engine, project_path)
 }
 
-/// Select a project for code analysis
+/// Start or stop asking one project's graph
 #[tauri::command(async)]
-fn graft_select_project_rust(
+fn graft_track_project_rust(
     engine: tauri::State<LlmEngine>,
     project_path: String,
+    tracked: bool,
 ) -> Result<serde_json::Value, String> {
-    commands::graft_select_project(&engine, project_path)
-}
-
-/// Get the currently selected Graft project
-#[tauri::command(async)]
-fn graft_get_selected_project_rust(
-    engine: tauri::State<LlmEngine>,
-) -> Result<serde_json::Value, String> {
-    commands::graft_get_selected_project(&engine)
+    commands::graft_track_project(&engine, project_path, tracked)
 }
 
 /// Get Graft version information
@@ -2893,8 +2888,7 @@ fn main() {
             vault_search_rust,
             graft_detect_projects_rust,
             graft_build_graph_rust,
-            graft_select_project_rust,
-            graft_get_selected_project_rust,
+            graft_track_project_rust,
             graft_version_rust,
             get_settings_rust,
             save_settings_rust,
