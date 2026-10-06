@@ -9860,6 +9860,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // been saved must not read as "off" here when the vault is in fact writing.
             document.getElementById('setting-vault-journal').checked = s.vault_journal !== false;
             document.getElementById('setting-graft-autorefresh').checked = s.graft_auto_refresh !== false;
+            document.getElementById('setting-graft-track-all').checked = s.graft_track_all !== false;
             document.getElementById('setting-local-only').checked = s.local_only === true;
             // Network & Remote. Saved by Save Changes with everything else rather than the
             // moment the switch moves: Settings has one Save button, and a panel that
@@ -10056,6 +10057,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 vault_journal: document.getElementById('setting-vault-journal').checked,
                 graft_auto_refresh: document.getElementById('setting-graft-autorefresh').checked,
+                graft_track_all: document.getElementById('setting-graft-track-all').checked,
                 // Sent only from the native app: the browser fallback has no window for the
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.
@@ -10956,97 +10958,165 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // The rows are built with DOM calls rather than interpolated HTML: a project is a
+    // folder on the operator's disk, so its name and path are not ours to trust, and a
+    // repository called `<img onerror=...>` would otherwise run here. It also means no
+    // inline onclick carrying a quoted path, which never escaped correctly.
+    function graftProjectRow(project) {
+        const row = document.createElement('div');
+        row.className = 'p-2 border-b border-slate-700 flex items-start gap-2';
+
+        const toggle = document.createElement('input');
+        toggle.type = 'checkbox';
+        toggle.checked = project.tracked === true;
+        toggle.className = 'mt-0.5 rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0 cursor-pointer';
+        toggle.title = 'Ask this project when answering code questions';
+        toggle.addEventListener('change', () => graftTrackProject(project.path, toggle.checked));
+        row.appendChild(toggle);
+
+        const body = document.createElement('div');
+        body.className = 'flex-1 min-w-0';
+
+        const head = document.createElement('div');
+        head.className = 'flex justify-between items-start gap-2';
+        const name = document.createElement('span');
+        name.className = 'font-semibold text-cyan-300';
+        name.textContent = project.name;
+        const status = document.createElement('span');
+        status.className = project.graft_status === 'Ready'
+            ? 'text-[9px] text-green-400 whitespace-nowrap'
+            : 'text-[9px] text-slate-400 whitespace-nowrap';
+        status.textContent = project.graft_status;
+        head.appendChild(name);
+        head.appendChild(status);
+
+        const path = document.createElement('div');
+        path.className = 'text-[9px] text-slate-500 break-all';
+        path.textContent = project.path;
+
+        body.appendChild(head);
+        body.appendChild(path);
+
+        // A project with no graph cannot answer anything, so the way to give it one sits on
+        // its own row rather than behind a single selection somewhere else.
+        if (project.graft_status !== 'Ready') {
+            const build = document.createElement('button');
+            build.type = 'button';
+            build.className = 'mt-1 text-[9px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-1.5 py-0.5 bg-cyan-950/40 cursor-pointer';
+            build.textContent = '🔨 Build graph';
+            build.addEventListener('click', () => graftBuildOne(project.path, build));
+            body.appendChild(build);
+        }
+
+        row.appendChild(body);
+        return row;
+    }
+
     async function loadGraftProjects() {
         try {
             const projectsList = document.getElementById('graft-projects-list');
             if (!projectsList) return;
 
             if (!IS_TAURI) {
-                projectsList.innerHTML = '<div class="text-slate-400">Project detection requires Tauri</div>';
+                projectsList.textContent = 'Project detection requires Tauri';
                 return;
             }
 
-            projectsList.innerHTML = '<div class="text-slate-400">Detecting projects...</div>';
+            projectsList.textContent = 'Detecting projects...';
             const projects = await tauriInvoke('graft_detect_projects_rust');
 
+            projectsList.replaceChildren();
             if (!projects || projects.length === 0) {
-                projectsList.innerHTML = '<div class="text-slate-400">No repositories found in common locations</div>';
+                projectsList.textContent = 'No repositories found in common locations';
                 return;
             }
 
-            const selected = await tauriInvoke('graft_get_selected_project_rust');
-            const selectedPath = selected.path;
-
-            projectsList.innerHTML = projects.map(p => `
-                <div class="p-2 border-b border-slate-700 cursor-pointer hover:bg-slate-800 transition-colors"
-                     data-project-path="${p.path}"
-                     onclick="graftSelectProject('${p.path.replace(/'/g, "\\'")}')">
-                    <div class="flex justify-between items-start">
-                        <span class="font-semibold text-cyan-300">${p.name}</span>
-                        <span class="text-[9px] text-slate-400">${p.graft_status}</span>
-                    </div>
-                    <div class="text-[9px] text-slate-500 break-all">${p.path}</div>
-                    ${selectedPath === p.path ? '<div class="text-[9px] text-green-400 mt-1">✓ Selected</div>' : ''}
-                </div>
-            `).join('');
+            for (const project of projects) {
+                projectsList.appendChild(graftProjectRow(project));
+            }
         } catch (e) {
             console.error('Error loading Graft projects:', e);
-            document.getElementById('graft-projects-list').innerHTML =
-                `<div class="text-red-400 text-[10px]">Error: ${e.message || e}</div>`;
+            const projectsList = document.getElementById('graft-projects-list');
+            if (projectsList) {
+                projectsList.replaceChildren();
+                const error = document.createElement('div');
+                error.className = 'text-red-400 text-[10px]';
+                error.textContent = `Error: ${e.message || e}`;
+                projectsList.appendChild(error);
+            }
         }
     }
 
-    window.graftSelectProject = async function(projectPath) {
+    async function graftTrackProject(projectPath, tracked) {
         try {
             if (!IS_TAURI) return;
-
-            await tauriInvoke('graft_select_project_rust', { projectPath });
-
-            // Re-enable build button
-            const buildBtn = document.getElementById('btn-graft-build');
-            if (buildBtn) buildBtn.disabled = false;
-
-            // Reload project list to show selection
+            const result = await tauriInvoke('graft_track_project_rust', { projectPath, tracked });
+            // Turning one project off turns off "track every project", so the switch has to
+            // be redrawn from what Rust decided rather than from what was clicked.
+            const trackAll = document.getElementById('setting-graft-track-all');
+            if (trackAll) trackAll.checked = result.track_all === true;
             await loadGraftProjects();
-
-            appendMessage(currentAgentName, `📊 Selected project: ${projectPath}`);
         } catch (e) {
-            console.error('Error selecting project:', e);
-            appendMessage(currentAgentName, `❌ Error selecting project: ${e.message || e}`);
+            console.error('Error tracking project:', e);
+            appendMessage(currentAgentName, `❌ Could not change that project: ${e.message || e}`);
+            await loadGraftProjects();
         }
-    };
+    }
+
+    async function graftBuildOne(projectPath, button) {
+        if (!IS_TAURI) return;
+        const label = button ? button.textContent : null;
+        try {
+            if (button) {
+                button.disabled = true;
+                button.textContent = '⏳ Building...';
+            }
+            await tauriInvoke('graft_build_graph_rust', { projectPath });
+            await loadGraftProjects();
+            appendMessage(currentAgentName, `✓ Graft graph built for: ${projectPath}`);
+            return true;
+        } catch (e) {
+            console.error('Error building Graft graph:', e);
+            appendMessage(currentAgentName, `❌ Failed to build the graph for ${projectPath}: ${e.message || e}`);
+            if (button) {
+                button.disabled = false;
+                button.textContent = label;
+            }
+            return false;
+        }
+    }
 
     document.getElementById('btn-graft-detect')?.addEventListener('click', loadGraftProjects);
 
-    document.getElementById('btn-graft-build')?.addEventListener('click', async () => {
+    // Built one at a time on purpose: a first build parses every file in a repository, and
+    // several at once would compete for the same cores and make every one of them slower.
+    // The count in the label is the only progress there is to show.
+    document.getElementById('btn-graft-build-all')?.addEventListener('click', async () => {
+        const button = document.getElementById('btn-graft-build-all');
+        if (!IS_TAURI || !button) return;
+        const label = button.textContent;
         try {
-            if (!IS_TAURI) return;
-
-            const selected = await tauriInvoke('graft_get_selected_project_rust');
-            if (!selected.path) {
-                appendMessage(currentAgentName, '⚠️ Please select a project first');
+            button.disabled = true;
+            const projects = await tauriInvoke('graft_detect_projects_rust');
+            const missing = (projects || []).filter(p => p.graft_status !== 'Ready');
+            if (missing.length === 0) {
+                appendMessage(currentAgentName, '✓ Every detected project already has a graph.');
                 return;
             }
 
-            const buildBtn = document.getElementById('btn-graft-build');
-            buildBtn.disabled = true;
-            buildBtn.textContent = '⏳ Building...';
-
-            await tauriInvoke('graft_build_graph_rust', { projectPath: selected.path });
-
-            // Reload status to show "Ready"
-            await loadGraftStatus();
+            let built = 0;
+            for (const [index, project] of missing.entries()) {
+                button.textContent = `⏳ Building ${index + 1}/${missing.length}...`;
+                if (await graftBuildOne(project.path, null)) built += 1;
+            }
+            appendMessage(
+                currentAgentName,
+                `✓ Built ${built} of ${missing.length} missing graph${missing.length === 1 ? '' : 's'}.`
+            );
+        } finally {
+            button.textContent = label;
+            button.disabled = false;
             await loadGraftProjects();
-
-            appendMessage(currentAgentName, `✓ Graft graph built for: ${selected.path}`);
-            buildBtn.textContent = '🔨 Build Graph';
-            buildBtn.disabled = false;
-        } catch (e) {
-            console.error('Error building Graft graph:', e);
-            appendMessage(currentAgentName, `❌ Failed to build Graft graph: ${e.message || e}`);
-            const buildBtn = document.getElementById('btn-graft-build');
-            buildBtn.textContent = '🔨 Build Graph';
-            buildBtn.disabled = false;
         }
     });
 

@@ -668,6 +668,10 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // unless switched off: a stale graph points the model at line numbers that have
         // moved, which is worse than the second the refresh costs. See graft.rs.
         "graft_auto_refresh": true,
+        // Ask every repository that turns up rather than one chosen project, new ones
+        // included. On by default because that is what was asked for; unticking a single
+        // project in the panel turns it off. See graft.rs.
+        "graft_track_all": true,
         // The HUD saves this alongside its own browser copy so the two agree; without a
         // default the key simply wouldn't come back on a fresh install, and the page would
         // have nothing to reconcile against.
@@ -1956,7 +1960,7 @@ pub fn handover_json(handover: &llm::flow::Handover) -> Value {
 }
 
 /// Get the list of detected projects and their Graft status
-pub fn graft_detect_projects() -> Result<Value, String> {
+pub fn graft_detect_projects(engine: &LlmEngine) -> Result<Value, String> {
     let projects = crate::graft::detect_projects();
     let projects_json: Vec<Value> = projects
         .iter()
@@ -1965,6 +1969,7 @@ pub fn graft_detect_projects() -> Result<Value, String> {
                 "path": p.path.to_string_lossy().to_string(),
                 "name": p.name,
                 "graft_status": p.graft_status.to_string(),
+                "tracked": crate::graft::is_tracked(engine.db(), &p.path),
             })
         })
         .collect();
@@ -1981,26 +1986,24 @@ pub fn graft_build_graph(_engine: &LlmEngine, project_path: String) -> Result<Va
     }))
 }
 
-/// Select a project for code analysis
-pub fn graft_select_project(engine: &LlmEngine, project_path: String) -> Result<Value, String> {
+/// Start or stop asking one project's graph.
+pub fn graft_track_project(
+    engine: &LlmEngine,
+    project_path: String,
+    tracked: bool,
+) -> Result<Value, String> {
     let path = PathBuf::from(&project_path);
-    crate::graft::set_selected_project(engine.db(), &path)?;
+    crate::graft::set_tracked(engine.db(), &path, tracked)?;
     Ok(serde_json::json!({
         "success": true,
-        "message": format!("Selected project: {}", path.display()),
+        "tracked": tracked,
+        "track_all": crate::graft::tracking_all(engine.db()),
+        "message": format!(
+            "{} {}",
+            if tracked { "Now asking" } else { "No longer asking" },
+            path.display()
+        ),
     }))
-}
-
-/// Get the currently selected project
-pub fn graft_get_selected_project(engine: &LlmEngine) -> Result<Value, String> {
-    match crate::graft::get_selected_project(engine.db()) {
-        Some(path) => Ok(serde_json::json!({
-            "path": path.to_string_lossy().to_string(),
-        })),
-        None => Ok(serde_json::json!({
-            "path": serde_json::Value::Null,
-        })),
-    }
 }
 
 /// Get Graft version information

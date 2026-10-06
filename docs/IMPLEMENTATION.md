@@ -3952,3 +3952,54 @@ names are snake_case on purpose -- and `{ deviceCode: code.device_code }` is a c
 whose *value* is snake_case. A grep flags four innocent lines and gets switched off; this one
 flagged exactly the three that were broken. Run against the fix in place it is quiet, and
 putting either bug back makes it fail with the file, line and command name.
+
+---
+
+## Step 62 — every repository, including the ones that do not exist yet
+
+The code graph knew about one project. `graft_selected_project` held a single path, the panel
+was a list you picked one row from, and `prime` asked that one graph. The operator has six
+repositories under `~/Projects` and asked for all of them, "even those going forward" -- so
+the question is not only how to ask several, but what happens when a seventh appears.
+
+**Tracked, not selected.** `graft_tracked_projects` is a list, and `graft_track_all` says to
+ignore the list and ask everything that detection finds. The second is the default and is what
+answers "going forward": a repository started next week is asked as soon as it has a graph,
+with nothing to tick. Unticking one project while tracking everything writes the rest of what
+was detected into the list and turns the switch off, because the alternative -- a tick that
+appears to do nothing because everything is tracked anyway -- is worse than the extra write. A
+project chosen before any of this existed is carried into the list on first read, so an upgrade
+keeps asking the graph it was asking yesterday instead of quietly going quiet.
+
+**Asked at once, ranked together.** Each `graft ask` is a process that spends its life waiting,
+so in sequence the wait would grow with the number of repositories and a question would get
+slower every time the operator started a project. `gather_hits` spawns them in a
+`thread::scope`, so the wait is the slowest single ask rather than the sum. The hits come back
+with Graft's own score and are sorted across every project, which is sound because the score
+comes from the same lexical ranker over the same kind of graph in each one. Ties break on
+project then pointer: the same question twice must not reorder the prompt, and thread
+completion order is not something to put in front of a model.
+
+**Two caps, for different reasons.** Five nodes reach the prompt, as before. Eight projects may
+be asked, which is new: past a handful the nodes that matter are in one or two repositories and
+the rest is noise competing for the same five slots. The projects are sorted by path before the
+cap bites, so a question consults the same eight every time rather than a different eight.
+
+**Every node now says which project it is in.** With one repository a pointer like
+`src/main.rs:L20` was unambiguous. With six it names no file at all, so the prompt labels each
+node `[Aether1]`, `[Tuxman]` and so on, and says that the pointer is a path inside that project.
+
+**The panel rebuilt, and a latent hole closed.** Rows are per-project toggles with their own
+"Build graph" button when a graph is missing, plus "Build All Missing" which walks them one at a
+time -- one at a time because a first build parses every file and several at once would compete
+for the same cores. The rows are now built with DOM calls instead of interpolated HTML: a
+project name is a folder on the operator's disk, and the old markup dropped it straight into
+`innerHTML` alongside an inline `onclick` carrying a quoted path whose escaping was wrong in a
+double-quoted attribute. A repository called `<img onerror=...>` would have run in the HUD. It
+is not a likely name; it is also not a risk worth keeping for markup that had to be rewritten
+anyway.
+
+**Measured on two real repositories.** `two_real_projects_are_asked_at_once_and_ranked_together`
+builds two throwaway projects with the real CLI, tracks both, and asserts the primed prompt
+carries nodes from each and names both projects. It is `#[ignore]`d because it needs `graft` on
+PATH, and it was run: two projects asked, both labelled, 2.0 seconds including both builds.

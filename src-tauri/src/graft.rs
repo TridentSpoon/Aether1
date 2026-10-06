@@ -16,8 +16,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Path setting for the currently selected project
+/// Path setting for the project chosen before there was more than one. Read only to carry
+/// an existing choice into the tracked list; nothing writes it any more.
 const SELECTED_PROJECT_SETTING: &str = "graft_selected_project";
+
+/// The projects whose graphs are asked on a code question, as a JSON array of paths. Only
+/// consulted when `graft_track_all` is off.
+const TRACKED_PROJECTS_SETTING: &str = "graft_tracked_projects";
+
+/// Track every repository that turns up, including ones made later. On by default: the
+/// operator asked for every repository rather than a chosen one, and a repository that
+/// appears next week is one of those.
+const TRACK_ALL_SETTING: &str = "graft_track_all";
 
 /// Whether `graft ask` may re-index changed files before answering. On by default: the
 /// refresh costs about a second, and a stale graph points the model at line numbers that
@@ -41,6 +51,15 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(900);
 /// The question handed to `graft ask` is cut to this many characters. Ranking is lexical,
 /// so a whole conversation turn's worth of text dilutes it rather than sharpening it.
 const QUERY_CHARS: usize = 240;
+
+/// How many projects may be asked about one question. They are asked at the same time, so
+/// the wait does not grow with the count, but each one is a process and a graph read -- and
+/// past a handful the answer is diluted rather than improved, because the nodes that matter
+/// are in one or two repositories and the rest contribute noise.
+const MAX_PROJECTS_PER_QUESTION: usize = 8;
+
+/// How many ranked nodes reach the prompt, across every project asked.
+const MAX_NODES_PER_QUESTION: usize = 5;
 
 /// Stores information about a detected project
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,25 +305,113 @@ pub fn build_graph(project_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Get the currently selected project
-pub fn get_selected_project(db: &MemoryDb) -> Option<PathBuf> {
-    let configured = db.get_setting_string(SELECTED_PROJECT_SETTING, "");
-    if configured.trim().is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(configured.trim()))
-    }
+/// Whether every repository that turns up is tracked, rather than a chosen few.
+pub fn tracking_all(db: &MemoryDb) -> bool {
+    db.get_setting_bool(TRACK_ALL_SETTING, true)
 }
 
-/// Set the currently selected project
-pub fn set_selected_project(db: &MemoryDb, path: &Path) -> Result<(), String> {
-    let path_str = path.to_string_lossy().to_string();
-    db.set_setting(
-        SELECTED_PROJECT_SETTING,
-        &serde_json::Value::String(path_str),
-    )
-    .map_err(|e| format!("Failed to save selected project: {e}"))?;
+/// The paths the operator has explicitly tracked.
+///
+/// A project chosen before this setting existed is carried in, so an upgrade keeps asking
+/// the graph it was asking yesterday rather than quietly going quiet.
+fn tracked_paths(db: &MemoryDb) -> Vec<PathBuf> {
+    let stored = db.get_setting_string(TRACKED_PROJECTS_SETTING, "");
+    let mut paths: Vec<PathBuf> = serde_json::from_str::<Vec<String>>(stored.trim())
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+
+    if paths.is_empty() {
+        let legacy = db.get_setting_string(SELECTED_PROJECT_SETTING, "");
+        if !legacy.trim().is_empty() {
+            paths.push(PathBuf::from(legacy.trim()));
+        }
+    }
+    paths
+}
+
+/// Is this project one whose graph gets asked?
+pub fn is_tracked(db: &MemoryDb, project_path: &Path) -> bool {
+    if tracking_all(db) {
+        return true;
+    }
+    tracked_paths(db).iter().any(|p| p == project_path)
+}
+
+/// Start or stop tracking one project.
+///
+/// Turning one off while tracking everything is a decision about that project, so it also
+/// turns off "track everything" and writes the rest of what was detected into the list --
+/// otherwise the switch would appear to do nothing.
+pub fn set_tracked(db: &MemoryDb, project_path: &Path, tracked: bool) -> Result<(), String> {
+    let mut paths = if tracking_all(db) {
+        detect_projects()
+            .into_iter()
+            .map(|project| project.path)
+            .collect::<Vec<_>>()
+    } else {
+        tracked_paths(db)
+    };
+
+    paths.retain(|p| p != project_path);
+    if tracked {
+        paths.push(project_path.to_path_buf());
+    }
+    paths.sort();
+    paths.dedup();
+
+    store_tracked(db, &paths)?;
+    if tracking_all(db) && !tracked {
+        set_tracking_all(db, false)?;
+    }
     Ok(())
+}
+
+/// Track everything, or go back to the list.
+pub fn set_tracking_all(db: &MemoryDb, all: bool) -> Result<(), String> {
+    db.set_setting(TRACK_ALL_SETTING, &serde_json::Value::Bool(all))
+        .map_err(|e| format!("Failed to save the track-everything setting: {e}"))
+}
+
+fn store_tracked(db: &MemoryDb, paths: &[PathBuf]) -> Result<(), String> {
+    let as_strings: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    let encoded = serde_json::to_string(&as_strings)
+        .map_err(|e| format!("Failed to encode the tracked projects: {e}"))?;
+    db.set_setting(
+        TRACKED_PROJECTS_SETTING,
+        &serde_json::Value::String(encoded),
+    )
+    .map_err(|e| format!("Failed to save the tracked projects: {e}"))?;
+    Ok(())
+}
+
+/// The projects to ask about a question: tracked, built, and capped.
+///
+/// Ordered by path so the set asked is the same from one turn to the next, which matters
+/// when the cap bites: a question that silently consulted a different five repositories
+/// each time would be impossible to reason about.
+fn projects_to_ask(db: &MemoryDb) -> Vec<PathBuf> {
+    let candidates: Vec<PathBuf> = if tracking_all(db) {
+        detect_projects()
+            .into_iter()
+            .map(|project| project.path)
+            .collect()
+    } else {
+        tracked_paths(db)
+    };
+
+    let mut ready: Vec<PathBuf> = candidates
+        .into_iter()
+        .filter(|path| check_graft_status(path) == GraftStatus::Ready)
+        .collect();
+    ready.sort();
+    ready.dedup();
+    ready.truncate(MAX_PROJECTS_PER_QUESTION);
+    ready
 }
 
 /// Cut a conversation turn down to something a lexical ranker can use.
@@ -316,8 +423,19 @@ fn ask_query(query: &str) -> String {
     }
 }
 
+/// One ranked node, with the project it came from and the score that orders it against
+/// nodes from every other project.
+#[derive(Debug, Clone)]
+struct Hit {
+    project: String,
+    title: String,
+    pointer: String,
+    code: String,
+    score: f64,
+}
+
 /// Ask Graft for ranked code context and include its source excerpts.
-fn query_graph(project_path: &Path, query: &str, refresh: bool) -> Vec<String> {
+fn query_graph(project_path: &Path, query: &str, refresh: bool) -> Vec<Hit> {
     let query = ask_query(query);
     if query.is_empty() {
         return Vec::new();
@@ -331,24 +449,38 @@ fn query_graph(project_path: &Path, query: &str, refresh: bool) -> Vec<String> {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             eprintln!(
-                "[AETHER1] Graft query failed: {}",
+                "[AETHER1] Graft query failed in {}: {}",
+                project_path.display(),
                 String::from_utf8_lossy(&output.stderr).trim()
             );
             return Vec::new();
         }
         Err(error) => {
-            // A question the graph cannot answer is not a failed turn: the model is
-            // perfectly able to read the code itself, so this is noted and dropped.
-            eprintln!("[AETHER1] Could not run Graft query: {error}");
+            // A question one graph cannot answer is not a failed turn, and with several
+            // projects it is not even a failed question: the others still answer, and the
+            // model can read the code itself.
+            eprintln!(
+                "[AETHER1] Could not run Graft query in {}: {error}",
+                project_path.display()
+            );
             return Vec::new();
         }
     };
 
-    parse_query(&output.stdout)
+    parse_query(project_label(project_path), &output.stdout)
+}
+
+/// What a project is called in the prompt: its folder name, which is what the operator
+/// calls it, with the full path kept out of the model's way.
+fn project_label(project_path: &Path) -> String {
+    project_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| project_path.to_string_lossy().to_string())
 }
 
 /// Pull the ranked nodes out of what `graft ask --json` printed.
-fn parse_query(stdout: &[u8]) -> Vec<String> {
+fn parse_query(project: String, stdout: &[u8]) -> Vec<Hit> {
     let response: serde_json::Value = match serde_json::from_slice(stdout) {
         Ok(response) => response,
         Err(error) => {
@@ -361,10 +493,9 @@ fn parse_query(stdout: &[u8]) -> Vec<String> {
         .as_array()
         .into_iter()
         .flatten()
-        .take(5)
+        .take(MAX_NODES_PER_QUESTION)
         .filter_map(|hit| {
             let title = hit["title"].as_str()?;
-            let pointer = hit["pointer"].as_str().unwrap_or_default();
             // `--source` inlines the code at each hit. Where it is absent -- a node Graft
             // has no span for -- the signature it always carries is the next best thing,
             // and is better than a bare title.
@@ -372,13 +503,55 @@ fn parse_query(stdout: &[u8]) -> Vec<String> {
                 "" => hit["snippet"].as_str().unwrap_or_default(),
                 code => code,
             };
-            if code.is_empty() {
-                Some(format!("{title} ({pointer})"))
-            } else {
-                Some(format!("{title} ({pointer})\n{code}"))
-            }
+            Some(Hit {
+                project: project.clone(),
+                title: title.to_string(),
+                pointer: hit["pointer"].as_str().unwrap_or_default().to_string(),
+                code: code.to_string(),
+                score: hit["score"].as_f64().unwrap_or(0.0),
+            })
         })
         .collect()
+}
+
+/// Ask every tracked project at once and keep the best nodes across all of them.
+///
+/// At the same time rather than one after another: each ask is a process that spends its
+/// time waiting on Graft, so in sequence the wait would grow with the number of
+/// repositories and a question would get slower every time the operator started a new
+/// project. In parallel the wait is the slowest single ask.
+fn gather_hits(projects: &[PathBuf], query: &str, refresh: bool) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = std::thread::scope(|scope| {
+        let handles: Vec<_> = projects
+            .iter()
+            .map(|project| scope.spawn(move || query_graph(project, query, refresh)))
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .flatten()
+            .collect()
+    });
+
+    rank_hits(&mut hits);
+    hits
+}
+
+/// Put the best nodes first, whichever project they came from.
+///
+/// Graft's scores are comparable between repositories because they come from the same
+/// lexical ranker over the same kind of graph. Ties break on the project and then the
+/// pointer so the order is stable rather than whichever thread happened to finish first --
+/// the same question twice should not reorder the prompt.
+fn rank_hits(hits: &mut Vec<Hit>) {
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.project.cmp(&b.project))
+            .then_with(|| a.pointer.cmp(&b.pointer))
+    });
+    hits.truncate(MAX_NODES_PER_QUESTION);
 }
 
 /// The Graft graph contribution to the system prompt, injected when analyzing code.
@@ -386,40 +559,102 @@ fn parse_query(stdout: &[u8]) -> Vec<String> {
 /// `graft ask` re-indexes the files that changed before it answers, so this needs no
 /// rebuild schedule of its own: the graph is as current as the last question.
 pub fn prime(db: &MemoryDb, query: &str) -> String {
-    let selected = match get_selected_project(db) {
-        Some(path) => path,
-        None => return String::new(),
-    };
-    if check_graft_status(&selected) != GraftStatus::Ready {
+    let projects = projects_to_ask(db);
+    if projects.is_empty() {
         return String::new();
     }
 
     let refresh = db.get_setting_bool(AUTO_REFRESH_SETTING, true);
-    let relevant_nodes = query_graph(&selected, query, refresh);
-    if relevant_nodes.is_empty() {
+    let hits = gather_hits(&projects, query, refresh);
+    if hits.is_empty() {
         return String::new();
     }
 
-    let nodes_text = relevant_nodes
+    let nodes_text = hits
         .iter()
         .enumerate()
-        .map(|(i, node)| format!("  {}. {}", i + 1, node))
+        .map(|(i, hit)| {
+            // The project is named on every node, because with several repositories asked
+            // at once a pointer like `src/main.rs:L20` belongs to no file in particular
+            // until you know which repository it is in.
+            let mut line = format!("  {}. [{}] {}", i + 1, hit.project, hit.title);
+            if !hit.pointer.is_empty() {
+                line.push_str(&format!(" ({})", hit.pointer));
+            }
+            if !hit.code.is_empty() {
+                line.push_str(&format!("\n{}", hit.code));
+            }
+            line
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
+    let scope = if projects.len() == 1 {
+        project_label(&projects[0])
+    } else {
+        format!(
+            "{} projects: {}",
+            projects.len(),
+            projects
+                .iter()
+                .map(|path| project_label(path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
     format!(
         "\n[CODE ANALYSIS: {}]\n\
-         The following code nodes from the project graph are relevant to this question:\n\
+         The following code nodes from the project graphs are relevant to this question:\n\
          {}\n\
-         Use these as entry points for understanding the codebase structure.\n",
-        selected.display(),
-        nodes_text
+         Each node is labelled with the project it is in, and its pointer is a path inside \
+         that project. Use these as entry points for understanding the codebase structure.\n",
+        scope, nodes_text
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A real temp file per test, not ":memory:" -- see the warning on MemoryDb::open.
+    fn temp_db(name: &str) -> MemoryDb {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "aether1_graft_{name}_{}_{n}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        MemoryDb::open(path).expect("temp db should open")
+    }
+
+    fn temp_project(name: &str, built: bool) -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "aether1_graft_project_{name}_{}_{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp project");
+        if built {
+            let graph = dir.join(GRAFT_DIR);
+            std::fs::create_dir_all(&graph).expect("temp graph");
+            std::fs::write(graph.join(GRAFT_INDEX), "# index").expect("index");
+        }
+        dir
+    }
+
+    fn hit(project: &str, pointer: &str, score: f64) -> Hit {
+        Hit {
+            project: project.to_string(),
+            title: format!("{project}::thing"),
+            pointer: pointer.to_string(),
+            code: String::new(),
+            score,
+        }
+    }
 
     #[test]
     fn test_graft_status_not_built() {
@@ -468,17 +703,188 @@ mod tests {
 
     #[test]
     fn a_hit_with_no_inlined_source_falls_back_to_its_signature() {
-        let nodes = parse_query(REAL_ASK_OUTPUT.as_bytes());
-        assert_eq!(nodes.len(), 2);
-        assert!(nodes[0].contains("frontend/js/layout.js:L677-L679"));
-        assert!(nodes[0].contains("return a.start < b.end;"));
+        let hits = parse_query("Aether1".to_string(), REAL_ASK_OUTPUT.as_bytes());
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].pointer, "frontend/js/layout.js:L677-L679");
+        assert!(hits[0].code.contains("return a.start < b.end;"));
         // No `code` on this one, so the signature stands in rather than nothing at all.
-        assert!(nodes[1].ends_with("class VoiceAudioEngine"));
+        assert_eq!(hits[1].code, "class VoiceAudioEngine");
+        // The project rides along on every hit: a pointer alone names no file once more
+        // than one repository has been asked.
+        assert!(hits.iter().all(|hit| hit.project == "Aether1"));
+        assert_eq!(hits[0].score, 1.28);
     }
 
     #[test]
     fn an_answer_that_is_not_json_is_no_nodes_rather_than_a_failed_turn() {
-        assert!(parse_query(b"graft: no graph here\n").is_empty());
-        assert!(parse_query(b"{ not json at all").is_empty());
+        assert!(parse_query("x".to_string(), b"graft: no graph here\n").is_empty());
+        assert!(parse_query("x".to_string(), b"{ not json at all").is_empty());
+    }
+
+    #[test]
+    fn the_best_nodes_win_whichever_project_they_came_from() {
+        let mut hits = vec![
+            hit("Tuxman", "src/a.rs:L1", 0.4),
+            hit("Aether1", "src/b.rs:L2", 1.9),
+            hit("Tuxman", "src/c.rs:L3", 0.9),
+        ];
+        rank_hits(&mut hits);
+        assert_eq!(
+            hits.iter().map(|h| h.score).collect::<Vec<_>>(),
+            vec![1.9, 0.9, 0.4]
+        );
+        assert_eq!(hits[0].project, "Aether1");
+    }
+
+    // Two repositories can score a node identically, and the order the threads finish in
+    // is not something to put in a prompt.
+    #[test]
+    fn an_equal_score_is_broken_the_same_way_every_time() {
+        let ordered = |hits: Vec<Hit>| {
+            let mut hits = hits;
+            rank_hits(&mut hits);
+            hits.iter()
+                .map(|h| format!("{}:{}", h.project, h.pointer))
+                .collect::<Vec<_>>()
+        };
+        let one = ordered(vec![
+            hit("Tuxman", "src/a.rs:L1", 1.0),
+            hit("Aether1", "src/z.rs:L9", 1.0),
+        ]);
+        let other = ordered(vec![
+            hit("Aether1", "src/z.rs:L9", 1.0),
+            hit("Tuxman", "src/a.rs:L1", 1.0),
+        ]);
+        assert_eq!(one, other);
+        assert_eq!(one[0], "Aether1:src/z.rs:L9");
+    }
+
+    #[test]
+    fn no_more_nodes_reach_the_prompt_than_the_cap() {
+        let mut hits: Vec<Hit> = (0..40)
+            .map(|i| hit("Aether1", &format!("src/f{i}.rs:L1"), i as f64))
+            .collect();
+        rank_hits(&mut hits);
+        assert_eq!(hits.len(), MAX_NODES_PER_QUESTION);
+    }
+
+    #[test]
+    fn tracking_everything_is_the_default() {
+        let db = temp_db("default_all");
+        assert!(tracking_all(&db));
+        assert!(is_tracked(&db, Path::new("/anywhere/at/all")));
+    }
+
+    #[test]
+    fn a_project_chosen_before_there_was_a_list_is_carried_into_it() {
+        let db = temp_db("legacy");
+        set_tracking_all(&db, false).expect("stop tracking all");
+        db.set_setting(
+            SELECTED_PROJECT_SETTING,
+            &serde_json::Value::String("/home/op/Projects/Aether1".to_string()),
+        )
+        .expect("legacy setting");
+
+        assert!(is_tracked(&db, Path::new("/home/op/Projects/Aether1")));
+        assert!(!is_tracked(&db, Path::new("/home/op/Projects/Tuxman")));
+    }
+
+    #[test]
+    fn a_tracked_project_survives_a_round_trip_and_can_be_turned_off() {
+        let db = temp_db("round_trip");
+        set_tracking_all(&db, false).expect("stop tracking all");
+        let one = PathBuf::from("/home/op/Projects/Tuxman");
+
+        set_tracked(&db, &one, true).expect("track");
+        assert!(is_tracked(&db, &one));
+
+        set_tracked(&db, &one, false).expect("untrack");
+        assert!(!is_tracked(&db, &one));
+    }
+
+    // Unticking one project while everything is tracked has to leave the others ticked,
+    // or the switch reads as doing nothing.
+    #[test]
+    fn turning_one_project_off_keeps_the_rest_and_stops_tracking_everything() {
+        let db = temp_db("narrow");
+        let kept = temp_project("kept", true);
+        let dropped = temp_project("dropped", true);
+
+        // Stand in for detection, which reads the operator's real home directory.
+        store_tracked(&db, &[kept.clone(), dropped.clone()]).expect("seed");
+        set_tracking_all(&db, false).expect("seed");
+
+        set_tracked(&db, &dropped, false).expect("untrack");
+        assert!(!tracking_all(&db));
+        assert!(is_tracked(&db, &kept));
+        assert!(!is_tracked(&db, &dropped));
+
+        let _ = std::fs::remove_dir_all(&kept);
+        let _ = std::fs::remove_dir_all(&dropped);
+    }
+
+    // A tracked project with no graph cannot answer anything, and asking it would spend a
+    // process per turn to be told so.
+    #[test]
+    fn only_projects_with_a_graph_are_asked() {
+        let db = temp_db("ready_only");
+        set_tracking_all(&db, false).expect("stop tracking all");
+        let built = temp_project("built", true);
+        let unbuilt = temp_project("unbuilt", false);
+        store_tracked(&db, &[built.clone(), unbuilt.clone()]).expect("seed");
+
+        let asked = projects_to_ask(&db);
+        assert_eq!(asked, vec![built.clone()]);
+
+        let _ = std::fs::remove_dir_all(&built);
+        let _ = std::fs::remove_dir_all(&unbuilt);
+    }
+
+    // The one test here that uses the real Graft CLI, so it is ignored by default and run
+    // by hand: `cargo test -- --ignored graft`. Everything above it is about our own
+    // bookkeeping; this is about whether two repositories really do get asked at once and
+    // come back ranked against each other, which is the whole point of the change and is
+    // not something the unit tests can show.
+    #[test]
+    #[ignore = "needs the graft CLI on PATH"]
+    fn two_real_projects_are_asked_at_once_and_ranked_together() {
+        let root = std::env::temp_dir().join(format!("aether1_graft_two_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut built = Vec::new();
+
+        for (name, body) in [
+            ("alpha", "pub fn alpha_telemetry_sampler() -> u32 { 1 }\n"),
+            ("beta", "pub fn beta_telemetry_sampler() -> u32 { 2 }\n"),
+        ] {
+            let dir = root.join(name);
+            std::fs::create_dir_all(dir.join("src")).expect("project tree");
+            std::fs::write(dir.join("src").join("lib.rs"), body).expect("source");
+            build_graph(&dir).expect("graft build should succeed");
+            assert_eq!(check_graft_status(&dir), GraftStatus::Ready);
+            built.push(dir);
+        }
+
+        let db = temp_db("two_real");
+        set_tracking_all(&db, false).expect("stop tracking all");
+        store_tracked(&db, &built).expect("track both");
+        assert_eq!(projects_to_ask(&db).len(), 2);
+
+        let primed = prime(&db, "telemetry sampler");
+        assert!(
+            primed.contains("[alpha]") && primed.contains("[beta]"),
+            "both projects should contribute nodes, got:\n{primed}"
+        );
+        assert!(primed.contains("2 projects: alpha, beta"), "got:\n{primed}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_project_is_named_in_the_prompt_by_its_folder() {
+        assert_eq!(
+            project_label(Path::new("/home/op/Projects/Aether1")),
+            "Aether1"
+        );
+        assert_eq!(project_label(Path::new("/")), "/");
     }
 }
