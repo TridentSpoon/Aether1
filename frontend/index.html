@@ -1245,6 +1245,21 @@
                                      platform this is not implemented on -- it says so here
                                      rather than appearing to do nothing. -->
                                 <p id="theme-desktop-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
+
+                                <!-- Following the desktop is two things, and this is the second
+                                     of them on its own: the shell keeps matching light and dark
+                                     either way, and this decides whether the accent is the
+                                     desktop's or yours. On unless turned off, so the default is
+                                     the whole of the desktop's theme. Only shown while the
+                                     desktop is being followed, because with a mode picked by
+                                     hand there is no desktop accent in play to keep or drop.
+                                     Applies on the spot, like every other control on this pane,
+                                     rather than waiting for Save Changes. -->
+                                <label id="theme-desktop-accent-row" class="a1-switch hidden">
+                                    <input id="theme-desktop-accent" type="checkbox" class="a1-switch-input">
+                                    <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                                    <span class="a1-switch-text">Use my desktop's accent colour</span>
+                                </label>
                             </div>
 
                             <!-- RIGHT COLUMNS: COLOUR OPTIONS -->

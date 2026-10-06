@@ -1655,7 +1655,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (themeModeNote) {
             themeModeNote.textContent = following
-                ? 'Following your desktop. Picking a mode below, or a colour of your own, stops that.'
+                ? 'Following your desktop. Picking a mode below stops that; picking a colour of your own only stops the accent following, not the light and dark.'
                 : '';
         }
 
@@ -1663,6 +1663,14 @@ document.addEventListener('DOMContentLoaded', () => {
            asked for, and whether an accent came with it. The probe's own note is appended
            rather than replacing this, because "no accent colour is set" and "the shell is
            Midnight" are both true and both worth knowing. */
+        /* The switch that separates the two halves of following. Shown only while the desktop
+           is the authority: with a mode picked by hand there is no desktop accent in play to
+           keep or drop, and a switch that governs nothing is worse than no switch. */
+        const desktopAccentRow = document.getElementById('theme-desktop-accent-row');
+        const desktopAccentInput = document.getElementById('theme-desktop-accent');
+        if (desktopAccentRow) desktopAccentRow.classList.toggle('hidden', !following);
+        if (desktopAccentInput) desktopAccentInput.checked = theme.desktopAccent !== false;
+
         const desktopNote = document.getElementById('theme-desktop-note');
         if (desktopNote) {
             if (!following) {
@@ -1673,10 +1681,24 @@ document.addEventListener('DOMContentLoaded', () => {
                    this app's name for its own dark shell, not a setting anybody has on their
                    desktop. So both names appear, each for the thing it actually names. */
                 const shell = Aether1Theme.MODE_LABELS[theme.mode];
-                const lines = [info.accent
-                    ? `Your desktop is set to ${info.mode || (theme.mode === 'solar' ? 'light' : 'dark')}, so this is ${shell} wearing your desktop's accent colour, ${info.accent}.`
-                    : `Your desktop is set to ${info.mode || (theme.mode === 'solar' ? 'light' : 'dark')}, so this is ${shell}.`];
-                if (info.note) lines.push(info.note);
+                const setTo = info.mode || (theme.mode === 'solar' ? 'light' : 'dark');
+                const lines = [];
+                if (theme.wearingDesktopAccent) {
+                    lines.push(`Your desktop is set to ${setTo}, so this is ${shell} wearing your desktop's accent colour, ${info.accent}.`);
+                } else if (theme.desktopAccent === false) {
+                    /* The switch is off, which is a choice rather than a failure, so this does
+                       not carry the probe's note about a missing accent -- there is nothing
+                       missing from what was asked for. */
+                    lines.push(`Your desktop is set to ${setTo}, so this is ${shell} with colours of your own. The shell still follows your desktop between light and dark.`);
+                } else {
+                    /* Switch on, no accent to wear. The probe's own note is the better second
+                       sentence -- it names where it looked -- so this one does not also say
+                       "no accent came back" and leave the pane saying it twice. That this case
+                       is distinguishable at all is the whole reason wearingDesktopAccent exists
+                       separately from desktopAccent. */
+                    lines.push(`Your desktop is set to ${setTo}, so this is ${shell}.`);
+                    lines.push(info.note || 'No accent colour came back from your desktop, so AETHER1 is keeping the accent it was designed with.');
+                }
                 desktopNote.textContent = lines.join(' ');
             }
         }
@@ -10185,6 +10207,16 @@ document.addEventListener('DOMContentLoaded', () => {
             paintTheme(Aether1Theme.setTone(slot, input.value));
         });
     });
+
+    /* The switch that decides whether the desktop's accent is worn while following it. Applies
+       on the spot like everything else on this pane; nothing here is behind Save Changes. */
+    const themeDesktopAccentInput = document.getElementById('theme-desktop-accent');
+    if (themeDesktopAccentInput) {
+        themeDesktopAccentInput.addEventListener('change', () => {
+            voiceEngine.playSFX('click');
+            paintTheme(Aether1Theme.setDesktopAccent(themeDesktopAccentInput.checked));
+        });
+    }
 
     const btnThemeColoursReset = document.getElementById('btn-theme-colours-reset');
     if (btnThemeColoursReset) {

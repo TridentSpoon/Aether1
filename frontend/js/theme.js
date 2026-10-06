@@ -507,7 +507,11 @@
     // ---- what is stored -----------------------------------------------------------------
 
     function blankState() {
-        return { mode: null, colours: {} };
+        /* `desktopAccent: true` is what makes the desktop's own colour the default rather than
+           something to go and switch on. Only an explicit false turns it off -- see normalise,
+           where anything else, a missing field from a state written before this existed
+           included, reads as on. */
+        return { mode: null, colours: {}, desktopAccent: true };
     }
 
     /* Reading is deliberately forgiving. Storage can hold anything -- a half-written state
@@ -517,6 +521,10 @@
         const state = blankState();
         if (!raw || typeof raw !== 'object') return state;
         if (MODES.indexOf(raw.mode) !== -1) state.mode = raw.mode;
+        /* Only an explicit false is an opt-out. A state saved by a build from before this
+           field existed has no opinion about it, and the default for no opinion is the
+           desktop's colour. */
+        state.desktopAccent = raw.desktopAccent !== false;
         MODES.forEach((mode) => {
             const c = raw.colours && raw.colours[mode];
             if (!c || !isColour(c.background) || !isColour(c.main) || !isColour(c.highlight)) return;
@@ -632,27 +640,41 @@
         return readStored().mode === null;
     }
 
-    /* The colours to wear while following the desktop: the mode's own designed shell, with the
-       desktop's accent and its derived companion in place of the designed pair.
-       
-       The ground is the designed one rather than anything stored, because following the desktop
-       means wearing the shell as drawn -- an accent somebody mixed by hand for Midnight last
-       week is not what the desktop is asking for. The two tone sliders are kept, though: those
-       are "not dark enough for me" and "too bright for me", which are true of a person rather
-       than of a palette, and resetting them every time the desktop is followed would quietly
-       undo a deliberate adjustment.
-       
-       No accent reported -- an older Windows with none set, a Linux desktop with no portal, a
-       window with no bridge to the native side at all -- leaves the designed pair alone. That
-       is the whole of the fallback: the shell still follows light and dark, and the colours are
-       the ones the mode was drawn with. */
-    function systemColours(mode, stored) {
-        const colours = defaultColours(mode);
-        if (stored) {
-            colours.saturation = stored.saturation;
-            colours.depth = stored.depth;
+    /* The colours to wear while following the desktop.
+     *
+     * Following the desktop is two separate things, and somebody can want one without the other:
+     * the shell matching light and dark, and the accent being the desktop's own. The second is
+     * what `desktopAccent` governs. It is on unless it has been turned off, so the default is
+     * the whole of the desktop's theme -- but a person who likes the app's Cyan on a shell that
+     * still follows their system between day and night can have exactly that, which they could
+     * not before: wanting their own accent used to mean giving up the light/dark following too.
+     *
+     * With it off, the mode wears whatever it was last wearing, which is the same thing picking
+     * that mode by hand would give. With it on, the shell is the designed one and the accent is
+     * the desktop's -- the ground deliberately designed rather than stored, because following
+     * the desktop means wearing the shell as drawn.
+     *
+     * Either way the two tone sliders are kept: "not dark enough for me" and "too bright for
+     * me" are true of a person rather than of a palette, and dropping them when the desktop is
+     * followed would quietly undo a deliberate adjustment.
+     *
+     * No accent reported -- an older Windows with none set, a Linux desktop with no portal, a
+     * window with no bridge to the native side at all -- falls back the same way as turning it
+     * off, and the note in Settings says which of the two happened. */
+    function systemColours(mode, stored, useDesktopAccent) {
+        const own = stored || defaultColours(mode);
+        if (!useDesktopAccent || !desktop.accent) {
+            const colours = defaultColours(mode);
+            colours.main = own.main;
+            colours.highlight = own.highlight;
+            colours.preset = own.preset;
+            colours.saturation = own.saturation;
+            colours.depth = own.depth;
+            return colours;
         }
-        if (!desktop.accent) return colours;
+        const colours = defaultColours(mode);
+        colours.saturation = own.saturation;
+        colours.depth = own.depth;
         colours.main = desktop.accent;
         /* Asked of the ground that will actually be painted, not of the mode: the two flat
            modes keep the shell they were designed with, so for them the two are the same
@@ -674,7 +696,16 @@
         const state = readStored();
         if (state.mode === null) {
             const mode = systemMode();
-            return { mode: mode, colours: systemColours(mode, state.colours[mode]), following: true };
+            return {
+                mode: mode,
+                colours: systemColours(mode, state.colours[mode], state.desktopAccent),
+                following: true,
+                /* What is actually on screen, not what was asked for: with the switch on but
+                   no accent reported, the colours are the app's own, and the UI has to be able
+                   to tell those two apart to say anything true about them. */
+                desktopAccent: state.desktopAccent,
+                wearingDesktopAccent: state.desktopAccent && !!desktop.accent
+            };
         }
         return {
             mode: state.mode,
@@ -729,32 +760,52 @@
        not clear the selected preset: turning the neon down on Night City is still Night City,
        and showing nothing as selected afterwards would imply a hand-mixed palette that is not
        what happened. */
+    /* Opening a colour set for editing, without answering a question nobody asked.
+     *
+     * Every setter below used to pin `state.mode` to whatever was being painted, which while
+     * the desktop was being followed meant dragging the saturation slider silently stopped the
+     * shell following light and dark. Nothing about a tone slider or a colour picker is a
+     * statement about where the mode should come from, so following survives all of them;
+     * leaving it is what the mode buttons are for.
+     *
+     * The colours being edited are the mode's own stored set, never the resolved ones -- while
+     * the desktop's accent is on, what is painted is the desktop's colour, and writing that
+     * into storage would turn today's accent into a permanent choice the moment anybody
+     * touched a slider. */
+    function beginEdit() {
+        const state = readStored();
+        const mode = state.mode === null ? systemMode() : state.mode;
+        const colours = state.colours[mode] || defaultColours(mode);
+        return { state: state, mode: mode, colours: colours };
+    }
+
+    function commitEdit(edit) {
+        edit.state.colours[edit.mode] = edit.colours;
+        write(edit.state);
+        return current();
+    }
+
     function setTone(slot, value) {
         if (slot !== 'saturation' && slot !== 'depth') return current();
-        const now = current();
-        const state = readStored();
-        state.mode = now.mode;
-        const colours = state.colours[now.mode] || defaultColours(now.mode);
-        colours[slot] = slot === 'saturation'
+        const edit = beginEdit();
+        edit.colours[slot] = slot === 'saturation'
             ? clampNumber(value, 0, 100, SATURATION_DEFAULT)
             : clampNumber(value, -DEPTH_LIMIT, DEPTH_LIMIT, 0);
-        state.colours[now.mode] = colours;
-        write(state);
-        return current();
+        return commitEdit(edit);
     }
 
     function setColour(slot, hex) {
         if (!isColour(hex)) return current();
-        const now = current();
-        if (slotsFor(now.mode).indexOf(slot) === -1) return current();
-        const state = readStored();
-        state.mode = now.mode;
-        const colours = state.colours[now.mode] || defaultColours(now.mode);
-        colours[slot] = toHex(toRgb(hex));
-        colours.preset = null;   // hand-mixed now, so no preset should show as selected
-        state.colours[now.mode] = colours;
-        write(state);
-        return current();
+        const edit = beginEdit();
+        if (slotsFor(edit.mode).indexOf(slot) === -1) return current();
+        edit.colours[slot] = toHex(toRgb(hex));
+        edit.colours.preset = null;   // hand-mixed now, so no preset should show as selected
+        /* Mixing a colour by hand is the plainest possible statement that the desktop's accent
+           is not the one you want, so it turns that switch off rather than being overwritten by
+           it on the next repaint. The shell carries on following light and dark, which is the
+           combination this exists to make reachable. */
+        if (edit.state.mode === null) edit.state.desktopAccent = false;
+        return commitEdit(edit);
     }
 
     /* A named palette worn as accents only, leaving the mode's own ground alone. This is how
@@ -767,25 +818,33 @@
     function setAccents(id) {
         const p = preset(id);
         if (!p) return current();
-        const now = current();
+        const edit = beginEdit();
+        edit.colours.main = p.main;
+        edit.colours.highlight = p.highlight;
+        edit.colours.preset = p.id;
+        // Choosing a palette is choosing colours, same as the pickers above.
+        if (edit.state.mode === null) edit.state.desktopAccent = false;
+        return commitEdit(edit);
+    }
+
+    /* Whether the desktop's own accent colour is worn while following it.
+     *
+     * Turning it back on does not restore anything, because nothing was lost: the mode's own
+     * colours were never overwritten, they were only not being painted. */
+    function setDesktopAccent(on) {
         const state = readStored();
-        state.mode = now.mode;
-        const colours = state.colours[now.mode] || defaultColours(now.mode);
-        colours.main = p.main;
-        colours.highlight = p.highlight;
-        colours.preset = p.id;
-        state.colours[now.mode] = colours;
+        state.desktopAccent = on !== false;
         write(state);
         return current();
     }
 
     function resetColours() {
-        const now = current();
-        const state = readStored();
-        state.mode = now.mode;
-        state.colours[now.mode] = defaultColours(now.mode);
-        write(state);
-        return current();
+        const edit = beginEdit();
+        edit.colours = defaultColours(edit.mode);
+        /* "Reset this mode's colours" means back to how the app ships, and while the desktop is
+           being followed how it ships is wearing the desktop's accent. */
+        if (edit.state.mode === null) edit.state.desktopAccent = true;
+        return commitEdit(edit);
     }
 
     /* Calls onChange when the OS flips between light and dark, but only while the choice is
@@ -891,6 +950,7 @@
         SYSTEM_MODE: SYSTEM_MODE,
         desktopTheme: desktopTheme,
         setDesktopTheme: setDesktopTheme,
+        setDesktopAccent: setDesktopAccent,
         companionFor: companionFor,
         followDesktop: followDesktop,
         setMode: setMode,

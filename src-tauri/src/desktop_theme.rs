@@ -406,10 +406,16 @@ pub(crate) fn parse_gsettings(scheme: Option<&str>, accent: Option<&str>) -> Des
     let accent = accent
         .map(unquote)
         .and_then(|name| gnome_accent_hex(&name).map(|h| h.to_string()));
-    let note = if mode.is_none() && accent.is_none() {
-        "GNOME reported no light/dark preference and no accent colour.".to_string()
-    } else {
-        String::new()
+    let note = match (&mode, &accent) {
+        (None, None) => "GNOME reported no light/dark preference and no accent colour.".to_string(),
+        // GNOME only grew an `accent-color` key in 47, so a machine on an older release
+        // answers the light/dark question and not this one. Saying so is the difference
+        // between a feature that looks broken and one that is explained.
+        (Some(_), None) => {
+            "GNOME reported no accent colour -- the setting arrived in GNOME 47 -- so AETHER1              is keeping the accent it was designed with."
+                .to_string()
+        }
+        _ => String::new(),
     };
     DesktopTheme {
         mode,
@@ -709,6 +715,17 @@ mod tests {
         assert_eq!(theme.mode.as_deref(), Some("dark"));
         assert_eq!(theme.accent.as_deref(), Some("#9141ac"));
         assert_eq!(theme.source, "gsettings");
+    }
+
+    /// A light/dark answer with no accent is the normal case on GNOME before 47, so it has
+    /// to carry a note: without one the pane says the desktop is being followed and shows a
+    /// colour that is not the desktop's, with nothing explaining the gap.
+    #[test]
+    fn gnome_without_an_accent_key_says_so() {
+        let theme = parse_gsettings(Some("'prefer-dark'"), None);
+        assert_eq!(theme.mode.as_deref(), Some("dark"));
+        assert_eq!(theme.accent, None);
+        assert!(theme.note.contains("no accent colour"), "{}", theme.note);
     }
 
     /// GNOME's "default" means nobody has chosen, so it must not be read as light.
