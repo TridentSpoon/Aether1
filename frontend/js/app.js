@@ -2435,6 +2435,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* Escapes text that is about to be interpolated into an innerHTML template.
+       Needed wherever the string came from outside this program -- a model server's
+       own list of model names, a release tag, an error message carrying a remote
+       body. formatMarkdown escapes its whole input before decorating it; these are
+       the places that build HTML directly and have to do it themselves. */
+    function escapeHtml(text) {
+        return String(text ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     function formatMarkdown(text) {
         if (!text) return '';
         let escaped = text
@@ -2931,9 +2945,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const head = document.createElement('div');
         head.className = 'flex items-center justify-between gap-2';
-        head.innerHTML = `<span><strong>${action.tool}</strong> — ${action.status}${
-            action.approved_by ? ` <span class="text-slate-500">(${action.approved_by})</span>` : ''
-        }</span><span class="text-slate-500">${action.timestamp}</span>`;
+        // A tool name only ever reaches this row from the registry, because tools::run
+        // refuses an unknown name before anything is written down. Escaped anyway: that
+        // is a property of a different file, and this row is the one place a name the
+        // model chose would become markup if it ever stopped holding.
+        head.innerHTML = `<span><strong>${escapeHtml(action.tool)}</strong> — ${escapeHtml(action.status)}${
+            action.approved_by ? ` <span class="text-slate-500">(${escapeHtml(action.approved_by)})</span>` : ''
+        }</span><span class="text-slate-500">${escapeHtml(action.timestamp)}</span>`;
         row.appendChild(head);
 
         const detail = document.createElement('div');
@@ -2986,7 +3004,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             for (const action of actions) list.appendChild(renderActivityRow(action));
         } catch (e) {
-            list.innerHTML = `<div class="text-rose-300">Could not load the activity log: ${e.message || e}</div>`;
+            list.innerHTML = `<div class="text-rose-300">Could not load the activity log: ${escapeHtml(e.message || e)}</div>`;
         }
     }
 
@@ -8472,7 +8490,7 @@ document.addEventListener('DOMContentLoaded', () => {
             let html = '';
 
             if (data.cloud_keys.detected_key) {
-                html += `<div class="text-green-400">✔ Detected Provider API Key (${data.cloud_keys.detected_provider || 'cloud'}) via Environment</div>`;
+                html += `<div class="text-green-400">✔ Detected Provider API Key (${escapeHtml(data.cloud_keys.detected_provider || 'cloud')}) via Environment</div>`;
             } else {
                 html += `<div class="text-slate-400">⚪ No Provider API keys found in environment.</div>`;
             }
@@ -8483,8 +8501,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const servers = data.local_servers || [];
             if (servers.length) {
                 for (const server of servers) {
+                    // Every one of these came off the wire from whatever answered the
+                    // probe: the label embeds a model name, and the list is the names
+                    // themselves. A server that returns a name with a tag in it does not
+                    // get to put markup in the HUD.
                     const models = server.models.length ? server.models.join(', ') : 'no models loaded';
-                    html += `<div class="text-green-400">✔ ${server.label} <span class="text-slate-400">(${server.endpoint})</span><br><span class="pl-6 text-cyan-300">${models}</span></div>`;
+                    html += `<div class="text-green-400">✔ ${escapeHtml(server.label)} <span class="text-slate-400">(${escapeHtml(server.endpoint)})</span><br><span class="pl-6 text-cyan-300">${escapeHtml(models)}</span></div>`;
                 }
                 html += `<div class="text-slate-400">Pick one from LOCAL SERVERS FOUND above to use it.</div>`;
             } else {
@@ -8503,7 +8525,7 @@ document.addEventListener('DOMContentLoaded', () => {
             populateLocalServers(servers);
             if (scannerResultsBox) scannerResultsBox.innerHTML = html;
         } catch (e) {
-            if (scannerResultsBox) scannerResultsBox.innerHTML = `<div class="text-red-400">Scan failed: ${e.message || e}</div>`;
+            if (scannerResultsBox) scannerResultsBox.innerHTML = `<div class="text-red-400">Scan failed: ${escapeHtml(e.message || e)}</div>`;
         }
     }
 
@@ -8910,7 +8932,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? `up to date with ${status.latest_tag}`
                     : `up to date (build ${status.built_commit_short})`;
                 if (updateStatusBox) {
-                    updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${status.version} -- ${against}</div>`;
+                    updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${escapeHtml(status.version)} -- ${escapeHtml(against)}</div>`;
                 }
                 if (versionBadge) {
                     versionBadge.classList.remove('border-yellow-500/50', 'text-yellow-400');
@@ -8933,7 +8955,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     // bundle nothing can check is not offered at all.
                     lines.push('<div class="text-[11px] text-yellow-400">It has no signature attached, so there is no way to tell it is the one the project built. Not offering it.</div>');
                 } else {
-                    lines.push(`<div class="text-[11px] text-slate-500">Downloading ${status.asset_name}${size} checks its signature and stops there. Installing it is your own last step.</div>`);
+                    lines.push(`<div class="text-[11px] text-slate-500">Downloading ${escapeHtml(status.asset_name)}${size} checks its signature and stops there. Installing it is your own last step.</div>`);
                     if (btnDownloadUpdate) btnDownloadUpdate.classList.remove('hidden');
                 }
                 if (updateStatusBox) updateStatusBox.innerHTML = lines.join('');
@@ -8946,7 +8968,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateHeaderProgress('Project update available', 0, false);
                 const latestShort = status.latest_commit ? status.latest_commit.slice(0, 7) : 'unknown';
                 if (updateStatusBox) {
-                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${status.built_commit_short}, latest is ${latestShort}</div>`;
+                    updateStatusBox.innerHTML = `<div class="text-yellow-400">⬆ Update available -- running ${escapeHtml(status.built_commit_short)}, latest is ${escapeHtml(latestShort)}</div>`;
                 }
                 if (versionBadge) {
                     versionBadge.classList.remove('border-green-500/50', 'text-green-400');
@@ -8959,7 +8981,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateHeaderAction('↻ Retry', 'check');
             updateHeaderProgress('Update check failed', 0, false);
             if (updateStatusBox) {
-                updateStatusBox.innerHTML = `<div class="text-red-400">Update check failed: ${e.message || e}</div>`;
+                updateStatusBox.innerHTML = `<div class="text-red-400">Update check failed: ${escapeHtml(e.message || e)}</div>`;
             }
             return null;
         } finally {
@@ -9116,7 +9138,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (btnDownloadUpdate) btnDownloadUpdate.disabled = true;
         if (btnCheckUpdate) btnCheckUpdate.disabled = true;
         const render = (text) => {
-            if (updateStatusBox) updateStatusBox.innerHTML = `<div class="text-cyan-300">${text}</div>`;
+            if (updateStatusBox) updateStatusBox.innerHTML = `<div class="text-cyan-300">${escapeHtml(text)}</div>`;
         };
         render('Starting the download...');
 
@@ -9135,7 +9157,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateHeaderProgress(`Verified download · ${result.tag}`, 100, false);
             updateHeaderAction('✔ Downloaded', 'check');
             if (updateStatusBox) {
-                updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${result.tag} downloaded, and its signature checks out.</div>`
+                updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${escapeHtml(result.tag)} downloaded, and its signature checks out.</div>`
                     + `<div class="text-[11px] text-slate-400 select-all">${result.path}</div>`
                     + '<div class="text-[11px] text-slate-500">Run it when you are ready -- AETHER1 does not install it for you.</div>';
             }
@@ -9149,7 +9171,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             updateHeaderProgress('Update download failed', 0, false);
             if (updateStatusBox) {
-                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ ${e.message || e}</div>`;
+                updateStatusBox.innerHTML = `<div class="text-red-400">⚠ ${escapeHtml(e.message || e)}</div>`;
             }
         } finally {
             if (unlisten) unlisten();

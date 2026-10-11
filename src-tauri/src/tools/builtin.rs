@@ -331,7 +331,7 @@ impl Tool for SearchWeb {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web for recent information using DuckDuckGo. Returns top results with title and URL so you can fetch and read them with fetch_url."
+        "Search the web for recent information using DuckDuckGo. Returns the top results with their titles and URLs. There is no page fetcher here, so report what the results say and give the operator the URL to open."
     }
 
     fn parameters(&self) -> Value {
