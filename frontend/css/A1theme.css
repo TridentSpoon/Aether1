@@ -3103,6 +3103,33 @@ select,
     border-top: 1px solid var(--border-neon);
 }
 .net-peer-pair .net-field-note { padding: 0; }
+.net-peer-pair .net-row-hint[data-tone="bad"] { color: var(--neon-amber); }
+
+/* Which machine this actually is. Set apart from the rest of the box and given the
+   fingerprint room to be read a group at a time, because reading it against another
+   screen is the one thing an operator is being asked to do here. */
+.net-peer-identity {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.net-peer-print {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    letter-spacing: 0.04em;
+    color: var(--neon-cyan);
+    word-break: break-word;
+}
+.net-peer-confirm {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+.net-peer-confirm input { accent-color: var(--neon-cyan); }
 .net-peer-models { flex: 1 0 100%; margin-top: 0.4rem; }
 .net-peer-models[data-tone="bad"] { color: var(--neon-amber); }
 

@@ -33,7 +33,7 @@ use crate::discovery;
 use crate::llm::{self, LlmEngine};
 use crate::model_scanner;
 use crate::project_root;
-use crate::serve_auth::{self, AttemptLimiter, ServeAuth, Setup};
+use crate::serve_auth::{self, AttemptLimiter, ServeAuth, Setup, TicketStore, TICKET_TTL};
 use crate::serve_tls;
 use crate::vault;
 
@@ -59,6 +59,14 @@ struct AppState {
 struct LanState {
     auth: Arc<ServeAuth>,
     limiter: Arc<AttemptLimiter>,
+    /// The single-use tickets a `/ws/*` handshake is opened with. Alongside the limiter
+    /// rather than inside `ServeAuth` because it is the only part of the credential that
+    /// never touches disk: it lives and dies with this process.
+    tickets: Arc<TicketStore>,
+    /// This machine's own certificate fingerprint, which is the salt every bound pairing
+    /// proof is made with. Carried on the state because `/api/pair` has to recompute the
+    /// proof it expects on each attempt, and the certificate is loaded once at startup.
+    fingerprint: Arc<String>,
 }
 
 /// The port both modes listen on. Named here because it is the one thing start.sh,
@@ -160,6 +168,11 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/agents/selection", post(set_agent_selection))
         .route("/api/agents/run", post(run_agents))
         .route("/api/code/level", post(code_level))
+        .route("/api/code/net", get(code_net))
+        .route("/api/code/net/allow", post(code_net_allow))
+        .route("/api/code/net/forget", post(code_net_forget))
+        .route("/api/code/net/decide", post(code_net_decide))
+        .route("/api/code/net/clear", post(code_net_clear))
         .route("/api/voice/test", post(test_speech))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
@@ -170,6 +183,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
         .route("/api/audio/devices", get(audio_devices))
+        .route("/api/desktop/theme", get(desktop_theme))
         .route("/api/setup/start-server", post(start_local_server))
         .route("/api/tools", get(get_tools))
         .route("/api/actions", get(get_actions))
@@ -237,22 +251,40 @@ pub async fn run(engine: LlmEngine, lan: bool) {
                  one. Run `aether1 pair` later to generate a new phrase and revoke this one.\n"
             );
         }
-        let lan_state = LanState {
-            auth: Arc::new(auth),
-            limiter: Arc::new(AttemptLimiter::new()),
-        };
-        let pair_router = Router::new()
-            .route("/api/pair", post(pair))
-            .with_state(lan_state.clone());
-        app = app
-            .route_layer(middleware::from_fn_with_state(lan_state, require_lan_token))
-            .merge(pair_router);
-
+        // Loaded before the pairing state is built, not after: a bound pairing proof is
+        // salted with this machine's fingerprint, so `/api/pair` cannot check one without
+        // the certificate already in hand.
         let certificate =
             serve_tls::load_or_create().expect("could not set up the --lan certificate");
         if matches!(certificate.origin, serve_tls::Origin::New) {
             println!("[AETHER1] --lan: made this machine a certificate to identify itself by.");
         }
+
+        let lan_state = LanState {
+            auth: Arc::new(auth),
+            limiter: Arc::new(AttemptLimiter::new()),
+            tickets: Arc::new(TicketStore::new()),
+            fingerprint: Arc::new(certificate.fingerprint.clone()),
+        };
+        // `/api/ws-ticket` is merged *before* the token layer and `/api/pair` after it, which
+        // is the whole difference between them: asking for a ticket requires a device token,
+        // and asking to be paired is how a device gets one.
+        let ticket_router = Router::new()
+            .route("/api/ws-ticket", post(ws_ticket))
+            .with_state(lan_state.clone());
+        let pair_router = Router::new()
+            // GET says which certificate this machine identifies itself by, POST pairs. The
+            // GET is deliberately open: it tells a caller nothing the TLS handshake has not
+            // already told them, and a device about to pair needs the fingerprint to bind
+            // its proof to -- taken from the handshake it actually made, with this as the
+            // thing an operator can read back and compare by eye.
+            .route("/api/pair", get(pairing_identity).post(pair))
+            .with_state(lan_state.clone());
+        app = app
+            .merge(ticket_router)
+            .route_layer(middleware::from_fn_with_state(lan_state, require_lan_token))
+            .merge(pair_router);
+
         println!(
             "\n[AETHER1] --lan certificate fingerprint (SHA-256):\n\n    {}\n\n\
              Your browser will warn that nobody vouches for this certificate, which is true: \
@@ -287,10 +319,11 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         // still be told what it means on the day they run it somewhere unfamiliar.
         println!(
             "[AETHER1] --lan: reachable from your network over TLS, but every request needs \
-             a token of its own -- a device gets one by POSTing the pairing phrase to \
-             /api/pair, and until then AETHER1 refuses to show your conversation or run \
-             anything. `aether1 devices` lists what is paired; `aether1 revoke <id>` cuts \
-             one off straight away."
+             a token of its own -- a device gets one by proving the pairing phrase or a \
+             one-time code at /api/pair, bound to the certificate above so that nothing \
+             answering in this machine's name can collect it, and until then AETHER1 \
+             refuses to show your conversation or run anything. `aether1 devices` lists \
+             what is paired; `aether1 revoke <id>` cuts one off straight away."
         );
     } else {
         println!("[AETHER1] reachable from this machine only. Use --lan to open it up.");
@@ -344,37 +377,65 @@ fn bearer_token(request: &Request) -> Option<String> {
 /// subprotocol was not selected.
 pub const WS_PROTOCOL: &str = "aether1";
 
-/// The prefix of the subprotocol that carries a device token.
+/// The prefix of the subprotocol that carries a single-use socket ticket.
+const WS_TICKET_PREFIX: &str = "aether1.ticket.";
+
+/// The prefix a device token used to arrive under. Kept only so a client built before
+/// tickets existed gets told what changed instead of a bare 401 -- nothing reads a token
+/// from a handshake any more.
 const WS_TOKEN_PREFIX: &str = "aether1.token.";
 
-/// A WebSocket handshake can't carry a custom `Authorization` header from a browser, so the
-/// `/ws/*` routes read the token from `Sec-WebSocket-Protocol` instead -- the one handshake
-/// header a browser does let a page set, through the WebSocket constructor's second
-/// argument.
-///
-/// It used to be `?token=...`, which is the better-known workaround and the wrong one: a URL
-/// is the part of a request that gets written down. Access logs record the request line,
-/// reverse proxies and their error pages record it too, and a device token here is not a
-/// short-lived ticket but the credential for every other request that device makes. A
-/// header is not immune to being logged, but it is not logged *by default* by the things in
-/// front of this server, and it is the same place the credential already travels for every
-/// route that is not a socket.
-///
-/// The server never echoes the token back. A client offers two subprotocols --
-/// `aether1.token.<token>` and `aether1` -- and the handlers select `aether1`, so the
-/// credential appears in one direction only.
-fn token_from_subprotocol(request: &Request) -> Option<String> {
-    let offered = request
+/// Whether this request is a socket handshake. `/ws/*` is the only family of routes that
+/// takes a ticket, and the only one that cannot take an `Authorization` header.
+fn is_socket_route(request: &Request) -> bool {
+    request.uri().path().starts_with("/ws/")
+}
+
+fn offered_subprotocols(request: &Request) -> Option<&str> {
+    request
         .headers()
         .get(header::SEC_WEBSOCKET_PROTOCOL)?
         .to_str()
-        .ok()?;
+        .ok()
+}
+
+/// A WebSocket handshake can't carry a custom `Authorization` header from a browser, so the
+/// `/ws/*` routes read their credential from `Sec-WebSocket-Protocol` instead -- the one
+/// handshake header a browser does let a page set, through the WebSocket constructor's
+/// second argument.
+///
+/// What rides there is a **ticket**, not the device token. The token went first: `?token=`,
+/// then this header. A URL is the part of a request that gets written down -- access logs
+/// record the request line, so do reverse proxies and their error pages -- and a header is
+/// not immune either, because logging request headers is a checkbox on everything that
+/// proxies. The thing that actually fixed it is making the credential in the handshake
+/// worthless: a ticket buys one socket, once, within a minute of being issued. A handshake
+/// recovered from a log a minute later opens nothing; the same handshake carrying a device
+/// token opened everything until someone ran `aether1 revoke`.
+///
+/// The server never echoes the ticket back. A client offers two subprotocols --
+/// `aether1.ticket.<ticket>` and `aether1` -- and the handlers select `aether1`, so the
+/// credential appears in one direction only.
+fn ticket_from_subprotocol(request: &Request) -> Option<String> {
+    let offered = offered_subprotocols(request)?;
     offered
         .split(',')
         .map(str::trim)
-        .find_map(|protocol| protocol.strip_prefix(WS_TOKEN_PREFIX))
-        .filter(|token| !token.is_empty())
+        .find_map(|protocol| protocol.strip_prefix(WS_TICKET_PREFIX))
+        .filter(|ticket| !ticket.is_empty())
         .map(str::to_string)
+}
+
+/// Whether the handshake offered a device token where a ticket now belongs. Not a credential
+/// path -- only the difference between "pair this device" and "your client is out of date",
+/// which are two different things for the operator to do.
+fn offered_device_token(request: &Request) -> bool {
+    offered_subprotocols(request).is_some_and(|offered| {
+        offered
+            .split(',')
+            .map(str::trim)
+            .any(|protocol| protocol.starts_with(WS_TOKEN_PREFIX))
+    })
 }
 
 fn unauthorized() -> Response {
@@ -383,8 +444,42 @@ fn unauthorized() -> Response {
         Json(serde_json::json!({
             "error": "pairing required",
             "hint": "POST your pairing phrase to /api/pair to get a token, then send it back \
-                      as `Authorization: Bearer <token>` (or, for a WebSocket, as the \
-                      `aether1.token.<token>` subprotocol)"
+                      as `Authorization: Bearer <token>`. For a WebSocket, POST to \
+                      /api/ws-ticket with that token and offer the ticket it returns as the \
+                      `aether1.ticket.<ticket>` subprotocol"
+        })),
+    )
+        .into_response()
+}
+
+/// What a handshake gets when its ticket is unknown, already spent, or older than a minute.
+/// Distinct from `unauthorized` because the device is almost certainly still paired and the
+/// thing to do is ask for another ticket, not type the phrase again.
+fn stale_ticket() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error": "socket ticket expired or already used",
+            "hint": format!(
+                "a ticket opens one socket and is good for {} seconds; POST /api/ws-ticket \
+                 for a fresh one",
+                TICKET_TTL.as_secs()
+            ),
+        })),
+    )
+        .into_response()
+}
+
+/// What a handshake gets when it offered a device token the way clients did before tickets.
+/// The token may well be valid; it is simply no longer a credential this route accepts.
+fn token_not_accepted_on_socket() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error": "a device token is not accepted in a socket handshake",
+            "hint": "POST /api/ws-ticket with `Authorization: Bearer <token>` and offer the \
+                     ticket it returns as the `aether1.ticket.<ticket>` subprotocol. Reload \
+                     the page to pick up a client that does this.",
         })),
     )
         .into_response()
@@ -416,7 +511,30 @@ async fn require_lan_token(
     if let Some(wait) = lan.limiter.retry_after(ip) {
         return too_many_attempts(wait);
     }
-    match bearer_token(&request).or_else(|| token_from_subprotocol(&request)) {
+    // A socket is the one route family that cannot carry an `Authorization` header, and so
+    // the one that takes a ticket instead. It takes *only* a ticket: accepting a device token
+    // here as well would leave the weaker credential in the handshake and make the ticket
+    // decoration rather than a boundary.
+    if is_socket_route(&request) {
+        return match ticket_from_subprotocol(&request) {
+            Some(ticket) if lan.tickets.spend(&ticket) => {
+                lan.limiter.record_success(ip);
+                next.run(request).await
+            }
+            // A ticket that does not match is either a guess at 256 bits of randomness or a
+            // replay of one already spent. Both are worth counting.
+            Some(_) => {
+                lan.limiter.record_failure(ip);
+                stale_ticket()
+            }
+            // A device token offered here is a client that predates tickets, not a guess, so
+            // it costs no attempts -- it would otherwise lock out a stale tab on reload.
+            None if offered_device_token(&request) => token_not_accepted_on_socket(),
+            None => unauthorized(),
+        };
+    }
+
+    match bearer_token(&request) {
         Some(token) if lan.auth.accepts(&token) => {
             lan.limiter.record_success(ip);
             next.run(request).await
@@ -442,11 +560,26 @@ async fn require_lan_token(
 
 #[derive(Deserialize)]
 struct PairRequest {
-    /// The twelve-word phrase, or the eight-character code the pairing sequence put on
-    /// screen. One field for both because a device is answering one question -- "what did
-    /// the other machine tell you" -- and which kind of secret it is, is for this end to
-    /// work out, not for the person typing.
+    /// A secret as typed, which is now only ever the eight-character code the pairing
+    /// sequence put on screen. It stays one field rather than becoming two because a
+    /// device is still answering one question -- "what did the other machine tell you" --
+    /// and which kind of secret it is, is for this end to work out, not for the person
+    /// typing.
+    ///
+    /// The twelve-word phrase used to be accepted here too. It is not any more: see `pair`
+    /// for why, and for what is sent in its place.
+    #[serde(default)]
     phrase: String,
+    /// The pairing phrase bound to this machine's certificate --
+    /// `serve_auth::bind_to_certificate(phrase hash, fingerprint)`. What AETHER1's own
+    /// pairing sends in place of the phrase, so that the words themselves never leave the
+    /// machine they were typed on and a proof collected by an impostor is a proof for the
+    /// impostor's certificate.
+    #[serde(default)]
+    phrase_proof: Option<String>,
+    /// The one-time code bound the same way.
+    #[serde(default)]
+    code_proof: Option<String>,
     /// What to call this device in the list. Optional: a browser will not send one, so the
     /// User-Agent stands in, and an operator can always tell one entry from another by when
     /// it paired even if both are called the same thing.
@@ -478,10 +611,52 @@ fn label_from_user_agent(request_headers: &header::HeaderMap, peer: SocketAddr) 
     }
 }
 
-/// The one route under `--lan` that needs no token -- it's what produces one. `phrase` is
-/// checked and discarded here; only the derived token it resolves to ever goes back over the
-/// wire, matching serve_auth's rule that the phrase itself never leaves the two ends that
-/// already know it (the person who read it off this machine, and whoever they typed it into).
+/// What certificate this machine identifies itself by, so a device can bind its pairing
+/// proof to the machine it is actually talking to and an operator can check the two agree.
+///
+/// Not a secret: anyone who completes a TLS handshake here has already been handed the
+/// whole certificate, and this is a digest of it.
+async fn pairing_identity(State(lan): State<LanState>) -> Response {
+    Json(serde_json::json!({ "fingerprint": lan.fingerprint.as_str() })).into_response()
+}
+
+/// Trades a device token for a ticket that opens one socket.
+///
+/// Behind the same token layer as every other API route, which is the point: the standing
+/// credential is presented where it can travel in an `Authorization` header, and only the
+/// short-lived one goes into a handshake. A device that can reach this route can already
+/// read everything a socket carries, so issuing a ticket grants nothing new -- it narrows
+/// what the handshake is worth to anyone who reads it later.
+async fn ws_ticket(State(lan): State<LanState>) -> Response {
+    match lan.tickets.mint() {
+        Ok(ticket) => (
+            // A ticket is a credential with a one-minute life; a cache holding one is a
+            // cache handing out a credential, and a revalidation is cheaper than a socket.
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({
+                "ticket": ticket,
+                "expires_in": TICKET_TTL.as_secs(),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e,
+                "hint": "the operating system would not give this machine randomness, so no \
+                         socket can be opened until it will",
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// The one route under `--lan` that needs no token -- it's what produces one. Nothing a
+/// device sends here is a credential in the clear: what it proves is knowledge of one,
+/// bound to this machine's certificate, and only the device token it earns ever goes back
+/// over the wire. That keeps serve_auth's rule that the phrase itself never leaves the two
+/// ends that already know it (the person who read it off this machine, and whoever they
+/// typed it into) -- and makes it true of the network in between as well.
 async fn pair(
     State(lan): State<LanState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -492,26 +667,66 @@ async fn pair(
     if let Some(wait) = lan.limiter.retry_after(ip) {
         return too_many_attempts(wait);
     }
-    // The one-time code is tried first, and a code that works ends the matter. It is the
-    // shorter of the two and cannot be mistaken for a mnemonic, so there is no case where
-    // one secret has to be told apart from the other.
-    let by_code = lan.auth.code_matches(&req.phrase);
-    if !by_code {
-        // A phrase that isn't valid BIP-39 counts as a failure too: it is still a guess, and
-        // letting malformed ones through free would make the budget trivial to avoid.
-        let Ok(token) = serve_auth::derive_token_from_phrase(&req.phrase) else {
-            lan.limiter.record_failure(ip);
+    // Bound proofs first, because that is what AETHER1's own pairing sends and the only
+    // form the standing phrase is accepted in at all. The code is tried before the phrase
+    // for the same reason it always was: it is the shorter of the two and cannot be
+    // mistaken for a mnemonic.
+    let by_code_proof = req
+        .code_proof
+        .as_deref()
+        .is_some_and(|proof| lan.auth.code_proof_matches(proof, &lan.fingerprint));
+    let by_phrase_proof = !by_code_proof
+        && req
+            .phrase_proof
+            .as_deref()
+            .is_some_and(|proof| lan.auth.phrase_proof_matches(proof, &lan.fingerprint));
+    let offered_a_proof = req.phrase_proof.is_some() || req.code_proof.is_some();
+
+    // A raw secret in the body can only ever be a one-time code now. The standing phrase
+    // used to be accepted here too, and that is exactly what made an impostor on the
+    // network worth being: machines are found over DNS-SD, which anyone can answer, so a
+    // convincing fake in the scan list collected the phrase in the clear and then paired
+    // with the real machine at its leisure. A one-time code is a far smaller prize -- single
+    // use, ten minutes, and only alive while the operator is deliberately pairing -- so it
+    // stays typeable in a browser, which has no way to see a certificate fingerprint.
+    let by_raw_code = !by_code_proof
+        && !by_phrase_proof
+        && !req.phrase.trim().is_empty()
+        && lan.auth.code_matches(&req.phrase);
+
+    if !by_code_proof && !by_phrase_proof && !by_raw_code {
+        lan.limiter.record_failure(ip);
+        // A raw phrase that is otherwise correct gets told what to do about it, rather than
+        // being called wrong: it is the one refusal here an honest operator will hit.
+        let correct_phrase_unbound = !offered_a_proof
+            && serve_auth::derive_token_from_phrase(&req.phrase)
+                .is_ok_and(|token| lan.auth.phrase_matches(&token));
+        if correct_phrase_unbound {
             return (
-                StatusCode::BAD_REQUEST,
-                "that is not the pairing code or the pairing phrase".to_string(),
+                StatusCode::UNAUTHORIZED,
+                "that is the right phrase, but a phrase typed into a browser cannot prove \
+                 which machine it reached. Pair from the AETHER1 app, which checks this \
+                 machine's certificate, or ask this machine for a one-time code and type \
+                 that instead."
+                    .to_string(),
             )
                 .into_response();
-        };
-        if !lan.auth.phrase_matches(&token) {
-            lan.limiter.record_failure(ip);
-            return (StatusCode::UNAUTHORIZED, "wrong pairing phrase".to_string()).into_response();
         }
+        if offered_a_proof {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "that machine did not accept the code or phrase for this certificate".to_string(),
+            )
+                .into_response();
+        }
+        return (
+            StatusCode::BAD_REQUEST,
+            "that is not a live pairing code for this machine".to_string(),
+        )
+            .into_response();
     }
+
+    let by_code = by_code_proof || by_raw_code;
 
     lan.limiter.record_success(ip);
     // Spent on the way in, so the code lets exactly one device through. The phrase is not
@@ -1148,6 +1363,84 @@ async fn code_level(
     Ok(Json(report))
 }
 
+/// Browser-transport twin of code_net_status_rust -- the domain policy, plus whatever is
+/// waiting on an answer. Polled by both the Settings page and the HUD, and polling it is
+/// what tells the proxy somebody is there to be asked.
+async fn code_net(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, String)> {
+    let status = tokio::task::spawn_blocking(move || commands::code_net_status(&state.engine))
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(status))
+}
+
+/// Reads the one `domain` field these three share.
+fn domain_of(body: &Value) -> String {
+    body.get("domain")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+async fn code_net_allow(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let domain = domain_of(&body);
+    let status =
+        tokio::task::spawn_blocking(move || commands::code_net_allow(&state.engine, &domain))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(status))
+}
+
+async fn code_net_forget(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let domain = domain_of(&body);
+    let status =
+        tokio::task::spawn_blocking(move || commands::code_net_forget(&state.engine, &domain))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(status))
+}
+
+/// Browser-transport twin of code_net_decide_rust: the HUD card's answer.
+async fn code_net_decide(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let decision = body
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let report = tokio::task::spawn_blocking(move || {
+        commands::code_net_decide(&state.engine, &id, &decision)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(report))
+}
+
+async fn code_net_clear(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let status =
+        tokio::task::spawn_blocking(move || commands::code_net_clear_denied(&state.engine))
+            .await
+            .map_err(internal_error)?;
+    Ok(Json(status))
+}
+
 async fn voice_advice(State(state): State<AppState>) -> Json<crate::voice_setup::VoiceAdvice> {
     Json(
         tokio::task::spawn_blocking(move || commands::voice_advice(&state.engine))
@@ -1257,6 +1550,20 @@ async fn audio_devices() -> Json<serde_json::Value> {
         tokio::task::spawn_blocking(commands::audio_devices)
             .await
             .expect("audio_devices panicked"),
+    )
+}
+
+// The desktop's own light/dark setting and accent colour. Exposed over HTTP as well as IPC
+// because the browser fallback needs it more than the native app does, not less: a page
+// served to a browser has `prefers-color-scheme` and no way at all to ask for the accent.
+//
+// Spawned off the request thread because every probe behind it runs a short-lived process
+// (powershell, gdbus, defaults) that is free to be slow.
+async fn desktop_theme() -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(commands::desktop_theme)
+            .await
+            .expect("desktop_theme panicked"),
     )
 }
 
@@ -1743,52 +2050,96 @@ mod ws_credential_tests {
 
     /// The point of the change: the credential is read from the handshake header and from
     /// nowhere else. A query string is the part of a request that gets written into logs, so
-    /// a token offered there is not a token at all -- and this test is the only thing that
+    /// a ticket offered there is not a ticket at all -- and this test is the only thing that
     /// stops it quietly coming back as a convenience.
     #[test]
-    fn a_socket_token_is_read_from_the_handshake_and_not_from_the_url() {
+    fn a_socket_ticket_is_read_from_the_handshake_and_not_from_the_url() {
         let secret = "a".repeat(64);
 
         assert_eq!(
-            token_from_subprotocol(&handshake(Some(&format!(
-                "{WS_TOKEN_PREFIX}{secret}, {WS_PROTOCOL}"
+            ticket_from_subprotocol(&handshake(Some(&format!(
+                "{WS_TICKET_PREFIX}{secret}, {WS_PROTOCOL}"
             )))),
             Some(secret.clone())
         );
         // Order is the client's to choose, and whitespace after a comma is normal.
         assert_eq!(
-            token_from_subprotocol(&handshake(Some(&format!(
-                "{WS_PROTOCOL},{WS_TOKEN_PREFIX}{secret}"
+            ticket_from_subprotocol(&handshake(Some(&format!(
+                "{WS_PROTOCOL},{WS_TICKET_PREFIX}{secret}"
             )))),
             Some(secret.clone())
         );
 
-        // A loopback tab offers the plain subprotocol and has no token to give.
-        assert_eq!(token_from_subprotocol(&handshake(Some(WS_PROTOCOL))), None);
-        assert_eq!(token_from_subprotocol(&handshake(None)), None);
-        // The prefix with nothing after it is not an empty token, it is no token: an empty
-        // string reaching `accepts` is a comparison nobody meant to make.
+        // A loopback tab offers the plain subprotocol and has no ticket to give.
+        assert_eq!(ticket_from_subprotocol(&handshake(Some(WS_PROTOCOL))), None);
+        assert_eq!(ticket_from_subprotocol(&handshake(None)), None);
+        // The prefix with nothing after it is not an empty ticket, it is no ticket: an empty
+        // string reaching `spend` is a comparison nobody meant to make.
         assert_eq!(
-            token_from_subprotocol(&handshake(Some(WS_TOKEN_PREFIX))),
+            ticket_from_subprotocol(&handshake(Some(WS_TICKET_PREFIX))),
             None
         );
 
         // And the URL is not consulted, however plausible the parameter looks.
         let in_the_url = Request::builder()
-            .uri(format!("/ws/telemetry?token={secret}"))
+            .uri(format!("/ws/telemetry?ticket={secret}"))
             .body(Body::empty())
             .expect("a request to build");
-        assert_eq!(token_from_subprotocol(&in_the_url), None);
+        assert_eq!(ticket_from_subprotocol(&in_the_url), None);
         assert_eq!(bearer_token(&in_the_url), None);
     }
 
-    /// The server selects the plain subprotocol and never the one carrying the token, so the
+    /// A device token in a handshake is what this change removed. Nothing reads one from
+    /// there any more -- the prefix survives only so the refusal can say what to do, which
+    /// is a different thing from accepting it.
+    #[test]
+    fn a_device_token_in_a_handshake_is_not_a_credential() {
+        let secret = "a".repeat(64);
+        let offered_the_old_way =
+            handshake(Some(&format!("{WS_TOKEN_PREFIX}{secret}, {WS_PROTOCOL}")));
+
+        assert_eq!(ticket_from_subprotocol(&offered_the_old_way), None);
+        // Recognised well enough to be told apart from a browser that offered nothing, so
+        // the operator is told to reload rather than to type the phrase again.
+        assert!(offered_device_token(&offered_the_old_way));
+        assert!(!offered_device_token(&handshake(Some(WS_PROTOCOL))));
+        assert!(!offered_device_token(&handshake(None)));
+        // A ticket must not read as a token, even though one prefix contains the other's
+        // stem: `aether1.ticket.` and `aether1.token.` differ from the eighth character on.
+        assert!(!offered_device_token(&handshake(Some(&format!(
+            "{WS_TICKET_PREFIX}{secret}"
+        )))));
+    }
+
+    /// Only `/ws/*` takes a ticket. If this ever answered true for an API route, a ticket
+    /// would become a credential for reading everything rather than for opening one socket.
+    #[test]
+    fn only_the_socket_routes_are_on_the_ticket_path() {
+        let path = |uri: &str| {
+            is_socket_route(
+                &Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("a request to build"),
+            )
+        };
+        assert!(path("/ws/telemetry"));
+        assert!(path("/ws/chat"));
+        assert!(!path("/api/ws-ticket"));
+        assert!(!path("/api/settings"));
+        assert!(!path("/api/pair"));
+        // Not a prefix match on the whole path: a route that merely begins with those two
+        // letters is an API route.
+        assert!(!path("/wsx/chat"));
+    }
+
+    /// The server selects the plain subprotocol and never the one carrying the ticket, so the
     /// credential travels in one direction. A browser closes a socket whose requested
     /// subprotocol was not selected, which is why the plain one has to exist at all.
     #[test]
-    fn the_server_never_echoes_the_token_back() {
-        assert!(!WS_PROTOCOL.starts_with(WS_TOKEN_PREFIX));
-        assert!(WS_TOKEN_PREFIX.starts_with(WS_PROTOCOL));
+    fn the_server_never_echoes_the_ticket_back() {
+        assert!(!WS_PROTOCOL.starts_with(WS_TICKET_PREFIX));
+        assert!(WS_TICKET_PREFIX.starts_with(WS_PROTOCOL));
         // The frontend's copy of these two names has to match, since a mismatch would fail
         // every socket from a paired browser with no error anyone could read.
         let lan_auth = std::fs::read_to_string(
@@ -1800,8 +2151,20 @@ mod ws_credential_tests {
             "lan-auth.js does not agree with WS_PROTOCOL"
         );
         assert!(
-            lan_auth.contains(&format!("const WS_TOKEN_PREFIX = '{WS_TOKEN_PREFIX}';")),
-            "lan-auth.js does not agree with WS_TOKEN_PREFIX"
+            lan_auth.contains(&format!("const WS_TICKET_PREFIX = '{WS_TICKET_PREFIX}';")),
+            "lan-auth.js does not agree with WS_TICKET_PREFIX"
+        );
+        // The browser has to ask for a ticket before it can offer one, and it has to ask on
+        // the route that issues them. A client still sending the device token would be
+        // refused every socket, which is exactly the failure the two asserts above exist to
+        // catch for the names.
+        assert!(
+            lan_auth.contains("/api/ws-ticket"),
+            "lan-auth.js does not fetch a ticket"
+        );
+        assert!(
+            !lan_auth.contains("WS_TOKEN_PREFIX"),
+            "lan-auth.js still carries a device token into the handshake"
         );
     }
 }

@@ -23,6 +23,14 @@
  * 3. **The desktop shell never sees any of this.** It talks to loopback, which needs no
  *    token at all, so `IS_TAURI` short-circuits every path here rather than the app
  *    carrying a credential it has no use for.
+ *
+ * What changed since: a one-time code is all this prompt can pair with now. The standing
+ * phrase is only accepted bound to the serving machine's certificate (see
+ * `serve_auth::bind_to_certificate`), and a browser has no way to see which certificate it
+ * reached -- which is exactly the gap, since a machine found over DNS-SD can be anything
+ * that answered. The app's own pairing binds its proof and is where a phrase belongs; a
+ * code is single-use and ten minutes long, so it stays typeable here. A correct phrase
+ * typed in anyway is refused in words that say what to do instead, rather than as "wrong".
  */
 
 (function () {
@@ -36,11 +44,11 @@
     // this from AETHER1's other stored settings.
     const TOKEN_KEY = 'aether1-lan-token';
 
-    /* The two subprotocol names, matching WS_PROTOCOL and WS_TOKEN_PREFIX in
+    /* The two subprotocol names, matching WS_PROTOCOL and WS_TICKET_PREFIX in
      * src-tauri/src/server.rs. WS_PROTOCOL is the one the server selects; the prefixed one is
-     * how the token gets there. */
+     * how the ticket gets there. */
     const WS_PROTOCOL = 'aether1';
-    const WS_TOKEN_PREFIX = 'aether1.token.';
+    const WS_TICKET_PREFIX = 'aether1.ticket.';
 
     /* A browser with storage blocked (private windows, some embedded webviews) must still be
      * able to pair -- it just pairs again next reload. Every access is guarded rather than
@@ -88,17 +96,54 @@
     }
 
     /* A WebSocket handshake from a browser cannot carry a custom header -- except this one.
-     * The constructor's second argument becomes `Sec-WebSocket-Protocol`, so the token rides
-     * there rather than in the URL, where access logs and proxy logs would write it down.
+     * The constructor's second argument becomes `Sec-WebSocket-Protocol`, so the credential
+     * rides there rather than in the URL, where access logs and proxy logs would write it
+     * down.
      *
-     * Two are offered: the one carrying the token, and the plain one the server selects and
-     * echoes. The plain one has to be in the list, because a browser closes a socket whose
-     * requested subprotocol was not selected, and the server never selects the one with the
-     * credential in it. */
-    function wsProtocols() {
+     * What rides there is a *ticket*, fetched here, not the device token. A header gets
+     * logged too wherever someone has configured that, so the fix is not a better hiding
+     * place for the standing credential -- it is making the credential in the handshake
+     * worthless a minute later. The token stays where it can travel in `Authorization`: on
+     * the fetch below.
+     *
+     * Two subprotocols are offered: the one carrying the ticket, and the plain one the
+     * server selects and echoes. The plain one has to be in the list, because a browser
+     * closes a socket whose requested subprotocol was not selected, and the server never
+     * selects the one with the credential in it.
+     *
+     * Async, which every caller has to honour -- a socket opened with the Promise instead of
+     * the array fails in a way that takes an afternoon to read. There is no synchronous way
+     * to do this: a ticket has to be asked for, and asking is a round trip.
+     *
+     * Falls back to the plain subprotocol alone whenever there is no ticket to be had. On
+     * loopback and in the desktop shell that is the right answer and always was, because
+     * neither is behind the token layer. On a LAN origin it means the handshake is refused,
+     * which is the same refusal the page is already showing a prompt about. */
+    async function wsProtocols() {
         if (IS_TAURI) return [WS_PROTOCOL];
         const token = readToken();
-        return token ? [`${WS_TOKEN_PREFIX}${token}`, WS_PROTOCOL] : [WS_PROTOCOL];
+        /* No token means not paired, which means there is nothing to buy a ticket with.
+         * It also covers loopback in a browser, where `/api/ws-ticket` is not even
+         * mounted -- the route only exists under `--lan`. */
+        if (!token) return [WS_PROTOCOL];
+        try {
+            const response = await fetch('/api/ws-ticket', authorize({ method: 'POST' }));
+            if (isUnauthorized(response)) {
+                /* The token has been revoked or the phrase rotated under us. Same handling as
+                 * any other refused request: drop it and ask for the phrase, rather than
+                 * opening a socket that will be refused for a reason the page cannot see. */
+                onUnauthorized();
+                return [WS_PROTOCOL];
+            }
+            if (!response.ok) return [WS_PROTOCOL];
+            const data = await response.json();
+            const ticket = data && data.ticket;
+            return ticket ? [`${WS_TICKET_PREFIX}${ticket}`, WS_PROTOCOL] : [WS_PROTOCOL];
+        } catch (e) {
+            /* A server that cannot be reached is not a pairing problem; the socket about to
+             * be opened will fail too, and its own retry is the right place to handle it. */
+            return [WS_PROTOCOL];
+        }
     }
 
     /* Whether a response is the server saying "pair first" rather than any other failure.
@@ -153,15 +198,17 @@
                            text-transform:uppercase;color:#7dd3fc">Pair this device</h1>
                 <p style="margin:0 0 16px;font-size:0.85rem;line-height:1.5;color:#94a3b8">
                     Type the code the other machine is showing you &mdash; Settings, Network
-                    &amp; Remote, Pair a device &mdash; and this one is in. The twelve-word
-                    pairing phrase works here too, if that is what you have.
+                    &amp; Remote, Pair a device &mdash; and this one is in. A browser cannot
+                    see which certificate it reached, so the standing twelve-word phrase is
+                    not accepted here any more: pair from the AETHER1 app for that, or ask
+                    that machine for a code.
                 </p>
                 <label for="lan-pair-phrase" style="display:block;margin-bottom:6px;
                        font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;
-                       color:#64748b">Pairing code or phrase</label>
+                       color:#64748b">Pairing code</label>
                 <textarea id="lan-pair-phrase" rows="2" autocomplete="off"
                     spellcheck="false" autocapitalize="characters"
-                    placeholder="the code, or twelve words"
+                    placeholder="the code the other machine is showing"
                     style="width:100%;box-sizing:border-box;padding:10px;border-radius:8px;
                            border:1px solid rgba(148,163,184,0.35);background:rgba(2,6,12,0.8);
                            color:#e2e8f0;font-size:0.9rem;resize:vertical"></textarea>

@@ -189,6 +189,7 @@ fn summarise(first_line: &str) -> String {
     out
 }
 
+#[derive(Clone)]
 pub struct MemoryDb {
     db_path: PathBuf,
 }

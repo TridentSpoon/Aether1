@@ -150,6 +150,11 @@
                 </div>
 
                 <div id="theme-menu" class="hud-slideout hud-slideout-narrow hidden" role="menu" aria-labelledby="btn-theme-menu">
+                    <!-- First, because it is what a fresh install is already doing and the one
+                         most people want: light or dark and the accent colour, all of it taken
+                         from the desktop's own settings. The three below it are a choice to
+                         stop following. -->
+                    <button class="theme-mode-btn hud-slideout-action" data-theme-mode="system" role="menuitem">🖥️ Desktop theme</button>
                     <button class="theme-mode-btn hud-slideout-action" data-theme-mode="solar" role="menuitem">☀️ Daylight</button>
                     <button class="theme-mode-btn hud-slideout-action" data-theme-mode="eclipse" role="menuitem">🌙 Midnight</button>
                     <button class="theme-mode-btn hud-slideout-action" data-theme-mode="cyberpunk" role="menuitem">⚡ Cyberpunk</button>
@@ -1227,11 +1232,34 @@
                             <div class="space-y-1.5">
                                 <label class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#127912; MODE</label>
                                 <div class="flex flex-col gap-1">
+                                    <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="system">&#128421;&#65039; Desktop theme</button>
                                     <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="solar">&#9728;&#65039; Daylight</button>
                                     <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="eclipse">&#127769; Midnight</button>
                                     <button class="theme-mode-btn cyber-btn text-[10px] leading-tight py-1.5 px-1 justify-center" data-theme-mode="cyberpunk">&#9889; Cyberpunk</button>
                                 </div>
                                 <p id="theme-mode-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
+                                <!-- Only filled while the desktop is being followed: which of
+                                     the three it is asking for, and where the accent came from.
+                                     When a probe could not answer -- an older Windows with no
+                                     accent set, a Linux desktop with no appearance portal, a
+                                     platform this is not implemented on -- it says so here
+                                     rather than appearing to do nothing. -->
+                                <p id="theme-desktop-note" class="text-[10px] font-mono text-slate-400 leading-snug"></p>
+
+                                <!-- Following the desktop is two things, and this is the second
+                                     of them on its own: the shell keeps matching light and dark
+                                     either way, and this decides whether the accent is the
+                                     desktop's or yours. On unless turned off, so the default is
+                                     the whole of the desktop's theme. Only shown while the
+                                     desktop is being followed, because with a mode picked by
+                                     hand there is no desktop accent in play to keep or drop.
+                                     Applies on the spot, like every other control on this pane,
+                                     rather than waiting for Save Changes. -->
+                                <label id="theme-desktop-accent-row" class="a1-switch hidden">
+                                    <input id="theme-desktop-accent" type="checkbox" class="a1-switch-input">
+                                    <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                                    <span class="a1-switch-text">Use my desktop's accent colour</span>
+                                </label>
                             </div>
 
                             <!-- RIGHT COLUMNS: COLOUR OPTIONS -->
@@ -1938,10 +1966,14 @@
 
                     <div class="hub-detail">
                         <div class="hub-detail-name">🎚 Voice tuning</div>
-                        <div class="hub-detail-sub">Choose an engine in “How it speaks”, adjust playback speed and audition the current voice.</div>
+                        <div class="hub-detail-sub">Choose an engine in “How it speaks”, adjust speed and pitch, then audition the current voice.</div>
                         <label class="block space-y-1 text-xs font-mono text-cyan-200">Playback speed <span id="voice-speed-value">1.0×</span>
                             <input id="setting-voice-speed" type="range" min="0.75" max="1.25" step="0.05" value="1" class="w-full">
                         </label>
+                        <label class="block space-y-1 text-xs font-mono text-cyan-200 mt-2">Pitch <span id="voice-pitch-value">0 st</span>
+                            <input id="setting-voice-pitch" type="range" min="-4" max="4" step="1" value="0" class="w-full">
+                        </label>
+                        <p class="text-[10px] font-mono text-slate-500">Pitch shifting can also affect playback speed on some audio engines.</p>
                     <div class="hub-action">
                             <span class="hub-action-size">Playback speed is applied by the audio player. Save Changes keeps your choice.</span>
                             <button type="button" id="btn-voice-audition" class="cyber-btn text-[10px] py-1 px-2">▶ Test current voice</button>
@@ -2192,26 +2224,43 @@
 
                         <div class="flex items-center gap-2 mb-3">
                             <button id="btn-graft-detect" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🔍 Detect Projects</button>
-                            <button id="btn-graft-build" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer" disabled>🔨 Build Graph</button>
+                            <button id="btn-graft-build-all" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🔨 Build All Missing</button>
                         </div>
 
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Graft builds a graph of your codebase to help understand its structure. The graph
-                            is automatically kept in sync with your code &mdash; it rebuilds periodically or
-                            when changes are detected. Once built, relevant code nodes are injected into the
-                            AI's context when answering code questions. This is working context from the selected
-                            project; it does not write to the Memory vault or become a personal memory note.
+                            Graft builds a graph of your codebase to help understand its structure. Install it
+                            with <span class="text-cyan-300">npm install -g @nanonets/graft</span>, then build a
+                            graph for each project you want it to know about. Every ticked project is asked when
+                            you ask a code question, and the nodes that match best across all of them are
+                            injected into the AI's context, each labelled with its project and the file and line
+                            to read. This is working context from your repositories; it does not write to the
+                            Memory vault or become a personal memory note.
                         </p>
 
                         <div class="mt-3">
-                            <label for="setting-graft-autosync" class="text-xs font-mono text-cyan-300 block mb-1">AUTO-SYNC</label>
+                            <label for="setting-graft-track-all" class="text-xs font-mono text-cyan-300 block mb-1">TRACK EVERY PROJECT</label>
                             <div class="flex items-center gap-2">
-                                <input id="setting-graft-autosync" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                                <label for="setting-graft-autosync" class="text-xs font-mono text-slate-300">Auto-rebuild every hour or when code changes</label>
+                                <input id="setting-graft-track-all" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                                <label for="setting-graft-track-all" class="text-xs font-mono text-slate-300">Ask every repository, including ones added later</label>
                             </div>
                             <p class="text-[10px] font-mono text-slate-400 leading-snug mt-1">
-                                Graft automatically detects code changes and rebuilds the graph. Disable this to
-                                only rebuild manually via the "Build Graph" button.
+                                On, every repository found in your project folders is asked, and a new one is
+                                picked up as soon as it has a graph &mdash; nothing to tick when you start
+                                something. Untick a single project in the list above and this switches off,
+                                leaving the ones still ticked.
+                            </p>
+                        </div>
+
+                        <div class="mt-3">
+                            <label for="setting-graft-autorefresh" class="text-xs font-mono text-cyan-300 block mb-1">AUTO-SYNC</label>
+                            <div class="flex items-center gap-2">
+                                <input id="setting-graft-autorefresh" type="checkbox" checked class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
+                                <label for="setting-graft-autorefresh" class="text-xs font-mono text-slate-300">Re-index changed files before answering</label>
+                            </div>
+                            <p class="text-[10px] font-mono text-slate-400 leading-snug mt-1">
+                                Graft re-indexes the files that changed since the last question, which takes
+                                about a second. Switch this off to answer from the graph as it was last built,
+                                where the line numbers may have moved.
                             </p>
                         </div>
                     </div>
@@ -2456,6 +2505,62 @@
                         <input id="setting-code-run-allowlist" type="text" placeholder="cargo, npm, git" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                     </div>
                 </div>
+
+                <!-- The domain policy. Until now this existed only as `aether1 code net`,
+                     which meant that the way to get a build past a refused host was to
+                     read a 403 out of a build log, work out which host it was about, and
+                     type a command. That friction is what makes people switch on "Run
+                     without a sandbox", so it is a security control that was being
+                     answered by turning the boundary off.
+
+                     Three sources, shown apart because only two of them can be edited: the
+                     starter list (compiled in, removable by writing a `deny` row), the
+                     project's own `allow` rows, and its `deny` rows. Filled in by app.js
+                     from GET /api/code/net. See src-tauri/src/code_proxy.rs. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">🌐</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">Where the sandbox may connect</h4>
+                            <p class="net-card-hint">
+                                With the network on, the sandbox still has no route of its own: every
+                                connection goes through a proxy that checks the destination against this
+                                list. An unlisted host raises a card in the HUD, where you can allow it
+                                once, allow it for this project, or refuse. Allowing a domain allows it
+                                entirely — what it can be told is whatever the sandbox can read, which is
+                                this project's folder.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">This project's list</p>
+                            <p id="code-net-state" class="net-row-hint">Reading the project's policy…</p>
+                        </div>
+                    </div>
+                    <div id="code-net-domains" class="px-3 pb-2 flex flex-wrap gap-1"></div>
+                    <div class="net-row">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Allow another</p>
+                            <p class="net-row-hint">A host name, no scheme and no path. It covers its subdomains.</p>
+                        </div>
+                    </div>
+                    <div class="px-3 pb-3 flex gap-2">
+                        <input id="code-net-add" type="text" placeholder="e.g. registry.yarnpkg.com" class="flex-1 bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <button id="code-net-add-btn" type="button" class="cyber-btn text-[10px] py-1 px-3 whitespace-nowrap">Allow</button>
+                    </div>
+                    <p id="code-net-hint" class="px-3 pb-2 text-[10px] font-mono text-slate-400 hidden"></p>
+                    <!-- What a build asked for and did not get. The question an operator
+                         arrives with is "something could not be reached, what was it", and
+                         before this the only answer was in a build log. -->
+                    <div id="code-net-refused-row" class="net-row hidden">
+                        <div class="net-row-text">
+                            <p class="net-row-title">Asked for and refused</p>
+                            <p id="code-net-refused" class="net-row-hint"></p>
+                        </div>
+                        <button id="code-net-clear-btn" type="button" class="cyber-btn text-[10px] py-1 px-2 whitespace-nowrap">Clear</button>
+                    </div>
+                </div>
             </section>
 
             <!-- ======================= NETWORK & REMOTE ======================= -->
@@ -2605,6 +2710,14 @@
                                 <p class="net-row-hint">What to type into a browser on the other device. The certificate is this machine's own, so the browser will ask once whether you trust it.</p>
                             </div>
                             <p id="lan-address" class="net-row-value">&mdash;</p>
+                        </div>
+
+                        <div class="net-row">
+                            <div class="net-row-text">
+                                <p class="net-row-title">This machine's fingerprint</p>
+                                <p class="net-row-hint">What identifies this machine, and the one thing about it nothing else on the network can copy. Read it out to whoever is pairing: their scan shows them a fingerprint too, and the two matching is how they know they reached you and not something answering in your name.</p>
+                            </div>
+                            <p id="lan-fingerprint" class="net-row-value net-peer-print">&mdash;</p>
                         </div>
 
                         <div class="net-row">

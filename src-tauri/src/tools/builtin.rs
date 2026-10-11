@@ -364,7 +364,10 @@ impl Tool for SearchWeb {
             urlencoding::encode(query)
         );
 
-        let response = ureq::get(&api_url)
+        // This path had no local-only check of its own before the gate existed -- the
+        // companion's own web search would still have reached DuckDuckGo with the mode
+        // on. It cannot now, because the request cannot be built without asking.
+        let response = crate::net::get(&api_url, "the search was not made")?
             .header("User-Agent", "AETHER1")
             .call()
             .map_err(|e| format!("cannot search the web: {e}"))?;

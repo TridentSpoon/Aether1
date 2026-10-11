@@ -23,11 +23,32 @@
  *
  * Two rules about where the first answer comes from:
  *
- *   1. Nothing chosen yet -> follow the operating system's light/dark setting (Solar or
- *      Eclipse). A companion that opens in blazing white on a machine set to dark looks broken
- *      before it has said a word, and the reverse is worse.
- *   2. Something chosen -> use it, and stop listening to the OS. An explicit choice is not a
- *      preference to be second-guessed the next time someone toggles Windows into night mode.
+ *   1. Nothing chosen yet -> follow the desktop. That means Daylight or Midnight to match the
+ *      system's light/dark setting, wearing the system's own accent colour. A companion that
+ *      opens in blazing white on a machine set to dark looks broken before it has said a word,
+ *      and one that opens in a blue nobody picked looks like it was not paying attention.
+ *   2. Something chosen -> use it, and stop listening to the desktop. An explicit choice is not
+ *      a preference to be second-guessed the next time someone toggles Windows into night mode.
+ *
+ * Following is a state, not only a starting point: `setMode('system')` goes back to it, and the
+ * three mode buttons plus that fourth choice are what Settings offers. While it is on, the
+ * desktop is re-read when the window is shown again and whenever the system flips light/dark,
+ * so changing the accent in Windows' settings and coming back shows the new colour.
+ *
+ * Where the desktop's answer comes from:
+ *
+ *   light/dark   `prefers-color-scheme` in the webview, overridden by the native probe
+ *                (desktop_theme.rs) when it has an answer. On Windows and macOS the webview is
+ *                told the truth and the two agree; on Linux WebKitGTK infers it from the GTK
+ *                theme name, so the native read of the XDG appearance portal is the one to
+ *                trust.
+ *   accent       Only the native probe. There is no media query for the accent colour on any
+ *                platform, so a window with no bridge to the native side (a page served to a
+ *                plain browser with the HTTP API unreachable) keeps the designed accent, which
+ *                is the right fallback rather than a failure.
+ *
+ * The desktop hands over one accent and the engine wants two, so the companion is derived --
+ * see companionFor.
  *
  * The HUD, the desktop sprite and the avatar workbench all ask this file rather than each
  * keeping their own copy of the answer.
@@ -39,11 +60,18 @@
     const LEGACY_KEY = 'aether_color_theme';   // the single-word themes this replaced
     const MODES = ['solar', 'eclipse', 'cyberpunk'];
 
+    /* Not a mode. It is the value the fourth button in the mode row sends to setMode, meaning
+       "stop choosing and follow the desktop", and it is never stored and never painted -- what
+       gets painted is whichever of the three the desktop is asking for. Kept out of MODES so
+       that nothing iterating the real modes (the stored colour sets, normalise, the palette
+       grid) has to learn about it. */
+    const SYSTEM_MODE = 'system';
+
     /* The names shown to the operator. Internally the two flat modes are still solar and
        eclipse -- every stored state and every data-theme attribute uses those -- but the
        two presets that draw them were always called Daylight and Midnight, and that is
        what they are called out loud now, in one place rather than two. */
-    const MODE_LABELS = { solar: 'Daylight', eclipse: 'Midnight', cyberpunk: 'Cyberpunk' };
+    const MODE_LABELS = { solar: 'Daylight', eclipse: 'Midnight', cyberpunk: 'Cyberpunk', system: 'Desktop' };
     const DEFAULT_PRESET = { solar: 'solar', eclipse: 'eclipse', cyberpunk: 'halcy' };
 
     /* What a mode lets you change.
@@ -171,6 +199,102 @@
     function raise(hex, factor, floor) {
         const c = toRgb(hex);
         return toHex({ r: c.r * factor + floor, g: c.g * factor + floor, b: c.b * factor + floor });
+    }
+
+    /* ---- hue, for the one job that needs it ------------------------------------------
+       Everything above works in RGB because mixing and fading do not need anything else. The
+       companion accent does: it is the same colour family turned a little way round the wheel,
+       and "a little way round the wheel" has no expression in RGB. */
+
+    function rgbToHsl(hex) {
+        const c = toRgb(hex);
+        const r = c.r / 255, g = c.g / 255, b = c.b / 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        const l = (max + min) / 2;
+        if (max === min) return { h: 0, s: 0, l: l };   // grey has no hue to report
+        const d = max - min;
+        const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        let h;
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        else if (max === g) h = ((b - r) / d + 2) / 6;
+        else h = ((r - g) / d + 4) / 6;
+        return { h: h, s: s, l: l };
+    }
+
+    function hslToRgb(hsl) {
+        const h = ((hsl.h % 1) + 1) % 1;
+        const s = Math.max(0, Math.min(1, hsl.s));
+        const l = Math.max(0, Math.min(1, hsl.l));
+        if (s === 0) {
+            const v = Math.round(l * 255);
+            return toHex({ r: v, g: v, b: v });
+        }
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        const channel = (t) => {
+            t = ((t % 1) + 1) % 1;
+            if (t < 1 / 6) return p + (q - p) * 6 * t;
+            if (t < 1 / 2) return q;
+            if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+            return p;
+        };
+        return toHex({ r: channel(h + 1 / 3) * 255, g: channel(h) * 255, b: channel(h - 1 / 3) * 255 });
+    }
+
+    /* The desktop publishes one accent colour. This engine is built on two -- a main and a
+       highlight, used for different things all over the stylesheet, and blended into a third
+       in between -- so the second one has to come from somewhere, and the only honest place is
+       the first.
+
+       The companion is the same hue, lifted and softened. That is to say: a tint of the
+       accent, not a second colour.
+
+       The first attempt here was not that. The two palettes drawn by hand for exactly these two
+       modes separate their accents by hue --
+
+         Daylight   #0067c0 -> #8764b8    +58 degrees, lightness .38 -> .56
+         Midnight   #60cdff -> #b4a0ff    +55 degrees, lightness .69 -> .81
+
+       -- so turning the accent 56 degrees reproduced both pairs closely, and looked right for
+       every accent that happens to be blue. It is wrong as a general rule, and a desktop set to
+       an orange accent is where that shows: 56 degrees off orange is yellow-green, so the HUD
+       came out orange and olive. Both designed pairs start from a blue, where a rotation of that
+       size stays inside the blue-violet family; from a warm hue the same rotation crosses into
+       the cool half and reads as two colours that do not belong together.
+
+       There is no rotation that is harmonious from every starting hue, and a table of per-hue
+       exceptions would be a pile of taste with nothing behind it. Holding the hue has nothing to
+       go wrong: an accent and a tint of it are the same colour, so the pair cannot clash whatever
+       somebody's desktop is set to. It is also what the desktops themselves do -- Windows stores
+       its accent as `AccentPalette`, eight shades of the one hue, and shows exactly that ramp in
+       its own settings. Following the desktop's accent should mean following the desktop's idea
+       of what goes with it.
+
+       Two sets of numbers, chosen by the ground rather than by the mode -- the same way every
+       other light-or-dark decision in this file is made. The light shell softens harder because
+       a saturated tint on a near-white page is the one that glares.
+
+       The cap is a floor in disguise. An accent that is already pale -- a light grey, a pastel --
+       would lift past the page itself and leave every border and fill painted with it invisible,
+       so the cap pulls it back down instead. Text is a separate matter and already handled:
+       variablesFor runs both accents through readable().
+
+       A grey accent -- Windows allows one, macOS calls it graphite -- comes out a lighter grey,
+       which falls out of the rule rather than needing a case of its own. */
+    const COMPANION = {
+        light: { lift: 0.18, saturationScale: 0.80, cap: 0.74 },
+        dark: { lift: 0.16, saturationScale: 0.90, cap: 0.86 }
+    };
+
+    function companionFor(accent, groundIsLight) {
+        if (!isColour(accent)) return accent;
+        const rule = groundIsLight ? COMPANION.light : COMPANION.dark;
+        const hsl = rgbToHsl(accent);
+        return hslToRgb({
+            h: hsl.h,
+            s: hsl.s * rule.saturationScale,
+            l: Math.min(rule.cap, hsl.l + rule.lift)
+        });
     }
 
     /* Drains the colour out of a hex without changing how bright it looks, by mixing it toward
@@ -383,7 +507,11 @@
     // ---- what is stored -----------------------------------------------------------------
 
     function blankState() {
-        return { mode: null, colours: {} };
+        /* `desktopAccent: true` is what makes the desktop's own colour the default rather than
+           something to go and switch on. Only an explicit false turns it off -- see normalise,
+           where anything else, a missing field from a state written before this existed
+           included, reads as on. */
+        return { mode: null, colours: {}, desktopAccent: true };
     }
 
     /* Reading is deliberately forgiving. Storage can hold anything -- a half-written state
@@ -393,6 +521,10 @@
         const state = blankState();
         if (!raw || typeof raw !== 'object') return state;
         if (MODES.indexOf(raw.mode) !== -1) state.mode = raw.mode;
+        /* Only an explicit false is an opt-out. A state saved by a build from before this
+           field existed has no opinion about it, and the default for no opinion is the
+           desktop's colour. */
+        state.desktopAccent = raw.desktopAccent !== false;
         MODES.forEach((mode) => {
             const c = raw.colours && raw.colours[mode];
             if (!c || !isColour(c.background) || !isColour(c.main) || !isColour(c.highlight)) return;
@@ -456,20 +588,130 @@
 
     // ---- the current answer --------------------------------------------------------------
 
+    /* What the native side said about the desktop, or nothing yet.
+     *
+     * Deliberately not in localStorage: this is a fact about the machine as it is right now,
+     * not a preference, and a stored copy would be a stale colour waiting to be painted on
+     * the next start before the probe comes back. It lives for the life of the window and is
+     * refreshed by followDesktop.
+     *
+     * `accent` is the desktop's own colour; `mode` is `'light'`, `'dark'` or null. `note` is
+     * what to tell an operator when the answer is incomplete or the platform cannot answer at
+     * all -- Settings shows it, which is the difference between "this does nothing here" and
+     * "this is broken". */
+    let desktop = { mode: null, accent: null, source: 'none', note: '' };
+
+    function desktopTheme() {
+        return { mode: desktop.mode, accent: desktop.accent, source: desktop.source, note: desktop.note };
+    }
+
+    /* Records what the native probe found. Returns true when it changed anything worth
+       repainting for, so a caller can skip a repaint on a probe that confirmed what it
+       already knew -- which is most of them, since this re-reads on every window focus. */
+    function setDesktopTheme(info) {
+        const mode = (info && (info.mode === 'light' || info.mode === 'dark')) ? info.mode : null;
+        const accent = (info && isColour(info.accent)) ? toHex(toRgb(info.accent)) : null;
+        const next = {
+            mode: mode,
+            accent: accent,
+            source: (info && typeof info.source === 'string') ? info.source : 'none',
+            note: (info && typeof info.note === 'string') ? info.note : ''
+        };
+        const changed = next.mode !== desktop.mode || next.accent !== desktop.accent;
+        desktop = next;
+        return changed;
+    }
+
+    /* Which of the two flat modes the desktop is asking for.
+     *
+     * The native probe wins when it has an answer, because on Linux it is reading the XDG
+     * appearance portal while the media query below is guessing from the GTK theme name. The
+     * media query is the fallback, and on Windows and macOS the two agree anyway. */
     function systemMode() {
+        if (desktop.mode === 'dark') return 'eclipse';
+        if (desktop.mode === 'light') return 'solar';
         const dark = global.matchMedia && global.matchMedia('(prefers-color-scheme: dark)').matches;
         return dark ? 'eclipse' : 'solar';
     }
 
-    /* True while the OS is still the authority -- nothing has been chosen in this browser. */
+    /* True while the desktop is still the authority -- nothing has been chosen in this
+       browser, or Follow the desktop theme has been chosen again since. */
     function followingSystem() {
         return readStored().mode === null;
     }
 
+    /* The colours to wear while following the desktop.
+     *
+     * Following the desktop is two separate things, and somebody can want one without the other:
+     * the shell matching light and dark, and the accent being the desktop's own. The second is
+     * what `desktopAccent` governs. It is on unless it has been turned off, so the default is
+     * the whole of the desktop's theme -- but a person who likes the app's Cyan on a shell that
+     * still follows their system between day and night can have exactly that, which they could
+     * not before: wanting their own accent used to mean giving up the light/dark following too.
+     *
+     * With it off, the mode wears whatever it was last wearing, which is the same thing picking
+     * that mode by hand would give. With it on, the shell is the designed one and the accent is
+     * the desktop's -- the ground deliberately designed rather than stored, because following
+     * the desktop means wearing the shell as drawn.
+     *
+     * Either way the two tone sliders are kept: "not dark enough for me" and "too bright for
+     * me" are true of a person rather than of a palette, and dropping them when the desktop is
+     * followed would quietly undo a deliberate adjustment.
+     *
+     * No accent reported -- an older Windows with none set, a Linux desktop with no portal, a
+     * window with no bridge to the native side at all -- falls back the same way as turning it
+     * off, and the note in Settings says which of the two happened. */
+    function systemColours(mode, stored, useDesktopAccent) {
+        const own = stored || defaultColours(mode);
+        if (!useDesktopAccent || !desktop.accent) {
+            const colours = defaultColours(mode);
+            colours.main = own.main;
+            colours.highlight = own.highlight;
+            colours.preset = own.preset;
+            colours.saturation = own.saturation;
+            colours.depth = own.depth;
+            return colours;
+        }
+        const colours = defaultColours(mode);
+        colours.saturation = own.saturation;
+        colours.depth = own.depth;
+        colours.main = desktop.accent;
+        /* Asked of the ground that will actually be painted, not of the mode: the two flat
+           modes keep the shell they were designed with, so for them the two are the same
+           thing, but reading the background is what the rest of this file does and a mode
+           added later would get the right answer for free. */
+        colours.highlight = companionFor(desktop.accent, isLight(colours.background));
+        /* Not a named palette any more, so nothing in Settings should show as selected: these
+           two colours came from the desktop, and claiming they are Night City's would be a
+           lie the swatch grid tells on the engine's behalf. */
+        colours.preset = null;
+        return colours;
+    }
+
+    /* The theme as it should be painted right now.
+     *
+     * `following` rides along so the UI can say where the colours came from without asking a
+     * second question and risking a different answer. */
     function current() {
         const state = readStored();
-        const mode = state.mode || systemMode();
-        return { mode: mode, colours: state.colours[mode] || defaultColours(mode) };
+        if (state.mode === null) {
+            const mode = systemMode();
+            return {
+                mode: mode,
+                colours: systemColours(mode, state.colours[mode], state.desktopAccent),
+                following: true,
+                /* What is actually on screen, not what was asked for: with the switch on but
+                   no accent reported, the colours are the app's own, and the UI has to be able
+                   to tell those two apart to say anything true about them. */
+                desktopAccent: state.desktopAccent,
+                wearingDesktopAccent: state.desktopAccent && !!desktop.accent
+            };
+        }
+        return {
+            mode: state.mode,
+            colours: state.colours[state.mode] || defaultColours(state.mode),
+            following: false
+        };
     }
 
     function apply(doc) {
@@ -483,6 +725,16 @@
        must not do: Solar with Cyberpunk's near-black ground is not a light theme, it is a
        broken one. */
     function setMode(mode) {
+        /* The fourth choice in the mode row, and the one that is not a mode: it hands the
+           decision back to the desktop. Stored as a null mode, which is already what "nothing
+           chosen" means, so a fresh install and someone who has chosen this end up in exactly
+           the same state rather than in two states that have to behave the same. */
+        if (mode === SYSTEM_MODE) {
+            const state = readStored();
+            state.mode = null;
+            write(state);
+            return current();
+        }
         if (MODES.indexOf(mode) === -1) return current();
         const state = readStored();
         state.mode = mode;
@@ -508,32 +760,52 @@
        not clear the selected preset: turning the neon down on Night City is still Night City,
        and showing nothing as selected afterwards would imply a hand-mixed palette that is not
        what happened. */
+    /* Opening a colour set for editing, without answering a question nobody asked.
+     *
+     * Every setter below used to pin `state.mode` to whatever was being painted, which while
+     * the desktop was being followed meant dragging the saturation slider silently stopped the
+     * shell following light and dark. Nothing about a tone slider or a colour picker is a
+     * statement about where the mode should come from, so following survives all of them;
+     * leaving it is what the mode buttons are for.
+     *
+     * The colours being edited are the mode's own stored set, never the resolved ones -- while
+     * the desktop's accent is on, what is painted is the desktop's colour, and writing that
+     * into storage would turn today's accent into a permanent choice the moment anybody
+     * touched a slider. */
+    function beginEdit() {
+        const state = readStored();
+        const mode = state.mode === null ? systemMode() : state.mode;
+        const colours = state.colours[mode] || defaultColours(mode);
+        return { state: state, mode: mode, colours: colours };
+    }
+
+    function commitEdit(edit) {
+        edit.state.colours[edit.mode] = edit.colours;
+        write(edit.state);
+        return current();
+    }
+
     function setTone(slot, value) {
         if (slot !== 'saturation' && slot !== 'depth') return current();
-        const now = current();
-        const state = readStored();
-        state.mode = now.mode;
-        const colours = state.colours[now.mode] || defaultColours(now.mode);
-        colours[slot] = slot === 'saturation'
+        const edit = beginEdit();
+        edit.colours[slot] = slot === 'saturation'
             ? clampNumber(value, 0, 100, SATURATION_DEFAULT)
             : clampNumber(value, -DEPTH_LIMIT, DEPTH_LIMIT, 0);
-        state.colours[now.mode] = colours;
-        write(state);
-        return current();
+        return commitEdit(edit);
     }
 
     function setColour(slot, hex) {
         if (!isColour(hex)) return current();
-        const now = current();
-        if (slotsFor(now.mode).indexOf(slot) === -1) return current();
-        const state = readStored();
-        state.mode = now.mode;
-        const colours = state.colours[now.mode] || defaultColours(now.mode);
-        colours[slot] = toHex(toRgb(hex));
-        colours.preset = null;   // hand-mixed now, so no preset should show as selected
-        state.colours[now.mode] = colours;
-        write(state);
-        return current();
+        const edit = beginEdit();
+        if (slotsFor(edit.mode).indexOf(slot) === -1) return current();
+        edit.colours[slot] = toHex(toRgb(hex));
+        edit.colours.preset = null;   // hand-mixed now, so no preset should show as selected
+        /* Mixing a colour by hand is the plainest possible statement that the desktop's accent
+           is not the one you want, so it turns that switch off rather than being overwritten by
+           it on the next repaint. The shell carries on following light and dark, which is the
+           combination this exists to make reachable. */
+        if (edit.state.mode === null) edit.state.desktopAccent = false;
+        return commitEdit(edit);
     }
 
     /* A named palette worn as accents only, leaving the mode's own ground alone. This is how
@@ -546,25 +818,33 @@
     function setAccents(id) {
         const p = preset(id);
         if (!p) return current();
-        const now = current();
+        const edit = beginEdit();
+        edit.colours.main = p.main;
+        edit.colours.highlight = p.highlight;
+        edit.colours.preset = p.id;
+        // Choosing a palette is choosing colours, same as the pickers above.
+        if (edit.state.mode === null) edit.state.desktopAccent = false;
+        return commitEdit(edit);
+    }
+
+    /* Whether the desktop's own accent colour is worn while following it.
+     *
+     * Turning it back on does not restore anything, because nothing was lost: the mode's own
+     * colours were never overwritten, they were only not being painted. */
+    function setDesktopAccent(on) {
         const state = readStored();
-        state.mode = now.mode;
-        const colours = state.colours[now.mode] || defaultColours(now.mode);
-        colours.main = p.main;
-        colours.highlight = p.highlight;
-        colours.preset = p.id;
-        state.colours[now.mode] = colours;
+        state.desktopAccent = on !== false;
         write(state);
         return current();
     }
 
     function resetColours() {
-        const now = current();
-        const state = readStored();
-        state.mode = now.mode;
-        state.colours[now.mode] = defaultColours(now.mode);
-        write(state);
-        return current();
+        const edit = beginEdit();
+        edit.colours = defaultColours(edit.mode);
+        /* "Reset this mode's colours" means back to how the app ships, and while the desktop is
+           being followed how it ships is wearing the desktop's accent. */
+        if (edit.state.mode === null) edit.state.desktopAccent = true;
+        return commitEdit(edit);
     }
 
     /* Calls onChange when the OS flips between light and dark, but only while the choice is
@@ -580,6 +860,80 @@
         else if (query.addListener) query.addListener(handler); // older WebKit
     }
 
+    /* Asks the native side what the desktop looks like.
+     *
+     * Over the Tauri bridge in the app, and over the HTTP API in a browser -- the second one
+     * matters more, not less: a page served to a browser has the media query and no way at all
+     * to ask for the accent colour. A caller with its own authenticated fetch passes it as
+     * `fetcher` (the HUD does, because the LAN API wants a device token); without one this
+     * falls back to a plain same-origin request, which is what the sprite and the workbench
+     * need and all they need.
+     *
+     * Every failure resolves to null rather than rejecting. A probe that cannot run is not an
+     * error worth a console full of red: it means the designed palette stands, which is a
+     * perfectly good theme. */
+    function readDesktop(fetcher) {
+        if (typeof fetcher === 'function') {
+            return Promise.resolve().then(fetcher).catch(() => null);
+        }
+        if (global.__TAURI__ && global.__TAURI__.core) {
+            return global.__TAURI__.core.invoke('desktop_theme_rust').catch(() => null);
+        }
+        if (typeof global.fetch !== 'function') return Promise.resolve(null);
+        return global.fetch('/api/desktop/theme')
+            .then((resp) => (resp.ok ? resp.json() : null))
+            .catch(() => null);
+    }
+
+    /* The whole of "follow the desktop theme", from one call.
+     *
+     * Reads the desktop now, repaints through onChange, and keeps following:
+     *
+     *   - the media query, for a light/dark flip, as followSystem always did;
+     *   - the window being shown again, because that is when a re-read is both cheap and
+     *     likely to find something new.
+     *
+     * The second one is there because *the accent has no change event*, on any platform. The
+     * media query fires for light and dark and nothing fires for a colour, so the realistic
+     * sequence -- open Windows' settings, pick a new accent, come back to AETHER1 -- would
+     * otherwise show the old colour until a restart. Coming back to the window is exactly that
+     * moment, so that is where the re-read goes. A probe runs one short-lived process and only
+     * repaints when the answer actually changed, which on a focus switch is almost never.
+     *
+     * Guarded by followingSystem() on every event rather than unsubscribed, same as
+     * followSystem: the moment a mode is picked this goes quiet by itself.
+     */
+    function followDesktop(onChange, fetcher) {
+        const refresh = function (force) {
+            if (!followingSystem()) return Promise.resolve();
+            return readDesktop(fetcher).then((info) => {
+                if (!info) return;
+                const changed = setDesktopTheme(info);
+                if ((changed || force) && followingSystem()) onChange(current());
+            });
+        };
+
+        followSystem(function () {
+            /* A light/dark flip repaints on the media query's word straight away -- the shell
+               must not wait on a process -- and the probe that follows it confirms the mode and
+               picks up an accent changed at the same time. */
+            onChange(current());
+            refresh(false);
+        });
+
+        if (global.document) {
+            global.document.addEventListener('visibilitychange', function () {
+                if (!global.document.hidden) refresh(false);
+            });
+        }
+        global.addEventListener('focus', function () { refresh(false); });
+
+        /* The first read repaints even when nothing changed: on startup "nothing changed" means
+           the probe agreed with the designed palette, and the window has not yet been painted
+           with the desktop's accent at all. */
+        return refresh(true);
+    }
+
     global.Aether1Theme = {
         MODES: MODES,
         MODE_LABELS: MODE_LABELS,
@@ -593,6 +947,12 @@
         current: current,
         followingSystem: followingSystem,
         systemMode: systemMode,
+        SYSTEM_MODE: SYSTEM_MODE,
+        desktopTheme: desktopTheme,
+        setDesktopTheme: setDesktopTheme,
+        setDesktopAccent: setDesktopAccent,
+        companionFor: companionFor,
+        followDesktop: followDesktop,
         setMode: setMode,
         setPreset: setPreset,
         setColour: setColour,

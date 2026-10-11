@@ -229,7 +229,10 @@ pub fn start(endpoint: &str, model: &str) -> Result<Download, String> {
 fn pump(endpoint: &str, model: &str) -> Result<(), String> {
     // No global timeout: this is a download of several gigabytes, and a deadline that can
     // expire mid-transfer is exactly the bug the old five-second path had.
-    let response = ureq::post(format!("{endpoint}/api/pull"))
+    // An Ollama server on this machine or on the LAN pulls as it always did; one on a
+    // rented box on the internet is outbound traffic, and the gate judges which this is
+    // by the endpoint rather than by the word "Ollama" (src/net.rs).
+    let response = crate::net::post(&format!("{endpoint}/api/pull"), "no model was downloaded")?
         .send_json(serde_json::json!({ "name": model, "stream": true }))
         .map_err(|e| format!("Could not reach Ollama at {endpoint}: {e}"))?;
 

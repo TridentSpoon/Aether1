@@ -3737,10 +3737,9 @@ the only clients are the pages this repository ships.
 
 **A header is not a magic word.** Headers get logged too, where someone configures it. The
 right end state is a short-lived, single-use ticket exchanged over the authenticated HTTPS
-path, so that a leaked handshake is worth nothing a minute later; that is still on the list in
-`docs/SECURITY_MODEL.md`. What this step closes is the gap between "a credential that leaks
-where URLs leak" and "a credential that travels where every other credential here already
-travels".
+path, so that a leaked handshake is worth nothing a minute later -- which is step 59. What
+this step closes is the gap between "a credential that leaks where URLs leak" and "a
+credential that travels where every other credential here already travels".
 
 **Verified over the wire**, against a real `aether1 --serve --lan` on TLS: the handshake
 carrying the token gets `101 Switching Protocols` with `sec-websocket-protocol: aether1` in
@@ -3797,3 +3796,210 @@ Each one asserts on the host disk, not on the message.
 
 `libc` becomes a direct dependency under `cfg(unix)` for `openat`, `mkdirat` and `fstatat`. It
 was already in the tree via Tauri.
+
+---
+
+## Step 59 — the handshake's credential becomes worthless a minute later
+
+Step 57 moved the device token out of the URL and into `Sec-WebSocket-Protocol`, and said in
+as many words that this was not the end state: headers get logged too, wherever someone has
+configured that. The last finding from review 1, and the one this step closes.
+
+**What was still wrong.** The credential in a handshake was the device token -- 256 bits good
+until `aether1 revoke`, the same one that authenticates every other request that device
+makes. So the fix in step 57 was a better hiding place, not a boundary. A handshake recovered
+from a proxy configured to log request headers, or from a browser network trace pasted into a
+bug report, still handed over lasting access to the conversation and to everything `/ws/chat`
+can run.
+
+**What a ticket is.** `POST /api/ws-ticket` sits behind the ordinary token layer and returns
+32 bytes from the operating system's generator. Only its SHA-256 is kept, in a
+`TicketStore` that lives in `LanState` beside the attempt limiter, with a one-minute TTL. The
+client offers `aether1.ticket.<ticket>` alongside a plain `aether1`; `require_lan_token`
+spends the ticket and only then upgrades. Replay the same handshake and the second one is
+401, from the same call that let the first through.
+
+**In memory, on purpose.** A ticket that outlived a restart would be a credential the operator
+cannot see or revoke, and a restart already drops every socket it could have opened.
+
+**Three routing decisions worth keeping.**
+
+- `/api/ws-ticket` is merged *before* the token layer and `/api/pair` after it. That one line
+  of difference is the whole shape of the flow: asking for a ticket requires a token, and
+  asking to be paired is how a device gets one.
+- `/ws/*` takes a ticket and *only* a ticket. Accepting the device token there as well would
+  have left the weaker credential in the handshake and made the ticket decoration. A unit
+  test pins which paths are on the ticket path, because a ticket accepted on an API route
+  would be a credential for reading everything instead of for opening one socket.
+- A device token offered in a handshake gets its own refusal -- "POST /api/ws-ticket ... and
+  reload the page" -- and is **not** counted against the attempt limiter. A stale tab is a
+  client version, not a guess, and counting it would lock the operator out on reload. A wrong
+  or replayed ticket is counted, because that is a guess at 256 bits or a replay.
+
+**Dropping the oldest is safe here, and was not for the limiter.** The store is capped at 1024
+live tickets for the same reason `MAX_TRACKED` exists: the caller chooses how many to ask for.
+In the attempt limiter, evicting the oldest record was evicting a live lockout, which erased
+the evidence of someone's failures -- the bug step 45 found in its own test. A ticket is the
+opposite: losing one costs its holder one more request and gives an attacker nothing, because
+a ticket that is gone is a ticket that is refused.
+
+**The browser had to become asynchronous.** `wsProtocols()` used to read a token out of
+localStorage and return an array; it now has to buy a ticket, which is a round trip. So it is
+`async`, `apiWsProtocols()` returns a promise, and `connectTelemetry` is `async` too. Both
+call sites await it -- a socket handed the promise instead of the array fails in a way that
+takes an afternoon to read. The telemetry reconnect calls it again on every retry, which buys
+a fresh ticket each time, which is what single-use means. With no token held there is no
+fetch and the plain subprotocol goes alone: that is loopback and the desktop shell, neither of
+which is behind the token layer at all.
+
+**Verified over the wire**, against a real `aether1 --serve --lan` on TLS. A fresh ticket gets
+`101 Switching Protocols` with `sec-websocket-protocol: aether1`. **The same handshake,
+replayed, gets 401** -- which is the finding closed, stated as a result. A 70-second-old
+ticket gets 401. A device token in the handshake gets 401 and the reload message. A ticket
+presented as a bearer token on `/api/static-info` gets 401, and is still good for a socket
+afterwards, so being refused elsewhere does not spend it. `/api/ws-ticket` with no token gets
+401, and its response carries `cache-control: no-store`.
+
+Eleven unit tests: one socket, one replay; expiry against an injected clock rather than a test
+that sleeps for a minute; an unissued ticket; tickets independent of each other; only the hash
+stored; the cap; the sweep on mint; which routes are on the ticket path; a device token not
+being a credential; and the one that reads `frontend/js/lan-auth.js` to check it agrees on the
+subprotocol names, fetches `/api/ws-ticket`, and no longer mentions `WS_TOKEN_PREFIX` at all.
+
+---
+
+## Step 60 — the code graph stops guessing when the code moved
+
+Graft landed wired to the right folder and asking the right question. What it still carried was
+a rebuild schedule it did not need and could not get right, a binary lookup that assumed a
+shell, and two subprocesses with no time limit.
+
+**The staleness check could not see the code.** `has_code_changed` read one directory --
+`read_dir` on the project root, no recursion -- and compared mtimes of source files found
+there. Aether1's own sources are all under `src-tauri/` and `frontend/`, so the answer was
+always "nothing changed" on this repository, and on any project that keeps its code in
+subdirectories, which is most of them. The only thing that ever triggered a rebuild was the
+hour timer, which then rebuilt everything whether or not a file had been touched.
+
+**So the schedule is gone rather than fixed.** `graft ask` re-indexes the files that changed
+before it answers -- one changed file, 1.5 seconds, measured here -- and leaves the graph in
+sync, which `graft check` then confirms. That is the same job `auto_sync_graph` was trying to
+do once an hour with a full build, done per question by the tool that owns the index.
+`AUTO_REBUILD_INTERVAL_SECS`, `graft_last_build_time` and the mtime walk all go with it.
+`graft build` stays behind the Settings button, for the first build, which is the long one.
+
+**AUTO-SYNC was a checkbox wired to nothing**, promising an hourly rebuild in its label. It is
+now `graft_auto_refresh`, read by `prime`, and it chooses whether `ask` is given
+`--no-refresh`. Off means answers come from the graph as last built, where the line numbers may
+have moved -- which is the honest description of that switch, so it is what the label says.
+
+**Finding the binary.** `graft` is an npm global, and a desktop launcher does not start the app
+from the operator's shell, so npm's bin directory is routinely absent from PATH even though
+`graft` runs fine in a terminal -- nvm most of all, since what adds its bin directory is a shell
+init file a launcher never sources. PATH is asked first, through the same
+`find_installed_binary` as every other binary we shell out to; then npm's own prefixes,
+including each installed Node version under `~/.nvm`; and `GRAFT_BIN` overrides both. A spawn
+that still fails says how to install it rather than reporting a missing file.
+
+**Both commands are killed if they outstay their budget** -- 20 seconds for a question, 15
+minutes for a build -- with the same poll-and-kill as `code_workspace::run`, because a wedged
+subprocess otherwise holds a Tauri command open until the operator gives up on the window. A
+question Graft cannot answer is not a failed turn: it is logged and dropped, and the model reads
+the code itself.
+
+**The question is cut to 240 characters** and its whitespace collapsed. Ranking is lexical, and
+the whole turn was being handed over: a paragraph of prose dilutes the terms that matter instead
+of sharpening them. `prime` also returns early unless the project reports `Ready`, so a project
+nobody has built does not pay for a spawn on every turn.
+
+**A hit with no inlined source now falls back to its signature.** `--source` inlines the code at
+each pointer, but a node Graft has no span for came through as a bare title; the signature it
+always carries is more use than nothing, and the parsing is split out as `parse_query` and
+tested against real 0.21.1 output.
+
+**Measured against graft 0.21.1** on this repository: 4038 nodes, 6001 edges, 112 cards, status
+Ready, five pointers back from a question in 0.7 seconds warm and 1.5 seconds after an edit.
+
+---
+
+## Step 61 — an argument Tauri never sees, and the script that finds the next one
+
+Trident pressed a project in the Graft panel and got `missing required key projectPath`. The
+JavaScript passed `{ project_path }`; Tauri converts a snake_case parameter to camelCase across
+the boundary, so it was looking for `projectPath` and the call never arrived.
+
+**The interesting part is what this class of bug does to the rest of the checks.** Both halves
+are individually correct. `graft_select_project_rust(project_path: String)` is right, `{
+project_path }` is a perfectly ordinary object, the build passes, clippy passes, 875 tests pass,
+`node --check` passes. Nothing in the tree can see the disagreement, because nothing in the tree
+reads both sides at once. The first thing that notices is an operator clicking a button.
+
+**Three calls were wrong, and only one of them said so.** `graft_select_project_rust` and
+`graft_build_graph_rust` take a `String`, so a missing key is a hard error the operator sees.
+`lan_pair_with_rust` takes `expect_fingerprint: Option<String>`, and a missing key for an
+`Option` is `None`, not an error -- so the fingerprint the operator had just confirmed on screen
+was never passed, and the re-check at the moment of pairing that step 60's certificate binding
+added was quietly doing nothing. It paired, reported success, and skipped the check. That is the
+version of this bug worth fearing: the loud one costs a click, the silent one costs a property
+the security model claims.
+
+**So it is checked rather than remembered**, in the shape the rest of `scripts/` already uses:
+`check_invoke_arg_names.sh` walks every `invoke`/`tauriInvoke` argument object and fails on a
+top-level key containing an underscore. It is a brace-counting walk and not a grep, because the
+two things that look identical to a regex both have to stay quiet: a nested object is a payload
+being serialised, not an argument list -- `save_settings_rust` takes a map of settings whose
+names are snake_case on purpose -- and `{ deviceCode: code.device_code }` is a correct call
+whose *value* is snake_case. A grep flags four innocent lines and gets switched off; this one
+flagged exactly the three that were broken. Run against the fix in place it is quiet, and
+putting either bug back makes it fail with the file, line and command name.
+
+---
+
+## Step 62 — every repository, including the ones that do not exist yet
+
+The code graph knew about one project. `graft_selected_project` held a single path, the panel
+was a list you picked one row from, and `prime` asked that one graph. The operator has six
+repositories under `~/Projects` and asked for all of them, "even those going forward" -- so
+the question is not only how to ask several, but what happens when a seventh appears.
+
+**Tracked, not selected.** `graft_tracked_projects` is a list, and `graft_track_all` says to
+ignore the list and ask everything that detection finds. The second is the default and is what
+answers "going forward": a repository started next week is asked as soon as it has a graph,
+with nothing to tick. Unticking one project while tracking everything writes the rest of what
+was detected into the list and turns the switch off, because the alternative -- a tick that
+appears to do nothing because everything is tracked anyway -- is worse than the extra write. A
+project chosen before any of this existed is carried into the list on first read, so an upgrade
+keeps asking the graph it was asking yesterday instead of quietly going quiet.
+
+**Asked at once, ranked together.** Each `graft ask` is a process that spends its life waiting,
+so in sequence the wait would grow with the number of repositories and a question would get
+slower every time the operator started a project. `gather_hits` spawns them in a
+`thread::scope`, so the wait is the slowest single ask rather than the sum. The hits come back
+with Graft's own score and are sorted across every project, which is sound because the score
+comes from the same lexical ranker over the same kind of graph in each one. Ties break on
+project then pointer: the same question twice must not reorder the prompt, and thread
+completion order is not something to put in front of a model.
+
+**Two caps, for different reasons.** Five nodes reach the prompt, as before. Eight projects may
+be asked, which is new: past a handful the nodes that matter are in one or two repositories and
+the rest is noise competing for the same five slots. The projects are sorted by path before the
+cap bites, so a question consults the same eight every time rather than a different eight.
+
+**Every node now says which project it is in.** With one repository a pointer like
+`src/main.rs:L20` was unambiguous. With six it names no file at all, so the prompt labels each
+node `[Aether1]`, `[Tuxman]` and so on, and says that the pointer is a path inside that project.
+
+**The panel rebuilt, and a latent hole closed.** Rows are per-project toggles with their own
+"Build graph" button when a graph is missing, plus "Build All Missing" which walks them one at a
+time -- one at a time because a first build parses every file and several at once would compete
+for the same cores. The rows are now built with DOM calls instead of interpolated HTML: a
+project name is a folder on the operator's disk, and the old markup dropped it straight into
+`innerHTML` alongside an inline `onclick` carrying a quoted path whose escaping was wrong in a
+double-quoted attribute. A repository called `<img onerror=...>` would have run in the HUD. It
+is not a likely name; it is also not a risk worth keeping for markup that had to be rewritten
+anyway.
+
+**Measured on two real repositories.** `two_real_projects_are_asked_at_once_and_ranked_together`
+builds two throwaway projects with the real CLI, tracks both, and asserts the primed prompt
+carries nodes from each and names both projects. It is `#[ignore]`d because it needs `graft` on
+PATH, and it was run: two projects asked, both labelled, 2.0 seconds including both builds.

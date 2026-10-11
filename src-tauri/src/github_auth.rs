@@ -145,14 +145,21 @@ pub fn start(agent_label: &str) -> Result<DeviceCode, SignInError> {
     if !configured() {
         return Err(SignInError::NotConfigured);
     }
-    let response = ureq::post("https://github.com/login/device/code")
-        .config()
-        .timeout_global(Some(REQUEST_TIMEOUT))
-        .build()
-        .header("Accept", "application/json")
-        .header("User-Agent", agent_label)
-        .send_form([("client_id", CLIENT_ID)])
-        .map_err(|e| SignInError::Network(e.to_string()))?;
+    // Through the egress gate like every other outbound request (src/net.rs). The HUD
+    // already hides the sign-in with local-only mode on; this is the backstop that makes
+    // that a fact about the program rather than about the panel.
+    let response = crate::net::post(
+        "https://github.com/login/device/code",
+        "the GitHub sign-in was not started",
+    )
+    .map_err(SignInError::Other)?
+    .config()
+    .timeout_global(Some(REQUEST_TIMEOUT))
+    .build()
+    .header("Accept", "application/json")
+    .header("User-Agent", agent_label)
+    .send_form([("client_id", CLIENT_ID)])
+    .map_err(|e| SignInError::Network(e.to_string()))?;
 
     let body: DeviceCodeResponse = response
         .into_body()
@@ -187,18 +194,22 @@ pub fn poll_once(device_code: &str, agent_label: &str) -> Result<Option<String>,
     if !configured() {
         return Err(SignInError::NotConfigured);
     }
-    let response = ureq::post("https://github.com/login/oauth/access_token")
-        .config()
-        .timeout_global(Some(REQUEST_TIMEOUT))
-        .build()
-        .header("Accept", "application/json")
-        .header("User-Agent", agent_label)
-        .send_form([
-            ("client_id", CLIENT_ID),
-            ("device_code", device_code),
-            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-        ])
-        .map_err(|e| SignInError::Network(e.to_string()))?;
+    let response = crate::net::post(
+        "https://github.com/login/oauth/access_token",
+        "the GitHub sign-in was not completed",
+    )
+    .map_err(SignInError::Other)?
+    .config()
+    .timeout_global(Some(REQUEST_TIMEOUT))
+    .build()
+    .header("Accept", "application/json")
+    .header("User-Agent", agent_label)
+    .send_form([
+        ("client_id", CLIENT_ID),
+        ("device_code", device_code),
+        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+    ])
+    .map_err(|e| SignInError::Network(e.to_string()))?;
 
     let body: TokenResponse = response
         .into_body()

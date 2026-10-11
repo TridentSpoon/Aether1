@@ -62,11 +62,16 @@ function apiFetch(path, options) {
         });
 }
 
-/* The same credential for the `/ws/*` routes. It travels as a WebSocket subprotocol rather
- * than in the URL -- the constructor's second argument is the one handshake header a browser
- * lets a page set, and a URL is the part of a request that ends up in logs. */
+/* The credential for the `/ws/*` routes. Not the same one: a socket is opened with a
+ * single-use ticket, bought with the device token at `/api/ws-ticket`, so a handshake that
+ * ends up in a log is worth nothing a minute later. It travels as a WebSocket subprotocol
+ * because the constructor's second argument is the one handshake header a browser lets a
+ * page set.
+ *
+ * Asynchronous because buying the ticket is a round trip. Every caller must await it; a
+ * socket handed this Promise instead of the array it resolves to fails obscurely. */
 function apiWsProtocols() {
-    return window.LanAuth ? window.LanAuth.wsProtocols() : ['aether1'];
+    return window.LanAuth ? window.LanAuth.wsProtocols() : Promise.resolve(['aether1']);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1546,9 +1551,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const gameModeBtn = document.getElementById('btn-game-mode');
         if (gameModeBtn) setGameModeButtonState(gameModeBtn.dataset.active === 'true');
 
-        // Covers both the three buttons in Settings and the three in the top bar's slide-out.
+        /* Covers both rows of mode buttons -- the four in Settings and the same four in the top
+           bar's slide-out. The Desktop one is the active one while the desktop is the
+           authority, and *only* then: when it is on, the mode being painted is still solar or
+           eclipse, so lighting that one up as well would show two buttons pressed and leave
+           nobody able to tell whether the shell was chosen or inherited. */
+        const following = theme.following === true;
         document.querySelectorAll('.theme-mode-btn').forEach(btn => {
-            btn.classList.toggle('cyber-btn-active', btn.getAttribute('data-theme-mode') === theme.mode);
+            const value = btn.getAttribute('data-theme-mode');
+            const active = value === Aether1Theme.SYSTEM_MODE ? following : (!following && value === theme.mode);
+            btn.classList.toggle('cyber-btn-active', active);
         });
 
         Object.keys(themeColourInputs).forEach(slot => {
@@ -1642,9 +1654,53 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (themeModeNote) {
-            themeModeNote.textContent = Aether1Theme.followingSystem()
-                ? 'Following your system\u2019s light/dark setting. Picking a mode stops that.'
+            themeModeNote.textContent = following
+                ? 'Following your desktop. Picking a mode below stops that; picking a colour of your own only stops the accent following, not the light and dark.'
                 : '';
+        }
+
+        /* What following actually produced, in the operator's terms: which shell the desktop
+           asked for, and whether an accent came with it. The probe's own note is appended
+           rather than replacing this, because "no accent colour is set" and "the shell is
+           Midnight" are both true and both worth knowing. */
+        /* The switch that separates the two halves of following. Shown only while the desktop
+           is the authority: with a mode picked by hand there is no desktop accent in play to
+           keep or drop, and a switch that governs nothing is worse than no switch. */
+        const desktopAccentRow = document.getElementById('theme-desktop-accent-row');
+        const desktopAccentInput = document.getElementById('theme-desktop-accent');
+        if (desktopAccentRow) desktopAccentRow.classList.toggle('hidden', !following);
+        if (desktopAccentInput) desktopAccentInput.checked = theme.desktopAccent !== false;
+
+        const desktopNote = document.getElementById('theme-desktop-note');
+        if (desktopNote) {
+            if (!following) {
+                desktopNote.textContent = '';
+            } else {
+                const info = Aether1Theme.desktopTheme();
+                /* "Your desktop is set to midnight" would be wrong twice over: Midnight is
+                   this app's name for its own dark shell, not a setting anybody has on their
+                   desktop. So both names appear, each for the thing it actually names. */
+                const shell = Aether1Theme.MODE_LABELS[theme.mode];
+                const setTo = info.mode || (theme.mode === 'solar' ? 'light' : 'dark');
+                const lines = [];
+                if (theme.wearingDesktopAccent) {
+                    lines.push(`Your desktop is set to ${setTo}, so this is ${shell} wearing your desktop's accent colour, ${info.accent}.`);
+                } else if (theme.desktopAccent === false) {
+                    /* The switch is off, which is a choice rather than a failure, so this does
+                       not carry the probe's note about a missing accent -- there is nothing
+                       missing from what was asked for. */
+                    lines.push(`Your desktop is set to ${setTo}, so this is ${shell} with colours of your own. The shell still follows your desktop between light and dark.`);
+                } else {
+                    /* Switch on, no accent to wear. The probe's own note is the better second
+                       sentence -- it names where it looked -- so this one does not also say
+                       "no accent came back" and leave the pane saying it twice. That this case
+                       is distinguishable at all is the whole reason wearingDesktopAccent exists
+                       separately from desktopAccent. */
+                    lines.push(`Your desktop is set to ${setTo}, so this is ${shell}.`);
+                    lines.push(info.note || 'No accent colour came back from your desktop, so AETHER1 is keeping the accent it was designed with.');
+                }
+                desktopNote.textContent = lines.join(' ');
+            }
         }
     }
 
@@ -1976,7 +2032,10 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshFlowMode();
     }
 
-    function connectTelemetry() {
+    /* Async because a browser socket now has to buy a ticket first. Both callers treat it
+       as fire-and-forget -- startup and the reconnect timer -- so nothing awaits it; what
+       matters is that the await inside happens before the socket is constructed. */
+    async function connectTelemetry() {
         if (IS_TAURI) {
             if (!window.__TAURI__ || !window.__TAURI__.event) {
                 console.error('Tauri event bridge unavailable; live telemetry will not update.');
@@ -2003,7 +2062,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/telemetry`;
-        const ws = new WebSocket(wsUrl, apiWsProtocols());
+        /* Awaited, so the socket is opened with a ticket rather than with a Promise. The
+           reconnect below calls this function again, which buys a fresh ticket each time --
+           which is what single-use means. */
+        const ws = new WebSocket(wsUrl, await apiWsProtocols());
 
         ws.onmessage = (event) => {
             try {
@@ -3108,9 +3170,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Browser fallback: the same conversation over a WebSocket, since the socket
         // plumbing already exists here for telemetry (see /ws/chat in server.rs).
+        const chatProtocols = await apiWsProtocols();
         return await new Promise((resolve, reject) => {
             const wsBase = (API_BASE || window.location.origin).replace(/^http/, 'ws');
-            const socket = new WebSocket(`${wsBase}/ws/chat`, apiWsProtocols());
+            const socket = new WebSocket(`${wsBase}/ws/chat`, chatProtocols);
             socket.onopen = () => socket.send(JSON.stringify({
                 message: text, session_id: sessionId, generate_voice: false, media
             }));
@@ -5419,6 +5482,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const lanPhraseStateEl = document.getElementById('lan-phrase-state');
     const lanNoticeEl = document.getElementById('lan-notice');
     const lanAddressEl = document.getElementById('lan-address');
+    const lanFingerprintEl = document.getElementById('lan-fingerprint');
     const lanPortEl = document.getElementById('lan-port');
     const lanDevicesEl = document.getElementById('lan-devices');
     const btnLanToggle = document.getElementById('btn-lan-toggle');
@@ -5492,6 +5556,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 : 'no network address on this machine';
         }
         if (lanPortEl) lanPortEl.textContent = String(report.port ?? 8378);
+        if (lanFingerprintEl) {
+            // Null until --lan has run once: the certificate is made the first time this
+            // machine goes on the network, and a pane being looked at should not make one.
+            lanFingerprintEl.textContent = report.fingerprint
+                || 'made the first time this machine goes on the network';
+        }
 
         renderDevices(devices, lanDevicesEl, btnLanRevokeAll, refreshLan);
     }
@@ -6024,6 +6094,29 @@ document.addEventListener('DOMContentLoaded', () => {
         label.textContent =
             `On ${peer.name}, open Settings, Network & Remote, Pair a device. Type the code `
             + 'it shows here. Its twelve-word phrase works too.';
+
+        /* A machine is found by asking the network who is out there, and anything on the
+           network can answer in anyone's name. So the name on this row proves nothing and
+           the fingerprint is the only thing that does: it is a digest of a certificate
+           whose private key that machine has, which an impostor cannot copy. The other
+           machine prints it when it starts and shows it in its own pane, so the two can be
+           compared by eye -- and until they have been, there is nothing to press. */
+        const identity = document.createElement('div');
+        identity.className = 'net-peer-identity';
+        const identityLabel = document.createElement('p');
+        identityLabel.className = 'net-row-hint';
+        identityLabel.textContent = 'Checking which machine this is…';
+        const print = document.createElement('p');
+        print.className = 'net-peer-print hidden';
+        const confirmRow = document.createElement('label');
+        confirmRow.className = 'net-peer-confirm hidden';
+        const confirm = document.createElement('input');
+        confirm.type = 'checkbox';
+        const confirmText = document.createElement('span');
+        confirmText.textContent = `This is what ${peer.name} shows`;
+        confirmRow.append(confirm, confirmText);
+        identity.append(identityLabel, print, confirmRow);
+
         const field = document.createElement('input');
         field.type = 'text';
         // The same field the phrase box uses, so it is the one input style in the pane.
@@ -6035,6 +6128,8 @@ document.addEventListener('DOMContentLoaded', () => {
         go.type = 'button';
         go.className = 'net-card-action';
         go.textContent = 'Pair';
+        // Nothing is typed at a machine whose identity has not been read back yet.
+        go.disabled = true;
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'net-card-action net-card-action-quiet';
@@ -6045,9 +6140,33 @@ document.addEventListener('DOMContentLoaded', () => {
         const close = () => { box.remove(); pairButton.disabled = false; };
         cancel.addEventListener('click', close);
 
+        /* Read before anything secret is typed, and kept: what goes to the Rust side with
+           the code is the fingerprint the operator actually looked at, so a machine that
+           swaps certificates between the look and the press is refused rather than pinned. */
+        let seen = '';
+        confirm.addEventListener('change', () => {
+            go.disabled = !(confirm.checked && seen);
+        });
+        tauriInvoke('lan_peer_fingerprint_rust', { address, port: peer.port })
+            .then(report => {
+                seen = String(report?.fingerprint || '');
+                if (!seen) throw new Error('that machine did not identify itself');
+                identityLabel.textContent =
+                    `Check this against the fingerprint ${peer.name} shows under Network & `
+                    + 'Remote, or printed when it started:';
+                print.textContent = seen;
+                print.classList.remove('hidden');
+                confirmRow.classList.remove('hidden');
+            })
+            .catch(e => {
+                identityLabel.textContent =
+                    `Could not ask ${peer.name} which machine it is: ${e.message || e}`;
+                identityLabel.dataset.tone = 'bad';
+            });
+
         async function submit() {
             const secret = field.value.trim();
-            if (!secret) return;
+            if (!secret || go.disabled) return;
             go.disabled = true;
             field.disabled = true;
             go.textContent = 'Pairing…';
@@ -6055,6 +6174,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const report = await tauriInvoke('lan_pair_with_rust', {
                     name: peer.name, address, port: peer.port, secret,
+                    expectFingerprint: seen,
                 });
                 // The row is redrawn from the fresh status, so "Paired" is the Rust side's
                 // answer rather than this side assuming the press worked.
@@ -6079,7 +6199,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const controls = document.createElement('div');
         controls.className = 'net-field-row';
         controls.append(field, go, cancel);
-        box.append(label, controls, outcome);
+        box.append(label, identity, controls, outcome);
         row.append(box);
         field.focus();
     }
@@ -9693,6 +9813,12 @@ document.addEventListener('DOMContentLoaded', () => {
             applyOsWording(data.os);
             applySandboxState(data.sandbox);
             applyAutonomy(data.autonomy, data.levels);
+            // The domain policy is its own request: it lives in the project's file rather
+            // than in settings, and it is the one block on this panel that can change
+            // without anybody touching the panel. Asking here also restarts the poll, so
+            // switching the sandbox network on and saving starts the cards working without
+            // a restart.
+            refreshNetPolicy().then(syncNetPoll);
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
@@ -9733,6 +9859,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Absent means on, matching vault::journal_enabled -- a setting that has never
             // been saved must not read as "off" here when the vault is in fact writing.
             document.getElementById('setting-vault-journal').checked = s.vault_journal !== false;
+            document.getElementById('setting-graft-autorefresh').checked = s.graft_auto_refresh !== false;
+            document.getElementById('setting-graft-track-all').checked = s.graft_track_all !== false;
             document.getElementById('setting-local-only').checked = s.local_only === true;
             // Network & Remote. Saved by Save Changes with everything else rather than the
             // moment the switch moves: Settings has one Save button, and a panel that
@@ -9794,6 +9922,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const voiceRateLabel = document.getElementById('voice-speed-value');
             if (voiceRateInput) voiceRateInput.value = String(window.AETHER_VOICE_RATE);
             if (voiceRateLabel) voiceRateLabel.textContent = `${window.AETHER_VOICE_RATE.toFixed(2).replace(/0$/, '')}×`;
+            window.AETHER_VOICE_PITCH = Math.max(-4, Math.min(4, Number(s.voice_pitch_semitones) || 0));
+            const voicePitchInput = document.getElementById('setting-voice-pitch');
+            const voicePitchLabel = document.getElementById('voice-pitch-value');
+            if (voicePitchInput) voicePitchInput.value = String(window.AETHER_VOICE_PITCH);
+            if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
             const quietEnabled = s.quiet_hours_enabled === true;
             const quietStart = s.quiet_hours_start || '22:00';
             const quietEnd = s.quiet_hours_end || '07:00';
@@ -9923,6 +10056,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 lan_autostart: document.getElementById('setting-lan-autostart')?.checked === true,
                 vault_path: document.getElementById('setting-vault-path').value.trim(),
                 vault_journal: document.getElementById('setting-vault-journal').checked,
+                graft_auto_refresh: document.getElementById('setting-graft-autorefresh').checked,
+                graft_track_all: document.getElementById('setting-graft-track-all').checked,
                 // Sent only from the native app: the browser fallback has no window for the
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.
@@ -9962,6 +10097,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 })(),
                 voice_startup_audible: document.getElementById('setting-voice-startup-audible').checked,
                 voice_playback_rate: Number(document.getElementById('setting-voice-speed')?.value || 1),
+                voice_pitch_semitones: Number(document.getElementById('setting-voice-pitch')?.value || 0),
                 quiet_hours_enabled: document.getElementById('setting-quiet-hours').checked,
                 quiet_hours_start: document.getElementById('setting-quiet-start').value || '22:00',
                 quiet_hours_end: document.getElementById('setting-quiet-end').value || '07:00',
@@ -10073,6 +10209,16 @@ document.addEventListener('DOMContentLoaded', () => {
             paintTheme(Aether1Theme.setTone(slot, input.value));
         });
     });
+
+    /* The switch that decides whether the desktop's accent is worn while following it. Applies
+       on the spot like everything else on this pane; nothing here is behind Save Changes. */
+    const themeDesktopAccentInput = document.getElementById('theme-desktop-accent');
+    if (themeDesktopAccentInput) {
+        themeDesktopAccentInput.addEventListener('change', () => {
+            voiceEngine.playSFX('click');
+            paintTheme(Aether1Theme.setDesktopAccent(themeDesktopAccentInput.checked));
+        });
+    }
 
     const btnThemeColoursReset = document.getElementById('btn-theme-colours-reset');
     if (btnThemeColoursReset) {
@@ -10805,11 +10951,65 @@ document.addEventListener('DOMContentLoaded', () => {
                     statusEl.textContent = `ℹ️ Graft status requires Tauri`;
                 }
             } catch (e) {
-                statusEl.textContent = '✗ Graft not installed. Install from https://github.com/nanonets/graft';
+                statusEl.textContent = '✗ Graft not found. Install it with: npm install -g @nanonets/graft';
             }
         } catch (e) {
             console.error('Error loading Graft status:', e);
         }
+    }
+
+    // The rows are built with DOM calls rather than interpolated HTML: a project is a
+    // folder on the operator's disk, so its name and path are not ours to trust, and a
+    // repository called `<img onerror=...>` would otherwise run here. It also means no
+    // inline onclick carrying a quoted path, which never escaped correctly.
+    function graftProjectRow(project) {
+        const row = document.createElement('div');
+        row.className = 'p-2 border-b border-slate-700 flex items-start gap-2';
+
+        const toggle = document.createElement('input');
+        toggle.type = 'checkbox';
+        toggle.checked = project.tracked === true;
+        toggle.className = 'mt-0.5 rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0 cursor-pointer';
+        toggle.title = 'Ask this project when answering code questions';
+        toggle.addEventListener('change', () => graftTrackProject(project.path, toggle.checked));
+        row.appendChild(toggle);
+
+        const body = document.createElement('div');
+        body.className = 'flex-1 min-w-0';
+
+        const head = document.createElement('div');
+        head.className = 'flex justify-between items-start gap-2';
+        const name = document.createElement('span');
+        name.className = 'font-semibold text-cyan-300';
+        name.textContent = project.name;
+        const status = document.createElement('span');
+        status.className = project.graft_status === 'Ready'
+            ? 'text-[9px] text-green-400 whitespace-nowrap'
+            : 'text-[9px] text-slate-400 whitespace-nowrap';
+        status.textContent = project.graft_status;
+        head.appendChild(name);
+        head.appendChild(status);
+
+        const path = document.createElement('div');
+        path.className = 'text-[9px] text-slate-500 break-all';
+        path.textContent = project.path;
+
+        body.appendChild(head);
+        body.appendChild(path);
+
+        // A project with no graph cannot answer anything, so the way to give it one sits on
+        // its own row rather than behind a single selection somewhere else.
+        if (project.graft_status !== 'Ready') {
+            const build = document.createElement('button');
+            build.type = 'button';
+            build.className = 'mt-1 text-[9px] font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-1.5 py-0.5 bg-cyan-950/40 cursor-pointer';
+            build.textContent = '🔨 Build graph';
+            build.addEventListener('click', () => graftBuildOne(project.path, build));
+            body.appendChild(build);
+        }
+
+        row.appendChild(body);
+        return row;
     }
 
     async function loadGraftProjects() {
@@ -10818,91 +11018,105 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!projectsList) return;
 
             if (!IS_TAURI) {
-                projectsList.innerHTML = '<div class="text-slate-400">Project detection requires Tauri</div>';
+                projectsList.textContent = 'Project detection requires Tauri';
                 return;
             }
 
-            projectsList.innerHTML = '<div class="text-slate-400">Detecting projects...</div>';
+            projectsList.textContent = 'Detecting projects...';
             const projects = await tauriInvoke('graft_detect_projects_rust');
 
+            projectsList.replaceChildren();
             if (!projects || projects.length === 0) {
-                projectsList.innerHTML = '<div class="text-slate-400">No repositories found in common locations</div>';
+                projectsList.textContent = 'No repositories found in common locations';
                 return;
             }
 
-            const selected = await tauriInvoke('graft_get_selected_project_rust');
-            const selectedPath = selected.path;
-
-            projectsList.innerHTML = projects.map(p => `
-                <div class="p-2 border-b border-slate-700 cursor-pointer hover:bg-slate-800 transition-colors"
-                     data-project-path="${p.path}"
-                     onclick="graftSelectProject('${p.path.replace(/'/g, "\\'")}')">
-                    <div class="flex justify-between items-start">
-                        <span class="font-semibold text-cyan-300">${p.name}</span>
-                        <span class="text-[9px] text-slate-400">${p.graft_status}</span>
-                    </div>
-                    <div class="text-[9px] text-slate-500 break-all">${p.path}</div>
-                    ${selectedPath === p.path ? '<div class="text-[9px] text-green-400 mt-1">✓ Selected</div>' : ''}
-                </div>
-            `).join('');
+            for (const project of projects) {
+                projectsList.appendChild(graftProjectRow(project));
+            }
         } catch (e) {
             console.error('Error loading Graft projects:', e);
-            document.getElementById('graft-projects-list').innerHTML =
-                `<div class="text-red-400 text-[10px]">Error: ${e.message || e}</div>`;
+            const projectsList = document.getElementById('graft-projects-list');
+            if (projectsList) {
+                projectsList.replaceChildren();
+                const error = document.createElement('div');
+                error.className = 'text-red-400 text-[10px]';
+                error.textContent = `Error: ${e.message || e}`;
+                projectsList.appendChild(error);
+            }
         }
     }
 
-    window.graftSelectProject = async function(projectPath) {
+    async function graftTrackProject(projectPath, tracked) {
         try {
             if (!IS_TAURI) return;
-
-            await tauriInvoke('graft_select_project_rust', { project_path: projectPath });
-
-            // Re-enable build button
-            const buildBtn = document.getElementById('btn-graft-build');
-            if (buildBtn) buildBtn.disabled = false;
-
-            // Reload project list to show selection
+            const result = await tauriInvoke('graft_track_project_rust', { projectPath, tracked });
+            // Turning one project off turns off "track every project", so the switch has to
+            // be redrawn from what Rust decided rather than from what was clicked.
+            const trackAll = document.getElementById('setting-graft-track-all');
+            if (trackAll) trackAll.checked = result.track_all === true;
             await loadGraftProjects();
-
-            appendMessage(currentAgentName, `📊 Selected project: ${projectPath}`);
         } catch (e) {
-            console.error('Error selecting project:', e);
-            appendMessage(currentAgentName, `❌ Error selecting project: ${e.message || e}`);
+            console.error('Error tracking project:', e);
+            appendMessage(currentAgentName, `❌ Could not change that project: ${e.message || e}`);
+            await loadGraftProjects();
         }
-    };
+    }
+
+    async function graftBuildOne(projectPath, button) {
+        if (!IS_TAURI) return;
+        const label = button ? button.textContent : null;
+        try {
+            if (button) {
+                button.disabled = true;
+                button.textContent = '⏳ Building...';
+            }
+            await tauriInvoke('graft_build_graph_rust', { projectPath });
+            await loadGraftProjects();
+            appendMessage(currentAgentName, `✓ Graft graph built for: ${projectPath}`);
+            return true;
+        } catch (e) {
+            console.error('Error building Graft graph:', e);
+            appendMessage(currentAgentName, `❌ Failed to build the graph for ${projectPath}: ${e.message || e}`);
+            if (button) {
+                button.disabled = false;
+                button.textContent = label;
+            }
+            return false;
+        }
+    }
 
     document.getElementById('btn-graft-detect')?.addEventListener('click', loadGraftProjects);
 
-    document.getElementById('btn-graft-build')?.addEventListener('click', async () => {
+    // Built one at a time on purpose: a first build parses every file in a repository, and
+    // several at once would compete for the same cores and make every one of them slower.
+    // The count in the label is the only progress there is to show.
+    document.getElementById('btn-graft-build-all')?.addEventListener('click', async () => {
+        const button = document.getElementById('btn-graft-build-all');
+        if (!IS_TAURI || !button) return;
+        const label = button.textContent;
         try {
-            if (!IS_TAURI) return;
-
-            const selected = await tauriInvoke('graft_get_selected_project_rust');
-            if (!selected.path) {
-                appendMessage(currentAgentName, '⚠️ Please select a project first');
+            button.disabled = true;
+            const projects = await tauriInvoke('graft_detect_projects_rust');
+            const missing = (projects || []).filter(p => p.graft_status !== 'Ready');
+            if (missing.length === 0) {
+                appendMessage(currentAgentName, '✓ Every detected project already has a graph.');
                 return;
             }
 
-            const buildBtn = document.getElementById('btn-graft-build');
-            buildBtn.disabled = true;
-            buildBtn.textContent = '⏳ Building...';
-
-            await tauriInvoke('graft_build_graph_rust', { project_path: selected.path });
-
-            // Reload status to show "Ready"
-            await loadGraftStatus();
+            let built = 0;
+            for (const [index, project] of missing.entries()) {
+                button.textContent = `⏳ Building ${index + 1}/${missing.length}...`;
+                if (await graftBuildOne(project.path, null)) built += 1;
+            }
+            appendMessage(
+                currentAgentName,
+                `✓ Built ${built} of ${missing.length} missing graph${missing.length === 1 ? '' : 's'}.`
+            );
+        } finally {
+            button.textContent = label;
+            button.disabled = false;
             await loadGraftProjects();
-
-            appendMessage(currentAgentName, `✓ Graft graph built for: ${selected.path}`);
-            buildBtn.textContent = '🔨 Build Graph';
-            buildBtn.disabled = false;
-        } catch (e) {
-            console.error('Error building Graft graph:', e);
-            appendMessage(currentAgentName, `❌ Failed to build Graft graph: ${e.message || e}`);
-            const buildBtn = document.getElementById('btn-graft-build');
-            buildBtn.textContent = '🔨 Build Graph';
-            buildBtn.disabled = false;
         }
     });
 
@@ -11152,9 +11366,18 @@ document.addEventListener('DOMContentLoaded', () => {
         window.AETHER_VOICE_RATE = rate;
         if (voiceRateLabel) voiceRateLabel.textContent = `${rate.toFixed(2).replace(/0$/, '')}×`;
     });
+    const voicePitchInput = document.getElementById('setting-voice-pitch');
+    const voicePitchLabel = document.getElementById('voice-pitch-value');
+    voicePitchInput?.addEventListener('input', () => {
+        window.AETHER_VOICE_PITCH = Math.max(-4, Math.min(4, Number(voicePitchInput.value) || 0));
+        if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
+    });
     document.getElementById('btn-voice-audition')?.addEventListener('click', async () => {
         const url = await synthesizeSpeechUrl('This is how the current Aether1 voice sounds.', null);
-        if (url) await voiceEngine.playTTSAudio(url, { playbackRate: window.AETHER_VOICE_RATE || 1 });
+        if (url) await voiceEngine.playTTSAudio(url, {
+            playbackRate: window.AETHER_VOICE_RATE || 1,
+            pitchSemitones: window.AETHER_VOICE_PITCH || 0,
+        });
     });
     const syncQuietHours = () => {
         window.AETHER_QUIET_HOURS = {
@@ -11269,6 +11492,325 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+
+    // --- The sandbox's domain policy --------------------------------------------------
+    //
+    // Two surfaces over one thing. The Settings card lists what this project's sandbox may
+    // connect to and lets a domain be added or taken away. The HUD card is what appears
+    // when a command asks for a host that is not on the list: the proxy holds the
+    // connection open while the card is up, and the choice on it is what releases or
+    // refuses the connection.
+    //
+    // Before this, the only way past a refused host was to read a 403 out of a build log,
+    // work out which host it was about, and type `aether1 code net-allow`. That friction
+    // is what makes people switch on "Run without a sandbox" -- so the card is a security
+    // control, not a convenience. See src-tauri/src/code_proxy.rs.
+
+    /* The last status seen, which is what the poll below is gated on. */
+    let lastNetStatus = null;
+
+    /* The one transport split, in one place. Every call below returns the same status
+       object -- the read does, and so does each write, so that a change is drawn from what
+       the backend says is now true rather than from what the frontend asked for. */
+    async function netPolicyApi(path, tauriCommand, body) {
+        if (IS_TAURI) return tauriInvoke(tauriCommand, body || {});
+        const options = body
+            ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+            : (path === '/api/code/net' ? {} : { method: 'POST' });
+        const resp = await apiFetch(path, options);
+        if (!resp.ok) throw new Error((await resp.text()) || `request failed: ${resp.status}`);
+        return resp.json();
+    }
+
+    function netPolicyHint(text, bad) {
+        const hint = document.getElementById('code-net-hint');
+        if (!hint) return;
+        hint.textContent = text || '';
+        hint.classList.toggle('hidden', !text);
+        hint.classList.toggle('text-amber-300', !!bad);
+        hint.classList.toggle('text-slate-400', !bad);
+    }
+
+    /* One domain, as a chip. A starter domain and one the operator typed look the same in
+       the effective list but are not removed the same way, so the chip says which it is --
+       and a `deny` row is shown too, because a starter domain that has been taken away is
+       invisible otherwise and looks like a bug. */
+    function netDomainChip(domain, kind) {
+        const chip = document.createElement('span');
+        const tone = kind === 'removed'
+            ? 'border-rose-500/40 text-rose-300/80 bg-rose-950/20 line-through'
+            : kind === 'added'
+                ? 'border-emerald-500/40 text-emerald-200 bg-emerald-950/20'
+                : 'border-cyan-500/30 text-cyan-200/80 bg-slate-900/60';
+        chip.className = `inline-flex items-center gap-1 text-[10px] font-mono border rounded px-1.5 py-0.5 ${tone}`;
+        chip.title = kind === 'removed'
+            ? `${domain} is refused: this project's policy takes it away.`
+            : kind === 'added'
+                ? `${domain} was allowed for this project.`
+                : `${domain} is on the starter list -- a host a build reaches on its own.`;
+        const label = document.createElement('span');
+        label.textContent = domain;
+        chip.appendChild(label);
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'opacity-60 hover:opacity-100 cursor-pointer';
+        // Taking away and putting back are the same button in two directions, because the
+        // chip already says which state it is in.
+        button.textContent = kind === 'removed' ? '+' : '×';
+        button.title = kind === 'removed' ? `Allow ${domain} again` : `Stop allowing ${domain}`;
+        button.onclick = async () => {
+            button.disabled = true;
+            try {
+                const status = kind === 'removed'
+                    ? await netPolicyApi('/api/code/net/allow', 'code_net_allow_rust', { domain })
+                    : await netPolicyApi('/api/code/net/forget', 'code_net_forget_rust', { domain });
+                applyNetPolicy(status);
+                netPolicyHint(kind === 'removed' ? `${domain} is allowed again.` : `${domain} is no longer allowed.`, false);
+            } catch (e) {
+                button.disabled = false;
+                netPolicyHint(`That did not change: ${e.message || e}`, true);
+            }
+        };
+        chip.appendChild(button);
+        return chip;
+    }
+
+    /* Draws the Settings card from a status object. */
+    function applyNetPolicy(status) {
+        if (!status) return;
+        lastNetStatus = status;
+        const state = document.getElementById('code-net-state');
+        const list = document.getElementById('code-net-domains');
+        const add = document.getElementById('code-net-add');
+        const addBtn = document.getElementById('code-net-add-btn');
+        if (!state || !list) return;
+
+        // No project folder, so there is no file to hold a policy. Say that rather than
+        // listing the starter domains as though they applied to something.
+        if (!status.root) {
+            state.textContent = 'Set a project folder above, and the policy lives in that project’s own .aether/policy.json.';
+            state.classList.add('text-amber-300');
+            list.innerHTML = '';
+            if (add) add.disabled = true;
+            if (addBtn) addBtn.disabled = true;
+            return;
+        }
+        if (add) add.disabled = false;
+        if (addBtn) addBtn.disabled = false;
+        state.classList.remove('text-amber-300');
+        const where = `Kept in ${status.file} under ${status.root}.`;
+        // An allowed-domain list is a confusing thing to read while the sandbox has no
+        // network at all, so the switch above is reported here rather than left to be
+        // inferred from a list that is not in force.
+        state.textContent = status.network
+            ? where
+            : `${where} The network switch above is off, so nothing reaches any of these yet.`;
+
+        list.innerHTML = '';
+        const starter = new Set(status.starter || []);
+        const added = new Set(status.added || []);
+        for (const domain of status.allowed || []) {
+            list.appendChild(netDomainChip(domain, added.has(domain) && !starter.has(domain) ? 'added' : 'starter'));
+        }
+        for (const domain of status.removed || []) {
+            list.appendChild(netDomainChip(domain, 'removed'));
+        }
+
+        // What a build asked for and did not get, which is the question an operator
+        // arrives with. `pending` is "it wanted this"; `denied` is "and the answer was
+        // no, for this reason" -- the reason matters, because "nobody answered" sends you
+        // to the HUD and "refused" sends you here.
+        const refusedRow = document.getElementById('code-net-refused-row');
+        const refused = document.getElementById('code-net-refused');
+        if (refusedRow && refused) {
+            const words = { refused: 'you refused it', unanswered: 'the card went unanswered', 'not asked': 'no window was open to ask' };
+            const lines = (status.denied || []).slice().reverse()
+                .map((entry) => `${entry.host} — ${words[entry.why] || entry.why}`);
+            // A host that asked and was never decided on at all still belongs here.
+            const decided = new Set((status.denied || []).map((entry) => entry.host));
+            for (const host of status.pending || []) {
+                if (!decided.has(host)) lines.push(`${host} — asked for, not allowed`);
+            }
+            refusedRow.classList.toggle('hidden', lines.length === 0);
+            refused.textContent = lines.join('; ');
+        }
+    }
+
+    /* The HUD card. Three choices and no default: the connection is being held open while
+       this is on screen, and picking for the operator is the thing this whole mechanism
+       exists not to do. */
+    function renderNetAskCard(ask) {
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded my-2 text-sm msg-agent self-start mr-8 border border-amber-500/50 bg-amber-950/20';
+        card.dataset.netAskId = ask.id;
+
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-amber-500/30 text-xs font-mono text-amber-300';
+        header.innerHTML = `<span>🌐 <strong>A COMMAND WANTS THE NETWORK</strong></span><span>${new Date().toLocaleTimeString()}</span>`;
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'text-cyan-100 font-mono text-xs my-2 break-all';
+        body.textContent = ask.port === 443 || ask.port === 80 ? ask.host : `${ask.host}:${ask.port}`;
+        card.appendChild(body);
+
+        const reason = document.createElement('div');
+        reason.className = 'text-[10px] font-mono text-amber-200/80 my-1';
+        // Said on the card, not left in the docs: allowing a domain allows it entirely,
+        // and what the sandbox can read is the thing the operator is actually risking.
+        reason.textContent = `A command in the sandbox is trying to reach ${ask.host}, which is not on this project’s allowed list. `
+            + 'Allowing it allows that host entirely — it can be sent whatever the sandbox can read, which is this project’s folder.'
+            + (ask.waiting > 1 ? ` ${ask.waiting} connections are waiting on this.` : '');
+        card.appendChild(reason);
+
+        const status = document.createElement('div');
+        status.className = 'text-xs font-mono text-slate-400 mt-2';
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex flex-wrap gap-2 mt-2';
+        const choices = [
+            ['once', '↻ Allow once', 'border-amber-500/50 text-amber-200 bg-amber-950/40 hover:bg-amber-900/40', 'Lets this attempt through and writes nothing. The next one asks again.'],
+            ['project', '✔ Allow for this project', 'border-emerald-500/50 text-emerald-300 bg-emerald-950/40 hover:bg-emerald-900/40', 'Writes the domain into this project’s .aether/policy.json. Nothing asks again.'],
+            ['deny', '✖ Refuse', 'border-rose-500/50 text-rose-300 bg-rose-950/40 hover:bg-rose-900/40', 'Refuses the connection and records it in Settings.'],
+        ];
+        const made = choices.map(([key, label, tone, title]) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `text-xs font-mono border px-3 py-1 rounded cursor-pointer ${tone}`;
+            button.textContent = label;
+            button.title = title;
+            button.dataset.decision = key;
+            buttons.appendChild(button);
+            return button;
+        });
+
+        const settle = (text, tone) => {
+            buttons.remove();
+            status.className = `text-xs font-mono mt-2 ${tone}`;
+            status.textContent = text;
+        };
+
+        for (const button of made) {
+            button.onclick = async () => {
+                for (const other of made) other.disabled = true;
+                status.textContent = 'Telling the command…';
+                try {
+                    const report = await netPolicyApi('/api/code/net/decide', 'code_net_decide_rust', {
+                        id: ask.id,
+                        decision: button.dataset.decision,
+                    });
+                    applyNetPolicy(report.status);
+                    // "settled" is false when the command gave up between the click and
+                    // the answer reaching it. For `project` the policy was still written,
+                    // and saying "allowed" about a command that has already failed would
+                    // send the operator looking for output that never comes.
+                    if (!report.settled) {
+                        settle(button.dataset.decision === 'project'
+                            ? `${ask.host} is allowed for this project now, but the command had already given up waiting. Run it again.`
+                            : 'The command gave up waiting before this was answered. Run it again.', 'text-amber-300');
+                        return;
+                    }
+                    settle({
+                        once: `↻ ${ask.host} allowed for this attempt only`,
+                        project: `✔ ${ask.host} allowed for this project`,
+                        deny: `✖ ${ask.host} refused`,
+                    }[button.dataset.decision], button.dataset.decision === 'deny' ? 'text-slate-400' : 'text-emerald-300');
+                } catch (e) {
+                    settle(`✖ Failed: ${e.message || e}`, 'text-rose-300');
+                }
+            };
+        }
+
+        card.appendChild(buttons);
+        card.appendChild(status);
+        chatContainer.appendChild(card);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        voiceEngine.playSFX('alert');
+        return card;
+    }
+
+    /* Fetches the policy and draws a card for anything waiting that isn't already up.
+       Asking is also what marks this window as present -- see commands::code_net_status --
+       so this is the heartbeat the proxy holds connections open against. */
+    async function refreshNetPolicy() {
+        let status;
+        try {
+            status = await netPolicyApi('/api/code/net', 'code_net_status_rust');
+        } catch (e) {
+            console.warn('[AETHER1] could not read the sandbox network policy:', e);
+            return null;
+        }
+        applyNetPolicy(status);
+        for (const ask of status.asks || []) {
+            if (!chatContainer.querySelector(`[data-net-ask-id="${ask.id}"]`)) {
+                renderNetAskCard(ask);
+            }
+        }
+        return status;
+    }
+
+    document.getElementById('code-net-add-btn')?.addEventListener('click', async () => {
+        const box = document.getElementById('code-net-add');
+        const domain = (box?.value || '').trim();
+        if (!domain) return;
+        voiceEngine.playSFX('click');
+        try {
+            applyNetPolicy(await netPolicyApi('/api/code/net/allow', 'code_net_allow_rust', { domain }));
+            if (box) box.value = '';
+            netPolicyHint(`${domain} is allowed for this project.`, false);
+        } catch (e) {
+            netPolicyHint(`${domain} was not added: ${e.message || e}`, true);
+        }
+    });
+
+    document.getElementById('code-net-add')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('code-net-add-btn')?.click();
+        }
+    });
+
+    document.getElementById('code-net-clear-btn')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        try {
+            applyNetPolicy(await netPolicyApi('/api/code/net/clear', 'code_net_clear_rust', null));
+        } catch (e) {
+            netPolicyHint(`That list was not cleared: ${e.message || e}`, true);
+        }
+    });
+
+    /* The poll, gated twice.
+       The sandbox's network switch being off means the proxy can never be asked anything,
+       so there is nothing to poll for -- and `document.hidden` keeps a parked window out
+       of it, for the same reason the telemetry sampler parks: a HUD behind a game should
+       cost nothing. One consequence worth knowing: with no window polling, the proxy does
+       not wait at all. An unlisted host is refused immediately, with a message that says
+       so. That is the fail-closed direction, and it is what keeps the CLI and the test
+       suite behaving as they did before any of this existed. */
+    let netPollTimer = null;
+    const NET_POLL_MS = 5000;
+
+    function syncNetPoll() {
+        const wanted = !document.hidden && !!(lastNetStatus && lastNetStatus.network);
+        if (wanted && !netPollTimer) {
+            netPollTimer = setInterval(() => { refreshNetPolicy().then(syncNetPoll); }, NET_POLL_MS);
+        } else if (!wanted && netPollTimer) {
+            clearInterval(netPollTimer);
+            netPollTimer = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        // Coming back from hidden: ask once straight away rather than waiting out an
+        // interval, because a command may have been blocked the whole time the window was
+        // parked.
+        if (!document.hidden) refreshNetPolicy().then(syncNetPoll);
+        else syncNetPoll();
+    });
+
+    refreshNetPolicy().then(syncNetPoll);
+
     document.getElementById('setting-sfx')?.addEventListener('change', (e) => {
         applySfx(e.target.checked);
     });
@@ -11328,10 +11870,21 @@ document.addEventListener('DOMContentLoaded', () => {
     hologram.setZoom(currentZoom);
     paintTheme(currentTheme);
 
-    /* Nothing chosen yet means the OS is still the authority, so a switch to dark mode while
-       the window is open should be followed rather than waiting for a restart. Aether1Theme
-       stops calling this the moment a mode is picked. */
-    Aether1Theme.followSystem(paintTheme);
+    /* Nothing chosen yet means the desktop is still the authority, so a switch to dark mode --
+       or a new accent colour picked in the system's own settings -- should be followed rather
+       than waiting for a restart. Aether1Theme stops calling this the moment a mode is picked.
+       
+       The fetcher is passed because the accent can only come from the native side, and the HTTP
+       path to it wants the device token that apiFetch carries; without one the browser fallback
+       would be refused by a LAN server and the window would quietly keep the designed accent.
+       Not awaited: the window is already painted with a correct theme, and the probe only
+       refines it. */
+    Aether1Theme.followDesktop(paintTheme, async () => {
+        if (IS_TAURI) return tauriInvoke('desktop_theme_rust');
+        const resp = await apiFetch('/api/desktop/theme');
+        if (!resp.ok) throw new Error(`desktop theme failed: ${resp.status}`);
+        return resp.json();
+    });
     loadStaticInfo();
     loadSettings();
     // A proposal outlives the conversation that made it, so anything still waiting from a

@@ -101,8 +101,18 @@ Three properties follow:
   inside the tunnel, and installs no certificate anywhere.
 * **The question is about a domain, once.** `.aether/policy.json` in the project holds
   `allow` and `deny` lists over a starter set of package registries and source hosts; `deny`
-  wins. A refused host is recorded and shown by `aether1 code net`, so "the build said it
-  could not reach something" and "what did it want" are one question.
+  wins. A refused host is recorded and shown by `aether1 code net` and in Settings, so "the
+  build said it could not reach something" and "what did it want" are one question.
+* **An unlisted host is asked about, not just refused.** With a HUD open, the proxy holds the
+  connection open and raises a card: allow once, allow for this project, or refuse. *Once*
+  writes nothing; *for this project* writes the domain into the policy file; *refuse* records
+  it. With no HUD open -- the CLI, `--serve` with nobody logged in, the tests -- nothing is
+  held and the host is refused at once, with a message that says there was nobody to ask. An
+  unanswered card is a refusal too, after 90 seconds. **No operator means no, never maybe.**
+
+  The card is a security control and not a convenience: without it, the way past a refused
+  host was to read a 403 out of a build log and type a command, and that friction is what
+  makes an operator switch on `code_run_unconfined` -- answering a boundary by removing it.
 
 What this is not: a content filter. An allowed host is allowed entirely -- which is bounded
 by the sandbox, since what the command can read is the project folder and nothing else.
@@ -217,27 +227,94 @@ Two consequences worth stating rather than discovering:
 * **The phrase is a standing credential.** Anyone who knows it can pair a new device until it
   is rotated, and revoking a device does not revoke the phrase. `aether1 pair` rotates it and
   clears every device.
-* **A WebSocket's credential travels as a subprotocol**, not in the URL. A browser's
+* **A WebSocket is opened with a single-use ticket, not with the device token.** A browser's
   `WebSocket` constructor cannot send an `Authorization` header, but its second argument
-  becomes `Sec-WebSocket-Protocol`, which is the one handshake header a page can set. A
-  client offers `aether1.token.<token>` alongside a plain `aether1`, and the server selects
-  the plain one, so the credential travels in one direction and never comes back. `?token=`
-  is not read at all: a URL is the part of a request that gets written down, by access logs,
-  by reverse proxies and by their error pages, and this token is not a short-lived ticket but
-  the credential for every other request that device makes. A header is not immune to being
-  logged either, which is why a short-lived socket ticket would still be better; it is not
-  what was open, though, and the query string was.
+  becomes `Sec-WebSocket-Protocol`, which is the one handshake header a page can set. So the
+  credential in a handshake is whatever rides there, and the question is what it is worth to
+  whoever reads it later. `POST /api/ws-ticket`, behind the ordinary token wall, returns 32
+  bytes of randomness that open **one** socket within **one minute**; only its SHA-256 is
+  held, in memory, and the middleware consumes it before upgrading. A client offers
+  `aether1.ticket.<ticket>` alongside a plain `aether1`, and the server selects the plain
+  one, so the credential travels in one direction and never comes back.
 
-`discovery.rs` announces over DNS-SD, which anyone on the network can impersonate, so a
-phrase can be typed into a convincing fake. A PAKE (SPAKE2) is the answer and is not written
-yet.
+  This went through three forms, and the reasoning is the useful part. `?token=` was wrong
+  because a URL is the part of a request that gets written down -- access logs record the
+  request line, so do reverse proxies and their error pages. Moving it to the subprotocol
+  header helped but did not settle it, because logging request headers is a checkbox on
+  everything that proxies, and what was being written down was the credential for every other
+  request that device makes, good until `aether1 revoke`. A ticket settles it by making the
+  logged thing worthless rather than by hiding it better: replay the handshake and the answer
+  is 401, because the first socket spent it.
+
+  A device token offered in a handshake is now refused outright, with a refusal that says to
+  fetch a ticket -- not counted against the attempt limiter, since a stale tab is a client
+  version, not a guess. A wrong or replayed ticket **is** counted. `?token=` and `?ticket=`
+  are not read at all.
+
+`discovery.rs` announces over DNS-SD, which anyone on the network can impersonate: a machine
+that answers in another's name appears in the scan list beside the real thing, and the name
+on the row proves nothing. The certificate does, so **a pairing credential is bound to the
+certificate of the machine it is for** and the credential itself never travels.
+
+What is sent is `HKDF(ikm = SHA-256 of the credential, salt = the fingerprint of the
+certificate on the other end of this TLS connection, info = "aether1 pairing credential
+binding v1")`, computed in `serve_auth::bind_to_certificate`. The hash is the input rather
+than the credential because it is the one form both ends hold: the pairing machine derives
+it from the phrase it was given, and the server has had it on disk since the phrase was
+minted. So nothing on disk changed shape for this, and the fingerprint is a salt rather than
+a second secret -- a leaked `serve_token.hash` still hands out nothing usable.
+
+The consequence is that an impostor collects a proof salted with *its own* certificate, which
+the machine it was impersonating cannot accept. Making a proof the real machine would accept
+needs the phrase, which never leaves the machine it was typed on.
+
+Three things follow from that:
+
+* **The standing phrase is no longer accepted in the clear at `/api/pair`.** A correct phrase
+  sent that way is refused in words that say where a phrase does work, rather than as
+  "wrong".
+* **A one-time code still is**, because a browser cannot see which certificate it reached and
+  a code is the far smaller prize: single use, ten minutes, and alive only while the operator
+  is deliberately pairing. The browser gate (`frontend/js/lan-auth.js`) asks for a code.
+* **The fingerprint is put in front of the operator either way.** `GET /api/pair` reports it,
+  the pairing box in Network & Remote shows the one read from the handshake and will not pair
+  until the operator says it matches, the serving machine shows its own in the same pane and
+  prints it at startup, and the fingerprint the operator accepted is re-checked at the moment
+  of pairing so a machine that swaps certificates in between is refused rather than pinned.
+
+A PAKE (SPAKE2) is still the stronger answer and is not written yet. What binding does not
+do is protect a phrase disclosed some other way -- read off a screen, pasted into a message --
+and it is only as good as the certificate's privacy: a machine whose `serve_key.pem` has been
+taken can make proofs for its own certificate, which is already true of everything else that
+key protects. The HMAC and HKDF are hand-rolled over `sha2` and held to the RFC 4231 and
+RFC 5869 test vectors in `serve_auth`'s tests; the end-to-end refusal is
+`peers::tests::a_proof_collected_by_an_impostor_is_refused_by_the_real_server`, which needs a
+real `--serve --lan` and so is `#[ignore]`d.
 
 ## 6. Leaving the machine
 
 Local-only mode is enforced at the network boundary rather than in the UI: the update check,
-the cloud providers, cloud speech and model downloads each refuse. The known weakness is that
-each subsystem asks `local_only_enabled()` for itself, so a new one can forget to; a single
-outbound-policy object would make that regression impossible rather than merely unlikely.
+the cloud providers, cloud speech and model downloads each refuse.
+
+There is one place that decision is made. `net::require_online` (`src/net.rs`) owns it, and
+`net::get`/`net::post` are the only way to build an outbound request: a subsystem that wants
+the network has to ask for a request, and asking for one is passing the check. There is no
+second way, because `scripts/check_egress_gate.sh` fails the build if ureq's request verbs
+appear in any file but that one, if a second HTTP client is added to the manifest, if no
+entry point loads the policy, or if the gate stops consulting the setting. Previously each
+subsystem asked `local_only::enabled()` for itself across nineteen call sites, all of them
+correct, and the twentieth was the one that could forget silently.
+
+The gate keeps the local/remote distinction rather than flattening it: a request to loopback
+or to a private address is allowed whatever the mode says, because reaching a model server
+on this machine or on the LAN is the point of the platform. That judgement is
+`local_only::is_local_endpoint`, made on the URL rather than on the provider's name, so an
+"Ollama" endpoint pointing at a rented box is still outbound traffic. The gate is handed the
+settings database once in `build_llm_engine` -- the one path the native app, `--serve` and
+every CLI subcommand share -- and reads the setting fresh at each decision, so switching the
+mode in Settings takes effect mid-session. Before that install has run it refuses anything
+not provably local, which is the direction worth failing in; `aether1 doctor` reports whether
+it has.
 
 ## 7. Updates
 
@@ -254,11 +331,11 @@ Listed here rather than implied by silence:
 * Windows confinement for `run` (section 1).
 * The same `openat` discipline on Windows, where `edit_file` and `create_file` still
   resolve a path twice (section 2).
-* A short-lived socket ticket rather than the device token itself, and a prominent statement
-  of what the pairing phrase is (section 5).
-* A Settings surface for the domain policy; today it is `aether1 code net` and the project's
-  own `.aether/policy.json` (section 1b).
-* One outbound network policy object rather than a check per subsystem (section 6).
-* A PAKE for pairing, so a spoofed announcement cannot collect a phrase (section 5).
+* A prominent statement of what the pairing phrase is -- it is a standing credential, and
+  the interface does not say so where an operator is reading it (section 5).
+* A PAKE for pairing. A spoofed announcement can no longer collect a usable phrase --
+  credentials are bound to the certificate they are sent to (section 5) -- but SPAKE2 would
+  remove the one-time code's remaining exposure in a browser, where no fingerprint can be
+  checked, and the need to compare a fingerprint by eye at all (section 5).
 * A second-pass audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri
   capability set, where prompt injection and tool confusion are the next class of issue.

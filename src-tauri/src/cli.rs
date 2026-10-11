@@ -1401,6 +1401,15 @@ fn run_code_net(allow: Option<String>) -> Result<String, String> {
         }
         out.push_str("\n  Allow one with `aether1 code net-allow <domain>`.\n");
     }
+    // The other surface, said here because an operator reading this list is the operator
+    // who would otherwise go on typing net-allow for every host a build wants. With the
+    // HUD open the question comes to them instead; without it, this command is the whole
+    // of it, which is why the CLI never waits for an answer.
+    out.push_str(
+        "\n  With the Aether1 window open, an unlisted host raises a card there instead:\n\
+         \x20   allow once, allow for this project, or refuse. From here there is nobody to\n\
+         \x20   ask, so an unlisted host is refused at once.\n",
+    );
     Ok(out)
 }
 
@@ -2133,8 +2142,11 @@ fn run_pair() -> Result<String, String> {
     Ok(format!(
         "New --lan pairing phrase (shown once -- write it down now):\n\n    {phrase}\n\n\
          {devices}Any phrase paired before this no longer works. Type this one into another \
-         AETHER1 instance's pairing prompt, or POST it as {{\"phrase\": ...}} to /api/pair, to \
-         let it reach this machine.\n\n\
+         AETHER1 instance's pairing prompt to let it reach this machine.\n\n\
+         The phrase is only accepted bound to this machine's certificate, which is what the \
+         app's own pairing sends, so it cannot be POSTed to /api/pair as it stands and \
+         cannot be collected by anything answering on the network in this machine's name. \
+         To pair from a browser instead, ask this machine for a one-time code.\n\n\
          To cut off one machine rather than all of them, use `aether1 devices` and \
          `aether1 revoke <id>` instead."
     ))

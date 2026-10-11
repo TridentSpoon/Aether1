@@ -144,6 +144,10 @@ pub fn status(engine: &LlmEngine, managed: &ManagedServer) -> Value {
         "paired_peers": paired_peers_payload(),
         // Which paired machine, if any, answers when this one has no model of its own.
         "chat_peer": engine.db().get_setting_string(crate::peers::HELPER_SETTING, ""),
+        // The certificate this machine identifies itself by, so the operator can read it
+        // out to whoever is pairing and they can check it against what their own scan
+        // shows. Null until --lan has run once and made a certificate.
+        "fingerprint": crate::serve_tls::existing_fingerprint(),
     })
 }
 
@@ -335,8 +339,9 @@ pub fn pair_with_peer(
     address: &str,
     port: u16,
     secret: &str,
+    expect_fingerprint: Option<&str>,
 ) -> Result<Value, String> {
-    let peer = crate::peers::pair_with(name, address, port, secret)?;
+    let peer = crate::peers::pair_with(name, address, port, secret, expect_fingerprint)?;
     let mut report = status(engine, managed);
     report["paired_with"] = json!({
         "name": peer.name,
@@ -344,6 +349,19 @@ pub fn pair_with_peer(
         "port": peer.port,
     });
     Ok(report)
+}
+
+/// The certificate a machine found by a scan identifies itself by, asked before anything
+/// is typed at it.
+///
+/// What the pane puts in front of the operator, and the reason pairing can be trusted at
+/// all: a machine is found over DNS-SD, which anyone on the network can answer in anyone
+/// else's name, so the name in the list proves nothing. The fingerprint does -- it is the
+/// one thing an impostor cannot copy, and the other machine prints it at startup and shows
+/// it in its own pane for exactly this comparison.
+pub fn peer_fingerprint(address: &str, port: u16) -> Result<Value, String> {
+    let fingerprint = crate::peers::fingerprint_of(address, port)?;
+    Ok(json!({ "address": address, "port": port, "fingerprint": fingerprint }))
 }
 
 /// Asks a paired machine what it can run, over the token it gave when it paired.

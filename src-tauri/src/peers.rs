@@ -12,13 +12,17 @@
 //!
 //! Three decisions worth keeping:
 //!
-//! 1. **The certificate is trusted on first pairing and pinned afterwards.** A LAN server
-//!    signs its own certificate -- no public authority will vouch for an address on your own
-//!    network -- so there is nothing to check it against the first time. What there *is* is
-//!    the next time: the fingerprint seen while pairing is stored with the token, and a
-//!    later connection to that machine must present the same one or it is refused. That
-//!    turns an unauthenticated first hop into a relationship that cannot be silently taken
-//!    over, which is the same bargain SSH makes.
+//! 1. **The certificate is shown, confirmed, then pinned.** A LAN server signs its own
+//!    certificate -- no public authority will vouch for an address on your own network --
+//!    so there is no authority to check it against. There are two other things. The
+//!    fingerprint is read before anything is typed and put in front of the operator to
+//!    compare against what that machine shows for itself, since a machine found over
+//!    DNS-SD is only claiming to be who it says; and whatever is typed is sent bound to
+//!    that certificate rather than in the clear (`serve_auth::bind_to_certificate`), so
+//!    even an operator who does not compare by eye cannot hand a working credential to an
+//!    impostor. The fingerprint is then stored with the token, and a later connection to
+//!    that machine must present the same one or it is refused -- the same bargain SSH
+//!    makes, with the first hop no longer taken on trust alone.
 //! 2. **The request is written by hand over rustls rather than through the HTTP client.**
 //!    ureq cannot both accept an unknown certificate and tell us which one it accepted, and
 //!    the fingerprint is the entire point. One POST with a known body is a small enough
@@ -296,34 +300,117 @@ fn request(
     Ok((status, answer, fingerprint))
 }
 
-pub fn pair_with(name: &str, address: &str, port: u16, secret: &str) -> Result<Peer, String> {
+/// What to send in place of the secret: each credential the typed string could be, bound
+/// to the certificate of the machine it is for.
+///
+/// Both are sent when the words parse as a phrase, because this end does not get to decide
+/// which of the two the operator meant -- the other machine knows which of its own
+/// credentials matches. Sending both gives nothing away: each is bound to the same
+/// certificate, so to anyone that certificate does not belong to, both are noise.
+fn bound_proofs(secret: &str, fingerprint: &str) -> Vec<(&'static str, String)> {
+    let mut proofs = Vec::new();
+    let code = crate::serve_auth::bind_to_certificate(
+        &crate::serve_auth::code_credential_hash(secret),
+        fingerprint,
+    );
+    if !code.is_empty() {
+        proofs.push(("code_proof", code));
+    }
+    if let Ok(hash) = crate::serve_auth::phrase_credential_hash(secret) {
+        let phrase = crate::serve_auth::bind_to_certificate(&hash, fingerprint);
+        if !phrase.is_empty() {
+            proofs.push(("phrase_proof", phrase));
+        }
+    }
+    proofs
+}
+
+/// Asks a machine which certificate it identifies itself by, before anything secret is
+/// typed at it.
+///
+/// Two jobs, and the second is the point. It gives the operator a fingerprint to compare
+/// against the one the other machine prints at startup and shows in its own Network &
+/// Remote pane -- the only way to tell a real machine from something that answered a DNS-SD
+/// query in its name. And it gives this machine the salt to bind its pairing proof with, so
+/// that even an operator who does not compare by eye cannot hand a working credential to an
+/// impostor: the proof is only good against the certificate it was made for.
+///
+/// The fingerprint returned is the one from the handshake, not the one in the body. A
+/// machine could claim anything in a JSON field; it cannot claim a certificate it has no
+/// key for.
+pub fn fingerprint_of(address: &str, port: u16) -> Result<String, String> {
+    let known = paired_peers()
+        .into_iter()
+        .find(|peer| peer.address == address && peer.port == port);
+    let head = format!("GET /api/pair HTTP/1.1\r\nHost: {address}:{port}\r\nConnection: close\r\n");
+    let (_status, _answer, fingerprint) = request(
+        address,
+        port,
+        known.as_ref().map(|peer| peer.fingerprint.clone()),
+        &head,
+        None,
+    )?;
+    Ok(fingerprint)
+}
+
+/// Pairs with a machine, proving knowledge of its code or phrase without ever sending
+/// either one.
+///
+/// `expect_fingerprint`, when given, is the fingerprint the operator was shown and
+/// accepted. The certificate is re-checked against it here rather than trusted from the
+/// moment it was displayed, so a machine that swaps certificates between the look and the
+/// press is refused instead of pinned.
+pub fn pair_with(
+    name: &str,
+    address: &str,
+    port: u16,
+    secret: &str,
+    expect_fingerprint: Option<&str>,
+) -> Result<Peer, String> {
     let secret = secret.trim();
     if secret.is_empty() {
         return Err("Type the code that machine is showing, or its pairing phrase.".to_string());
     }
 
     // A machine already paired with is pinned to the certificate it had. A new one is not,
-    // and what it presents becomes the pin.
+    // and what it presents becomes the pin -- but only after the operator has been shown
+    // the fingerprint and said it is the right one.
     let known = paired_peers()
         .into_iter()
         .find(|peer| peer.address == address && peer.port == port);
 
-    let body = serde_json::json!({
-        "phrase": secret,
-        "device": device_label(),
-    })
-    .to_string();
+    // The handshake that learns the fingerprint happens before the secret is derived into
+    // anything, so there is one connection in which nothing but a GET has been sent if the
+    // certificate turns out to be the wrong one.
+    let pin = match (known.as_ref(), expect_fingerprint) {
+        (Some(peer), _) => peer.fingerprint.clone(),
+        (None, Some(expected)) if !expected.trim().is_empty() => expected.trim().to_string(),
+        (None, _) => fingerprint_of(address, port)?,
+    };
+
+    // Nothing to bind to means nothing to send. Only reachable with a fingerprint that is
+    // not one, so it is reported as that rather than as a mistyped code.
+    let proofs = bound_proofs(secret, &pin);
+    if proofs.is_empty() {
+        return Err(format!(
+            "{address} did not identify itself with a certificate this can check, so there \
+             is nothing to pair against. Make sure LAN access is on over there and try the \
+             scan again."
+        ));
+    }
+
+    let mut body = serde_json::Map::new();
+    body.insert("device".to_string(), serde_json::json!(device_label()));
+    for (field, proof) in &proofs {
+        body.insert(field.to_string(), serde_json::json!(proof));
+    }
+    let body = serde_json::Value::Object(body).to_string();
     let head = format!(
         "POST /api/pair HTTP/1.1\r\nHost: {address}:{port}\r\n\
          Content-Type: application/json\r\nConnection: close\r\n"
     );
-    let (status, answer, fingerprint) = request(
-        address,
-        port,
-        known.as_ref().map(|peer| peer.fingerprint.clone()),
-        &head,
-        Some(&body),
-    )?;
+    let (status, answer, fingerprint) =
+        request(address, port, Some(pin.clone()), &head, Some(&body))?;
 
     match status {
         200 => {}
@@ -714,7 +801,7 @@ mod tests {
 
     #[test]
     fn an_empty_secret_never_reaches_the_network() {
-        let outcome = pair_with("somewhere", "127.0.0.1", 1, "   ");
+        let outcome = pair_with("somewhere", "127.0.0.1", 1, "   ", None);
         assert!(outcome.unwrap_err().contains("Type the code"));
     }
 
@@ -728,7 +815,7 @@ mod tests {
     #[test]
     #[ignore = "needs a real --serve --lan on this machine"]
     fn a_wrong_code_is_refused_in_the_other_machines_words() {
-        let outcome = pair_with("this machine", "127.0.0.1", 8378, "NOTTHECODE");
+        let outcome = pair_with("this machine", "127.0.0.1", 8378, "NOTTHECODE", None);
         let message = outcome.expect_err("a wrong code must not pair");
         assert!(
             message.contains("pairing code") || message.contains("pairing phrase"),
@@ -768,12 +855,83 @@ mod tests {
     #[ignore = "needs a real --serve --lan whose certificate has been replaced"]
     fn a_changed_certificate_is_refused() {
         let phrase = std::env::var("AETHER1_TEST_PHRASE").expect("AETHER1_TEST_PHRASE");
-        let message = pair_with("this machine", "127.0.0.1", 8378, &phrase)
+        let message = pair_with("this machine", "127.0.0.1", 8378, &phrase, None)
             .expect_err("a changed certificate must not pair");
         assert!(
             message.contains("different certificate"),
             "the pin is what should have stopped it: {message}"
         );
+    }
+
+    /// The scenario the binding exists for, against a real server over a real socket.
+    ///
+    /// An impostor that answers a DNS-SD query in this machine's name collects whatever the
+    /// operator types at it. This builds exactly what it would come away with -- the
+    /// credential bound to a certificate that is not the server's -- and sends it to the
+    /// server, which must refuse it. Then it pairs properly, to show the refusal is the
+    /// binding working rather than the server being unable to pair at all.
+    ///
+    /// Run by hand, like the rest of this module's wire tests. Two attempts fail on
+    /// purpose, which is inside the five-a-minute budget:
+    ///
+    ///   aether1 pair                       # prints twelve words
+    ///   aether1 --serve --lan &
+    ///   AETHER1_TEST_PHRASE="the twelve words" \
+    ///     cargo test -- --ignored --test-threads 1 a_proof_collected_by_an_impostor
+    #[test]
+    #[ignore = "needs a real --serve --lan on this machine"]
+    fn a_proof_collected_by_an_impostor_is_refused_by_the_real_server() {
+        let phrase = std::env::var("AETHER1_TEST_PHRASE").expect("AETHER1_TEST_PHRASE");
+        let real = fingerprint_of("127.0.0.1", 8378).expect("the server identified itself");
+        // Well-formed, the right length, and not this server's.
+        let impostor = "99887766 55443322 11009988 77665544 33221100 99887766 55443322 11009988";
+        assert_ne!(
+            crate::serve_auth::bind_to_certificate("x", &real),
+            crate::serve_auth::bind_to_certificate("x", impostor),
+            "the two fingerprints must actually differ"
+        );
+
+        // What the impostor holds, sent to the machine it was impersonating.
+        let collected = bound_proofs(&phrase, impostor);
+        assert!(!collected.is_empty(), "there is something to send");
+        let mut body = serde_json::Map::new();
+        body.insert("device".to_string(), serde_json::json!("the impostor"));
+        for (field, proof) in &collected {
+            body.insert(field.to_string(), serde_json::json!(proof));
+        }
+        let head = "POST /api/pair HTTP/1.1\r\nHost: 127.0.0.1:8378\r\n\
+                    Content-Type: application/json\r\nConnection: close\r\n";
+        let (status, answer, _) = request(
+            "127.0.0.1",
+            8378,
+            Some(real.clone()),
+            head,
+            Some(&serde_json::Value::Object(body).to_string()),
+        )
+        .expect("the server answered");
+        assert_eq!(
+            status, 401,
+            "a proof for another certificate must not pair: {answer}"
+        );
+
+        // The standing phrase in the clear, which is what used to be sent and what an
+        // impostor used to come away with, is refused as well -- in words that say what to
+        // do instead.
+        let head = "POST /api/pair HTTP/1.1\r\nHost: 127.0.0.1:8378\r\n\
+                    Content-Type: application/json\r\nConnection: close\r\n";
+        let raw = serde_json::json!({ "phrase": phrase, "device": "a browser" }).to_string();
+        let (status, answer, _) =
+            request("127.0.0.1", 8378, Some(real), head, Some(&raw)).expect("answered");
+        assert_eq!(status, 401, "a phrase in the clear must not pair: {answer}");
+        assert!(
+            answer.contains("app"),
+            "and the refusal should say where a phrase does work: {answer}"
+        );
+
+        // And the same phrase, bound to the certificate actually on the other end, pairs.
+        let peer = pair_with("this machine", "127.0.0.1", 8378, &phrase, None)
+            .expect("the bound proof should pair");
+        assert!(!peer.token.is_empty(), "a token came back");
     }
 
     /// Not run in CI: it needs a real `aether1 --serve --lan` on this machine and its
@@ -787,7 +945,7 @@ mod tests {
     #[ignore = "needs a real --serve --lan on this machine"]
     fn pairing_with_a_real_server_stores_a_token_and_a_fingerprint() {
         let phrase = std::env::var("AETHER1_TEST_PHRASE").expect("AETHER1_TEST_PHRASE");
-        let peer = pair_with("this machine", "127.0.0.1", 8378, &phrase).expect("pairing");
+        let peer = pair_with("this machine", "127.0.0.1", 8378, &phrase, None).expect("pairing");
         assert!(!peer.token.is_empty(), "a token came back");
         assert!(!peer.fingerprint.is_empty(), "the certificate was recorded");
         assert!(
