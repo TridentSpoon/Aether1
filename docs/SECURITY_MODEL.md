@@ -337,5 +337,19 @@ Listed here rather than implied by silence:
   credentials are bound to the certificate they are sent to (section 5) -- but SPAKE2 would
   remove the one-time code's remaining exposure in a browser, where no fingerprint can be
   checked, and the need to compare a fingerprint by eye at all (section 5).
-* A second-pass audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri
+* A content security policy for the windows. None is set, and `withGlobalTauri` puts
+  `window.__TAURI__` in every one, so any HTML that reaches the DOM could call every
+  command the program has. Nothing does today -- `formatMarkdown` escapes before it
+  decorates, and the LAN and permission cards use `textContent` -- but that is three
+  correct implementations guarding a surface where one slip is total. There are five
+  inline script blocks in the way and no inline handlers, so the fix is small;
+  `docs/SECURITY_AUDIT_S4.md` has it.
+* The companion's reads are still resolve-then-open. `tools/fs_guard.rs` canonicalizes
+  before it judges, which is the right order, but the `openat` discipline of section 2 was
+  never extended to it, so a read can in principle be raced the way a write once could.
+* Finishing the audit of `tools/`, `vault/`, the LLM prompt/tool boundary and the Tauri
   capability set, where prompt injection and tool confusion are the next class of issue.
+  The first pass is `docs/SECURITY_AUDIT_S4.md`: it found and fixed two places where text
+  from off this machine was rendered as HTML, labelled tool results as data rather than as
+  the operator talking, and left the vault, the native tool-call path and `llm/providers.rs`
+  unexamined.
