@@ -58,6 +58,28 @@ pub fn enabled(db: &MemoryDb) -> bool {
     env_forced() || db.get_setting_bool(SETTING, false)
 }
 
+/// Whether one address is on this machine or on the local network.
+///
+/// The address half of [`is_local_endpoint`], split out because a name is not an address:
+/// anything that resolves a hostname has to ask this question again about what came back.
+/// `nas.local` passes the name check and could still answer with a public address, and a
+/// decision made on the name alone would then be a boundary with a hole in it.
+pub fn is_local_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        std::net::IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                // Unique local (fc00::/7) and link-local (fe80::/10). Both have stable
+                // `is_*` helpers only on nightly, so the prefixes are checked directly.
+                || (ip.segments()[0] & 0xfe00) == 0xfc00
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 /// Whether `endpoint` names something on this machine or on the local network.
 ///
 /// This is the boundary the project has already written down (docs/IMPLEMENTATION.md,
@@ -81,17 +103,8 @@ pub fn is_local_endpoint(endpoint: &str) -> bool {
         return false;
     };
     match parsed.host() {
-        Some(url::Host::Ipv4(ip)) => {
-            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
-        }
-        Some(url::Host::Ipv6(ip)) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                // Unique local (fc00::/7) and link-local (fe80::/10). Both have stable
-                // `is_*` helpers only on nightly, so the prefixes are checked directly.
-                || (ip.segments()[0] & 0xfe00) == 0xfc00
-                || (ip.segments()[0] & 0xffc0) == 0xfe80
-        }
+        Some(url::Host::Ipv4(ip)) => is_local_ip(std::net::IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => is_local_ip(std::net::IpAddr::V6(ip)),
         Some(url::Host::Domain(name)) => {
             let name = name.trim_end_matches('.').to_ascii_lowercase();
             name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local")

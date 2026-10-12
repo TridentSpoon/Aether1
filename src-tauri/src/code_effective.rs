@@ -94,6 +94,10 @@ pub enum Source {
     Environment,
     /// What this machine can actually do. No setting moves it.
     Machine,
+    /// Which model server AETHER1 itself is pointed at. Changed in Settings like a switch,
+    /// but not one of AETHER CODE's switches -- a row that said `switch` would send an
+    /// operator hunting through Permissions for something that lives beside the model.
+    Model,
 }
 
 impl Source {
@@ -107,6 +111,7 @@ impl Source {
             Source::LocalOnly => "local-only",
             Source::Environment => "environment",
             Source::Machine => "machine",
+            Source::Model => "model",
         }
     }
 
@@ -121,6 +126,7 @@ impl Source {
             Source::LocalOnly => "Local-only mode",
             Source::Environment => "The environment it was started in",
             Source::Machine => "This machine",
+            Source::Model => "The model AETHER1 is on",
         }
     }
 }
@@ -218,6 +224,7 @@ pub fn report(db: &MemoryDb) -> Report {
         edit_row(db, root.as_deref(), level, level_applied),
         run_row(db, &sandbox, level, level_applied),
         network_row(db, &sandbox, root.as_deref(), level, level_applied),
+        brain_row(db, &sandbox),
         folders_row(root.as_deref(), level),
     ];
 
@@ -468,6 +475,60 @@ fn run_row(
             vec!["Inside the sandbox the list of program names is not consulted: the box is the boundary, and a shell is allowed in it.".into()]
         } else {
             Vec::new()
+        },
+    }
+}
+
+/// Whether a coding agent inside the sandbox could reach AETHER1's own model server.
+///
+/// Not a switch, which is why this row has no `Switch` or `Level` source: the socket is
+/// opened for a caller that asks for it, and the only thing an operator can change is where
+/// AETHER1 itself is pointed. So the row reports the two facts that decide it -- the machine
+/// can confine a command at all, and the model is one with a local address -- and
+/// `code_model` is what answers the second, rather than this file working it out again.
+fn brain_row(db: &MemoryDb, sandbox: &crate::code_sandbox::Sandbox) -> Row {
+    const KEY: &str = "brain";
+    const TITLE: &str = "A coding agent's own model";
+
+    if !sandbox.confines() {
+        return Row {
+            key: KEY,
+            title: TITLE,
+            action: Action::Deny,
+            decided_by: Source::Machine,
+            rule: "This machine cannot confine a command, so there is no sandbox to open the \
+                   model server to -- and commands are refused here anyway."
+                .into(),
+            exceptions: Vec::new(),
+        };
+    }
+
+    match crate::code_model::configured(db) {
+        Ok(endpoint) => Row {
+            key: KEY,
+            title: TITLE,
+            action: Action::Allow,
+            decided_by: Source::Model,
+            rule: format!(
+                "An agent in the sandbox is given one socket to {}:{} -- AETHER1's own model \
+                 server, and nothing else on this machine. It works with the network off.",
+                endpoint.host, endpoint.port
+            ),
+            exceptions: vec![
+                format!(
+                    "Inside the sandbox it is addressed as {}",
+                    endpoint.in_box()
+                ),
+                "Every other address goes through the network policy instead".to_string(),
+            ],
+        },
+        Err(why) => Row {
+            key: KEY,
+            title: TITLE,
+            action: Action::Deny,
+            decided_by: Source::Model,
+            rule: why,
+            exceptions: Vec::new(),
         },
     }
 }
@@ -866,7 +927,7 @@ mod tests {
                 row.rule
             );
         }
-        assert_eq!(seen.len(), 7, "a row was added or lost without a test");
+        assert_eq!(seen.len(), 8, "a row was added or lost without a test");
     }
 
     /// The HUD and the HTTP route read this shape, and a row drawn without its layer is a
@@ -876,7 +937,7 @@ mod tests {
         let db = db();
         let json = to_json(&report(&db));
         let rows = json["rows"].as_array().expect("rows");
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 8);
         for row in rows {
             for field in [
                 "key",
@@ -894,5 +955,55 @@ mod tests {
             }
             assert!(row["exceptions"].is_array());
         }
+    }
+    /// The brain row reports and does not decide: whatever `code_model` says about the
+    /// settings is what the row says, and the row never starts a socket to find out. Both
+    /// directions, so a row that always said one thing would fail.
+    #[test]
+    fn the_brain_row_is_whatever_code_model_says_about_the_settings() {
+        let db = db();
+        let sandbox = crate::code_sandbox::Sandbox::Bubblewrap {
+            bwrap: std::path::PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: true,
+        };
+
+        for (provider, endpoint) in [
+            ("ollama", "http://localhost:11434"),
+            ("lmstudio", "http://127.0.0.1:1234/v1"),
+            ("anthropic", "http://localhost:11434"),
+            ("ollama", "http://models.example.com:11434"),
+            ("offline", "http://localhost:11434"),
+        ] {
+            db.set_setting("llm_provider", &serde_json::json!(provider))
+                .expect("provider");
+            db.set_setting("llm_endpoint", &serde_json::json!(endpoint))
+                .expect("endpoint");
+
+            let row = brain_row(&db, &sandbox);
+            let allowed = crate::code_model::configured(&db).is_ok();
+            assert_eq!(
+                row.action == Action::Allow,
+                allowed,
+                "{provider} at {endpoint}: the row must agree with code_model, not repeat \
+                 its reasoning"
+            );
+            // Never one of AETHER CODE's five switches, because it is not one of them.
+            assert_eq!(row.decided_by, Source::Model, "{provider} at {endpoint}");
+        }
+    }
+
+    /// A machine with no sandbox has nothing to open the model to, and that is the machine's
+    /// answer rather than the model's -- the same place `run` is already refused.
+    #[test]
+    fn with_no_sandbox_the_brain_row_blames_the_machine() {
+        let db = db();
+        db.set_setting("llm_provider", &serde_json::json!("ollama"))
+            .expect("provider");
+        let row = brain_row(
+            &db,
+            &crate::code_sandbox::Sandbox::Unavailable("no bubblewrap"),
+        );
+        assert_eq!(row.action, Action::Deny);
+        assert_eq!(row.decided_by, Source::Machine);
     }
 }

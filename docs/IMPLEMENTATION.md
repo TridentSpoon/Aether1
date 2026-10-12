@@ -3637,9 +3637,17 @@ the filesystem confined, the network is the only way anything gets out.
 states, so it has a loopback interface and no route anywhere. Switching the network on does
 not give it one. It bind-mounts in a single unix socket, which crosses a network namespace
 because it is a file rather than a route. Inside, `aether1 --net-relay` (Aether1 re-entering
-itself, then running the real command as a child) listens on loopback and hands every
-connection down that socket. Outside, `code_proxy.rs` answers one question per connection:
-is this host one the project agreed to?
+itself, then running the real command as a child) listens on loopback in front of each socket
+the box was given and hands every connection down it. Outside, `code_proxy.rs` answers one
+question per connection: is this host one the project agreed to?
+
+There is a second socket, for a different question, and `code_model.rs` owns it: the box's
+own loopback is not the operator's, so an agent inside cannot reach the Ollama or LM Studio
+server driving it, and the proxy refuses `127.0.0.1` on purpose. That socket carries no
+decision at all -- one address, fixed by Aether1 from its own settings before the box
+existed, checked to be an endpoint-addressed provider on a local address by name *and* by
+resolved number, and bind-mounted only for a caller that asks. `code_workspace::run` does
+not ask. See docs/SECURITY_MODEL.md §1e.
 
 So a program that ignores `HTTPS_PROXY` does not get out by ignoring it. There is nothing to
 get out through.
