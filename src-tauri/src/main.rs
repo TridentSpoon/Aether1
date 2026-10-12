@@ -23,6 +23,7 @@ mod background_services;
 mod cli;
 mod code_chat;
 mod code_checkpoint;
+mod code_effective;
 mod code_openat;
 mod code_perms;
 mod code_policy;
@@ -1853,6 +1854,14 @@ fn code_set_level_rust(
     commands::code_set_level(&engine, &level)
 }
 
+/// Rust-native twin of GET /api/code/effective: what AETHER CODE will actually do, and
+/// which answer decided it. Read-only -- see code_effective.rs for why the switches cannot
+/// answer this on their own.
+#[tauri::command(async)]
+fn code_effective_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::code_effective_report(&engine)
+}
+
 /// Rust-native twin of GET /api/code/net: the sandbox's domain policy and whatever is
 /// waiting on an answer. The HUD polls this, and polling it is what tells the proxy there
 /// is somebody here to ask -- see commands::code_net_status.
@@ -2893,6 +2902,7 @@ fn main() {
             get_settings_rust,
             save_settings_rust,
             code_set_level_rust,
+            code_effective_rust,
             code_net_status_rust,
             code_net_allow_rust,
             code_net_forget_rust,

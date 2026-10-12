@@ -3580,3 +3580,111 @@ select,
 :root[data-render="lite"] .setup-bar-fill[data-state="unknown"] {
   animation: none;
 }
+
+/* ---------------------------------------------------------------- effective permissions
+
+   The report of what AETHER CODE will actually do (code_effective.rs). Three verdicts and
+   a layer name per row, drawn so the verdict column can be scanned on its own.
+
+   Blocked is deliberately *not* red. Refusing to write files is this product working, and a
+   page that paints every refusal as a failure teaches an operator to stop reading it. Red is
+   kept for the one row that is genuinely a warning: a level whose switches have been moved
+   under it, which is the page contradicting itself. */
+.code-effective-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.code-effective-row:last-child { border-bottom: 0; }
+
+.code-effective-verdict {
+    flex: 0 0 5.2rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    padding-top: 0.1rem;
+}
+
+.code-effective-verdict i {
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex: 0 0 auto;
+}
+
+.code-effective-row[data-action="allow"] .code-effective-verdict { color: var(--text-accent); }
+.code-effective-row[data-action="allow"] .code-effective-verdict i {
+    background: var(--text-accent);
+    box-shadow: 0 0 6px var(--text-accent);
+}
+.code-effective-row[data-action="ask"] .code-effective-verdict { color: var(--neon-amber); }
+.code-effective-row[data-action="ask"] .code-effective-verdict i {
+    background: var(--neon-amber);
+    box-shadow: 0 0 6px var(--neon-amber);
+}
+
+.code-effective-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+
+.code-effective-name {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+/* Who decided. Quiet, because it is the second thing read, and never hidden, because it is
+   the whole reason this card exists. */
+.code-effective-layer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    padding: 0.05rem 0.3rem;
+    white-space: nowrap;
+}
+
+/* A layer the operator cannot change from Settings. Marked rather than coloured: the point
+   is "do not go looking for a switch", not "something is wrong". */
+.code-effective-layer[data-fixed="true"] { border-style: dashed; }
+
+.code-effective-exceptions { margin-top: 0.2rem; }
+
+.code-effective-exceptions > summary {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    list-style: none;
+}
+
+.code-effective-exceptions > summary::-webkit-details-marker { display: none; }
+.code-effective-exceptions > summary::before { content: '▸ '; }
+.code-effective-exceptions[open] > summary::before { content: '▾ '; }
+.code-effective-exceptions > summary:hover { color: var(--text-accent); }
+
+.code-effective-exceptions ul {
+    margin: 0.25rem 0 0;
+    padding-left: 0.9rem;
+    list-style: disc;
+}
+
+.code-effective-exceptions li {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
+/* The level line, and the one place red is earned: the file says one thing and the switches
+   in force say another. */
+.code-effective-mismatch { color: var(--text-danger); }

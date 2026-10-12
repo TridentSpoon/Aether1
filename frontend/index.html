@@ -2347,6 +2347,26 @@
                     </div>
                 </div>
 
+                <!-- What the switches below add up to. Its own card, and first, because the
+                     switches cannot answer it: local-only mode outranks the internet switch,
+                     a machine with no usable bubblewrap outranks the run switch, and a level
+                     somebody has moved a switch under no longer describes its own project.
+                     Each row says what will happen and which answer decided it, so a row
+                     that surprises an operator tells them where to go. Read-only on purpose
+                     -- the controls are below, and a report you can edit is a second place
+                     policy is set. See code_effective.rs. -->
+                <div class="net-card">
+                    <div class="net-card-head">
+                        <span class="net-card-icon" aria-hidden="true">📋</span>
+                        <div class="net-card-heading">
+                            <h4 class="net-card-title">What will actually happen</h4>
+                        </div>
+                        <span id="code-effective-state" class="net-state" data-state="off"><i aria-hidden="true"></i>Reading…</span>
+                    </div>
+                    <p id="code-effective-level" class="net-card-hint px-3 pb-1 hidden"></p>
+                    <div id="code-effective-rows"></div>
+                </div>
+
                 <div class="net-card">
                     <div class="net-card-head">
                         <span class="net-card-icon" aria-hidden="true">⌨️</span>

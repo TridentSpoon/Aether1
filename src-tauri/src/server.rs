@@ -234,6 +234,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/agents/selection", post(set_agent_selection))
         .route("/api/agents/run", post(run_agents))
         .route("/api/code/level", post(code_level))
+        .route("/api/code/effective", get(code_effective))
         .route("/api/code/net", get(code_net))
         .route("/api/code/net/allow", post(code_net_allow))
         .route("/api/code/net/forget", post(code_net_forget))
@@ -1436,6 +1437,17 @@ async fn code_level(
 /// Browser-transport twin of code_net_status_rust -- the domain policy, plus whatever is
 /// waiting on an answer. Polled by both the Settings page and the HUD, and polling it is
 /// what tells the proxy somebody is there to be asked.
+/// What AETHER CODE will actually do. Read-only; see code_effective.rs.
+async fn code_effective(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let report =
+        tokio::task::spawn_blocking(move || commands::code_effective_report(&state.engine))
+            .await
+            .map_err(internal_error)?;
+    Ok(Json(report))
+}
+
 async fn code_net(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, String)> {
     let status = tokio::task::spawn_blocking(move || commands::code_net_status(&state.engine))
         .await

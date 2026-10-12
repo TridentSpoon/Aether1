@@ -188,6 +188,10 @@ pub enum Invocation {
         grant: Option<String>,
         on: Option<bool>,
     },
+    /// `code effective`: what AETHER CODE will actually do, and which answer decided it.
+    /// Reads only -- see code_effective.rs for why the switches cannot answer this on their
+    /// own.
+    CodeEffective,
     /// `code workspace`: the project folder AETHER CODE may change, printed or set.
     CodeWorkspace {
         path: Option<String>,
@@ -565,6 +569,13 @@ pub fn parse(argv: &[String]) -> Invocation {
                      `code perms internet off`"
                         .to_string(),
                 ),
+            },
+            // One word, no arguments, and read-only. A report that could be narrowed by
+            // an argument would invite `code effective run` as a question about one row,
+            // and the point of the report is that the rows constrain each other.
+            Some("effective") => match &rest[1..] {
+                [] => Ok(Invocation::CodeEffective),
+                _ => Err("code effective takes no arguments".to_string()),
             },
             // The project folder. With no path it prints the one in force, which is the
             // question an operator asks before they trust any of this.
@@ -1237,6 +1248,79 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
              terminal for you to run, and nothing enters it but your own Return key.\n",
         );
     }
+    // A switch is not an outcome. Local-only mode outranks `internet`, a machine with no
+    // usable bubblewrap outranks `run`, and this list says `ON` for both -- so it ends by
+    // naming the command that does not.
+    out.push_str(
+        "\n  A switch is not the whole answer: local-only mode outranks `internet`, and a\n\
+         machine that cannot confine a command outranks `run`. For what will actually\n\
+         happen, and who decided it: `aether1 code effective`\n",
+    );
+    Ok(out)
+}
+
+/// `aether1 code effective`: the whole answer, one row per capability.
+///
+/// Printed rather than returned as data because the operator asking this is at a terminal
+/// wanting to read it. The HUD and the HTTP route take the same report as JSON.
+///
+/// The layout puts the verdict before the sentence and the layer after it, because the scan
+/// an operator does here is down the verdict column looking for the one row that says
+/// something they did not expect; the sentence is what they stop and read.
+fn run_code_effective() -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let report = crate::code_effective::report(engine.db());
+
+    let mut out = "AETHER CODE -- what will actually happen\n\n".to_string();
+    match (&report.root, report.level) {
+        (Some(root), Some(level)) => {
+            out.push_str(&format!("  Project   {}\n", root.display()));
+            out.push_str(&format!("  Level     {}\n", level.title()));
+            if !report.level_applied {
+                // The one line in this output that is a warning. A level in a file that the
+                // switches contradict is a lie in exactly the place an operator checks, so
+                // it is said before the rows rather than after them.
+                out.push_str(
+                    "            ^ the switches no longer match this level. Somebody moved one\n\
+                     \x20             by hand; the rows below are what is in force.\n",
+                );
+            }
+        }
+        _ => out.push_str(
+            "  No project folder is nominated, so the rows that need one say so.\n\
+             \x20 Name one with `aether1 code workspace <path>`.\n",
+        ),
+    }
+    out.push('\n');
+
+    for row in &report.rows {
+        out.push_str(&format!(
+            "  {:<11} {:<15} {}\n",
+            row.action.title(),
+            format!("[{}]", row.decided_by.key()),
+            row.title
+        ));
+        out.push_str(&format!("              {}\n", row.rule));
+        // Capped, because the starter domain list alone is sixteen lines and a report
+        // nobody reads to the end is a report that does not answer anything. The count is
+        // the fact; the HUD's expandable row and the JSON carry all of them.
+        const SHOWN: usize = 4;
+        for exception in row.exceptions.iter().take(SHOWN) {
+            out.push_str(&format!("              - {exception}\n"));
+        }
+        if row.exceptions.len() > SHOWN {
+            out.push_str(&format!(
+                "              - and {} more\n",
+                row.exceptions.len() - SHOWN
+            ));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(
+        "  The bracket is who decided. `switch` and `level` you can change; `machine`,\n\
+         \x20 `environment` and `no-workspace` you cannot, from Settings.\n",
+    );
     Ok(out)
 }
 
@@ -2519,6 +2603,7 @@ pub fn run(invocation: Invocation) -> i32 {
         } => run_doctor(fix, heal, json, report, replay),
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
+        Invocation::CodeEffective => run_code_effective(),
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
         Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
         Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
