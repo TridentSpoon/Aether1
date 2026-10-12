@@ -74,6 +74,72 @@ struct LanState {
 /// to say whether anything is serving, and reads it from here rather than repeating it.
 pub const SERVE_PORT: u16 = 8378;
 
+/// The content security policy every page is served under, on both paths.
+///
+/// Escaping the text that goes into the DOM is the actual defence; this is what makes the
+/// next slip in that escaping survivable rather than total. Without it, markup that reaches
+/// the page can run a script, and a script in this window reaches every `#[tauri::command]`
+/// the program has -- which is the consent model, the network policy and the device list,
+/// all of it, from a model name. `docs/SECURITY_AUDIT_S4.md` has the two places that had
+/// already happened.
+///
+/// Why this constant exists rather than only the `csp` field in `tauri.conf.json`: the
+/// frontend is served two ways. Tauri's asset protocol applies the configured policy and
+/// hashes inline scripts at build time; this HTTP server applies nothing and hashes nothing.
+/// A policy on only one of them is a policy on neither in practice, so this sets the same
+/// header here, and `the_two_policies_agree` fails the build if the two copies drift.
+///
+/// Each source is here because something needs it, and nothing else is:
+///
+/// * `script-src 'self'` and `style-src 'self'` with no inline exception at all -- which is
+///   the whole point, and why the five inline `<script>` blocks and the one `<style>` block
+///   became files. A hash would have worked in the desktop shell and nowhere else.
+/// * `asset:` and `asset.localhost` for images and audio, because `convertFileSrc` hands the
+///   webview a path under Tauri's own asset protocol, whose shape differs by platform:
+///   `asset://localhost/...` on Linux and macOS, `http(s)://asset.localhost/...` on Windows.
+///   Both are listed because both platforms are supported.
+/// * `ipc:` and `ipc.localhost` in `connect-src`, because `invoke` is a `fetch` to that
+///   protocol. Blocking it would not break the app -- Tauri falls back to `postMessage` --
+///   but it would make every command take the slow road for no reason.
+/// * `localhost:8378` in `connect-src` and `media-src`, because inside the desktop shell the
+///   page's origin is `tauri://localhost` while `API_BASE` points at this server. Every
+///   request the HUD makes is cross-origin there, which is the one entry a policy written
+///   from the textbook would have left out, and it would have broken the whole app.
+/// * `blob:` for the clips synthesized speech arrives as, and `data:` for inline images.
+/// * `object-src 'none'`, `base-uri 'self'`, `form-action 'none'` and `frame-ancestors
+///   'none'` because there are no plugins, no forms and no frames here, so the answer to all
+///   four is no rather than something narrower.
+///
+/// WebSocket connections are covered by `'self'`: in the browser the page and its sockets
+/// share an origin, and in the shell they go to the `localhost:8378` entry.
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+     script-src 'self'; \
+     style-src 'self'; \
+     img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost; \
+     media-src 'self' blob: asset: http://asset.localhost https://asset.localhost \
+     http://localhost:8378; \
+     font-src 'self'; \
+     connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost \
+     http://localhost:8378 ws://localhost:8378; \
+     object-src 'none'; \
+     base-uri 'self'; \
+     form-action 'none'; \
+     frame-ancestors 'none'";
+
+/// Puts the policy on every response.
+///
+/// On every response rather than only on HTML: a browser ignores the header on anything that
+/// is not a document, and a rule that has to work out which responses are documents is a rule
+/// with a gap in it the day a new route serves one.
+async fn with_content_security_policy(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        header::HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    response
+}
+
 /// How long the headless telemetry loop waits between looks while no browser is attached.
 /// A subscribing client wakes it immediately; this is only the fallback, and a look is one
 /// integer read.
@@ -303,7 +369,11 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         }
     }
 
-    let app = app.fallback_service(static_service);
+    let app = app
+        .fallback_service(static_service)
+        // After the fallback, so the static files -- the HTML, which is the only response
+        // where the policy does anything -- are covered as well as the routes.
+        .layer(middleware::from_fn(with_content_security_policy));
 
     // Bound before serving either way, so "that port is taken" is still reported the moment
     // it happens rather than somewhere inside the TLS handshake machinery.

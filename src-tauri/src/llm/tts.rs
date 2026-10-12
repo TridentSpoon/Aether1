@@ -468,13 +468,6 @@ fn synthesize_local(
     Ok(())
 }
 
-/// What a refused or broken WebSocket handshake to Microsoft's endpoint is reported as.
-///
-/// Named rather than written twice because the live test decides whether to skip itself by
-/// matching it: a reworded message would turn "there is no path to this service" back into
-/// a suite failure on every offline machine.
-const NO_CONNECTION: &str = "could not connect to TTS service";
-
 /// rustls needs exactly one process-wide `CryptoProvider` installed before any TLS
 /// connection can be built. With both the `ring` and `aws-lc-rs` backends pulled in
 /// transitively (ureq wants one, msedge-tts's platform-verifier wants the other), rustls
@@ -488,6 +481,12 @@ static CRYPTO_PROVIDER: LazyLock<()> = LazyLock::new(|| {
     let _ = rustls::crypto::ring::default_provider().install_default();
 });
 
+/// What a failure to reach the speech endpoint says, as opposed to a failure of the
+/// synthesis itself. The live test below matches on it to tell "this machine cannot get
+/// there" from "the service is there and got it wrong", so it is a constant rather than a
+/// string written out twice.
+const TTS_CONNECT_FAILED: &str = "could not connect to TTS service";
+
 fn synthesize_cloud(voice_name: &str, text: &str, output_path: &Path) -> Result<(), String> {
     LazyLock::force(&CRYPTO_PROVIDER);
     let config = SpeechConfig {
@@ -498,7 +497,7 @@ fn synthesize_cloud(voice_name: &str, text: &str, output_path: &Path) -> Result<
         volume: 0,
     };
 
-    let mut client = connect().map_err(|e| format!("{NO_CONNECTION}: {e}"))?;
+    let mut client = connect().map_err(|e| format!("{TTS_CONNECT_FAILED}: {e}"))?;
     let audio = client
         .synthesize(text, &config)
         .map_err(|e| format!("speech synthesis failed: {e}"))?;
@@ -900,9 +899,19 @@ mod tests {
 
     /// Real end-to-end test against Microsoft's live TTS endpoint -- not a mock. Skips
     /// itself if there's no network path to it, rather than failing the suite on offline
-    /// dev machines/CI. "No network path" is decided twice, because the voice list and
-    /// synthesis are different endpoints over different protocols: the probe before the
-    /// call, and a refused handshake from the call itself.
+    /// dev machines/CI.
+    ///
+    /// "No network path" has to be judged from the socket this test actually uses. Asking
+    /// `get_voices_list` first is not enough: that is an HTTPS request to the voices
+    /// catalogue, while synthesis is a WebSocket to the speech endpoint, and the two can
+    /// disagree -- from October 2026 the catalogue answers CI runners and the speech
+    /// endpoint refuses them with a 403, which failed the suite on every pull request.
+    /// So the attempt itself is the reachability check, and a refusal to connect is a
+    /// skip. `synthesize_cloud` separates the two phases for exactly this: `connect()`
+    /// reports "could not connect to TTS service", `synthesize()` reports "speech
+    /// synthesis failed". A real synthesis defect still fails here, as does an empty
+    /// file; what this gives up is catching a regression inside `connect()` itself, which
+    /// is the trade the skip was always making.
     #[test]
     fn generate_speech_against_live_service_if_reachable() {
         // Normally installed once by main() before any thread touches TLS; the test
@@ -911,36 +920,33 @@ mod tests {
         // it first, that's still a successfully-installed provider, not a failure.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        let reachable = msedge_tts::voice::get_voices_list().is_ok();
-        if !reachable {
-            eprintln!("skipping generate_speech_against_live_service_if_reachable: TTS endpoint unreachable");
-            return;
-        }
-
         let dir = std::env::temp_dir().join(format!("aether1_tts_test_{}", std::process::id()));
-        let path = match generate_speech_with(
+        let result = generate_speech_with(
             &dir,
             "Testing one two three.",
             Engine::Cloud,
             None,
             None,
             &plain(),
-        ) {
-            Ok(path) => path,
-            // The probe above is an HTTPS GET for the voice list; synthesis is a WebSocket
-            // to a different endpoint, so "reachable" can be true about a path this call
-            // does not use. A refused handshake is the no-network-path case this test
-            // documents itself as skipping on -- CI runners get 403 from it. A synthesis
-            // that connects and then fails is still a failure.
-            Err(e) if e.contains(NO_CONNECTION) => {
-                eprintln!("skipping generate_speech_against_live_service_if_reachable: {e}");
+        );
+
+        match result {
+            Ok(path) => {
+                let metadata = std::fs::metadata(&path).expect("output file should exist");
+                assert!(metadata.len() > 0, "synthesized mp3 should not be empty");
                 let _ = std::fs::remove_dir_all(&dir);
-                return;
             }
-            Err(e) => panic!("synthesis against the live service should succeed: {e}"),
-        };
-        let metadata = std::fs::metadata(&path).expect("output file should exist");
-        assert!(metadata.len() > 0, "synthesized mp3 should not be empty");
-        let _ = std::fs::remove_dir_all(&dir);
+            Err(e) if e.contains(TTS_CONNECT_FAILED) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                eprintln!(
+                    "skipping generate_speech_against_live_service_if_reachable: \
+                     no network path to the speech endpoint ({e})"
+                );
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                panic!("synthesis against the live service should succeed: {e}");
+            }
+        }
     }
 }

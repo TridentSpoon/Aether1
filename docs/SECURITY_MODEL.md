@@ -342,6 +342,40 @@ mode in Settings takes effect mid-session. Before that install has run it refuse
 not provably local, which is the direction worth failing in; `aether1 doctor` reports whether
 it has.
 
+## 6a. What a stray string can do
+
+Everything above is about what the agent and the network may reach. This is about the
+window itself, and it exists because the answer used to be "anything".
+
+A script running in the HUD reaches every `#[tauri::command]` the program has -- the
+consent queue, the domain policy, the device list -- because `withGlobalTauri` puts the
+handle in the page. So the question is whether a string can ever become a script, and the
+honest answer in September was that nothing stopped it except every rendering path
+happening to escape correctly. Two of them did not: a model name from whatever answered a
+probe on loopback, and a release tag, both interpolated into `innerHTML`
+(`docs/SECURITY_AUDIT_S4.md`).
+
+Escaping is still the defence. The policy is what makes the next slip survivable:
+`script-src 'self'` and `style-src 'self'` with **no inline exception at all**, so markup
+that gets into a page cannot run, whatever put it there. Everything else in it is a source
+something actually needs -- Tauri's asset protocol for images and clips, its IPC protocol
+because `invoke` is a `fetch`, and `localhost:8378` because inside the desktop shell the
+page's origin is `tauri://localhost` while the API is this server, so every request the HUD
+makes is cross-origin.
+
+The part worth stating rather than discovering: **the frontend is served twice**, over
+Tauri's asset protocol and over the HTTP server, and only the first applies the configured
+policy or hashes inline scripts at build time. A policy on one of them is a policy on
+neither, so `server.rs` sets the same header on its own responses, and
+`scripts/check_csp.sh` fails the build if the two copies drift, if either grows an
+`unsafe-inline`, or if any page gains an inline `<script>`, `<style>` or handler attribute.
+That last one is the subtle break: it would keep working in the desktop shell and fail in
+the LAN browser, on somebody else's machine rather than the author's.
+
+`withGlobalTauri` stays on. Turning it off was considered and is not worth it: it would
+rewrite 56 call sites across the frontend to remove a handle that is only reachable by a
+script, and no script runs now without the policy already having failed.
+
 ## 7. Updates
 
 A release bundle is verified before it is trusted: the asset is matched, its `.minisig`
@@ -363,13 +397,6 @@ Listed here rather than implied by silence:
   credentials are bound to the certificate they are sent to (section 5) -- but SPAKE2 would
   remove the one-time code's remaining exposure in a browser, where no fingerprint can be
   checked, and the need to compare a fingerprint by eye at all (section 5).
-* A content security policy for the windows. None is set, and `withGlobalTauri` puts
-  `window.__TAURI__` in every one, so any HTML that reaches the DOM could call every
-  command the program has. Nothing does today -- `formatMarkdown` escapes before it
-  decorates, and the LAN and permission cards use `textContent` -- but that is three
-  correct implementations guarding a surface where one slip is total. There are five
-  inline script blocks in the way and no inline handlers, so the fix is small;
-  `docs/SECURITY_AUDIT_S4.md` has it.
 * The companion's reads are still resolve-then-open. `tools/fs_guard.rs` canonicalizes
   before it judges, which is the right order, but the `openat` discipline of section 2 was
   never extended to it, so a read can in principle be raced the way a write once could.
