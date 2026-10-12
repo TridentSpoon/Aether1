@@ -88,7 +88,8 @@ source tree. Neither is a mode to work in, so it is now a policy.
 The box keeps its network namespace in both states. What changes when the operator turns the
 network on is that one unix socket is bind-mounted in -- a file, which crosses a network
 namespace, rather than a route, which does not. A relay inside (`aether1 --net-relay`, which
-is Aether1 re-entering itself and then running the real command) listens on loopback, and
+is Aether1 re-entering itself and then running the real command) listens on loopback in front
+of each socket the box was given, and
 `code_proxy.rs`, running outside where the real network is, decides one question per
 connection: is this host one the project agreed to?
 
@@ -124,6 +125,49 @@ read, because `http://crates.io@evil.example/` goes to the second one.
 The end-to-end test is the claim itself: a real command in a real sandbox tries the host
 directly and is blocked, then reaches an allowed host through the proxy, with the domain
 added between the two runs.
+
+## 1e. The way to the brain
+
+The network namespace that makes the box honest also means the box's `127.0.0.1` is the
+box's own. An Ollama or LM Studio server on the operator's loopback is not in it, so a coding
+agent running inside the box cannot reach the model that is meant to be driving it. The proxy
+is not the answer: it refuses `127.0.0.1` on purpose, because a proxy that allowed loopback
+would open every unauthenticated service on the machine rather than this one.
+
+So the model server gets a door of its own, `code_model.rs`, the same shape as the proxy's
+and deliberately narrower. A second unix socket is bind-mounted in, a second relay port
+listens on loopback inside, and every byte that arrives goes to **one address**, chosen by
+Aether1 from its own settings before the box existed. This socket reads nothing. There is no
+request line to parse, no host to compare, and nothing a program inside the box can say that
+changes where its connection lands.
+
+Three rules keep that address honest, each failing closed:
+
+1. **An endpoint-addressed provider, or no door at all.** Ollama and LM Studio are addressed
+   by `llm_endpoint`. The four cloud providers are not, and a tunnel to one of them would be
+   an unaudited way off the machine sitting next to the proxy that exists to audit exactly
+   that. With Aether1 on a cloud provider there is no socket.
+2. **A local address, by name and then again by number.** `local_only::is_local_endpoint`
+   judges the setting, which is the boundary the rest of the program already uses. A name is
+   not an address, though: `brain.local` passes that check and could answer with a public one,
+   so every address the name resolves to is checked with `local_only::is_local_ip` as well,
+   and one that is not local refuses the lot.
+3. **Only for a command meant to have it.** The socket is bind-mounted only when the caller
+   asks for it. `code_workspace::run` -- every command the operator or the companion starts
+   -- does not ask: a test suite has no business querying the brain, and a door that opens
+   for one caller is one fewer thing to reason about.
+
+The network switch is not involved, which is the point of keeping them apart: an engine that
+cannot think with the network off is not much of an offline engine.
+
+What this is not: an authenticated channel. Whatever is inside the box can talk to the model
+server as freely as anything else on the operator's machine can, which is what makes rule 3
+the one that matters.
+
+The end-to-end test is again the claim itself: a stand-in model server on the host's
+loopback, a real command in a real box, and three answers in one run -- the direct
+connection refused, the model reached through the socket, and the proxy's port not open, so a
+box given one door has not quietly been given both.
 
 ## 1a. Putting it back
 

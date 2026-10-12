@@ -125,10 +125,11 @@ impl Access {
 }
 
 /// How a command reaches the network, which is three states rather than a switch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Net {
     /// No network namespace but the sandbox's own, and nothing bridged into it. The box has
     /// a loopback interface and no route anywhere.
+    #[default]
     None,
     /// The same isolation, plus one unix socket bind-mounted in. A relay started inside the
     /// box listens on loopback and hands every connection down that socket to Aether1's
@@ -140,6 +141,37 @@ pub enum Net {
     /// relay, which well-behaved tools honour, but nothing enforces it and the Confinement
     /// line says so.
     Unenforced,
+}
+
+/// What is bridged into the box besides the filesystem: the way out, and the way to
+/// AETHER1's own model server.
+///
+/// Two separate questions, deliberately. The network is the operator's switch and a per-host
+/// policy. The model server is neither: it is this machine's own compute, it has to work
+/// with the network switch off -- an engine that cannot think offline is not much of an
+/// offline engine -- and the only thing it can reach is one address AETHER1 chose. Folding
+/// them into one flag would mean turning the internet on to let an agent think.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bridges {
+    pub net: Net,
+    /// The model socket, when this command is one that may talk to the model server.
+    ///
+    /// `None` for everything the operator or the companion runs through
+    /// `code_workspace::run`: a test suite has no business asking the brain questions, and a
+    /// door that opens for one caller is one fewer thing to reason about. See `code_model`.
+    pub model: Option<PathBuf>,
+}
+
+impl Bridges {
+    /// The ordinary case: whatever the network settings say, and no model server.
+    pub fn net_only(net: Net) -> Bridges {
+        Bridges { net, model: None }
+    }
+
+    /// Whether anything inside the box needs the relay started in front of the command.
+    fn needs_relay(&self) -> bool {
+        matches!(self.net, Net::Proxied { .. }) || self.model.is_some()
+    }
 }
 
 /// What this machine can actually do.
@@ -297,11 +329,11 @@ fn probe(bwrap: &Path, network_off: bool) -> bool {
         &[],
         &dir,
         &dir,
-        if network_off {
-            &Net::None
+        &Bridges::net_only(if network_off {
+            Net::None
         } else {
-            &Net::Unenforced
-        },
+            Net::Unenforced
+        }),
         &Access::project_only(),
     );
     let ok = Command::new(bwrap)
@@ -385,9 +417,10 @@ pub fn command(
     rest: &[String],
     cwd: &Path,
     root: &Path,
-    net: &Net,
+    bridges: &Bridges,
     access: &Access,
 ) -> Command {
+    let net = &bridges.net;
     match sandbox {
         Sandbox::Unavailable(_) => {
             let mut cmd = Command::new(program);
@@ -396,24 +429,30 @@ pub fn command(
         }
         Sandbox::Bubblewrap { bwrap, .. } => {
             let mut cmd = Command::new(bwrap);
-            // With a proxy in play the command is wrapped: Aether1 itself runs inside the
-            // box, starts the relay on loopback, and then runs what was asked for. Two
-            // processes rather than a shell line, so nothing in the argv is ever parsed.
-            let (program, rest) = match net {
-                Net::Proxied { .. } => {
-                    let me = aether1_binary().to_string_lossy().to_string();
-                    let mut wrapped = vec![
-                        "--net-relay".to_string(),
-                        crate::code_proxy::SOCKET_IN_SANDBOX.to_string(),
-                        "--".to_string(),
-                        program.to_string(),
-                    ];
-                    wrapped.extend(rest.iter().cloned());
-                    (me, wrapped)
+            // With a socket bridged in the command is wrapped: Aether1 itself runs inside
+            // the box, listens on loopback in front of each socket it was given, and then
+            // runs what was asked for. Two processes rather than a shell line, so nothing in
+            // the argv is ever parsed. Each bridge is named, so the relay opens exactly the
+            // doors this box has and no others.
+            let (program, rest) = if bridges.needs_relay() {
+                let me = aether1_binary().to_string_lossy().to_string();
+                let mut wrapped = vec!["--net-relay".to_string()];
+                if matches!(net, Net::Proxied { .. }) {
+                    wrapped.push("--net-socket".to_string());
+                    wrapped.push(crate::code_proxy::SOCKET_IN_SANDBOX.to_string());
                 }
-                _ => (program.to_string(), rest.to_vec()),
+                if bridges.model.is_some() {
+                    wrapped.push("--model-socket".to_string());
+                    wrapped.push(crate::code_model::SOCKET_IN_SANDBOX.to_string());
+                }
+                wrapped.push("--".to_string());
+                wrapped.push(program.to_string());
+                wrapped.extend(rest.iter().cloned());
+                (me, wrapped)
+            } else {
+                (program.to_string(), rest.to_vec())
             };
-            for arg in bwrap_args(&program, &rest, cwd, root, net, access) {
+            for arg in bwrap_args(&program, &rest, cwd, root, bridges, access) {
                 cmd.arg(arg);
             }
             // The sandbox's own environment, not this process's. `env_clear` covers what
@@ -486,9 +525,10 @@ pub fn bwrap_args(
     rest: &[String],
     cwd: &Path,
     root: &Path,
-    net: &Net,
+    bridges: &Bridges,
     access: &Access,
 ) -> Vec<String> {
+    let net = &bridges.net;
     let home = std::env::var("HOME").unwrap_or_default();
     let mut args: Vec<String> = Vec::new();
     let mut push = |parts: &[&str]| args.extend(parts.iter().map(|s| (*s).to_string()));
@@ -536,6 +576,17 @@ pub fn bwrap_args(
             "--bind",
             &socket.to_string_lossy(),
             crate::code_proxy::SOCKET_IN_SANDBOX,
+        ]);
+    }
+
+    // The way to AETHER1's own model server, which is a second socket and not the same
+    // door: this one carries no decision, because its single destination was fixed before
+    // the box existed. See `code_model`.
+    if let Some(socket) = &bridges.model {
+        push(&[
+            "--bind",
+            &socket.to_string_lossy(),
+            crate::code_model::SOCKET_IN_SANDBOX,
         ]);
     }
 
@@ -589,12 +640,16 @@ mod tests {
     }
 
     fn args_for_net(net: &Net) -> Vec<String> {
+        args_for_bridges(&Bridges::net_only(net.clone()))
+    }
+
+    fn args_for_bridges(bridges: &Bridges) -> Vec<String> {
         bwrap_args(
             "python3",
             &["-c".to_string(), "print(1)".to_string()],
             Path::new("/w/sub"),
             Path::new("/w"),
-            net,
+            bridges,
             &Access::project_only(),
         )
     }
@@ -671,7 +726,7 @@ mod tests {
                 &[],
                 &root,
                 &root,
-                &net,
+                &Bridges::net_only(net.clone()),
                 &Access::default(),
             );
             let env: Vec<_> = cmd.get_envs().collect();
@@ -701,7 +756,7 @@ mod tests {
             &[],
             &root,
             &root,
-            &Net::None,
+            &Bridges::default(),
             &Access::default(),
         );
         let keys: Vec<_> = cmd.get_envs().map(|(k, _)| k).collect();
@@ -717,6 +772,96 @@ mod tests {
                 "a box with no network must not set {key}"
             );
         }
+    }
+
+    /// The model socket is bridged in the same way the proxy's is -- a file, which crosses
+    /// a network namespace -- and the box still has no route. See `code_model`.
+    #[test]
+    fn the_model_socket_crosses_into_a_box_that_still_has_no_network() {
+        let args = args_for_bridges(&Bridges {
+            net: Net::None,
+            model: Some(PathBuf::from("/var/aether1/model.sock")),
+        });
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("--unshare-net"),
+            "the model socket is not a network: {joined}"
+        );
+        assert!(
+            joined.contains(&format!(
+                "--bind /var/aether1/model.sock {}",
+                crate::code_model::SOCKET_IN_SANDBOX
+            )),
+            "and the socket is bound in: {joined}"
+        );
+        assert!(
+            !joined.contains(crate::code_proxy::SOCKET_IN_SANDBOX),
+            "a box given the brain has not been given the network: {joined}"
+        );
+    }
+
+    /// The relay is told which doors to open, one flag per socket, so a box with one bridge
+    /// does not get a port with nothing behind it -- and a box with neither is not wrapped
+    /// at all, which is how `code run` has always worked with the network off.
+    #[test]
+    fn the_relay_opens_exactly_the_doors_the_box_has() {
+        let root = std::env::temp_dir();
+        let sandbox = Sandbox::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: true,
+        };
+        let argv_for = |bridges: &Bridges| -> String {
+            let cmd = command(
+                &sandbox,
+                "node",
+                &[],
+                &root,
+                &root,
+                bridges,
+                &Access::default(),
+            );
+            cmd.get_args()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+
+        let net = Net::Proxied {
+            socket: PathBuf::from("/var/aether1/net.sock"),
+        };
+        let model = Some(PathBuf::from("/var/aether1/model.sock"));
+
+        let both = argv_for(&Bridges {
+            net: net.clone(),
+            model: model.clone(),
+        });
+        assert!(both.contains("--net-relay"), "{both}");
+        assert!(both.contains("--net-socket"), "{both}");
+        assert!(both.contains("--model-socket"), "{both}");
+
+        let brain_only = argv_for(&Bridges {
+            net: Net::None,
+            model,
+        });
+        assert!(brain_only.contains("--net-relay"), "{brain_only}");
+        assert!(brain_only.contains("--model-socket"), "{brain_only}");
+        assert!(
+            !brain_only.contains("--net-socket"),
+            "no proxy, so no proxy port: {brain_only}"
+        );
+
+        let network_only = argv_for(&Bridges { net, model: None });
+        assert!(network_only.contains("--net-socket"), "{network_only}");
+        assert!(
+            !network_only.contains("--model-socket"),
+            "no brain, so no brain port: {network_only}"
+        );
+
+        let neither = argv_for(&Bridges::default());
+        assert!(
+            !neither.contains("--net-relay"),
+            "nothing to bridge means the command is run directly: {neither}"
+        );
     }
 
     #[test]

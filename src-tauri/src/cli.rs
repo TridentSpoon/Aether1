@@ -84,6 +84,9 @@ USAGE:
                                    the GitHub CLI, the internet, and -- off until you say
                                    otherwise -- edit and run inside one project folder
     aether1 code perms <n> on|off  Turn one of those on or off
+    aether1 code effective         What will actually happen, and which answer decided it
+    aether1 code brain             Whether an agent in the sandbox can reach your model,
+                                   answered by building a real box and trying it
     aether1 code workspace [path]  The project folder it may change; prints the current one
     aether1 code level [name]      How much this project is trusted with; prints all four
     aether1 code share <folder>    Let it read one folder beyond the project
@@ -192,14 +195,21 @@ pub enum Invocation {
     /// Reads only -- see code_effective.rs for why the switches cannot answer this on their
     /// own.
     CodeEffective,
+    /// `code brain`: whether a coding agent in the sandbox can reach AETHER1's own model
+    /// server, answered by actually trying it.
+    CodeBrain,
     /// `code workspace`: the project folder AETHER CODE may change, printed or set.
     CodeWorkspace {
         path: Option<String>,
     },
-    /// `--net-relay`: Aether1 running inside the sandbox, bridging loopback to the proxy
-    /// socket and then running the real command. Never typed by a person.
+    /// `--net-relay`: Aether1 running inside the sandbox, bridging loopback to each socket
+    /// it was given and then running the real command. Never typed by a person.
     NetRelay {
-        socket: String,
+        /// The proxy socket, which decides per host. Absent when the network is off.
+        net_socket: Option<String>,
+        /// The model socket, which goes to one address. Absent unless the caller asked for
+        /// AETHER1's own model server to be reachable from the box.
+        model_socket: Option<String>,
         argv: Vec<String>,
     },
     /// `code level`: how much this project is trusted with, printed or set.
@@ -470,15 +480,30 @@ pub fn parse(argv: &[String]) -> Invocation {
     let args: Vec<String> = argv.iter().skip(1).cloned().collect();
 
     // The sandbox's own entry point, checked first and documented nowhere the operator
-    // looks: `--net-relay <socket> -- <program> <args...>` is how Aether1 re-enters itself
-    // inside the box to bridge loopback to the proxy. It is not a verb anybody types.
-    if let Some(at) = args.iter().position(|a| a == "--net-relay") {
-        let socket = args.get(at + 1).cloned().unwrap_or_default();
-        let rest: Vec<String> = match args.iter().position(|a| a == "--") {
-            Some(dashes) => args[dashes + 1..].to_vec(),
-            None => Vec::new(),
+    // looks: `--net-relay [--net-socket P] [--model-socket P] -- <program> <args...>` is how
+    // Aether1 re-enters itself inside the box to bridge loopback to each socket it was
+    // given. It is not a verb anybody types.
+    //
+    // Both sockets are named rather than positional, because the box may have either, both
+    // or neither, and a positional path whose meaning depends on what else is present is the
+    // kind of argument that eventually gets handed to the wrong bridge. Only the flags before
+    // `--` are read, so nothing in the command's own argv can add a door.
+    if args.iter().any(|a| a == "--net-relay") {
+        let dashes = args.iter().position(|a| a == "--");
+        let flags = &args[..dashes.unwrap_or(args.len())];
+        let value_of = |name: &str| {
+            flags
+                .iter()
+                .position(|a| a == name)
+                .and_then(|at| flags.get(at + 1))
+                .filter(|path| !path.starts_with("--"))
+                .cloned()
         };
-        return Invocation::NetRelay { socket, argv: rest };
+        return Invocation::NetRelay {
+            net_socket: value_of("--net-socket"),
+            model_socket: value_of("--model-socket"),
+            argv: dashes.map(|at| args[at + 1..].to_vec()).unwrap_or_default(),
+        };
     }
 
     // Checked before anything else so the existing `--serve` behavior is unchanged: it
@@ -576,6 +601,14 @@ pub fn parse(argv: &[String]) -> Invocation {
             Some("effective") => match &rest[1..] {
                 [] => Ok(Invocation::CodeEffective),
                 _ => Err("code effective takes no arguments".to_string()),
+            },
+            // Also one word and also no arguments, but unlike `effective` this one *does*
+            // something: it builds a real box and makes a real request from inside it. An
+            // argument here would be a way to point the probe somewhere AETHER1 is not
+            // configured for, which is the one thing the door exists to prevent.
+            Some("brain") => match &rest[1..] {
+                [] => Ok(Invocation::CodeBrain),
+                _ => Err("code brain takes no arguments".to_string()),
             },
             // The project folder. With no path it prints the one in force, which is the
             // question an operator asks before they trust any of this.
@@ -1267,6 +1300,126 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
 /// The layout puts the verdict before the sentence and the layer after it, because the scan
 /// an operator does here is down the verdict column looking for the one row that says
 /// something they did not expect; the sentence is what they stop and read.
+/// `aether1 code brain`: can a coding agent inside the sandbox reach AETHER1's own model
+/// server?
+///
+/// Answered by doing it rather than by describing it. The settings half of the question is
+/// `code_model::configured`, which the Settings report also reads; what it cannot tell an
+/// operator is whether the socket, the relay and the box actually line up on this machine.
+/// So this builds a real box with the model socket and nothing else bridged in, makes one
+/// request from inside it, and prints what came back.
+///
+/// Nothing is written and nothing is left running: the socket belongs to this process and
+/// goes when it does.
+fn run_code_brain() -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    let mut out = "AETHER CODE -- can an agent in the sandbox reach your model?\n\n".to_string();
+
+    let sandbox = crate::code_sandbox::detect();
+    if !sandbox.confines() {
+        return Err(format!(
+            "{out}  No. {}\n\n  Commands are refused on this machine for the same reason, so \
+             there is no\n  box to open the model server to. See `aether1 code effective`.\n",
+            match &sandbox {
+                crate::code_sandbox::Sandbox::Unavailable(why) => *why,
+                crate::code_sandbox::Sandbox::Bubblewrap { .. } => "…it can, and this is a bug",
+            }
+        ));
+    }
+
+    let brain = match crate::code_model::start(db) {
+        Ok(brain) => brain,
+        // Not an error in AETHER1: a cloud provider or a remote endpoint is a legitimate
+        // setup, and this is the sentence that says what it means for a coding agent.
+        Err(why) => return Err(format!("{out}  No. {why}\n")),
+    };
+    out.push_str(&format!(
+        "  Your model server   {}:{}\n  Inside the sandbox  {}\n\n",
+        brain.endpoint.host,
+        brain.endpoint.port,
+        brain.endpoint.in_box()
+    ));
+
+    // Whatever this machine has. The box can see the whole read-only host, so a tool on the
+    // operator's PATH is a tool inside; naming both means a stripped-down machine with only
+    // one of them still gets an answer.
+    let Some(probe) = crate::paths::find_installed_binary(&["curl", "python3"]) else {
+        return Err(format!(
+            "{out}  Cannot tell: neither curl nor python3 is on this machine, so there is \
+             nothing to\n  make the request with. The socket itself started fine.\n"
+        ));
+    };
+    let name = probe
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let url = format!("{}/", brain.endpoint.in_box());
+    let args: Vec<String> = if name.starts_with("curl") {
+        vec!["-sS".into(), "--max-time".into(), "10".into(), url]
+    } else {
+        vec![
+            "-c".into(),
+            format!(
+                "import urllib.request;print(urllib.request.urlopen('{url}',timeout=10)\
+                 .status)"
+            ),
+        ]
+    };
+
+    // A scratch folder as the workspace: this probe changes nothing, and pointing a box at
+    // the operator's real project to make an HTTP request would be a worse default than
+    // needing a directory.
+    let scratch = std::env::temp_dir().join(format!("aether1_brain_{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).map_err(|e| {
+        format!(
+            "{out}  Cannot tell: {} could not be made: {e}\n",
+            scratch.display()
+        )
+    })?;
+    let output = crate::code_sandbox::command(
+        &sandbox,
+        &probe.to_string_lossy(),
+        &args,
+        &scratch,
+        &scratch,
+        // The model socket and nothing else. The network stays off, which is also the claim
+        // being tested: the brain is reachable without it.
+        &crate::code_sandbox::Bridges {
+            net: crate::code_sandbox::Net::None,
+            model: Some(brain.socket.clone()),
+        },
+        &crate::code_sandbox::Access::project_only(),
+    )
+    .output();
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    let output =
+        output.map_err(|e| format!("{out}  Cannot tell: the box would not start: {e}\n"))?;
+    let said = String::from_utf8_lossy(&output.stdout).to_string()
+        + &String::from_utf8_lossy(&output.stderr);
+    let said = said.trim();
+
+    if output.status.success() {
+        out.push_str(&format!(
+            "  Yes. {name} in a confined box, with the network off, got an answer from your \
+             model\n  server through the socket.\n\n  It said: {said}\n"
+        ));
+        Ok(out)
+    } else {
+        // The socket is there and the box is there, so this is the model server itself --
+        // most often not running. Said as that rather than as a sandbox failure, because the
+        // operator's next move is `ollama serve`, not a permission.
+        Err(format!(
+            "{out}  No. The socket and the box are fine; the request did not come back.\n  \
+             Most often that means nothing is listening on {}:{} yet.\n\n  {name} said: \
+             {said}\n",
+            brain.endpoint.host, brain.endpoint.port
+        ))
+    }
+}
+
 fn run_code_effective() -> Result<String, String> {
     let engine = crate::build_llm_engine();
     let report = crate::code_effective::report(engine.db());
@@ -2604,6 +2757,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::CodeEffective => run_code_effective(),
+        Invocation::CodeBrain => run_code_brain(),
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
         Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
         Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
@@ -3045,5 +3199,89 @@ mod tests {
         );
         // Naming nothing is the dangerous reading -- it must not quietly mean "all".
         assert!(matches!(parse_args(&["revoke"]), Invocation::Invalid(_)));
+    }
+    /// The sandbox's own entry point. Each socket is named, so a box with one bridge cannot
+    /// have its path read as the other's, and nothing after `--` can add a door -- which
+    /// matters because what follows `--` is the command the model asked to run.
+    #[test]
+    fn the_relay_reads_only_the_sockets_before_the_dashes() {
+        assert_eq!(
+            parse_args(&[
+                "--net-relay",
+                "--net-socket",
+                "/n.sock",
+                "--model-socket",
+                "/m.sock",
+                "--",
+                "node",
+                "build.js",
+            ]),
+            Invocation::NetRelay {
+                net_socket: Some("/n.sock".to_string()),
+                model_socket: Some("/m.sock".to_string()),
+                argv: vec!["node".to_string(), "build.js".to_string()],
+            }
+        );
+
+        // One bridge, and the other stays absent rather than picking up a stray path.
+        assert_eq!(
+            parse_args(&["--net-relay", "--model-socket", "/m.sock", "--", "node"]),
+            Invocation::NetRelay {
+                net_socket: None,
+                model_socket: Some("/m.sock".to_string()),
+                argv: vec!["node".to_string()],
+            }
+        );
+
+        // A command that names the flags itself gets nothing: the argv after `--` is the
+        // model's, and a door it could ask for would not be a door AETHER1 decided on.
+        assert_eq!(
+            parse_args(&[
+                "--net-relay",
+                "--",
+                "node",
+                "--model-socket",
+                "/evil.sock",
+                "--net-socket",
+                "/evil.sock",
+            ]),
+            Invocation::NetRelay {
+                net_socket: None,
+                model_socket: None,
+                argv: vec![
+                    "node".to_string(),
+                    "--model-socket".to_string(),
+                    "/evil.sock".to_string(),
+                    "--net-socket".to_string(),
+                    "/evil.sock".to_string(),
+                ],
+            }
+        );
+
+        // A flag with its value missing takes the next flag as its path in no circumstance.
+        assert_eq!(
+            parse_args(&[
+                "--net-relay",
+                "--net-socket",
+                "--model-socket",
+                "/m.sock",
+                "--",
+                "node"
+            ]),
+            Invocation::NetRelay {
+                net_socket: None,
+                model_socket: Some("/m.sock".to_string()),
+                argv: vec!["node".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn code_brain_takes_no_arguments() {
+        assert_eq!(parse_args(&["code", "brain"]), Invocation::CodeBrain);
+        assert!(matches!(
+            parse_args(&["code", "brain", "localhost"]),
+            Invocation::Invalid(_)
+        ));
     }
 }

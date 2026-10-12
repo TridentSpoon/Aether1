@@ -539,7 +539,10 @@ fn run_inner(db: &MemoryDb, args: &Value, approved_once: bool) -> Result<String,
         rest,
         &cwd,
         &root,
-        &crate::code_sandbox::network_for(&sandbox, db),
+        // Network as the settings say it, and no path to AETHER1's own model server: this
+        // is every command the operator or the companion starts, and a test suite has no
+        // business asking the brain questions. See `code_model`, rule 3.
+        &crate::code_sandbox::Bridges::net_only(crate::code_sandbox::network_for(&sandbox, db)),
         &access,
     )
     .stdin(Stdio::null())

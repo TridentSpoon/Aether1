@@ -24,6 +24,7 @@ mod cli;
 mod code_chat;
 mod code_checkpoint;
 mod code_effective;
+mod code_model;
 mod code_openat;
 mod code_perms;
 mod code_policy;
@@ -2782,8 +2783,17 @@ fn main() {
     // handler, which only ever runs for the *second* launch.
     // Inside the sandbox, and before anything else this process would normally do: no
     // tray, no database, no window. It bridges one socket and runs one command.
-    if let cli::Invocation::NetRelay { socket, argv } = &invocation {
-        std::process::exit(code_proxy::relay_main(socket, argv));
+    if let cli::Invocation::NetRelay {
+        net_socket,
+        model_socket,
+        argv,
+    } = &invocation
+    {
+        std::process::exit(code_proxy::relay_main(
+            net_socket.as_deref(),
+            model_socket.as_deref(),
+            argv,
+        ));
     }
     let open_face_at_launch = matches!(invocation, cli::Invocation::Face);
     match invocation {

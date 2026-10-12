@@ -890,47 +890,54 @@ async fn handle(mut inbound: tokio::net::UnixStream, db: MemoryDb) -> std::io::R
 
 // ------------------------------------------------------------------ the relay
 
-/// `aether1 --net-relay -- <program> <args...>`, which runs *inside* the sandbox.
+/// `aether1 --net-relay [--net-socket P] [--model-socket P] -- <program> <args...>`, which
+/// runs *inside* the sandbox.
 ///
-/// It listens on loopback -- the only interface the box has -- and hands every connection
-/// down the unix socket bind-mounted in from outside, then runs the real command and exits
-/// with its status. Two processes rather than a shell line, so nothing in the argv is ever
-/// parsed by anything.
-pub fn relay_main(socket: &str, argv: &[String]) -> i32 {
+/// For each socket it was given it listens on loopback -- the only interface the box has --
+/// and hands every connection down that socket to the half of Aether1 running outside, then
+/// runs the real command and exits with its status. Two processes rather than a shell line,
+/// so nothing in the argv is ever parsed by anything.
+///
+/// The two doors stay separate all the way through. `--net-socket` reaches the proxy, which
+/// decides per host; `--model-socket` reaches one address that was fixed before this process
+/// started. A box is given one, both, or neither, and a port with no socket behind it is
+/// never opened -- a program that finds nothing listening on 8081 learns the truth, which is
+/// that this box has no model server, rather than hanging on a bridge to nowhere.
+pub fn relay_main(net_socket: Option<&str>, model_socket: Option<&str>, argv: &[String]) -> i32 {
     let Some((program, rest)) = argv.split_first() else {
         eprintln!("--net-relay needs a command to run after --");
         return 2;
     };
-    let socket = socket.to_string();
-    std::thread::Builder::new()
-        .name("aether1-net-relay".to_string())
-        .spawn(move || {
-            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            else {
-                return;
-            };
-            runtime.block_on(async move {
-                let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", RELAY_PORT)).await
+    let bridges: Vec<(u16, String)> = [
+        net_socket.map(|s| (RELAY_PORT, s.to_string())),
+        model_socket.map(|s| (crate::code_model::RELAY_PORT, s.to_string())),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    if !bridges.is_empty() {
+        std::thread::Builder::new()
+            .name("aether1-net-relay".to_string())
+            .spawn(move || {
+                let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
                 else {
                     return;
                 };
-                loop {
-                    let Ok((mut inbound, _)) = listener.accept().await else {
-                        continue;
-                    };
-                    let socket = socket.clone();
-                    tokio::spawn(async move {
-                        if let Ok(mut outbound) = tokio::net::UnixStream::connect(&socket).await {
-                            let _ =
-                                tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
-                        }
-                    });
-                }
-            });
-        })
-        .ok();
+                runtime.block_on(async move {
+                    let mut listening = Vec::new();
+                    for (port, socket) in bridges {
+                        listening.push(tokio::spawn(bridge(port, socket)));
+                    }
+                    for task in listening {
+                        let _ = task.await;
+                    }
+                });
+            })
+            .ok();
+    }
 
     match std::process::Command::new(program).args(rest).status() {
         Ok(status) => status.code().unwrap_or(1),
@@ -938,6 +945,24 @@ pub fn relay_main(socket: &str, argv: &[String]) -> i32 {
             eprintln!("{program} could not be started: {e}");
             127
         }
+    }
+}
+
+/// One loopback port in front of one unix socket, copying bytes and reading none of them.
+async fn bridge(port: u16, socket: String) {
+    let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await else {
+        return;
+    };
+    loop {
+        let Ok((mut inbound, _)) = listener.accept().await else {
+            continue;
+        };
+        let socket = socket.clone();
+        tokio::spawn(async move {
+            if let Ok(mut outbound) = tokio::net::UnixStream::connect(&socket).await {
+                let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+            }
+        });
     }
 }
 
@@ -1204,9 +1229,9 @@ mod tests {
                 &["-c".to_string(), script.clone()],
                 &project,
                 &project,
-                &crate::code_sandbox::Net::Proxied {
+                &crate::code_sandbox::Bridges::net_only(crate::code_sandbox::Net::Proxied {
                     socket: proxy.clone(),
-                },
+                }),
                 &crate::code_sandbox::Access::project_only(),
             )
             .output()
@@ -1712,9 +1737,9 @@ mod tests {
             &["-c".to_string(), script],
             &project,
             &project,
-            &crate::code_sandbox::Net::Proxied {
+            &crate::code_sandbox::Bridges::net_only(crate::code_sandbox::Net::Proxied {
                 socket: proxy.clone(),
-            },
+            }),
             &crate::code_sandbox::Access::project_only(),
         )
         .output()
