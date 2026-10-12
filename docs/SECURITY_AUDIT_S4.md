@@ -2,7 +2,9 @@
 
 `docs/SECURITY_PLAN.md` lists S4 as the one remaining item that is not a known gap with a
 known fix. It is a search for the next class of issue: prompt injection and tool confusion.
-This is the first pass, done 2026-10-11 against `a93a544`.
+This is the first pass, done 2026-10-11 against `a93a544`. **All five of its findings are
+now closed**; finding 4, the content security policy, was taken separately on 2026-10-12
+and its entry below says what closing it turned up.
 
 The question asked throughout was not "can the model be tricked" -- it can, that is what a
 model is -- but **what a sentence written by somebody who is not the operator can reach.**
@@ -67,7 +69,7 @@ is asked to approve and the words of its reason, so the remaining attack is soci
 that looks like the routine next step of the thing the operator just asked for. Worth
 revisiting if proposal reasons ever get more prominent than the preview.
 
-### 4. No CSP, with `withGlobalTauri: true` — not fixed; needs a decision
+### 4. No CSP, with `withGlobalTauri: true` — fixed 2026-10-12
 
 `src-tauri/tauri.conf.json` sets no `csp` at all (`app.security` carries only
 `assetProtocol`), and `withGlobalTauri` is `true`, so `window.__TAURI__` is ambient in every
@@ -81,16 +83,38 @@ output cannot produce a tag. The LAN pairing rows and the new network-permission
 `textContent` throughout. That is three correct implementations guarding a surface where one
 slip is fatal.
 
-**Recommended fix, and it is cheap.** There are only **five inline `<script>` blocks** across
-the four pages (two in `index.html`, one each in `sprite.html`, `face.html`,
-`avatar-lab.html`) and **no inline event-handler attributes at all**. Extract those five,
-then set a real policy -- `default-src 'self'`, `script-src 'self'`, `object-src 'none'`,
-`frame-ancestors 'none'` -- and consider turning `withGlobalTauri` off in favour of the
-module import, which removes the ambient handle an injected script would reach for. Estimate:
-a day, mostly checking that nothing in the HUD depended on an inline block.
+**Fixed.** The five inline `<script>` blocks became two files (`js/solo-panel.js` and
+`js/theme-apply.js`), `avatar-lab.html`'s one `<style>` block became `css/avatar-lab.css`,
+and the policy is now set with no inline exception at all. There were no inline
+event-handler attributes to deal with.
 
-Not done here because it changes how every window loads its scripts and wants the app run on
-real hardware afterwards, which this container cannot do.
+**What the fix turned up, and it would have broken the app.** The frontend is served **two
+ways** -- Tauri's asset protocol and the Axum HTTP server -- and only the first applies the
+`csp` from `tauri.conf.json` or hashes inline scripts at build time. A policy set only there
+would have left the LAN browser unprotected, and an inline block added later would have kept
+working on the author's machine and failed on everyone else's. So `server.rs` carries the
+same policy as `CONTENT_SECURITY_POLICY` and applies it to its own responses, and
+`scripts/check_csp.sh` fails the build if the two drift, if either grows an `unsafe-inline`,
+or if any page gains an inline block or handler attribute.
+
+The other thing a policy written from the textbook would have got wrong: inside the desktop
+shell the page's origin is `tauri://localhost` while `API_BASE` is `http://localhost:8378`,
+so **every request the HUD makes is cross-origin** and needs naming in `connect-src` and
+`media-src`. Likewise `ipc:`, because `invoke` is a `fetch` to Tauri's IPC protocol (it falls
+back to `postMessage` if blocked, so this is a performance cliff rather than a break), and
+the asset protocol in both its shapes -- `asset://localhost` on Linux and macOS,
+`http(s)://asset.localhost` on Windows.
+
+**`withGlobalTauri` stays on.** Turning it off was the other half of the recommendation and
+is not worth taking: it would rewrite 56 call sites across the frontend to remove a handle
+that only a script can reach, and with `script-src 'self'` holding, no script runs unless the
+policy has already failed. The cost is real and the margin it buys is not.
+
+**Still unverified.** The policy was assembled and compared by compiling the constant and
+diffing it against the config, and the check script was tested against all three of its
+failure modes, but the app itself has not been run under the policy -- this container has no
+GTK libraries. A console full of CSP violations on first launch is the thing to watch for,
+and the sources above are the list of what each one would mean.
 
 ### 5. `search_web` advertised a tool the companion does not have — fixed here
 

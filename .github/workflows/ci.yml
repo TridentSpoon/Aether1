@@ -293,3 +293,11 @@ jobs:
       # the Graft panel and the fingerprint the pairing gate re-checks all shipped that way.
       - name: Check Tauri calls name their arguments the way Tauri reads them
         run: ./scripts/check_invoke_arg_names.sh
+
+      # The policy has no inline exception, and the two halves of it live in different
+      # files because the frontend is served two ways. An inline block added to a page
+      # would keep working in the desktop shell, where Tauri hashes inline scripts at
+      # build time, and stop working in the LAN browser, where nothing does -- so the
+      # break would show up on somebody else's machine and not on the author's.
+      - name: Check the content security policy still holds
+        run: ./scripts/check_csp.sh
