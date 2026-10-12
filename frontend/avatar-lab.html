@@ -15,49 +15,9 @@
          renders once in the fallback palette first, which on a light theme is a dark flash. -->
     <script src="js/hologram/palettes.js?v=19"></script>
     <script src="js/theme.js?v=7"></script>
-    <script>Aether1Theme.apply(document);</script>
+    <script src="js/theme-apply.js?v=1"></script>
     <script src="vendor/three.min.js?v=1"></script>
-    <style>
-        /* The workbench is its own thing: two columns, avatar on the left, controls on
-           the right, and nothing that has to match the HUD's layout. */
-        body { margin: 0; height: 100vh; overflow: hidden; }
-        .lab-grid { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
-        @media (max-width: 900px) { .lab-grid { grid-template-columns: 1fr; grid-template-rows: 50vh 50vh; } }
-        .lab-controls { overflow-y: auto; }
-        .lab-field { display: flex; flex-direction: column; gap: 0.25rem; }
-        .lab-field label { font-size: 10px; letter-spacing: 0.1em; }
-        select, input[type="range"] { width: 100%; }
-        /* These were fixed near-blacks, written when every theme was one. On a light shell
-           they are dark boxes on a white page, so they follow the theme like everything
-           else. */
-        select {
-            background: var(--bg-panel-hover); border: 1px solid var(--border-neon); border-radius: 3px;
-            color: var(--text-main); font-family: 'Share Tech Mono', monospace; font-size: 12px; padding: 4px 6px;
-        }
-        .lab-readout { font-variant-numeric: tabular-nums; }
-        textarea {
-            width: 100%; background: var(--bg-panel-hover); border: 1px solid var(--border-neon); border-radius: 3px;
-            color: var(--text-main); font-family: 'Share Tech Mono', monospace; font-size: 11px; padding: 6px;
-        }
-        .state-btn.is-on { background: var(--neon-cyan); color: var(--bg-core); border-color: var(--neon-cyan); }
-
-        /* Range inputs are the one control browsers refuse to inherit anything from,
-           so they arrive as a blue bar in the middle of a cyan HUD unless dressed. */
-        input[type="range"] {
-            -webkit-appearance: none; appearance: none;
-            height: 4px; border-radius: 2px; background: var(--tint-main);
-            border: 1px solid var(--border-neon); outline: none;
-        }
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none; appearance: none;
-            width: 12px; height: 16px; border-radius: 2px; cursor: grab;
-            background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
-        }
-        input[type="range"]::-moz-range-thumb {
-            width: 12px; height: 16px; border: 0; border-radius: 2px; cursor: grab;
-            background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
-        }
-    </style>
+    <link rel="stylesheet" href="css/avatar-lab.css?v=1">
 </head>
 <body class="bg-cyber-dark text-slate-100">
     <div class="scanlines"></div>
