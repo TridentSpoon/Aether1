@@ -429,6 +429,13 @@ pub fn command(
                 for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
                     cmd.env(key, &proxy);
                 }
+                // Node's built-in `fetch` is the one common client that reads none of the
+                // four above unless told to, so inside a proxied box it resolves the host
+                // itself, gets nowhere, and reports `EAI_AGAIN` -- which reads to an
+                // operator as "this machine is offline" rather than "your tool ignored the
+                // only way out". curl, npm and python all honour the variables, which is
+                // why it goes unnoticed. Harmless where it is not understood.
+                cmd.env("NODE_USE_ENV_PROXY", "1");
             }
             cmd.current_dir(cwd);
             cmd
@@ -640,6 +647,76 @@ mod tests {
             )),
             "and reaches the proxy through one socket: {joined}"
         );
+    }
+
+    /// A box with a way out is no use to a tool that cannot see it. Node's `fetch` reads
+    /// `NODE_USE_ENV_PROXY`, not the proxy variables, so without this the Proxied and
+    /// Unenforced states look offline to it while the proxy sits there waiting.
+    #[test]
+    fn a_box_with_a_way_out_points_node_at_it_too() {
+        let root = std::env::temp_dir();
+        let sandbox = Sandbox::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: true,
+        };
+        for net in [
+            Net::Proxied {
+                socket: PathBuf::from("/var/aether1/net.sock"),
+            },
+            Net::Unenforced,
+        ] {
+            let cmd = command(
+                &sandbox,
+                "node",
+                &[],
+                &root,
+                &root,
+                &net,
+                &Access::default(),
+            );
+            let env: Vec<_> = cmd.get_envs().collect();
+            assert!(
+                env.contains(&(
+                    std::ffi::OsStr::new("NODE_USE_ENV_PROXY"),
+                    Some(std::ffi::OsStr::new("1"))
+                )),
+                "{net:?} sets the proxy variables, so it must set this one too: {env:?}"
+            );
+        }
+    }
+
+    /// The other half of the rule above: a box with no way out must not claim one. A
+    /// variable pointing at a relay that is not there would have Node reporting a proxy
+    /// failure where the honest answer is that the network is off.
+    #[test]
+    fn a_box_with_no_way_out_claims_none() {
+        let root = std::env::temp_dir();
+        let sandbox = Sandbox::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: true,
+        };
+        let cmd = command(
+            &sandbox,
+            "node",
+            &[],
+            &root,
+            &root,
+            &Net::None,
+            &Access::default(),
+        );
+        let keys: Vec<_> = cmd.get_envs().map(|(k, _)| k).collect();
+        for key in [
+            "NODE_USE_ENV_PROXY",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+        ] {
+            assert!(
+                !keys.contains(&std::ffi::OsStr::new(key)),
+                "a box with no network must not set {key}"
+            );
+        }
     }
 
     #[test]
