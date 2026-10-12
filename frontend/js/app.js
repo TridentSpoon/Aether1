@@ -9841,6 +9841,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // switching the sandbox network on and saving starts the cards working without
             // a restart.
             refreshNetPolicy().then(syncNetPoll);
+            // And the report of what those switches add up to, which also lives outside
+            // settings: the level is in the project's file and the sandbox is a fact about
+            // the machine.
+            refreshCodeEffective();
             updateAgentNameDisplay(s.agent_name || "HALCY");
             document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
             document.getElementById('setting-operator-name').value = s.operator_name || '';
@@ -10154,6 +10158,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // The mode changes what the two speech engines mean, so the readout under them
             // is re-asked rather than left describing the settings as they were.
             loadVoiceStatus();
+            // And the report above the switches, for the same reason: a switch that was
+            // just saved may be outranked by local-only mode or by the machine, and a
+            // report still describing the previous answer is the thing it exists to
+            // prevent.
+            refreshCodeEffective();
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
@@ -11750,6 +11759,152 @@ document.addEventListener('DOMContentLoaded', () => {
         chatContainer.scrollTop = chatContainer.scrollHeight;
         voiceEngine.playSFX('alert');
         return card;
+    }
+
+    // ---------------------------------------------------------------- what will happen
+    //
+    // The report above the switches. Every answer in it comes from the backend
+    // (code_effective.rs); nothing here works out whether a thing is allowed, because a
+    // second opinion drawn in the frontend is a second policy that disagrees with the first
+    // one the next time either changes.
+
+    /* The layers an operator cannot change from Settings. Marked so a row that surprises
+       them does not send them hunting for a switch that does not exist. */
+    const CODE_EFFECTIVE_FIXED = new Set(['machine', 'environment', 'no-workspace']);
+
+    /* One row. Verdict, name, the layer that decided it, the sentence, and the narrower
+       rules behind a disclosure -- closed, because the count is the fact and the list is
+       the detail. */
+    function codeEffectiveRow(row) {
+        const el = document.createElement('div');
+        el.className = 'code-effective-row';
+        el.dataset.action = row.action || 'deny';
+        el.dataset.key = row.key || '';
+
+        const verdict = document.createElement('span');
+        verdict.className = 'code-effective-verdict';
+        const dot = document.createElement('i');
+        dot.setAttribute('aria-hidden', 'true');
+        verdict.appendChild(dot);
+        verdict.appendChild(document.createTextNode(row.action_title || ''));
+        el.appendChild(verdict);
+
+        const body = document.createElement('div');
+        body.className = 'code-effective-body';
+
+        const name = document.createElement('div');
+        name.className = 'code-effective-name';
+        const title = document.createElement('p');
+        title.className = 'net-row-title';
+        title.textContent = row.title || row.key || '';
+        name.appendChild(title);
+        const layer = document.createElement('span');
+        layer.className = 'code-effective-layer';
+        layer.textContent = row.decided_by_title || row.decided_by || '';
+        if (CODE_EFFECTIVE_FIXED.has(row.decided_by)) layer.dataset.fixed = 'true';
+        // The whole point of the row, so it is in the accessible name of the row itself
+        // rather than only in a visual chip beside it.
+        layer.title = CODE_EFFECTIVE_FIXED.has(row.decided_by)
+            ? 'Decided outside Settings; no switch here changes it.'
+            : 'Where this was decided.';
+        name.appendChild(layer);
+        body.appendChild(name);
+
+        const rule = document.createElement('p');
+        rule.className = 'net-row-hint';
+        rule.textContent = row.rule || '';
+        body.appendChild(rule);
+
+        const exceptions = Array.isArray(row.exceptions) ? row.exceptions : [];
+        if (exceptions.length) {
+            const details = document.createElement('details');
+            details.className = 'code-effective-exceptions';
+            const summary = document.createElement('summary');
+            summary.textContent = exceptions.length === 1
+                ? '1 narrower rule'
+                : `${exceptions.length} narrower rules`;
+            details.appendChild(summary);
+            const list = document.createElement('ul');
+            for (const text of exceptions) {
+                const item = document.createElement('li');
+                item.textContent = text;
+                list.appendChild(item);
+            }
+            details.appendChild(list);
+            body.appendChild(details);
+        }
+
+        el.appendChild(body);
+        return el;
+    }
+
+    /* Draws the report. */
+    function applyCodeEffective(report) {
+        const rows = document.getElementById('code-effective-rows');
+        const state = document.getElementById('code-effective-state');
+        const level = document.getElementById('code-effective-level');
+        if (!rows) return;
+
+        if (!report) {
+            rows.replaceChildren();
+            if (state) {
+                state.dataset.state = 'off';
+                state.replaceChildren(document.createElement('i'), document.createTextNode('Unavailable'));
+            }
+            level?.classList.add('hidden');
+            return;
+        }
+
+        if (state) {
+            // "Blocked" is not a problem here, so the dot stays quiet when something is
+            // blocked and goes amber only for the contradiction below.
+            state.dataset.state = report.level_applied === false ? 'busy' : 'on';
+            const dot = document.createElement('i');
+            dot.setAttribute('aria-hidden', 'true');
+            state.replaceChildren(
+                dot,
+                document.createTextNode(report.level_applied === false ? 'Out of step' : 'Current'),
+            );
+        }
+
+        if (level) {
+            if (report.level_applied === false && report.level_title) {
+                level.textContent = `This project's file says ${report.level_title}, and the switches in force no longer match it. Somebody moved one by hand; the rows below are what will happen.`;
+                level.classList.remove('hidden');
+                level.classList.add('code-effective-mismatch');
+            } else if (report.root && report.level_title) {
+                level.textContent = `${report.root} — ${report.level_title}`;
+                level.classList.remove('hidden');
+                level.classList.remove('code-effective-mismatch');
+            } else {
+                level.textContent = 'No project folder is nominated yet, so the rows that need one say so.';
+                level.classList.remove('hidden');
+                level.classList.remove('code-effective-mismatch');
+            }
+        }
+
+        rows.replaceChildren(...(report.rows || []).map(codeEffectiveRow));
+    }
+
+    /* Reads it. Read-only, so unlike the domain policy there is nothing to poll for: it is
+       asked when the panel opens and again after anything that could change an answer. */
+    async function refreshCodeEffective() {
+        let report;
+        try {
+            report = IS_TAURI
+                ? await tauriInvoke('code_effective_rust', {})
+                : await (async () => {
+                    const resp = await apiFetch('/api/code/effective');
+                    if (!resp.ok) throw new Error(`request failed: ${resp.status}`);
+                    return resp.json();
+                })();
+        } catch (e) {
+            console.warn('[AETHER1] could not read what AETHER CODE will do:', e);
+            applyCodeEffective(null);
+            return null;
+        }
+        applyCodeEffective(report);
+        return report;
     }
 
     /* Fetches the policy and draws a card for anything waiting that isn't already up.

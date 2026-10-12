@@ -169,6 +169,32 @@ everything their account can reach. And **a shared folder is genuinely shared**:
 mount is read-only against the kernel, but anything the project can read at Agent level it can
 also send anywhere the proxy allows.
 
+## 1d. Reading the answer back
+
+Six things decide what AETHER CODE may do, and they can outrank each other: five grants in
+`code_perms`, the four switches a level writes, the project's domain and folder lists,
+local-only mode, `AETHER1_LOCAL_ONLY` in the environment, and whether this machine can
+confine a command at all. A switch is therefore not an outcome. `aether1 code perms` prints
+`internet  ON` on a machine in local-only mode, where every fetch is refused before the URL
+is parsed, and it prints `run  ON` on a machine with no usable bubblewrap, where every
+command is refused for a reason no switch will move.
+
+`code_effective.rs` answers the question the switches cannot: for each capability, what will
+happen and **which of those answers decided it**. It is read-only and it decides nothing —
+every verdict is read from the module that owns it, so the report cannot become a second
+policy that drifts from the first. Three surfaces: `aether1 code effective`,
+`GET /api/code/effective`, and the card above the switches in Settings → Permissions.
+
+Naming the layer is the part that matters. "Commands are refused" sends an operator to a
+switch that is already on; "Commands are refused — this machine" tells them to install
+bubblewrap or to choose Unrestricted deliberately. The layers the operator cannot change
+from Settings (`machine`, `environment`, `no-workspace`) are marked as such.
+
+The report also carries the one contradiction this design can produce: a level is a name for
+a set of switches, so an operator who moves one by hand leaves the file claiming a level the
+switches no longer mean. `code_policy::effective` has always noticed this; the card is where
+it is now said.
+
 ## 2. What AETHER CODE may change without a sandbox
 
 `edit_file` and `create_file` do not spawn anything, so they are guarded in-process instead:

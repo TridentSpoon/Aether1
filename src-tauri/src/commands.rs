@@ -805,6 +805,14 @@ pub fn code_set_level(engine: &LlmEngine, level: &str) -> Result<Value, String> 
 /// proxy hold a connection open while a card is on screen. That is deliberate and it is
 /// why the CLI does not call this: a window that is polling can be asked, and anything
 /// else cannot.
+/// What AETHER CODE will actually do, and which answer decided it.
+///
+/// The Settings page's and the HTTP route's twin of `aether1 code effective`. Read-only, and
+/// it decides nothing -- `code_effective` calls the modules that own each answer.
+pub fn code_effective_report(engine: &LlmEngine) -> Value {
+    crate::code_effective::to_json(&crate::code_effective::report(engine.db()))
+}
+
 pub fn code_net_status(engine: &LlmEngine) -> Value {
     crate::code_proxy::note_watcher();
     let db = engine.db();
