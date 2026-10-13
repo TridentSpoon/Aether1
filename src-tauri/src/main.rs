@@ -24,6 +24,7 @@ mod cli;
 mod code_chat;
 mod code_checkpoint;
 mod code_effective;
+mod code_engine;
 mod code_model;
 mod code_openat;
 mod code_perms;

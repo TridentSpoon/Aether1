@@ -112,6 +112,15 @@ pub struct Access {
     /// False at the Assistant level, where the agent reads and changes nothing.
     pub write_workspace: bool,
     pub extra: Vec<crate::code_policy::Mount>,
+    /// The engine's own state directory on this machine, when the caller wants the command
+    /// to keep anything between runs.
+    ///
+    /// Writable whatever the workspace is, and deliberately so: at the Assistant level the
+    /// project is read-only, and an engine that cannot write its own session database cannot
+    /// run there at all. This is AETHER1's state about the project rather than a file of it,
+    /// and it is somewhere else entirely -- see `code_engine`. `None` for every command the
+    /// operator or the companion starts, which is what keeps that true.
+    pub engine_state: Option<PathBuf>,
 }
 
 impl Access {
@@ -120,6 +129,7 @@ impl Access {
         Access {
             write_workspace: true,
             extra: Vec::new(),
+            engine_state: None,
         }
     }
 }
@@ -476,6 +486,18 @@ pub fn command(
                 // why it goes unnoticed. Harmless where it is not understood.
                 cmd.env("NODE_USE_ENV_PROXY", "1");
             }
+            // The engine's roots, named as the box sees them. Set only when the directory is
+            // actually bound in: an `XDG_DATA_HOME` pointing into a tmpfs that goes when the
+            // command returns would be worse than not setting it, because the engine would
+            // believe it had somewhere to keep things.
+            if access.engine_state.is_some() {
+                let home = std::env::var("HOME").unwrap_or_default();
+                if !home.is_empty() {
+                    for (key, value) in crate::code_engine::env_in_sandbox(&home) {
+                        cmd.env(key, value);
+                    }
+                }
+            }
             cmd.current_dir(cwd);
             cmd
         }
@@ -567,6 +589,17 @@ pub fn bwrap_args(
             let path = format!("{home}/{file}");
             push(&["--ro-bind-try", "/dev/null", &path]);
         }
+    }
+
+    // The engine's own directory, after the caches so a cache path cannot hide it and
+    // before the workspace so the workspace still wins. Writable regardless of
+    // `write_workspace`: it is not part of the project. See `code_engine`.
+    if let (Some(state), false) = (&access.engine_state, home.is_empty()) {
+        push(&[
+            "--bind",
+            &state.to_string_lossy(),
+            &format!("{home}/{}", crate::code_engine::DIR_NAME),
+        ]);
     }
 
     // The way out, if there is one: a socket, not a route. It crosses the network

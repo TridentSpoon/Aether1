@@ -492,6 +492,10 @@ fn run_inner(db: &MemoryDb, args: &Value, approved_once: bool) -> Result<String,
     let access = crate::code_sandbox::Access {
         write_workspace: level.writes_the_project(),
         extra: crate::code_policy::mounts(&root),
+        // No engine state, for the same reason there is no model socket below: this is every
+        // command the operator or the companion starts, and nothing it does should outlive
+        // the box. See `code_engine`.
+        engine_state: None,
     };
     let cwd = match args.get("cwd").and_then(Value::as_str) {
         None | Some("") => root.clone(),

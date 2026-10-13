@@ -87,6 +87,9 @@ USAGE:
     aether1 code effective         What will actually happen, and which answer decided it
     aether1 code brain             Whether an agent in the sandbox can reach your model,
                                    answered by building a real box and trying it
+    aether1 code do <task>         Give the coding engine a task; it works in the sandbox,
+                                   on your model, and remembers between runs
+                                   (`--session <id>` carries one on)
     aether1 code workspace [path]  The project folder it may change; prints the current one
     aether1 code level [name]      How much this project is trusted with; prints all four
     aether1 code share <folder>    Let it read one folder beyond the project
@@ -198,6 +201,12 @@ pub enum Invocation {
     /// `code brain`: whether a coding agent in the sandbox can reach AETHER1's own model
     /// server, answered by actually trying it.
     CodeBrain,
+    /// `code do <task>`: give the engine a task and let it work in the sandbox.
+    CodeDo {
+        task: String,
+        /// `--session <id>`, to carry on an earlier one rather than start fresh.
+        session: Option<String>,
+    },
     /// `code workspace`: the project folder AETHER CODE may change, printed or set.
     CodeWorkspace {
         path: Option<String>,
@@ -476,6 +485,35 @@ fn parse_announce(rest: Vec<String>) -> Result<Invocation, String> {
     }
 }
 
+/// `code do [--session <id>] <task...>`.
+///
+/// The task is the rest of the line, quoted or not, the way `code ask` takes its question:
+/// this is a sentence typed at a shell, and a shell has opinions about most of the characters
+/// in one. The session id is lifted out first, so an id can never end up inside the task.
+fn parse_code_do(args: &[String]) -> Result<Invocation, String> {
+    let mut session = None;
+    let mut words: Vec<String> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(word) = rest.next() {
+        match word.as_str() {
+            "--session" | "-s" => match rest.next() {
+                Some(id) if !id.starts_with('-') => session = Some(id.clone()),
+                _ => return Err("--session needs the id of a session after it".to_string()),
+            },
+            _ => words.push(word.clone()),
+        }
+    }
+    let task = words.join(" ").trim().to_string();
+    if task.is_empty() {
+        return Err(
+            "code do needs a task after it, for example `aether1 code do add a test for the \
+             parser`"
+                .to_string(),
+        );
+    }
+    Ok(Invocation::CodeDo { task, session })
+}
+
 pub fn parse(argv: &[String]) -> Invocation {
     let args: Vec<String> = argv.iter().skip(1).cloned().collect();
 
@@ -610,6 +648,7 @@ pub fn parse(argv: &[String]) -> Invocation {
                 [] => Ok(Invocation::CodeBrain),
                 _ => Err("code brain takes no arguments".to_string()),
             },
+            Some("do") => parse_code_do(&rest[1..]),
             // The project folder. With no path it prints the one in force, which is the
             // question an operator asks before they trust any of this.
             Some("workspace") => match &rest[1..] {
@@ -1311,6 +1350,45 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
 ///
 /// Nothing is written and nothing is left running: the socket belongs to this process and
 /// goes when it does.
+/// `aether1 code do <task>`: hand the engine a task and let it work.
+///
+/// The engine runs confined, reaches AETHER1's own model through the socket `code brain`
+/// tests, and keeps its memory in a directory of its own -- so `--session <id>` means
+/// something on the next run. What the project is trusted with is the level, unchanged:
+/// `code do` at the Assistant level gets a read-only workspace, and the engine will say so
+/// rather than this command pretending it cannot happen.
+fn run_code_do(task: String, session: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    // The coding model, chosen the same way the AETHER CODE panel chooses it, so the two
+    // never disagree about which model this machine writes code with.
+    let advice = crate::commands::code_advice(&engine);
+    if !advice.model_installed {
+        return Err(format!(
+            "No coding model is downloaded yet. {} is the one for this machine -- download \
+             it from the coding panel under The Brain, and this will use it.",
+            advice.model
+        ));
+    }
+
+    // Long, because this is a coding agent editing a repository rather than a shell command.
+    // Still bounded: an engine that has stopped making progress should stop, not sit there.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+    let done = crate::code_engine::run(db, &advice.model, &task, session.as_deref(), TIMEOUT)?;
+
+    let said = done.output.trim();
+    if done.status == 0 {
+        Ok(format!("{said}\n"))
+    } else {
+        Err(format!(
+            "{} stopped with status {}.\n\n{said}\n",
+            crate::code_engine::ENGINE,
+            done.status
+        ))
+    }
+}
+
 fn run_code_brain() -> Result<String, String> {
     let engine = crate::build_llm_engine();
     let db = engine.db();
@@ -2758,6 +2836,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::CodeEffective => run_code_effective(),
         Invocation::CodeBrain => run_code_brain(),
+        Invocation::CodeDo { task, session } => run_code_do(task, session),
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
         Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
         Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
@@ -3281,6 +3360,47 @@ mod tests {
         assert_eq!(parse_args(&["code", "brain"]), Invocation::CodeBrain);
         assert!(matches!(
             parse_args(&["code", "brain", "localhost"]),
+            Invocation::Invalid(_)
+        ));
+    }
+    /// `code do` takes a sentence, and the session id must never end up inside it.
+    #[test]
+    fn code_do_separates_the_session_from_the_task() {
+        assert_eq!(
+            parse_args(&["code", "do", "add", "a", "test", "for", "the", "parser"]),
+            Invocation::CodeDo {
+                task: "add a test for the parser".to_string(),
+                session: None,
+            }
+        );
+        assert_eq!(
+            parse_args(&["code", "do", "--session", "ses_abc", "and", "again"]),
+            Invocation::CodeDo {
+                task: "and again".to_string(),
+                session: Some("ses_abc".to_string()),
+            }
+        );
+        // The flag anywhere in the line, because that is where people put it.
+        assert_eq!(
+            parse_args(&["code", "do", "carry", "on", "-s", "ses_abc"]),
+            Invocation::CodeDo {
+                task: "carry on".to_string(),
+                session: Some("ses_abc".to_string()),
+            }
+        );
+        // A task is required: an engine started on an empty prompt would think about nothing
+        // and charge this machine for it.
+        assert!(matches!(
+            parse_args(&["code", "do"]),
+            Invocation::Invalid(_)
+        ));
+        assert!(matches!(
+            parse_args(&["code", "do", "--session", "ses_abc"]),
+            Invocation::Invalid(_)
+        ));
+        // And a flag with nothing after it is an error rather than a task called "--session".
+        assert!(matches!(
+            parse_args(&["code", "do", "--session", "--", "x"]),
             Invocation::Invalid(_)
         ));
     }
