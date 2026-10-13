@@ -301,3 +301,9 @@ jobs:
       # break would show up on somebody else's machine and not on the author's.
       - name: Check the content security policy still holds
         run: ./scripts/check_csp.sh
+
+      # A window label that matches nothing in capabilities/default.json gets no core API,
+      # and the page says so only when a human opens it: the AETHER CODE board drew
+      # correctly and answered every question with "plugin:event:listen not allowed by ACL".
+      - name: Check every undockable panel window has a capability
+        run: ./scripts/check_panel_capability.sh
