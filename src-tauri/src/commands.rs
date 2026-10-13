@@ -1457,12 +1457,17 @@ pub fn code_set_model_preference(engine: &LlmEngine, model: &str) -> Result<(), 
 pub fn code_chat_ask(
     engine: &LlmEngine,
     prompt: &str,
+    task: Option<&str>,
     sink: llm::Sink,
 ) -> Result<crate::code_chat::CodeReply, String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
         return Err("Nothing to ask.".to_string());
     }
+    // Which piece of work this belongs to, before anything is scanned or asked: a question
+    // aimed at a task that has been deleted is refused here rather than landing in whichever
+    // conversation happens to be in focus.
+    let task = crate::code_tasks::resolve(engine.db(), task)?;
 
     let scan = model_scanner::scan_all();
     let server = scan
@@ -1485,7 +1490,7 @@ pub fn code_chat_ask(
     }
 
     let os = llm::Telemetry::snapshot().os_name;
-    crate::code_chat::ask(
+    crate::code_chat::ask_in_session(
         engine.db(),
         &server.endpoint,
         server.api,
@@ -1493,6 +1498,7 @@ pub fn code_chat_ask(
         &os,
         prompt,
         sink,
+        &task.session(),
     )
 }
 
@@ -1813,30 +1819,95 @@ pub fn code_agents_ask(
     Ok(results)
 }
 
-/// What has been said in the coding conversation, for a panel that was just opened.
-pub fn code_chat_history(engine: &LlmEngine) -> Vec<serde_json::Value> {
-    crate::code_chat::transcript(engine.db())
-        .into_iter()
-        .map(|message| {
-            // The commands are worked out again here rather than stored, so a reply
-            // reloaded from the database offers exactly what it offered when it arrived.
-            let commands = if message.sender == "user" {
-                Vec::new()
-            } else {
-                crate::code_chat::commands_in(&message.text)
-            };
-            serde_json::json!({
-                "sender": message.sender,
-                "text": message.text,
-                "timestamp": message.timestamp,
-                "commands": commands,
+/// What has been said in one task, for a panel that was just opened.
+pub fn code_chat_history(
+    engine: &LlmEngine,
+    task: Option<&str>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let task = crate::code_tasks::resolve(engine.db(), task)?;
+    Ok(
+        crate::code_chat::transcript_in(engine.db(), &task.session())
+            .into_iter()
+            .map(|message| {
+                // The commands are worked out again here rather than stored, so a reply
+                // reloaded from the database offers exactly what it offered when it arrived.
+                let commands = if message.sender == "user" {
+                    Vec::new()
+                } else {
+                    crate::code_chat::commands_in(&message.text)
+                };
+                serde_json::json!({
+                    "sender": message.sender,
+                    "text": message.text,
+                    "timestamp": message.timestamp,
+                    "commands": commands,
+                })
             })
-        })
-        .collect()
+            .collect(),
+    )
 }
 
-pub fn code_chat_clear(engine: &LlmEngine) -> Result<(), String> {
-    crate::code_chat::clear(engine.db())
+/// Empties one task's conversation, leaving the task itself in the list. Deleting the task
+/// outright is `code_task_delete`.
+pub fn code_chat_clear(engine: &LlmEngine, task: Option<&str>) -> Result<(), String> {
+    let task = crate::code_tasks::resolve(engine.db(), task)?;
+    crate::code_chat::clear_in(engine.db(), &task.session())
+}
+
+/// Every piece of work in AETHER CODE, ready to draw.
+pub fn code_tasks_list(engine: &LlmEngine) -> Vec<crate::code_tasks::Listed> {
+    crate::code_tasks::listed(engine.db())
+}
+
+/// Starts a piece of work and puts it in focus. The name may be empty: the first thing asked
+/// in it becomes what the list shows.
+pub fn code_task_create(
+    engine: &LlmEngine,
+    title: &str,
+) -> Result<crate::code_tasks::Task, String> {
+    crate::code_tasks::create(engine.db(), title)
+}
+
+/// Switches which piece of work the panel is on, so a window opened later lands here too.
+pub fn code_task_focus(engine: &LlmEngine, id: &str) -> Result<crate::code_tasks::Task, String> {
+    crate::code_tasks::focus(engine.db(), id)
+}
+
+/// Renames a piece of work. An empty name puts it back on the first thing asked in it.
+pub fn code_task_rename(
+    engine: &LlmEngine,
+    id: &str,
+    title: &str,
+) -> Result<crate::code_tasks::Task, String> {
+    crate::code_tasks::rename(engine.db(), id, title)
+}
+
+/// Marks a piece of work finished, or puts it back to work.
+pub fn code_task_set_done(
+    engine: &LlmEngine,
+    id: &str,
+    done: bool,
+) -> Result<crate::code_tasks::Task, String> {
+    let state = if done {
+        crate::code_tasks::State::Done
+    } else {
+        crate::code_tasks::State::Open
+    };
+    crate::code_tasks::set_state(engine.db(), id, state)
+}
+
+/// Pins a piece of work to the top of the list, or unpins it.
+pub fn code_task_set_pinned(
+    engine: &LlmEngine,
+    id: &str,
+    pinned: bool,
+) -> Result<crate::code_tasks::Task, String> {
+    crate::code_tasks::set_pinned(engine.db(), id, pinned)
+}
+
+/// Deletes a piece of work and everything said in it.
+pub fn code_task_delete(engine: &LlmEngine, id: &str) -> Result<(), String> {
+    crate::code_tasks::delete(engine.db(), id)
 }
 
 /// The sentence the voice test speaks. Short enough to be quick, long enough that a voice

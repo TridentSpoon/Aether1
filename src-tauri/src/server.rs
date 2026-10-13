@@ -230,6 +230,12 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/chat", post(code_chat))
         .route("/api/code/chat/history", get(code_chat_history))
         .route("/api/code/chat/clear", post(code_chat_clear))
+        .route("/api/code/tasks", get(code_tasks).post(code_task_create))
+        .route("/api/code/tasks/focus", post(code_task_focus))
+        .route("/api/code/tasks/rename", post(code_task_rename))
+        .route("/api/code/tasks/done", post(code_task_done))
+        .route("/api/code/tasks/pin", post(code_task_pin))
+        .route("/api/code/tasks/delete", post(code_task_delete))
         .route("/api/agents", get(get_agents))
         .route("/api/agents/selection", post(set_agent_selection))
         .route("/api/agents/run", post(run_agents))
@@ -1299,6 +1305,10 @@ async fn code_conventions() -> String {
 #[derive(Deserialize)]
 struct CodeChatRequest {
     message: String,
+    /// Which piece of work it belongs to. Absent means the one in focus, which is what a
+    /// script driving this by hand will want; the panel always says which.
+    #[serde(default)]
+    task: Option<String>,
 }
 
 /// The browser twin of code_chat_ask_rust.
@@ -1313,7 +1323,7 @@ async fn code_chat(
 ) -> Result<Json<crate::code_chat::CodeReply>, (StatusCode, String)> {
     let engine = state.engine.clone();
     let reply = tokio::task::spawn_blocking(move || {
-        commands::code_chat_ask(&engine, &req.message, &mut |_| {})
+        commands::code_chat_ask(&engine, &req.message, req.task.as_deref(), &mut |_| {})
     })
     .await
     .map_err(internal_error)?
@@ -1321,18 +1331,147 @@ async fn code_chat(
     Ok(Json(reply))
 }
 
-async fn code_chat_history(State(state): State<AppState>) -> Json<Vec<Value>> {
-    Json(
-        tokio::task::spawn_blocking(move || commands::code_chat_history(&state.engine))
-            .await
-            .expect("code_chat_history panicked"),
-    )
+/// Which task a query string or a body names, if either does.
+#[derive(Deserialize)]
+struct TaskQuery {
+    #[serde(default)]
+    task: Option<String>,
+}
+
+/// One task, named in a body. `id` rather than `task` because these are about a task rather
+/// than about something happening inside one.
+#[derive(Deserialize)]
+struct TaskRequest {
+    id: String,
+}
+
+/// A new task. Its own type rather than `TaskTitleRequest` with the id left out: a create
+/// that accepted an id would read as "make this one", which is not what it does, and a
+/// rename that accepted a body with no id would rename whichever task was in focus.
+#[derive(Deserialize)]
+struct NewTaskRequest {
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct TaskTitleRequest {
+    id: String,
+    #[serde(default)]
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct TaskFlagRequest {
+    id: String,
+    #[serde(default)]
+    on: bool,
+}
+
+async fn code_chat_history(
+    State(state): State<AppState>,
+    Query(query): Query<TaskQuery>,
+) -> Result<Json<Vec<Value>>, (StatusCode, String)> {
+    let found = tokio::task::spawn_blocking(move || {
+        commands::code_chat_history(&state.engine, query.task.as_deref())
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(found))
 }
 
 async fn code_chat_clear(
     State(state): State<AppState>,
+    Query(query): Query<TaskQuery>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    tokio::task::spawn_blocking(move || commands::code_chat_clear(&state.engine))
+    tokio::task::spawn_blocking(move || {
+        commands::code_chat_clear(&state.engine, query.task.as_deref())
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// The browser twins of the task commands. Same list, same errors, same order -- the panel
+/// is the same panel whichever way it was opened.
+async fn code_tasks(State(state): State<AppState>) -> Json<Vec<crate::code_tasks::Listed>> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::code_tasks_list(&state.engine))
+            .await
+            .expect("code_tasks panicked"),
+    )
+}
+
+async fn code_task_create(
+    State(state): State<AppState>,
+    Json(req): Json<NewTaskRequest>,
+) -> Result<Json<crate::code_tasks::Task>, (StatusCode, String)> {
+    let task =
+        tokio::task::spawn_blocking(move || commands::code_task_create(&state.engine, &req.title))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(task))
+}
+
+async fn code_task_focus(
+    State(state): State<AppState>,
+    Json(req): Json<TaskRequest>,
+) -> Result<Json<crate::code_tasks::Task>, (StatusCode, String)> {
+    let task =
+        tokio::task::spawn_blocking(move || commands::code_task_focus(&state.engine, &req.id))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(task))
+}
+
+async fn code_task_rename(
+    State(state): State<AppState>,
+    Json(req): Json<TaskTitleRequest>,
+) -> Result<Json<crate::code_tasks::Task>, (StatusCode, String)> {
+    let task = tokio::task::spawn_blocking(move || {
+        commands::code_task_rename(&state.engine, &req.id, &req.title)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(task))
+}
+
+async fn code_task_done(
+    State(state): State<AppState>,
+    Json(req): Json<TaskFlagRequest>,
+) -> Result<Json<crate::code_tasks::Task>, (StatusCode, String)> {
+    let task = tokio::task::spawn_blocking(move || {
+        commands::code_task_set_done(&state.engine, &req.id, req.on)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(task))
+}
+
+async fn code_task_pin(
+    State(state): State<AppState>,
+    Json(req): Json<TaskFlagRequest>,
+) -> Result<Json<crate::code_tasks::Task>, (StatusCode, String)> {
+    let task = tokio::task::spawn_blocking(move || {
+        commands::code_task_set_pinned(&state.engine, &req.id, req.on)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(task))
+}
+
+async fn code_task_delete(
+    State(state): State<AppState>,
+    Json(req): Json<TaskRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    tokio::task::spawn_blocking(move || commands::code_task_delete(&state.engine, &req.id))
         .await
         .map_err(internal_error)?
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;

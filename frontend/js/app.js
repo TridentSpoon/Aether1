@@ -4390,6 +4390,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let codeChatBusy = false;
     let codeChatLoaded = false;
 
+    /* AETHER CODE's pieces of work. The backend decides which one is in focus and remembers
+       it, so a second window opened later lands on the same one; this is a copy of the list
+       for drawing, and `codeTaskId` is the id every question, history read and clear is sent
+       with. Explicitly, not left to the backend's default: the board window and the docked
+       panel can be looking at different tasks at the same moment, and a request that says
+       nothing would land in whichever was switched to last. */
+    let codeTasks = [];
+    let codeTaskId = null;
+
     /* Set by the terminal block below. A tab's view has no layout box while it is hidden,
        so xterm measures zero there and the shell would keep that size once it is shown --
        the same reason a switched-off panel gets `aether1:panels-changed`. */
@@ -4618,16 +4627,258 @@ document.addEventListener('DOMContentLoaded', () => {
         commands.forEach(command => strip.appendChild(codeCommandRow(command)));
     }
 
+    /* ---------------------------------------------------------------------- */
+    /* AETHER CODE's pieces of work.                                          */
+    /*                                                                        */
+    /* One conversation became many: see src-tauri/src/code_tasks.rs for what  */
+    /* a task is and why the transcripts stay where they always were. The two  */
+    /* places this is drawn -- the one-row bar in the docked panel and the     */
+    /* rail in the board window -- are the same code, because a board that     */
+    /* disagreed with the bar about which task is open would be worse than no   */
+    /* board at all.                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    async function codeTasksFetch() {
+        if (IS_TAURI) return await tauriInvoke('code_tasks_rust');
+        return await (await apiFetch('/api/code/tasks')).json();
+    }
+
+    /* Each of these returns the task it changed, which is what the backend hands back, so
+       nothing here has to guess what the list now looks like -- it reloads. */
+    async function codeTaskCall(name, path, args) {
+        if (IS_TAURI) return await tauriInvoke(name, args);
+        const resp = await apiFetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(args),
+        });
+        if (!resp.ok) throw new Error((await resp.text()) || 'that did not work');
+        return await resp.json();
+    }
+
+    const codeTaskNew = (title) =>
+        codeTaskCall('code_task_create_rust', '/api/code/tasks', { title: title || '' });
+    const codeTaskFocus = (id) =>
+        codeTaskCall('code_task_focus_rust', '/api/code/tasks/focus', { id });
+    const codeTaskRename = (id, title) =>
+        codeTaskCall('code_task_rename_rust', '/api/code/tasks/rename', { id, title });
+    const codeTaskDone = (id, on) =>
+        IS_TAURI
+            ? tauriInvoke('code_task_done_rust', { id, done: on })
+            : codeTaskCall(null, '/api/code/tasks/done', { id, on });
+    const codeTaskPin = (id, on) =>
+        IS_TAURI
+            ? tauriInvoke('code_task_pin_rust', { id, pinned: on })
+            : codeTaskCall(null, '/api/code/tasks/pin', { id, on });
+    const codeTaskDelete = (id) =>
+        codeTaskCall('code_task_delete_rust', '/api/code/tasks/delete', { id });
+
+    /* One line about a task, the same wording wherever it is drawn. */
+    function codeTaskSubtitle(task) {
+        const said = task.messages === 1 ? '1 message' : `${task.messages} messages`;
+        const state = task.state === 'done' ? 'done' : (task.pinned ? 'pinned' : 'open');
+        return `${state} · ${said}`;
+    }
+
+    /* The bar at the top of the panel: which task is open, and how many there are. */
+    function paintCodeTaskBar() {
+        const name = document.getElementById('code-task-name');
+        const count = document.getElementById('code-task-count');
+        const open = codeTasks.find(t => t.id === codeTaskId);
+        if (name) name.textContent = open ? open.title : 'no task';
+        if (count) {
+            const others = codeTasks.length - 1;
+            count.textContent = others > 0 ? `+${others}` : '';
+        }
+    }
+
+    /* The switch menu. Deliberately a plain list of titles: this is the thing pressed to get
+       back to yesterday's work, and anything that needs reading first is in the board. */
+    function paintCodeTaskMenu() {
+        const menu = document.getElementById('code-task-menu');
+        if (!menu) return;
+        menu.innerHTML = '';
+        codeTasks.forEach(task => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            /* .hud-slideout-action is the house menu row, the same one the avatar and theme
+               menus use, so it takes its colours from the theme. A hand-rolled pair does
+               not: `text-cyan-100` is remapped to the theme's ink, which on Daylight is
+               nearly black, and a hard-coded dark panel under it is a list you cannot read.
+               That is what the first draft of this did. */
+            row.className = 'hud-slideout-action flex items-center gap-2';
+            row.setAttribute('role', 'menuitem');
+            if (task.id === codeTaskId) row.classList.add('cyber-btn-active');
+            const tick = document.createElement('span');
+            tick.className = 'w-3 shrink-0 text-cyan-400';
+            tick.textContent = task.id === codeTaskId ? '•' : '';
+            const text = document.createElement('span');
+            text.className = 'min-w-0 flex-1';
+            const title = document.createElement('div');
+            title.className = task.state === 'done' ? 'truncate line-through opacity-60' : 'truncate';
+            title.textContent = task.title;
+            const sub = document.createElement('div');
+            /* Faded rather than a grey of its own: the open row is drawn in the theme's
+               highlight, and a fixed grey on top of that is the one line in the menu you
+               cannot read. */
+            sub.className = 'text-[10px] opacity-60';
+            sub.textContent = codeTaskSubtitle(task);
+            text.appendChild(title);
+            text.appendChild(sub);
+            row.appendChild(tick);
+            row.appendChild(text);
+            row.addEventListener('click', () => {
+                menu.classList.add('hidden');
+                switchCodeTask(task.id);
+            });
+            menu.appendChild(row);
+        });
+    }
+
+    /* The rail in the board window: everything the menu has, plus the things a list needs
+       room for -- pin, finish, rename, delete. */
+    function paintCodeTaskRail() {
+        const rail = document.getElementById('code-task-rail');
+        if (!rail || rail.classList.contains('hidden')) return;
+        rail.innerHTML = '';
+
+        const head = document.createElement('div');
+        head.className = 'px-3 py-2 text-[10px] font-mono text-slate-500 border-b border-cyan-500/10';
+        head.textContent = codeTasks.length === 1 ? '1 piece of work' : `${codeTasks.length} pieces of work`;
+        rail.appendChild(head);
+
+        codeTasks.forEach(task => {
+            const row = document.createElement('div');
+            row.className = 'px-3 py-2 border-b border-cyan-500/5 text-[11px] font-mono';
+            if (task.id === codeTaskId) row.classList.add('bg-cyan-500/10');
+
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'w-full text-left min-w-0';
+            const title = document.createElement('div');
+            title.className = task.state === 'done' ? 'truncate text-slate-500 line-through' : 'truncate text-cyan-100';
+            title.textContent = task.title;
+            const sub = document.createElement('div');
+            sub.className = 'text-[10px] text-slate-500';
+            sub.textContent = codeTaskSubtitle(task);
+            open.appendChild(title);
+            open.appendChild(sub);
+            open.addEventListener('click', () => switchCodeTask(task.id));
+            row.appendChild(open);
+
+            const tools = document.createElement('div');
+            tools.className = 'mt-1 flex items-center gap-2 text-[10px] text-slate-500';
+            const tool = (label, hint, run) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'hover:text-cyan-300';
+                b.textContent = label;
+                b.title = hint;
+                b.addEventListener('click', () => run());
+                tools.appendChild(b);
+            };
+            tool(task.pinned ? 'unpin' : 'pin', 'Keep this at the top of the list',
+                 () => codeTaskAction(() => codeTaskPin(task.id, !task.pinned)));
+            tool(task.state === 'done' ? 'reopen' : 'finish', 'Mark this piece of work finished',
+                 () => codeTaskAction(() => codeTaskDone(task.id, task.state !== 'done')));
+            tool('rename', 'Give this piece of work a name', () => {
+                const next = window.prompt('What should this be called?', task.named ? task.title : '');
+                if (next === null) return;
+                codeTaskAction(() => codeTaskRename(task.id, next));
+            });
+            /* `main` is the conversation AETHER CODE had before it had tasks, and the backend
+               will not remove it -- asking empties it instead. Saying so on the button is
+               better than offering a delete that quietly does something else. */
+            const isMain = task.id === 'main';
+            tool(isMain ? 'empty' : 'delete',
+                 isMain
+                     ? 'Forget everything said in the first conversation; it stays in the list'
+                     : 'Delete this piece of work and everything said in it',
+                 () => {
+                     const ask = isMain
+                         ? 'Forget everything said in the first conversation?'
+                         : `Delete "${task.title}" and everything said in it?`;
+                     if (!window.confirm(ask)) return;
+                     codeTaskAction(() => codeTaskDelete(task.id));
+                 });
+            row.appendChild(tools);
+            rail.appendChild(row);
+        });
+    }
+
+    /* Something changed a task: do it, then reload the list and redraw. The list is reloaded
+       rather than patched in place because ordering depends on when things were last said,
+       which is in the transcript and not in anything returned here. */
+    async function codeTaskAction(change) {
+        try {
+            await change();
+        } catch (err) {
+            const why = (err && (err.message || err)) || 'that did not work';
+            appendCodeMessage('agent', String(why), []);
+            return;
+        }
+        await loadCodeTasks({ keepTranscript: true });
+    }
+
+    async function switchCodeTask(id) {
+        if (id === codeTaskId) {
+            document.getElementById('code-task-menu')?.classList.add('hidden');
+            return;
+        }
+        try {
+            await codeTaskFocus(id);
+        } catch (e) {
+            /* A task that has gone is the one case, and the reload below says so by not
+               listing it. */
+        }
+        codeTaskId = id;
+        await loadCodeTasks();
+    }
+
+    /* Reads the list, works out which task is open, and redraws everything that shows it.
+       `keepTranscript` is for the changes that cannot have moved the conversation -- a
+       rename, a pin -- because reloading the messages there would scroll the operator away
+       from what they were reading. */
+    async function loadCodeTasks(opts) {
+        const keep = opts && opts.keepTranscript;
+        try {
+            codeTasks = await codeTasksFetch() || [];
+        } catch (e) {
+            codeTasks = [];
+        }
+        const open = codeTasks.find(t => t.id === codeTaskId) || codeTasks.find(t => t.current);
+        const moved = !open || open.id !== codeTaskId;
+        codeTaskId = open ? open.id : null;
+        paintCodeTaskBar();
+        paintCodeTaskMenu();
+        paintCodeTaskRail();
+        if (!keep || moved) await loadCodeChatMessages();
+    }
+
     /* What was said before, so reopening the tab is not a blank page. The commands are
        worked out again by the backend from the stored text, so a reply loaded from the
        database offers exactly what it offered when it arrived. */
     async function loadCodeChat() {
         refreshCodeChatModel();
+        /* The task list first: it decides which transcript is read, and it is what the bar
+           above the conversation says. */
+        await loadCodeTasks();
+    }
+
+    /* The words of whichever task is open. Replaces what is on screen rather than appending
+       to it, because this also runs when the operator switches task. */
+    async function loadCodeChatMessages() {
         if (!codeChatMessages) return;
+        codeChatMessages.innerHTML = '';
+        const task = codeTaskId;
         try {
             const history = IS_TAURI
-                ? await tauriInvoke('code_chat_history_rust')
-                : await (await apiFetch('/api/code/chat/history')).json();
+                ? await tauriInvoke('code_chat_history_rust', { task })
+                : await (await apiFetch(`/api/code/chat/history?task=${encodeURIComponent(task || '')}`)).json();
+            /* A late answer for a task the operator has already switched away from is
+               dropped: two of these can be in flight at once, and the slower one would
+               paint the wrong conversation over the right one. */
+            if (task !== codeTaskId) return;
             (history || []).forEach(m => appendCodeMessage(m.sender, m.text, m.commands));
         } catch (e) {
             /* An empty tab is the right failure here: the conversation is a convenience,
@@ -4642,7 +4893,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
             });
             try {
-                return await tauriInvoke('code_chat_ask_rust', { prompt: text, streamId });
+                return await tauriInvoke('code_chat_ask_rust', { prompt: text, streamId, task: codeTaskId });
             } finally {
                 unlisten();
             }
@@ -4650,7 +4901,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const resp = await apiFetch('/api/code/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text }),
+            body: JSON.stringify({ message: text, task: codeTaskId }),
         });
         if (!resp.ok) throw new Error((await resp.text()) || 'the coding model did not answer');
         return await resp.json();
@@ -4688,6 +4939,9 @@ document.addEventListener('DOMContentLoaded', () => {
             replyDiv?.classList.remove('typing-cursor');
             codeChatBusy = false;
             codeChatMessages.scrollTop = codeChatMessages.scrollHeight;
+            /* The list, not the conversation: the first question asked in a task with no
+               name is what the list calls it from then on, and the message count moved. */
+            loadCodeTasks({ keepTranscript: true });
         }
     }
 
@@ -4701,11 +4955,72 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-code-chat-clear')?.addEventListener('click', async () => {
         voiceEngine.playSFX('click');
         try {
-            if (IS_TAURI) await tauriInvoke('code_chat_clear_rust');
-            else await apiFetch('/api/code/chat/clear', { method: 'POST' });
+            const task = codeTaskId;
+            if (IS_TAURI) await tauriInvoke('code_chat_clear_rust', { task });
+            else await apiFetch(`/api/code/chat/clear?task=${encodeURIComponent(task || '')}`, { method: 'POST' });
             if (codeChatMessages) codeChatMessages.innerHTML = '';
+            loadCodeTasks({ keepTranscript: true });
         } catch (e) { /* nothing to forget */ }
     });
+
+    /* The task bar's three buttons. */
+    document.getElementById('btn-code-task-menu')?.addEventListener('click', (e) => {
+        voiceEngine.playSFX('click');
+        const menu = document.getElementById('code-task-menu');
+        if (!menu) return;
+        const show = menu.classList.contains('hidden');
+        menu.classList.toggle('hidden', !show);
+        e.currentTarget.setAttribute('aria-expanded', show ? 'true' : 'false');
+    });
+    /* Anywhere else closes it. A menu that stays open after the operator has looked away is
+       a menu covering the conversation they went back to reading. */
+    document.addEventListener('click', (e) => {
+        const menu = document.getElementById('code-task-menu');
+        if (!menu || menu.classList.contains('hidden')) return;
+        if (e.target.closest('#code-task-menu, #btn-code-task-menu')) return;
+        menu.classList.add('hidden');
+        document.getElementById('btn-code-task-menu')?.setAttribute('aria-expanded', 'false');
+    });
+    document.getElementById('btn-code-task-new')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        /* No name is asked for. A task is started because there is something to ask, and the
+           first question makes a better name than anything typed into a box before it --
+           see `fallback_title` in src-tauri/src/code_tasks.rs. */
+        try {
+            const task = await codeTaskNew('');
+            codeTaskId = task.id;
+            await loadCodeTasks();
+            codeChatInput?.focus();
+        } catch (err) {
+            const why = (err && (err.message || err)) || 'that did not work';
+            appendCodeMessage('agent', String(why), []);
+        }
+    });
+    document.getElementById('btn-code-task-board')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        openCodeTaskBoard();
+    });
+
+    /* The board in its own window: the same panel, the same code, a window wide enough for
+       the rail beside the conversation.
+     *
+     * Trident, 2026-10-13: "standard window on the themes except cyberpunk. That can have a
+     * dark fade behind it and have it look like a hologram." So the window the backend builds
+     * depends on the mode that is painted right now -- decorated and opaque on Daylight and
+     * Midnight, frameless and transparent on Cyberpunk, where the page draws the fade and the
+     * frame itself. The mode is read off <html>, which is where theme.js puts the one in
+     * effect, so following the desktop is already accounted for. */
+    function openCodeTaskBoard() {
+        const hologram = document.documentElement.getAttribute('data-theme') === 'cyberpunk';
+        if (!IS_TAURI) {
+            /* In a browser there is no window to build, and nothing to be transparent
+               against. A tab is the honest equivalent. */
+            window.open(`${location.pathname}?panel=code`, '_blank', 'noopener');
+            return;
+        }
+        tauriInvoke('open_panel_window_rust', { panel: 'code', hologram })
+            .catch((err) => console.warn('Could not open the board', err));
+    }
 
     /* Puts a command in front of the operator, in their own shell.
      *
@@ -9223,8 +9538,25 @@ document.addEventListener('DOMContentLoaded', () => {
     function initWindowChrome() {
         const controls = document.getElementById('window-controls');
         const grips = document.getElementById('window-resize-grips');
-        if (!IS_TAURI || document.documentElement.hasAttribute('data-solo-panel')) return;
+        if (!IS_TAURI) return;
+        /* An undocked panel window normally keeps its native frame, so these buttons would
+           sit under a title bar that already has them. The hologram board is the exception:
+           it was built frameless so it could be transparent, which means the only close
+           button and the only way to resize it are the ones on this page. The controls live
+           in the header, which solo mode hides, so they are moved to the one strip that is
+           still on screen rather than drawn a second time. */
+        const solo = document.documentElement.getAttribute('data-solo-panel');
+        const hologram = document.documentElement.hasAttribute('data-solo-hologram');
+        if (solo && !hologram) return;
         if (!controls || !grips) return;
+        if (hologram) {
+            const bar = document.getElementById('btn-code-task-board')?.parentElement;
+            if (bar) {
+                document.getElementById('btn-code-task-board')?.classList.add('hidden');
+                bar.appendChild(controls);
+                bar.setAttribute('data-window-handle', '');
+            }
+        }
 
         controls.classList.replace('hidden', 'flex');
         grips.classList.remove('hidden');
@@ -9275,7 +9607,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // The top bar is the window's handle now. Anything pressable in it is not: a drag
         // started on the avatar chip would swallow the click that opens its menu.
-        const header = document.querySelector('header');
+        const header = document.querySelector('[data-window-handle]') || document.querySelector('header');
         header?.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return;
             if (e.target.closest('button, a, input, select, textarea, .hud-slideout, [data-no-window-drag]')) return;
@@ -9449,8 +9781,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function initSoloPanel() {
         const panelId = document.documentElement.getAttribute('data-solo-panel');
         if (!panelId) return;
-        const panel = document.querySelector(`[data-panel="${CSS.escape(panelId)}"]`);
+        /* `code` is the AETHER CODE board: the conversation panel, opened on its own tab,
+           with the task rail revealed because this window has room for it. It is not a panel
+           of its own -- there is one chat panel and one task list, and a second
+           implementation of either would be the thing that disagrees with the first. */
+        const target = panelId === 'code' ? 'chat' : panelId;
+        const panel = document.querySelector(`[data-panel="${CSS.escape(target)}"]`);
         if (panel) panel.classList.add('solo-target');
+        if (panelId === 'code') {
+            document.getElementById('code-task-rail')?.classList.remove('hidden');
+            switchChatTab('code');
+        }
 
         if (!IS_TAURI) return;
         const pinControl = document.getElementById('solo-pin-control');

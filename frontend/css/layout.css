@@ -516,3 +516,108 @@ body.layout-seaming .movable-panel > * {
 .window-resize-grip.grip-ne { top: 0; right: 0; cursor: nesw-resize; }
 .window-resize-grip.grip-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .window-resize-grip.grip-se { bottom: 0; right: 0; cursor: nwse-resize; }
+
+/* THE AETHER CODE BOARD, AS A HOLOGRAM
+   Trident, 2026-10-13, on the board window: "standard window on the themes except cyberpunk.
+   That can have a dark fade behind it and have it look like a hologram."
+
+   So this is one mode's treatment of one window and nothing else. The window is built
+   frameless and transparent only when Cyberpunk is the mode being painted (see
+   open_panel_window_rust), and `data-solo-hologram` is stamped from the URL before the first
+   paint, so the fade is the window's background rather than something that arrives over an
+   opaque one.
+
+   Everything here is drawn by the page, because there is no frame: the fade past the panel's
+   edges, the edge glow that stands in for a border, and the scan line. The window controls
+   are moved into the task bar by initWindowChrome rather than drawn again -- a second close
+   button that did not go through close_window_rust would be a close button that does
+   something slightly different. */
+
+:root[data-solo-hologram],
+:root[data-solo-hologram] body {
+  background: transparent !important;
+}
+
+/* The fade. Darkest where the panel is and gone by the corners, so the window reads as a
+   projection standing in the air rather than as a rectangle with a hole in it. A compositor
+   that will not give us transparency renders this against black, which is the same picture
+   with harder corners -- it degrades, it does not break. */
+:root[data-solo-hologram] #hud-layout {
+  background: radial-gradient(
+    120% 100% at 50% 0%,
+    rgba(8, 20, 30, 0.94) 0%,
+    rgba(6, 14, 22, 0.86) 45%,
+    rgba(4, 10, 16, 0.55) 78%,
+    rgba(2, 6, 10, 0) 100%
+  );
+  /* Room for the fade to happen in. Tighter than this and the projection has a hard edge
+     with a glow on it, which is a rectangle rather than something standing in the air. */
+  padding: 22px;
+  /* Fills what the hidden chin bar left behind. The generic solo rule sets a height of
+     100%, which with the footer gone measures the old box and leaves the projection short
+     with transparent window under it. */
+  flex: 1 1 auto;
+  height: auto;
+}
+
+/* The panel itself: edges that glow instead of a border, and the faint cyan wash a
+   projection has. `--neon-cyan` is the mode's own colour, so a Cyberpunk preset in another
+   hue projects in that hue rather than in a hard-coded cyan. */
+:root[data-solo-hologram] .solo-target {
+  width: calc(100% - 44px) !important;
+  height: calc(100% - 44px) !important;
+  border: 1px solid color-mix(in srgb, var(--neon-cyan, #22d3ee) 45%, transparent);
+  border-radius: 6px;
+  box-shadow:
+    0 0 1px color-mix(in srgb, var(--neon-cyan, #22d3ee) 70%, transparent),
+    0 0 18px color-mix(in srgb, var(--neon-cyan, #22d3ee) 22%, transparent),
+    0 0 60px color-mix(in srgb, var(--neon-cyan, #22d3ee) 10%, transparent),
+    inset 0 0 40px color-mix(in srgb, var(--neon-cyan, #22d3ee) 6%, transparent);
+  overflow: hidden;
+}
+
+/* One line travelling down it, slowly. Thirteen seconds rather than two: this window is for
+   reading a conversation in, and a stripe crossing it every couple of seconds is the kind of
+   effect that gets switched off on the second day. `prefers-reduced-motion` turns it off
+   outright, as everything animated here does. */
+:root[data-solo-hologram] .solo-target::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    color-mix(in srgb, var(--neon-cyan, #22d3ee) 7%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 100% 18%;
+  background-repeat: no-repeat;
+  animation: a1-hologram-scan 13s linear infinite;
+}
+
+@keyframes a1-hologram-scan {
+  from { background-position: 0 -20%; }
+  to { background-position: 0 120%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-solo-hologram] .solo-target::after {
+    animation: none;
+    background: none;
+  }
+}
+
+/* The controls, which solo mode hides with the header they normally live in. They are in the
+   task bar now, so the rule that hides the header must not take them with it. */
+:root[data-solo-hologram] #window-resize-grips {
+  display: block !important;
+}
+
+/* The chin bar is the HUD's own footer -- state, telemetry, the Verify and Diagnostics
+   buttons. An undocked panel keeps it because that window is still a window of the app with
+   a frame of its own around it. A hologram has no frame, so a strip of opaque chrome under
+   the projection is the one thing that makes it look like a web page again. */
+:root[data-solo-hologram] #chin-bar {
+  display: none !important;
+}
