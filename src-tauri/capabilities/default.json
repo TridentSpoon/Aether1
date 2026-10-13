@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window and the floating desktop-sprite window -- grants the core JS APIs the frontend actually uses via window.__TAURI__ (withGlobalTauri): invoking commands and listening for the telemetry-update event. Custom #[tauri::command]s (chat, TTS, scanner, updates, sprite window control) aren't gated by this file -- only Tauri's own built-in core APIs are.",
-  "windows": ["main", "sprite"],
+  "description": "Capability for the main window, the floating desktop-sprite window and the undocked panel windows (`panel-*`, see PANEL_WINDOWS in main.rs) -- grants the core JS APIs the frontend actually uses via window.__TAURI__ (withGlobalTauri): invoking commands and listening for events such as telemetry-update and code-chat-delta. A window missing from this list gets no core API at all: the page loads, and the first listen fails with `plugin:event:listen not allowed by ACL` in front of the operator, which is what the AETHER CODE board did on its first run. Custom #[tauri::command]s (chat, TTS, scanner, updates, sprite window control) aren't gated by this file -- only Tauri's own built-in core APIs are.",
+  "windows": ["main", "sprite", "panel-*"],
   "permissions": [
     "core:default",
     "core:event:default"
