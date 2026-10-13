@@ -406,20 +406,23 @@
                      conversation; the board button opens the same view in a window wide
                      enough for the rail beside it. See src-tauri/src/code_tasks.rs. -->
                 <div class="px-4 py-1.5 bg-slate-950/60 border-b border-cyan-500/20 flex items-center gap-2 text-[10px] font-mono">
-                    <!-- The switch menu is .hud-slideout, the same dropdown as the avatar
-                         and theme menus in the header, so it follows the theme. It needs a
-                         positioned parent to hang from, which is what this wrapper is. -->
+                    <!-- A .hud-chip, the same control as the avatar and theme pickers in the
+                         header: a label saying what it is, the value, and a caret that turns
+                         over while the menu is open. Drawn as bare text it read as a status
+                         line, and nobody presses a status line. The menu below it is a
+                         .hud-slideout, which needs a positioned parent -- this wrapper. -->
                     <div class="relative min-w-0">
-                        <button type="button" id="btn-code-task-menu" class="flex items-center gap-1 text-cyan-300 hover:text-cyan-200 min-w-0" aria-haspopup="true" aria-expanded="false" aria-controls="code-task-menu" title="Switch to another piece of work">
-                            <span class="opacity-60">▾</span>
-                            <span id="code-task-name" class="truncate max-w-[14rem]">...</span>
+                        <button type="button" id="btn-code-task-menu" class="hud-chip min-w-0" aria-haspopup="true" aria-expanded="false" aria-controls="code-task-menu" title="Switch to another piece of work">
+                            <span class="hud-chip-label">TASK</span>
+                            <span id="code-task-name" class="hud-chip-value truncate">...</span>
+                            <span class="hud-chip-caret" aria-hidden="true">▾</span>
                         </button>
                         <div id="code-task-menu" class="hud-slideout hidden max-h-80 overflow-y-auto" role="menu" aria-labelledby="btn-code-task-menu"></div>
                     </div>
                     <span id="code-task-count" class="text-slate-500 shrink-0"></span>
                     <span class="flex-1"></span>
-                    <button type="button" id="btn-code-task-new" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Start another piece of work">+ task</button>
-                    <button type="button" id="btn-code-task-board" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Open the board in its own window">⧉ board</button>
+                    <button type="button" id="btn-code-task-new" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Start another piece of work">+ New task</button>
+                    <button type="button" id="btn-code-task-board" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Open the whole list in its own window">⧉ Board</button>
                 </div>
                 <!-- Below: the rail and the conversation. The rail is drawn by the same code
                      in both places and revealed only where there is room for it -- see the
@@ -429,7 +432,7 @@
                     <div class="flex-1 min-w-0 flex flex-col">
                 <div class="px-4 py-1 bg-slate-950/60 border-b border-cyan-500/20 flex items-center justify-between gap-2 text-[10px] font-mono">
                     <span id="code-chat-model" class="text-slate-400 truncate">checking what is here...</span>
-                    <button type="button" id="btn-code-chat-clear" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Forget what was said in this piece of work; the task itself stays">clear</button>
+                    <button type="button" id="btn-code-chat-clear" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Forget what was said in this task; the task itself stays in the list">clear this task</button>
                 </div>
                 <div id="code-chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
                 <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
