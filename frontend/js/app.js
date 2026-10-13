@@ -4673,14 +4673,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const codeTaskDelete = (id) =>
         codeTaskCall('code_task_delete_rust', '/api/code/tasks/delete', { id });
 
-    /* One line about a task, the same wording wherever it is drawn. */
+    /* One line under a task's name. The state is not repeated here: the list is grouped
+       under headings that already say it, and a row reading "open" inside a group headed
+       OPEN is a word the eye has to skip. What is left is the one fact the heading cannot
+       carry. */
     function codeTaskSubtitle(task) {
-        const said = task.messages === 1 ? '1 message' : `${task.messages} messages`;
-        const state = task.state === 'done' ? 'done' : (task.pinned ? 'pinned' : 'open');
-        return `${state} · ${said}`;
+        if (!task.messages) return 'nothing asked yet';
+        return task.messages === 1 ? '1 message' : `${task.messages} messages`;
     }
 
-    /* The bar at the top of the panel: which task is open, and how many there are. */
+    /* The list broken into its three groups, in the order they are drawn, with the empty
+       ones left out. The menu and the rail both walk this, so they cannot disagree about
+       what belongs where -- which is the whole reason it is one function and not two
+       filters written twice. */
+    function codeTaskGroups() {
+        return [
+            { name: 'PINNED', rows: codeTasks.filter(t => t.pinned) },
+            { name: 'OPEN', rows: codeTasks.filter(t => !t.pinned && t.state !== 'done') },
+            { name: 'FINISHED', rows: codeTasks.filter(t => !t.pinned && t.state === 'done') },
+        ].filter(group => group.rows.length);
+    }
+
+    /* A group heading, in the same voice in both places. */
+    function codeTaskHeading(name) {
+        const head = document.createElement('div');
+        head.className = 'px-2 pt-2 pb-1 text-[9px] tracking-widest text-slate-500';
+        head.textContent = name;
+        return head;
+    }
+
+    /* The chip at the top of the panel: which task is open, and whether there are others.
+       "2 more" rather than "+2", because the chip is read as a sentence -- TASK, its name,
+       and then how many others there are -- and "+2" in that position reads as part of the
+       name. */
     function paintCodeTaskBar() {
         const name = document.getElementById('code-task-name');
         const count = document.getElementById('code-task-count');
@@ -4688,121 +4713,167 @@ document.addEventListener('DOMContentLoaded', () => {
         if (name) name.textContent = open ? open.title : 'no task';
         if (count) {
             const others = codeTasks.length - 1;
-            count.textContent = others > 0 ? `+${others}` : '';
+            count.textContent = others > 0 ? `${others} more` : '';
         }
     }
 
-    /* The switch menu. Deliberately a plain list of titles: this is the thing pressed to get
-       back to yesterday's work, and anything that needs reading first is in the board. */
+    /* The switch menu. Names and nothing else: this is the thing pressed to get back to
+       yesterday's work, and anything that needs reading first belongs in the board. */
     function paintCodeTaskMenu() {
         const menu = document.getElementById('code-task-menu');
         if (!menu) return;
         menu.innerHTML = '';
-        codeTasks.forEach(task => {
-            const row = document.createElement('button');
-            row.type = 'button';
-            /* .hud-slideout-action is the house menu row, the same one the avatar and theme
-               menus use, so it takes its colours from the theme. A hand-rolled pair does
-               not: `text-cyan-100` is remapped to the theme's ink, which on Daylight is
-               nearly black, and a hard-coded dark panel under it is a list you cannot read.
-               That is what the first draft of this did. */
-            row.className = 'hud-slideout-action flex items-center gap-2';
-            row.setAttribute('role', 'menuitem');
-            if (task.id === codeTaskId) row.classList.add('cyber-btn-active');
-            const tick = document.createElement('span');
-            tick.className = 'w-3 shrink-0 text-cyan-400';
-            tick.textContent = task.id === codeTaskId ? '•' : '';
-            const text = document.createElement('span');
-            text.className = 'min-w-0 flex-1';
-            const title = document.createElement('div');
-            title.className = task.state === 'done' ? 'truncate line-through opacity-60' : 'truncate';
-            title.textContent = task.title;
-            const sub = document.createElement('div');
-            /* Faded rather than a grey of its own: the open row is drawn in the theme's
-               highlight, and a fixed grey on top of that is the one line in the menu you
-               cannot read. */
-            sub.className = 'text-[10px] opacity-60';
-            sub.textContent = codeTaskSubtitle(task);
-            text.appendChild(title);
-            text.appendChild(sub);
-            row.appendChild(tick);
-            row.appendChild(text);
-            row.addEventListener('click', () => {
-                menu.classList.add('hidden');
-                switchCodeTask(task.id);
+
+        /* Starting one is also in the bar, and it is here as well because this is the menu
+           somebody opens when they are thinking about which task to be in -- which is the
+           same moment they decide there should be a new one. It sits above the list rather
+           than under it: the list scrolls once there are a dozen tasks, and the first draft
+           put this row below the fold where nobody would find it. */
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'hud-slideout-action';
+        add.setAttribute('role', 'menuitem');
+        add.textContent = '+ New task';
+        add.addEventListener('click', () => {
+            menu.classList.add('hidden');
+            startCodeTask();
+        });
+        menu.appendChild(add);
+        const rule = document.createElement('div');
+        rule.className = 'my-1 border-t border-cyan-500/20';
+        menu.appendChild(rule);
+
+        codeTaskGroups().forEach(group => {
+            menu.appendChild(codeTaskHeading(group.name));
+            group.rows.forEach(task => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                /* .hud-slideout-action is the house menu row, the same one the avatar and
+                   theme menus use, so it takes its colours from the theme. A hand-rolled
+                   pair does not: `text-cyan-100` is remapped to the theme's ink, which on
+                   Daylight is nearly black, and a hard-coded dark panel under it is a list
+                   you cannot read. That is what the first draft of this did. */
+                row.className = 'hud-slideout-action flex items-center gap-2';
+                row.setAttribute('role', 'menuitem');
+                if (task.id === codeTaskId) row.classList.add('cyber-btn-active');
+                const tick = document.createElement('span');
+                tick.className = 'w-3 shrink-0 text-cyan-400';
+                tick.textContent = task.id === codeTaskId ? '•' : '';
+                const text = document.createElement('span');
+                text.className = 'min-w-0 flex-1';
+                const title = document.createElement('div');
+                title.className = task.state === 'done' ? 'truncate line-through opacity-60' : 'truncate';
+                title.textContent = task.title;
+                const sub = document.createElement('div');
+                /* Faded rather than a grey of its own: the open row is drawn in the theme's
+                   highlight, and a fixed grey on top of that is the one line in the menu you
+                   cannot read. */
+                sub.className = 'text-[10px] opacity-60';
+                sub.textContent = codeTaskSubtitle(task);
+                text.appendChild(title);
+                text.appendChild(sub);
+                row.appendChild(tick);
+                row.appendChild(text);
+                row.addEventListener('click', () => {
+                    menu.classList.add('hidden');
+                    switchCodeTask(task.id);
+                });
+                menu.appendChild(row);
             });
-            menu.appendChild(row);
         });
     }
 
-    /* The rail in the board window: everything the menu has, plus the things a list needs
-       room for -- pin, finish, rename, delete. */
+    /* The rail in the board window: the same list, with room for what it can do.
+     *
+     * The buttons appear on the row the pointer is over and on the one that is open, rather
+     * than under all of them at once. Four verbs under every task turned the list into a
+     * wall of words with the names lost in it -- the names are what the list is for. */
     function paintCodeTaskRail() {
         const rail = document.getElementById('code-task-rail');
         if (!rail || rail.classList.contains('hidden')) return;
         rail.innerHTML = '';
 
         const head = document.createElement('div');
-        head.className = 'px-3 py-2 text-[10px] font-mono text-slate-500 border-b border-cyan-500/10';
+        head.className = 'px-3 py-2 text-[10px] font-mono text-slate-500 border-b border-cyan-500/20';
         head.textContent = codeTasks.length === 1 ? '1 piece of work' : `${codeTasks.length} pieces of work`;
         rail.appendChild(head);
 
-        codeTasks.forEach(task => {
-            const row = document.createElement('div');
-            row.className = 'px-3 py-2 border-b border-cyan-500/5 text-[11px] font-mono';
-            if (task.id === codeTaskId) row.classList.add('bg-cyan-500/10');
+        codeTaskGroups().forEach(group => {
+            const heading = codeTaskHeading(group.name);
+            heading.classList.add('px-3', 'font-mono');
+            rail.appendChild(heading);
 
-            const open = document.createElement('button');
-            open.type = 'button';
-            open.className = 'w-full text-left min-w-0';
-            const title = document.createElement('div');
-            title.className = task.state === 'done' ? 'truncate text-slate-500 line-through' : 'truncate text-cyan-100';
-            title.textContent = task.title;
-            const sub = document.createElement('div');
-            sub.className = 'text-[10px] text-slate-500';
-            sub.textContent = codeTaskSubtitle(task);
-            open.appendChild(title);
-            open.appendChild(sub);
-            open.addEventListener('click', () => switchCodeTask(task.id));
-            row.appendChild(open);
+            group.rows.forEach(task => {
+                const row = document.createElement('div');
+                row.className = 'group px-3 py-2 text-[11px] font-mono cursor-pointer hover:bg-cyan-500/5';
+                const here = task.id === codeTaskId;
+                if (here) row.classList.add('bg-cyan-500/10');
 
-            const tools = document.createElement('div');
-            tools.className = 'mt-1 flex items-center gap-2 text-[10px] text-slate-500';
-            const tool = (label, hint, run) => {
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.className = 'hover:text-cyan-300';
-                b.textContent = label;
-                b.title = hint;
-                b.addEventListener('click', () => run());
-                tools.appendChild(b);
-            };
-            tool(task.pinned ? 'unpin' : 'pin', 'Keep this at the top of the list',
-                 () => codeTaskAction(() => codeTaskPin(task.id, !task.pinned)));
-            tool(task.state === 'done' ? 'reopen' : 'finish', 'Mark this piece of work finished',
-                 () => codeTaskAction(() => codeTaskDone(task.id, task.state !== 'done')));
-            tool('rename', 'Give this piece of work a name', () => {
-                const next = window.prompt('What should this be called?', task.named ? task.title : '');
-                if (next === null) return;
-                codeTaskAction(() => codeTaskRename(task.id, next));
+                const open = document.createElement('button');
+                open.type = 'button';
+                open.className = 'w-full text-left min-w-0';
+                const title = document.createElement('div');
+                title.className = task.state === 'done'
+                    ? 'truncate line-through opacity-60 text-cyan-100'
+                    : 'truncate text-cyan-100';
+                title.textContent = task.title;
+                const sub = document.createElement('div');
+                sub.className = 'text-[10px] text-slate-500';
+                sub.textContent = codeTaskSubtitle(task);
+                open.appendChild(title);
+                open.appendChild(sub);
+                /* The whole row is the target, not just the words: the row is what the
+                   pointer is over and what lights up, so a click on the empty right of it
+                   has to do the same thing. The verbs below stop their own clicks. */
+                row.addEventListener('click', () => switchCodeTask(task.id));
+                row.appendChild(open);
+
+                const tools = document.createElement('div');
+                /* Always in the layout, so a row does not change height as the pointer
+                   crosses it and the list stops jumping under the hand. */
+                tools.className = here
+                    ? 'mt-1 flex items-center gap-3 text-[10px] text-slate-500'
+                    : 'mt-1 flex items-center gap-3 text-[10px] text-slate-500 invisible group-hover:visible';
+                const tool = (label, hint, run) => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'hover:text-cyan-300';
+                    b.textContent = label;
+                    b.title = hint;
+                    b.addEventListener('click', (ev) => {
+                        ev.stopPropagation();
+                        run();
+                    });
+                    tools.appendChild(b);
+                };
+                tool(task.pinned ? 'unpin' : 'pin', 'Keep this at the top of the list',
+                     () => codeTaskAction(() => codeTaskPin(task.id, !task.pinned)));
+                tool(task.state === 'done' ? 'reopen' : 'finish', 'Mark this piece of work finished',
+                     () => codeTaskAction(() => codeTaskDone(task.id, task.state !== 'done')));
+                tool('rename', 'Give this piece of work a name', () => {
+                    const next = window.prompt('What should this be called?', task.named ? task.title : '');
+                    if (next === null) return;
+                    codeTaskAction(() => codeTaskRename(task.id, next));
+                });
+                /* `main` is the conversation AETHER CODE had before it had tasks, and the
+                   backend will not remove it -- asking empties it instead. Saying so on the
+                   button is better than offering a delete that quietly does something
+                   else. */
+                const isMain = task.id === 'main';
+                tool(isMain ? 'empty' : 'delete',
+                     isMain
+                         ? 'Forget everything said in the first conversation; it stays in the list'
+                         : 'Delete this piece of work and everything said in it',
+                     () => {
+                         const ask = isMain
+                             ? 'Forget everything said in the first conversation?'
+                             : `Delete "${task.title}" and everything said in it?`;
+                         if (!window.confirm(ask)) return;
+                         codeTaskAction(() => codeTaskDelete(task.id));
+                     });
+                row.appendChild(tools);
+                rail.appendChild(row);
             });
-            /* `main` is the conversation AETHER CODE had before it had tasks, and the backend
-               will not remove it -- asking empties it instead. Saying so on the button is
-               better than offering a delete that quietly does something else. */
-            const isMain = task.id === 'main';
-            tool(isMain ? 'empty' : 'delete',
-                 isMain
-                     ? 'Forget everything said in the first conversation; it stays in the list'
-                     : 'Delete this piece of work and everything said in it',
-                 () => {
-                     const ask = isMain
-                         ? 'Forget everything said in the first conversation?'
-                         : `Delete "${task.title}" and everything said in it?`;
-                     if (!window.confirm(ask)) return;
-                     codeTaskAction(() => codeTaskDelete(task.id));
-                 });
-            row.appendChild(tools);
-            rail.appendChild(row);
         });
     }
 
@@ -4981,11 +5052,11 @@ document.addEventListener('DOMContentLoaded', () => {
         menu.classList.add('hidden');
         document.getElementById('btn-code-task-menu')?.setAttribute('aria-expanded', 'false');
     });
-    document.getElementById('btn-code-task-new')?.addEventListener('click', async () => {
-        voiceEngine.playSFX('click');
-        /* No name is asked for. A task is started because there is something to ask, and the
-           first question makes a better name than anything typed into a box before it --
-           see `fallback_title` in src-tauri/src/code_tasks.rs. */
+    /* No name is asked for. A task is started because there is something to ask, and the
+       first question makes a better name than anything typed into a box before it -- see
+       `fallback_title` in src-tauri/src/code_tasks.rs. The cursor lands in the composer,
+       because that question is the next thing to happen. */
+    async function startCodeTask() {
         try {
             const task = await codeTaskNew('');
             codeTaskId = task.id;
@@ -4995,6 +5066,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const why = (err && (err.message || err)) || 'that did not work';
             appendCodeMessage('agent', String(why), []);
         }
+    }
+
+    document.getElementById('btn-code-task-new')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        startCodeTask();
     });
     document.getElementById('btn-code-task-board')?.addEventListener('click', () => {
         voiceEngine.playSFX('click');
@@ -9790,6 +9866,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (panel) panel.classList.add('solo-target');
         if (panelId === 'code') {
             document.getElementById('code-task-rail')?.classList.remove('hidden');
+            /* This window is the board, so the button that opens it would only raise the
+               window it is already in. */
+            document.getElementById('btn-code-task-board')?.classList.add('hidden');
             switchChatTab('code');
         }
 

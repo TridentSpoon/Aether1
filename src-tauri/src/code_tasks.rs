@@ -405,7 +405,10 @@ fn fallback_title(messages: &[crate::llm::Message]) -> String {
         .unwrap_or("");
     let flat: String = first.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.is_empty() {
-        return "Nothing asked yet".to_string();
+        // A name, not a sentence about the state. This string goes in the chip at the top of
+        // the panel where every other value is a name, and "Nothing asked yet" read there as
+        // a status line rather than as what the task is called.
+        return "New task".to_string();
     }
     if flat.chars().count() <= TITLE_FROM_CHARS {
         return flat;
