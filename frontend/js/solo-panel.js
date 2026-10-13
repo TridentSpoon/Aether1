@@ -10,4 +10,11 @@
 (function () {
     var m = /(?:^|[?&])panel=([a-z]+)(?:&|$)/.exec(location.search);
     if (m) document.documentElement.setAttribute('data-solo-panel', m[1]);
+    /* `&hologram=1` says this window was built frameless and transparent so the page could
+       draw its own edges -- the Cyberpunk board. Stamped here with the panel, before
+       anything paints, because the fade and the frame are the window's background and a
+       frame that appears a moment later is a flash of the wrong thing. */
+    if (/(?:^|[?&])hologram=1(?:&|$)/.test(location.search)) {
+        document.documentElement.setAttribute('data-solo-hologram', '');
+    }
 })();

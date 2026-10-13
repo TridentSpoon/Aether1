@@ -169,6 +169,36 @@ loopback, a real command in a real box, and three answers in one run -- the dire
 connection refused, the model reached through the socket, and the proxy's port not open, so a
 box given one door has not quietly been given both.
 
+## 1f. What the engine keeps
+
+The tmpfs over `$HOME` is why a command in the box leaves nothing behind, which is right for
+`cargo test` and wrong for an agent that is supposed to remember what it was doing. An engine
+started in the box writes its configuration, its session database and its logs into `$HOME`,
+and every run starts from nothing.
+
+So the engine gets one directory of its own, bound in writable, with the four `XDG_*`
+variables pointing at it. Verified against opencode 1.19.0: with those set it writes nothing
+at all into `$HOME`.
+
+It does **not** live in the project. `<project>/.aether/engine/` would read naturally next to
+`policy.json`, and two things rule it out. At `Level::Assistant` the workspace is mounted
+read-only, so an engine that cannot write its session database could not run there at all, and
+binding one writable hole into a read-only workspace would put an exception in the simplest
+level. And a session database is Aether1's state *about* a project rather than a file *of* it:
+in the tree it becomes something to gitignore, review in diffs, and explain to collaborators.
+So it sits beside the settings database, one directory per project folder, keyed by the
+canonical path -- the folder's own name on the front so it is readable, the hash behind it so
+two projects called `api` stay apart.
+
+The directory is bound in only for a caller that asks, the same rule the model socket follows.
+`code_workspace::run` does not ask, so no command the operator or the companion starts can see
+it or keep anything.
+
+The test is the claim: a command writes into `XDG_DATA_HOME` in one box, a second box is
+built, and what the first wrote is still there -- and the same two runs without the directory
+find nothing, so the test fails if the bind ever stops mattering rather than passing for the
+wrong reason.
+
 ## 1a. Putting it back
 
 Confinement settles what the agent can reach and not what it can ruin inside the folder it is

@@ -142,18 +142,46 @@ own additions, and its removals shown apart, because a starter domain is taken a
 a `deny` row rather than by deleting an `allow` one, and the two cannot be offered the same
 button.
 
-**5. Host tools instead of host access.** `system.get_cpu()`, `system.list_processes()`,
+**~~5. One conversation.~~ Many.** `code_chat.rs` pinned one session id, so AETHER CODE had
+one conversation forever and `clear` was the only way out of it: you could not run two pieces
+of work, could not come back to yesterday's, and could not compare. OpenWork's answer is a
+workspace holding many sessions, one per task, and that is the shape borrowed here.
+`code_tasks.rs` holds them -- a title, a state, a pin -- in one settings row, while the
+transcripts stay in `messages` keyed by session exactly as they always were, so nothing is
+migrated and the conversation that was there before this is the task called `main`. The
+session id is derived from the task id rather than stored, which is what keeps a hand-edited
+settings row from aiming a task at the companion's own conversation.
+
+In the HUD this is one row above the conversation -- which task, a menu to switch, a button to
+start another -- because the chat column is 380px and a sidebar in it would leave no room for
+the words. The rail with the rest (pin, finish, rename, delete) lives in a window of its own,
+`?panel=code`, which on Cyberpunk is built frameless and transparent so the page can draw the
+projection rather than a rectangle.
+
+What a task does **not** hold yet is the engine's own session, and that is deliberate rather
+than forgotten: the engine mints its own ids and refuses one it did not mint, `--continue`
+follows whichever session ran last in the state directory rather than this task's, and the
+state directory cannot be made per task because the provider package in it is 63 MB. The id
+is on every event of `opencode run --format json`, which is also what the tool-activity rail
+below would be built from, so the two arrive together or not at all.
+
+**6. A tool-activity rail instead of streamed prose.** Each tool call drawn as a line that
+says what it did -- `Updated src/net.rs`, `Ran cargo test` -- rather than as the model's prose
+about what it is about to do. This is also where the engine's session id comes from; see
+above.
+
+**7. Host tools instead of host access.** `system.get_cpu()`, `system.list_processes()`,
 notifications, screenshots — narrow calls into the host rather than a shell on it. When the
 agent genuinely needs the host (install a package, change a service) it stops and asks *that*
 question, showing the exact command and the reason. A meaningful approval, and rare enough to
 be read rather than clicked through.
 
-**6. The journal.** Every action with a timestamp, so that when something goes wrong the
+**8. The journal.** Every action with a timestamp, so that when something goes wrong the
 answer to "what did you actually do" comes from a log rather than from the model's memory of
 itself. `db.log_action` already records each `run`; what is missing is the operator-facing
 view.
 
-**7. A browser, in its own sandbox.** `browser.open/search/click/download`, with downloads
+**9. A browser, in its own sandbox.** `browser.open/search/click/download`, with downloads
 landing inside the sandbox rather than in the operator's real Downloads folder.
 
 ## The principle to hold on to

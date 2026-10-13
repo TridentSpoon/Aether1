@@ -24,6 +24,7 @@ mod cli;
 mod code_chat;
 mod code_checkpoint;
 mod code_effective;
+mod code_engine;
 mod code_model;
 mod code_openat;
 mod code_perms;
@@ -31,6 +32,7 @@ mod code_policy;
 mod code_proxy;
 mod code_sandbox;
 mod code_setup;
+mod code_tasks;
 mod code_tools;
 mod code_workspace;
 mod commands;
@@ -1290,12 +1292,13 @@ fn code_chat_ask_rust(
     managed_ollama: tauri::State<background_services::ManagedOllama>,
     prompt: String,
     stream_id: String,
+    task: Option<String>,
 ) -> Result<code_chat::CodeReply, String> {
     // A turn is about to go to a model. If the idle watch stopped the local server, this is
     // what brings it back before the request goes out; otherwise it just tells the watch the
     // server is still wanted. A cloud turn does neither -- see background_services::note_use.
     background_services::note_use(&engine, &managed_ollama);
-    commands::code_chat_ask(&engine, &prompt, &mut |delta| {
+    commands::code_chat_ask(&engine, &prompt, task.as_deref(), &mut |delta| {
         let _ = app.emit(
             "code-chat-delta",
             serde_json::json!({ "stream_id": stream_id, "delta": delta }),
@@ -1341,13 +1344,73 @@ fn code_run_approved_rust(
 }
 
 #[tauri::command(async)]
-fn code_chat_history_rust(engine: tauri::State<LlmEngine>) -> Vec<serde_json::Value> {
-    commands::code_chat_history(&engine)
+fn code_chat_history_rust(
+    engine: tauri::State<LlmEngine>,
+    task: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    commands::code_chat_history(&engine, task.as_deref())
 }
 
 #[tauri::command(async)]
-fn code_chat_clear_rust(engine: tauri::State<LlmEngine>) -> Result<(), String> {
-    commands::code_chat_clear(&engine)
+fn code_chat_clear_rust(
+    engine: tauri::State<LlmEngine>,
+    task: Option<String>,
+) -> Result<(), String> {
+    commands::code_chat_clear(&engine, task.as_deref())
+}
+
+/// The pieces of work AETHER CODE has on, newest activity first within each group.
+#[tauri::command(async)]
+fn code_tasks_rust(engine: tauri::State<LlmEngine>) -> Vec<code_tasks::Listed> {
+    commands::code_tasks_list(&engine)
+}
+
+#[tauri::command(async)]
+fn code_task_create_rust(
+    engine: tauri::State<LlmEngine>,
+    title: Option<String>,
+) -> Result<code_tasks::Task, String> {
+    commands::code_task_create(&engine, title.as_deref().unwrap_or(""))
+}
+
+#[tauri::command(async)]
+fn code_task_focus_rust(
+    engine: tauri::State<LlmEngine>,
+    id: String,
+) -> Result<code_tasks::Task, String> {
+    commands::code_task_focus(&engine, &id)
+}
+
+#[tauri::command(async)]
+fn code_task_rename_rust(
+    engine: tauri::State<LlmEngine>,
+    id: String,
+    title: String,
+) -> Result<code_tasks::Task, String> {
+    commands::code_task_rename(&engine, &id, &title)
+}
+
+#[tauri::command(async)]
+fn code_task_done_rust(
+    engine: tauri::State<LlmEngine>,
+    id: String,
+    done: bool,
+) -> Result<code_tasks::Task, String> {
+    commands::code_task_set_done(&engine, &id, done)
+}
+
+#[tauri::command(async)]
+fn code_task_pin_rust(
+    engine: tauri::State<LlmEngine>,
+    id: String,
+    pinned: bool,
+) -> Result<code_tasks::Task, String> {
+    commands::code_task_set_pinned(&engine, &id, pinned)
+}
+
+#[tauri::command(async)]
+fn code_task_delete_rust(engine: tauri::State<LlmEngine>, id: String) -> Result<(), String> {
+    commands::code_task_delete(&engine, &id)
 }
 
 /// What only the running desktop process can answer about itself, gathered in one place so
@@ -2472,6 +2535,10 @@ const PANEL_WINDOWS: &[(&str, &str, f64, f64)] = &[
     // Wider and shorter than the rest: 80 columns is what a terminal is for, and a shell
     // squeezed into a 380px column wraps every second command.
     ("terminal", "Terminal", 760.0, 520.0),
+    // The AETHER CODE board: the same conversation panel with the task rail beside it, which
+    // is the whole reason it has a window of its own -- the rail does not fit in the HUD's
+    // 380px chat column. Wide enough for a 16rem rail and a readable conversation next to it.
+    ("code", "Aether Code tasks", 900.0, 680.0),
 ];
 
 /// Rust-native "undock" for any HUD panel that isn't the hologram: opens a normal, decorated,
@@ -2485,12 +2552,26 @@ const PANEL_WINDOWS: &[(&str, &str, f64, f64)] = &[
 ///
 /// Re-shows and focuses an already-open one rather than building a second, matching
 /// toggle_sprite_window_rust and open_avatar_lab_rust.
+///
+/// `hologram` is the one thing about the window the page cannot do for itself. Trident, on the
+/// board window, 2026-10-13: *"standard window on the themes except cyberpunk. That can have a
+/// dark fade behind it and have it look like a hologram."* Transparency and the frame are
+/// decided when the window is built and cannot be changed afterwards, so the caller passes the
+/// mode it is painting in. Everything else about the look is CSS -- see the
+/// `[data-solo-hologram]` rules in css/A1theme.css -- and the `&hologram=1` on the URL is what
+/// tells the page it is drawing its own edges, including the close button, because a frameless
+/// window whose page does not know it is frameless cannot be closed.
 #[tauri::command]
-fn open_panel_window_rust(app: tauri::AppHandle, panel: String) -> Result<(), String> {
+fn open_panel_window_rust(
+    app: tauri::AppHandle,
+    panel: String,
+    hologram: Option<bool>,
+) -> Result<(), String> {
     let Some(&(id, title, width, height)) = PANEL_WINDOWS.iter().find(|(id, ..)| *id == panel)
     else {
         return Err(format!("{panel:?} is not a panel that can be undocked"));
     };
+    let hologram = hologram.unwrap_or(false);
 
     let label = format!("panel-{id}");
     if let Some(window) = app.get_webview_window(&label) {
@@ -2498,18 +2579,28 @@ fn open_panel_window_rust(app: tauri::AppHandle, panel: String) -> Result<(), St
         return window.set_focus().map_err(|e| e.to_string());
     }
 
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        &label,
-        tauri::WebviewUrl::App(format!("index.html?panel={id}").into()),
-    )
-    .title(format!("AETHER1 -- {title}"))
-    .inner_size(width, height)
-    .min_inner_size(280.0, 200.0)
-    .resizable(true)
-    .build()
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    let url = if hologram {
+        format!("index.html?panel={id}&hologram=1")
+    } else {
+        format!("index.html?panel={id}")
+    };
+    let builder =
+        tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+            .title(format!("AETHER1 -- {title}"))
+            .inner_size(width, height)
+            .min_inner_size(280.0, 200.0)
+            .resizable(true);
+    // Frameless so the page can draw the fade past where a title bar would be, and
+    // transparent so the fade has something to fade into. Where the compositor will not give
+    // us transparency the window renders opaque instead of failing, which is a dark window
+    // with a hologram frame drawn in it -- the look degrades, nothing breaks, and the page's
+    // own close button is there either way.
+    let builder = if hologram {
+        builder.decorations(false).transparent(true)
+    } else {
+        builder
+    };
+    builder.build().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Shared by both the native Tauri path and `--serve`: opens the real sqlite file at
@@ -2931,6 +3022,13 @@ fn main() {
             code_run_approved_rust,
             code_chat_history_rust,
             code_chat_clear_rust,
+            code_tasks_rust,
+            code_task_create_rust,
+            code_task_focus_rust,
+            code_task_rename_rust,
+            code_task_done_rust,
+            code_task_pin_rust,
+            code_task_delete_rust,
             code_conventions_rust,
             test_speech_rust,
             list_personas_rust,

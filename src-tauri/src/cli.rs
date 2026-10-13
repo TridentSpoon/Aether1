@@ -74,8 +74,11 @@ USAGE:
     aether1 installs remove old    Remove every copy older than the one you are running
     aether1 code                   What this machine still needs before it can write code
                                    offline, and the commands to set it up
-    aether1 code ask <question>    Ask the coding model something, in the same
-                                   conversation the HUD's Aether Code tab keeps
+    aether1 code ask <question>    Ask the coding model something, in whichever piece of
+                                   work the HUD's Aether Code tab has open
+                                   (`--task <id>` before the question picks another)
+    aether1 code tasks             The pieces of work Aether Code has on, and which one a
+                                   question with no --task goes to
     aether1 code conventions       Print the house rules for a coding model to follow;
                                    redirect it into an AGENTS.md at the top of your project
     aether1 doctor --heal          Make every repair AETHER1 can make to itself, without
@@ -87,6 +90,9 @@ USAGE:
     aether1 code effective         What will actually happen, and which answer decided it
     aether1 code brain             Whether an agent in the sandbox can reach your model,
                                    answered by building a real box and trying it
+    aether1 code do <task>         Give the coding engine a task; it works in the sandbox,
+                                   on your model, and remembers between runs
+                                   (`--session <id>` carries one on)
     aether1 code workspace [path]  The project folder it may change; prints the current one
     aether1 code level [name]      How much this project is trusted with; prints all four
     aether1 code share <folder>    Let it read one folder beyond the project
@@ -183,7 +189,12 @@ pub enum Invocation {
         /// A question for the coding model, when there is one. The same conversation the
         /// HUD's Aether Code tab keeps, so a question asked here is remembered there.
         ask: Option<String>,
+        /// Which piece of work the question belongs to. `None` means whichever the HUD has
+        /// in focus, so a question typed at a terminal lands in the task being looked at.
+        task: Option<String>,
     },
+    /// `code tasks`: the pieces of work AETHER CODE has on, and what is in focus.
+    CodeTasks,
     /// `code perms`: what AETHER CODE is allowed to look at, and with two arguments, the
     /// setting of one. See code_perms.rs for why there is no write permission to set.
     CodePerms {
@@ -198,6 +209,12 @@ pub enum Invocation {
     /// `code brain`: whether a coding agent in the sandbox can reach AETHER1's own model
     /// server, answered by actually trying it.
     CodeBrain,
+    /// `code do <task>`: give the engine a task and let it work in the sandbox.
+    CodeDo {
+        task: String,
+        /// `--session <id>`, to carry on an earlier one rather than start fresh.
+        session: Option<String>,
+    },
     /// `code workspace`: the project folder AETHER CODE may change, printed or set.
     CodeWorkspace {
         path: Option<String>,
@@ -476,6 +493,35 @@ fn parse_announce(rest: Vec<String>) -> Result<Invocation, String> {
     }
 }
 
+/// `code do [--session <id>] <task...>`.
+///
+/// The task is the rest of the line, quoted or not, the way `code ask` takes its question:
+/// this is a sentence typed at a shell, and a shell has opinions about most of the characters
+/// in one. The session id is lifted out first, so an id can never end up inside the task.
+fn parse_code_do(args: &[String]) -> Result<Invocation, String> {
+    let mut session = None;
+    let mut words: Vec<String> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(word) = rest.next() {
+        match word.as_str() {
+            "--session" | "-s" => match rest.next() {
+                Some(id) if !id.starts_with('-') => session = Some(id.clone()),
+                _ => return Err("--session needs the id of a session after it".to_string()),
+            },
+            _ => words.push(word.clone()),
+        }
+    }
+    let task = words.join(" ").trim().to_string();
+    if task.is_empty() {
+        return Err(
+            "code do needs a task after it, for example `aether1 code do add a test for the \
+             parser`"
+                .to_string(),
+        );
+    }
+    Ok(Invocation::CodeDo { task, session })
+}
+
 pub fn parse(argv: &[String]) -> Invocation {
     let args: Vec<String> = argv.iter().skip(1).cloned().collect();
 
@@ -556,17 +602,14 @@ pub fn parse(argv: &[String]) -> Invocation {
             // `ask` takes the whole rest of the line as one question, quoted or not, the
             // way `prompt` does -- a question typed at a shell is full of words the shell
             // would otherwise have opinions about.
-            Some("ask") => {
-                let question = rest[1..].join(" ").trim().to_string();
-                if question.is_empty() {
-                    Err("code ask needs a question after it".to_string())
-                } else {
-                    Ok(Invocation::Code {
-                        conventions: false,
-                        ask: Some(question),
-                    })
-                }
-            }
+            Some("ask") => parse_code_ask(&rest[1..]),
+            // The list only. Starting, renaming and finishing a task are the HUD's job:
+            // a task is a thing you look at, and a command that creates one you then cannot
+            // see is a worse way in than the panel.
+            Some("tasks") => match &rest[1..] {
+                [] => Ok(Invocation::CodeTasks),
+                extra => Err(format!("code tasks takes no arguments (got {extra:?})")),
+            },
             // `perms` on its own lists them; with two words it sets one. Nothing in
             // between: `code perms github` reads as a question and would be answered by
             // silence, so it is an error that says which two words were expected.
@@ -610,6 +653,7 @@ pub fn parse(argv: &[String]) -> Invocation {
                 [] => Ok(Invocation::CodeBrain),
                 _ => Err("code brain takes no arguments".to_string()),
             },
+            Some("do") => parse_code_do(&rest[1..]),
             // The project folder. With no path it prints the one in force, which is the
             // question an operator asks before they trust any of this.
             Some("workspace") => match &rest[1..] {
@@ -721,10 +765,12 @@ pub fn parse(argv: &[String]) -> Invocation {
                 None => Ok(Invocation::Code {
                     conventions: false,
                     ask: None,
+                    task: None,
                 }),
                 Some("conventions") => Ok(Invocation::Code {
                     conventions: true,
                     ask: None,
+                    task: None,
                 }),
                 Some(other) => Err(format!(
                     "code takes nothing, the word `conventions`, `perms`, or \
@@ -1179,12 +1225,76 @@ pub(crate) fn run_diagnostics() -> String {
 /// terminal the operator is already at a prompt -- what they need is the line to copy, not
 /// a button, and AETHER1 typing into the shell that launched it would be a different and
 /// much worse idea than the HUD's button, which types into a shell it started itself.
-fn run_code_ask(question: &str) -> String {
+/// `code ask [--task <id>] <question>`.
+///
+/// The flag is read from anywhere in the line and the rest is the question, the same way
+/// `code do` reads `--session`: these two are siblings, and a flag that works in one place
+/// for one of them and another place for the other is worse than either rule. It costs the
+/// ability to ask a question containing the literal words "--task something", which is not a
+/// question anybody has.
+fn parse_code_ask(args: &[String]) -> Result<Invocation, String> {
+    let mut task = None;
+    let mut words: Vec<String> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(word) = rest.next() {
+        match word.as_str() {
+            "--task" => match rest.next() {
+                Some(id) if !id.starts_with('-') && !id.trim().is_empty() => {
+                    task = Some(id.trim().to_string())
+                }
+                _ => return Err("--task needs the id of a task after it".to_string()),
+            },
+            _ => words.push(word.clone()),
+        }
+    }
+    let question = words.join(" ").trim().to_string();
+    if question.is_empty() {
+        return Err("code ask needs a question after it".to_string());
+    }
+    Ok(Invocation::Code {
+        conventions: false,
+        ask: Some(question),
+        task,
+    })
+}
+
+/// `aether1 code tasks` -- the pieces of work the panel has on, from a terminal.
+///
+/// Read-only on purpose. See the parser: starting and finishing a task is the HUD's job.
+fn run_code_tasks() -> String {
+    let engine = crate::build_llm_engine();
+    let rows = commands::code_tasks_list(&engine);
+    let mut out = String::from(
+        "AETHER CODE -- pieces of work
+
+",
+    );
+    for row in &rows {
+        let mark = if row.current { "->" } else { "  " };
+        let state = match (row.pinned, row.state) {
+            (true, crate::code_tasks::State::Done) => "pinned, done",
+            (true, crate::code_tasks::State::Open) => "pinned",
+            (false, crate::code_tasks::State::Done) => "done",
+            (false, crate::code_tasks::State::Open) => "open",
+        };
+        out.push_str(&format!(
+            "{mark} {:<20} {:<14} {:>4} messages  {}\n",
+            row.id, state, row.messages, row.title
+        ));
+    }
+    out.push_str(&format!(
+        "\n{} in all. The arrow is the one a question with no --task goes to.\n",
+        rows.len()
+    ));
+    out
+}
+
+fn run_code_ask(question: &str, task: Option<&str>) -> String {
     use std::io::Write;
 
     let engine = crate::build_llm_engine();
     let mut streamed = false;
-    let result = commands::code_chat_ask(&engine, question, &mut |delta| {
+    let result = commands::code_chat_ask(&engine, question, task, &mut |delta| {
         streamed = true;
         print!("{delta}");
         let _ = std::io::stdout().flush();
@@ -1311,6 +1421,45 @@ fn run_code_perms(grant: Option<String>, on: Option<bool>) -> Result<String, Str
 ///
 /// Nothing is written and nothing is left running: the socket belongs to this process and
 /// goes when it does.
+/// `aether1 code do <task>`: hand the engine a task and let it work.
+///
+/// The engine runs confined, reaches AETHER1's own model through the socket `code brain`
+/// tests, and keeps its memory in a directory of its own -- so `--session <id>` means
+/// something on the next run. What the project is trusted with is the level, unchanged:
+/// `code do` at the Assistant level gets a read-only workspace, and the engine will say so
+/// rather than this command pretending it cannot happen.
+fn run_code_do(task: String, session: Option<String>) -> Result<String, String> {
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    // The coding model, chosen the same way the AETHER CODE panel chooses it, so the two
+    // never disagree about which model this machine writes code with.
+    let advice = crate::commands::code_advice(&engine);
+    if !advice.model_installed {
+        return Err(format!(
+            "No coding model is downloaded yet. {} is the one for this machine -- download \
+             it from the coding panel under The Brain, and this will use it.",
+            advice.model
+        ));
+    }
+
+    // Long, because this is a coding agent editing a repository rather than a shell command.
+    // Still bounded: an engine that has stopped making progress should stop, not sit there.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+    let done = crate::code_engine::run(db, &advice.model, &task, session.as_deref(), TIMEOUT)?;
+
+    let said = done.output.trim();
+    if done.status == 0 {
+        Ok(format!("{said}\n"))
+    } else {
+        Err(format!(
+            "{} stopped with status {}.\n\n{said}\n",
+            crate::code_engine::ENGINE,
+            done.status
+        ))
+    }
+}
+
 fn run_code_brain() -> Result<String, String> {
     let engine = crate::build_llm_engine();
     let db = engine.db();
@@ -1826,13 +1975,13 @@ fn run_code_run_allow(program: Option<String>, add: bool) -> Result<String, Stri
     ))
 }
 
-fn run_code(conventions: bool, ask: Option<String>) -> String {
+fn run_code(conventions: bool, ask: Option<String>, task: Option<String>) -> String {
     if conventions {
         return crate::code_setup::conventions();
     }
 
     if let Some(question) = ask {
-        return run_code_ask(&question);
+        return run_code_ask(&question, task.as_deref());
     }
 
     let engine = crate::build_llm_engine();
@@ -2754,10 +2903,16 @@ pub fn run(invocation: Invocation) -> i32 {
             report,
             replay,
         } => run_doctor(fix, heal, json, report, replay),
-        Invocation::Code { conventions, ask } => Ok(run_code(conventions, ask)),
+        Invocation::Code {
+            conventions,
+            ask,
+            task,
+        } => Ok(run_code(conventions, ask, task)),
+        Invocation::CodeTasks => Ok(run_code_tasks()),
         Invocation::CodePerms { grant, on } => run_code_perms(grant, on),
         Invocation::CodeEffective => run_code_effective(),
         Invocation::CodeBrain => run_code_brain(),
+        Invocation::CodeDo { task, session } => run_code_do(task, session),
         Invocation::CodeWorkspace { path } => run_code_workspace(path),
         Invocation::CodeSandbox { unconfined, on } => run_code_sandbox(unconfined, on),
         Invocation::CodeCheckpoints { revert, which } => run_code_checkpoints(revert, which),
@@ -3060,14 +3215,16 @@ mod tests {
             parse_args(&["code"]),
             Invocation::Code {
                 conventions: false,
-                ask: None
+                ask: None,
+                task: None
             }
         );
         assert_eq!(
             parse_args(&["code", "conventions"]),
             Invocation::Code {
                 conventions: true,
-                ask: None
+                ask: None,
+                task: None
             }
         );
     }
@@ -3281,6 +3438,88 @@ mod tests {
         assert_eq!(parse_args(&["code", "brain"]), Invocation::CodeBrain);
         assert!(matches!(
             parse_args(&["code", "brain", "localhost"]),
+            Invocation::Invalid(_)
+        ));
+    }
+    /// `code ask` takes a sentence too, and the task id must never end up inside it.
+    #[test]
+    fn code_ask_separates_the_task_from_the_question() {
+        assert_eq!(
+            parse_args(&["code", "ask", "why", "is", "the", "build", "red"]),
+            Invocation::Code {
+                conventions: false,
+                ask: Some("why is the build red".to_string()),
+                task: None,
+            }
+        );
+        assert_eq!(
+            parse_args(&["code", "ask", "--task", "t19a2", "and", "now"]),
+            Invocation::Code {
+                conventions: false,
+                ask: Some("and now".to_string()),
+                task: Some("t19a2".to_string()),
+            }
+        );
+        // The flag anywhere, matching `code do --session`.
+        assert_eq!(
+            parse_args(&["code", "ask", "carry", "on", "--task", "t19a2"]),
+            Invocation::Code {
+                conventions: false,
+                ask: Some("carry on".to_string()),
+                task: Some("t19a2".to_string()),
+            }
+        );
+        // A flag with nothing after it is an error rather than a question about a flag.
+        assert!(matches!(
+            parse_args(&["code", "ask", "--task"]),
+            Invocation::Invalid(_)
+        ));
+        // And `tasks` is a different verb, not a question.
+        assert_eq!(parse_args(&["code", "tasks"]), Invocation::CodeTasks);
+        assert!(matches!(
+            parse_args(&["code", "tasks", "new"]),
+            Invocation::Invalid(_)
+        ));
+    }
+
+    /// `code do` takes a sentence, and the session id must never end up inside it.
+    #[test]
+    fn code_do_separates_the_session_from_the_task() {
+        assert_eq!(
+            parse_args(&["code", "do", "add", "a", "test", "for", "the", "parser"]),
+            Invocation::CodeDo {
+                task: "add a test for the parser".to_string(),
+                session: None,
+            }
+        );
+        assert_eq!(
+            parse_args(&["code", "do", "--session", "ses_abc", "and", "again"]),
+            Invocation::CodeDo {
+                task: "and again".to_string(),
+                session: Some("ses_abc".to_string()),
+            }
+        );
+        // The flag anywhere in the line, because that is where people put it.
+        assert_eq!(
+            parse_args(&["code", "do", "carry", "on", "-s", "ses_abc"]),
+            Invocation::CodeDo {
+                task: "carry on".to_string(),
+                session: Some("ses_abc".to_string()),
+            }
+        );
+        // A task is required: an engine started on an empty prompt would think about nothing
+        // and charge this machine for it.
+        assert!(matches!(
+            parse_args(&["code", "do"]),
+            Invocation::Invalid(_)
+        ));
+        assert!(matches!(
+            parse_args(&["code", "do", "--session", "ses_abc"]),
+            Invocation::Invalid(_)
+        ));
+        // And a flag with nothing after it is an error rather than a task called "--session".
+        assert!(matches!(
+            parse_args(&["code", "do", "--session", "--", "x"]),
             Invocation::Invalid(_)
         ));
     }

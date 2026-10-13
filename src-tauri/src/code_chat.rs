@@ -313,25 +313,17 @@ fn command_on(line: &str) -> Option<String> {
     Some(text.to_string())
 }
 
-/// Asks the coding model, streaming the reply as it arrives.
+/// Asks the coding model in one conversation, streaming the reply as it arrives.
 ///
 /// The endpoint, the API shape and the model all come from the caller rather than from a
 /// setting, because they are the ones `code_setup::advise` already worked out -- the server
 /// that answered and the best coding model on it, which is not the model the companion is
 /// configured to use and must not be confused with it.
-pub fn ask(
-    db: &MemoryDb,
-    endpoint: &str,
-    api: LocalApi,
-    model: &str,
-    os: &str,
-    prompt: &str,
-    sink: Sink,
-) -> Result<CodeReply, String> {
-    ask_in_session(db, endpoint, api, model, os, prompt, sink, SESSION_ID)
-}
-
-/// Asks in an independent history, used for simultaneous Agent Browser analyses.
+///
+/// `session_id` used to have a wrapper over it that passed `SESSION_ID`, from when the panel
+/// had one conversation and only the Agent Browser needed its own. `code_tasks` now gives
+/// every question a task to belong to, and the wrapper went with it: a caller that has not
+/// said which conversation it means is a caller that has not decided.
 #[allow(clippy::too_many_arguments)]
 pub fn ask_in_session(
     db: &MemoryDb,
@@ -540,15 +532,18 @@ fn partial_fence_len(text: &str) -> usize {
     0
 }
 
-/// Forgets the coding conversation. The companion's sessions are untouched.
-pub fn clear(db: &MemoryDb) -> Result<(), String> {
-    db.delete_session(SESSION_ID)
+/// Forgets one coding conversation. The companion's sessions are untouched.
+///
+/// Takes the session rather than assuming `SESSION_ID`, because `code_tasks` gives the panel
+/// more than one conversation and "clear" has to mean the one on screen.
+pub fn clear_in(db: &MemoryDb, session: &str) -> Result<(), String> {
+    db.delete_session(session)
         .map_err(|e: rusqlite::Error| e.to_string())
 }
 
-/// What has been said so far, oldest first, for a panel that was just opened.
-pub fn transcript(db: &MemoryDb) -> Vec<Message> {
-    db.get_messages(SESSION_ID, 50).unwrap_or_default()
+/// What has been said in one conversation, oldest first, for a panel that was just opened.
+pub fn transcript_in(db: &MemoryDb, session: &str) -> Vec<Message> {
+    db.get_messages(session, 50).unwrap_or_default()
 }
 
 #[cfg(test)]
