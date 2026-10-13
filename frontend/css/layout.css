@@ -621,3 +621,111 @@ body.layout-seaming .movable-panel > * {
 :root[data-solo-hologram] #chin-bar {
   display: none !important;
 }
+
+/* THE AVATAR, NESTED IN THE BOARD
+   Trident, 2026-10-13: "The avatar can be in a small nested window in the Project/Thread
+   window."
+
+   So the board gets the companion in the corner of it, rather than the operator having to
+   keep the HUD open beside the board to see who they are talking to. It is the same
+   `[data-panel="hologram"]` as the HUD's -- one avatar panel, one implementation, revealed
+   here instead of copied -- which is why solo mode's blanket hide has to be undone for it
+   explicitly.
+
+   A window rather than a corner of the page: it has a bar to drag it by, it can be rolled
+   up to that bar, and where it was left is remembered. It is positioned against #hud-layout,
+   which is already `position: relative`, so it floats over the conversation without being
+   inside the panel the scan line covers. */
+
+:root[data-solo-panel] .solo-companion {
+  display: flex !important;
+  position: absolute;
+  z-index: 45;
+  width: var(--companion-w, 208px);
+  height: var(--companion-h, 232px);
+  /* The narrow-window rules above give every .movable-panel a 16rem floor so a stacked
+     one-column HUD does not collapse. A board window is usually narrower than 1024px, so
+     that floor applied here too: the card was 256px whatever it was told, and rolling it
+     up left a bar adrift at the top of an empty 256px box. */
+  min-height: 0;
+  /* Where it sits is set in JS, against the board panel's own box rather than against the
+     window: the Cyberpunk treatment insets the projection by its fade, so a card placed
+     against the window hung off the corner of something that is meant to be standing in
+     the air. See initBoardCompanion. */
+  border: 1px solid color-mix(in srgb, var(--neon-cyan, #22d3ee) 40%, transparent);
+  border-radius: 6px;
+  overflow: hidden;
+  /* Dark enough to read the avatar against whatever is behind it, on every theme: the
+     conversation it floats over is light on Daylight and near-black on Cyberpunk. */
+  background: rgba(4, 10, 16, 0.92);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* The bar it is dragged by, built by initBoardCompanion rather than written into
+   index.html, because it exists only in this window. */
+.companion-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  cursor: grab;
+  user-select: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--neon-cyan, #22d3ee) 25%, transparent);
+  background: color-mix(in srgb, var(--neon-cyan, #22d3ee) 8%, transparent);
+}
+
+.companion-bar:active {
+  cursor: grabbing;
+}
+
+.companion-bar button {
+  /* Not a drag target: a pointer that goes down on the roll-up button is rolling it up. */
+  cursor: pointer;
+  padding: 0 3px;
+  line-height: 1;
+}
+
+/* The panel is `justify-center` for the HUD, where the projection is the whole of it. Here
+   the bar is the top of a window and belongs at the top. */
+:root[data-solo-panel] .solo-companion {
+  justify-content: flex-start;
+}
+
+/* Rolled up: the bar and nothing else, so the corner of the board is given back without
+   the avatar having to be found again to bring it there. Everything, not just the
+   viewport -- the chin strip and the floating notice have height of their own, and hiding
+   only the projection left a bar adrift in the middle of an empty box. */
+:root[data-solo-panel] .solo-companion.companion-rolled {
+  height: auto;
+}
+
+:root[data-solo-panel] .solo-companion.companion-rolled > *:not(.companion-bar) {
+  display: none !important;
+}
+
+/* The viewport's own min-height is written for the HUD's tall panel; at 208px wide it would
+   push the avatar out through the bottom of the card. */
+:root[data-solo-panel] .solo-companion #hologram-viewport {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* What a 208px card has no room for. The two corner labels overlap each other at this width
+   -- "STRUCTURE: ..." and "HOLOGRAM: ACTIVE" print on top of one another -- and the three
+   sliders take half the card to adjust an avatar you are glancing at rather than posing.
+   They are all still in the HUD's own panel, which is where you go to pose it.
+
+   The waveform stays: it is the one thing in the chin that is the avatar doing something
+   rather than a control, and it is why you would want the avatar in here at all. */
+:root[data-solo-panel] .solo-companion .viewport-label,
+:root[data-solo-panel] .solo-companion .hologram-chin-row {
+  display: none;
+}
+
+:root[data-solo-panel] .solo-companion .hologram-chin {
+  padding: 0 0 2px;
+}

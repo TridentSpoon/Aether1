@@ -286,23 +286,23 @@
                  viewport-label, not the page's own dim ink: these sit on the dark
                  projection bay, and --text-dim is mixed for the page behind it. On Solar
                  that put a mid grey meant for white on a near-black bay. -->
-            <div class="w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent space-y-1 relative">
+            <div class="hologram-chin w-full px-4 pb-3 bg-gradient-to-t from-slate-950/90 to-transparent space-y-1 relative">
                 <!-- The voice waveform, drawn over the bottom edge of the projection rather
                      than on the strip: it is something the avatar is doing, not something
                      you can set, so it sits with the hologram and leaves the chin to the
                      three controls. Sized by .hologram-waveform in A1theme.css. -->
                 <canvas id="audio-waveform" width="360" height="36" class="hologram-waveform"></canvas>
-                <div class="flex items-center gap-2" title="How big the avatar reads on screen">
+                <div class="hologram-chin-row flex items-center gap-2" title="How big the avatar reads on screen">
                     <span class="viewport-label text-[9px] font-mono tracking-wider w-8 shrink-0">ZOOM</span>
                     <input id="avatar-zoom" type="range" min="50" max="250" value="100" class="cyber-range flex-1" aria-label="Avatar zoom">
                     <span id="avatar-zoom-readout" class="viewport-label text-[9px] font-mono w-9 text-right">100%</span>
                 </div>
-                <div class="flex items-center gap-2" title="Tip the avatar toward you or away from you">
+                <div class="hologram-chin-row flex items-center gap-2" title="Tip the avatar toward you or away from you">
                     <span class="viewport-label text-[9px] font-mono tracking-wider w-8 shrink-0">PITCH</span>
                     <input id="avatar-pitch" type="range" min="-45" max="45" value="0" class="cyber-range flex-1" aria-label="Avatar pitch">
                     <span id="avatar-pitch-readout" class="viewport-label text-[9px] font-mono w-9 text-right">0&deg;</span>
                 </div>
-                <div class="flex items-center gap-2" title="Lean the avatar to one side">
+                <div class="hologram-chin-row flex items-center gap-2" title="Lean the avatar to one side">
                     <span class="viewport-label text-[9px] font-mono tracking-wider w-8 shrink-0">TILT</span>
                     <input id="avatar-tilt" type="range" min="-45" max="45" value="0" class="cyber-range flex-1" aria-label="Avatar tilt">
                     <span id="avatar-tilt-readout" class="viewport-label text-[9px] font-mono w-9 text-right">0&deg;</span>
