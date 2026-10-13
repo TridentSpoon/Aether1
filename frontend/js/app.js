@@ -9870,6 +9870,7 @@ document.addEventListener('DOMContentLoaded', () => {
                window it is already in. */
             document.getElementById('btn-code-task-board')?.classList.add('hidden');
             switchChatTab('code');
+            initBoardCompanion();
         }
 
         if (!IS_TAURI) return;
@@ -9881,6 +9882,153 @@ document.addEventListener('DOMContentLoaded', () => {
             tauriInvoke('set_window_always_on_top_rust', { enabled: pinCheckbox.checked })
                 .catch((e) => console.warn('Could not toggle always-on-top', e));
         });
+    }
+
+    /* The avatar, nested in the board window.
+     *
+     * Trident, 2026-10-13: "The avatar can be in a small nested window in the Project/Thread
+     * window." Without this the board is the one place in AETHER1 where you are talking to
+     * the companion and cannot see it, because solo mode hides every panel but the one the
+     * window is for.
+     *
+     * It is the HUD's own `[data-panel="hologram"]`, not a copy: one avatar panel, one
+     * `HologramAvatar`, already built and already driven by `setAvatarState`. All this does
+     * is give it a bar to drag, somewhere to be, and a way to be rolled up -- the CSS in
+     * layout.css does the rest. The engine parks itself when the element has no layout box
+     * (see the `offsetParent` check in js/hologram/animate.js), so a rolled-up card costs
+     * what a hidden one costs.
+     *
+     * Where it was left is remembered per window, in localStorage rather than in settings:
+     * it is where one operator put a card on one screen, not a decision about the product.
+     */
+    const COMPANION_PLACE = 'aether_board_companion';
+
+    function initBoardCompanion() {
+        const panel = document.querySelector('[data-panel="hologram"]');
+        const layout = document.getElementById('hud-layout');
+        if (!panel || !layout) return;
+        panel.classList.add('solo-companion');
+
+        const bar = document.createElement('div');
+        bar.className = 'companion-bar text-cyan-300';
+        const name = document.createElement('span');
+        name.className = 'flex-1 truncate';
+        name.textContent = 'AVATAR';
+        const roll = document.createElement('button');
+        roll.type = 'button';
+        roll.className = 'hover:text-cyan-100';
+        bar.appendChild(name);
+        bar.appendChild(roll);
+        panel.prepend(bar);
+
+        const state = readCompanionPlace();
+
+        const setRolled = (rolled) => {
+            panel.classList.toggle('companion-rolled', rolled);
+            roll.textContent = rolled ? '▾' : '▴';
+            roll.title = rolled ? 'Show the avatar' : 'Roll the avatar up into its bar';
+            roll.setAttribute('aria-label', roll.title);
+        };
+        setRolled(!!state.rolled);
+        roll.addEventListener('click', () => {
+            const rolled = !panel.classList.contains('companion-rolled');
+            setRolled(rolled);
+            writeCompanionPlace({ rolled });
+        });
+
+        /* Kept inside the board panel rather than inside the window, and the difference is
+           the Cyberpunk treatment: there the projection is inset by #hud-layout's fade, so
+           a card placed against the window hangs off the corner of something that is meant
+           to be standing in the air. Clamping to the panel also means a position remembered
+           from a wide window cannot strand the card off the edge of a narrow one. */
+        const bounds = () => {
+            const host = layout.getBoundingClientRect();
+            const box = (document.querySelector('.solo-target') || layout).getBoundingClientRect();
+            return {
+                left: box.left - host.left,
+                top: box.top - host.top,
+                right: box.right - host.left,
+                bottom: box.bottom - host.top,
+            };
+        };
+        const place = (left, top) => {
+            const edge = bounds();
+            const inset = 14;
+            const maxLeft = Math.max(edge.left, edge.right - panel.offsetWidth - inset);
+            const maxTop = Math.max(edge.top, edge.bottom - panel.offsetHeight - inset);
+            const x = Math.min(Math.max(edge.left + inset, left), maxLeft);
+            const y = Math.min(Math.max(edge.top + inset, top), maxTop);
+            panel.style.left = `${x}px`;
+            panel.style.top = `${y}px`;
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            return { left: x, top: y };
+        };
+
+        /* The bottom of the task rail: the one part of the board that is empty until there
+           are a dozen tasks. Over the conversation it covered either the newest message or
+           the composer, whichever corner it was put in. */
+        const settle = () => {
+            if (typeof state.left === 'number' && typeof state.top === 'number') {
+                place(state.left, state.top);
+            } else {
+                place(0, Number.MAX_SAFE_INTEGER);
+            }
+        };
+        settle();
+        /* The panel has no box to measure until the window has laid out once, and the board
+           can be resized afterwards -- both leave the card somewhere that is no longer
+           inside the panel. */
+        requestAnimationFrame(settle);
+        window.addEventListener('resize', () => {
+            const at = place(parseFloat(panel.style.left) || 0, parseFloat(panel.style.top) || 0);
+            writeCompanionPlace(at);
+        });
+
+        let from = null;
+        bar.addEventListener('pointerdown', (ev) => {
+            if (ev.target === roll) return;
+            const box = panel.getBoundingClientRect();
+            const host = layout.getBoundingClientRect();
+            from = {
+                x: ev.clientX,
+                y: ev.clientY,
+                left: box.left - host.left,
+                top: box.top - host.top,
+            };
+            bar.setPointerCapture(ev.pointerId);
+            ev.preventDefault();
+        });
+        bar.addEventListener('pointermove', (ev) => {
+            if (!from) return;
+            place(from.left + (ev.clientX - from.x), from.top + (ev.clientY - from.y));
+        });
+        const drop = (ev) => {
+            if (!from) return;
+            const at = place(from.left + (ev.clientX - from.x), from.top + (ev.clientY - from.y));
+            from = null;
+            writeCompanionPlace(at);
+        };
+        bar.addEventListener('pointerup', drop);
+        bar.addEventListener('pointercancel', () => { from = null; });
+    }
+
+    function readCompanionPlace() {
+        try {
+            return JSON.parse(localStorage.getItem(COMPANION_PLACE) || '{}') || {};
+        } catch (e) {
+            // A corrupt entry is a card in the default corner, not a window with no avatar.
+            return {};
+        }
+    }
+
+    function writeCompanionPlace(patch) {
+        try {
+            const next = Object.assign(readCompanionPlace(), patch);
+            localStorage.setItem(COMPANION_PLACE, JSON.stringify(next));
+        } catch (e) {
+            // Private mode, or a full store. The card still works; it just forgets.
+        }
     }
 
     // The hologram panel's own visual state: while the avatar is floating on the desktop as
