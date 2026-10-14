@@ -4473,6 +4473,130 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* The other half of "can this panel do anything": a model to answer with, and a folder
+     * to work in. The strip said the first and was silent about the second, so a panel with
+     * no project folder looked ready and then refused -- which is how Trident found out, by
+     * asking it and being told no.
+     *
+     * Read from the settings both transports already serve rather than a new command: the
+     * root and the two grants are in there, and a second source for the same three values
+     * is a second thing to disagree with the Settings page.
+     *
+     * Only when the panel could otherwise act. With Edit and Run both off the folder
+     * changes nothing, and a warning about a folder it would not write to anyway is a
+     * warning to learn to ignore. */
+    async function refreshCodeWorkspaceNote() {
+        const note = document.getElementById('btn-code-workspace');
+        if (!note) return;
+        try {
+            /* Both transports answer with the same wrapper -- settings, plus the facts
+               about this machine and this project that the Settings page draws beside
+               them. The stored values are under `settings`; reading the wrapper as if it
+               were the map is how the first draft of this never showed the line at all. */
+            const data = IS_TAURI
+                ? await tauriInvoke('get_settings_rust')
+                : await (await apiFetch('/api/settings')).json();
+            const s = data?.settings || {};
+            const root = typeof s.code_workspace_root === 'string' ? s.code_workspace_root.trim() : '';
+            const mayAct = s.code_perm_edit === true || s.code_perm_run === true;
+            note.classList.toggle('hidden', !!root || !mayAct);
+        } catch (e) {
+            /* The strip already says when the model cannot be reached. A second amber line
+               about settings that could not be read says the same thing twice. */
+            note.classList.add('hidden');
+        }
+    }
+
+    /* Opens Settings where the folder is named, with the field focused: the point of the
+       button is that nobody should have to go looking for the card. */
+    document.getElementById('btn-code-workspace')?.addEventListener('click', async () => {
+        voiceEngine.playSFX('click');
+        await loadSettings();
+        settingsModal?.classList.remove('hidden');
+        showSettingsSection('permissions');
+        const field = document.getElementById('setting-code-workspace-root');
+        field?.scrollIntoView({ block: 'center' });
+        field?.focus();
+    });
+
+    /* "Choose folder..." beside the project-folder field.
+     *
+     * Not an operating-system folder dialog: AETHER1 has no dialog plugin, and the question
+     * is not "which of the million folders on this disk" but "which of my projects". So it
+     * lists the git repositories already found on this machine -- the same scan the Graft
+     * panel uses, which is simply where it was written -- and picking one fills the field.
+     * The field stays, because a project outside the handful of places that scan looks is
+     * still a project.
+     *
+     * Native only. The scan reads this machine's home directory, and in a browser this
+     * machine is the one serving the page, not the one in front of whoever is reading: a
+     * list of somebody else's folders is worse than no list. initCodeWorkspaceBrowse
+     * removes the button there rather than leaving it to fail. */
+    function initCodeWorkspaceBrowse() {
+        const button = document.getElementById('btn-code-workspace-browse');
+        const found = document.getElementById('code-workspace-found');
+        const field = document.getElementById('setting-code-workspace-root');
+        if (!button || !found || !field) return;
+        if (!IS_TAURI) {
+            button.remove();
+            return;
+        }
+
+        const say = (words) => {
+            found.innerHTML = '';
+            const line = document.createElement('p');
+            line.className = 'p-2 text-xs text-slate-400';
+            line.textContent = words;
+            found.appendChild(line);
+            found.classList.remove('hidden');
+        };
+
+        button.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            if (!found.classList.contains('hidden')) {
+                found.classList.add('hidden');
+                return;
+            }
+            say('looking for projects...');
+            let projects = [];
+            try {
+                projects = await tauriInvoke('graft_detect_projects_rust') || [];
+            } catch (e) {
+                say(`could not look: ${e.message || e}`);
+                return;
+            }
+            if (!projects.length) {
+                say('No git projects found under your home folder, Projects, code, src, dev or workspace. Type the path instead.');
+                return;
+            }
+            found.innerHTML = '';
+            projects.forEach((project) => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'w-full text-left p-2 hover:bg-cyan-500/10';
+                const name = document.createElement('div');
+                name.className = 'text-xs text-cyan-300 truncate';
+                name.textContent = project.name;
+                const path = document.createElement('div');
+                path.className = 'text-[9px] text-slate-500 break-all';
+                path.textContent = project.path;
+                row.appendChild(name);
+                row.appendChild(path);
+                row.addEventListener('click', () => {
+                    field.value = project.path;
+                    found.classList.add('hidden');
+                    /* Not saved from here. This card has one Save button like the rest of
+                       Settings, and a field that wrote itself to disk while the switches
+                       beside it waited would be the one control on the page that does not
+                       behave like the others. */
+                    field.focus();
+                });
+                found.appendChild(row);
+            });
+            found.classList.remove('hidden');
+        });
+    }
+
     /* One command, with the button that puts it in the terminal.
        In a browser the button is replaced by the command alone: there is no terminal
        behind it, and a button that cannot work is worse than no button. */
@@ -4931,6 +5055,7 @@ document.addEventListener('DOMContentLoaded', () => {
        database offers exactly what it offered when it arrived. */
     async function loadCodeChat() {
         refreshCodeChatModel();
+        refreshCodeWorkspaceNote();
         /* The task list first: it decides which transcript is read, and it is what the bar
            above the conversation says. */
         await loadCodeTasks();
@@ -10754,6 +10879,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // report still describing the previous answer is the thing it exists to
             // prevent.
             refreshCodeEffective();
+            // And the strip above the coding conversation, which is the one place the
+            // operator sees that there is still no folder: naming one here has to make
+            // that line go away without reopening the panel.
+            refreshCodeWorkspaceNote();
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
@@ -12673,6 +12802,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initSpriteMode();
     initStartupPerformance();
     initSoloPanel();
+    initCodeWorkspaceBrowse();
     initPanelUndock();
     initAvatarFullscreen();
     initHologramFloatingNotice();

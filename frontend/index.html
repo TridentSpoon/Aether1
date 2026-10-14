@@ -430,8 +430,16 @@
                 <div class="flex-1 min-h-0 flex">
                     <div id="code-task-rail" class="hidden w-64 shrink-0 border-r border-cyan-500/20 bg-slate-950/60 overflow-y-auto"></div>
                     <div class="flex-1 min-w-0 flex flex-col">
-                <div class="px-4 py-1 bg-slate-950/60 border-b border-cyan-500/20 flex items-center justify-between gap-2 text-[10px] font-mono">
+                <div class="px-4 py-1 bg-slate-950/60 border-b border-cyan-500/20 flex items-center gap-2 text-[10px] font-mono">
                     <span id="code-chat-model" class="text-slate-400 truncate">checking what is here...</span>
+                    <!-- The other thing this panel cannot do anything without. It says the
+                         model is missing when the model is missing, and said nothing at all
+                         when no project folder was named -- so the only way to find that out
+                         was to ask the panel and be told no. Revealed by
+                         refreshCodeWorkspaceNote and nowhere else; a button rather than a
+                         line of text because the thing to do about it is one click away. -->
+                    <button type="button" id="btn-code-workspace" class="hidden shrink-0 text-amber-400 hover:text-amber-300" title="Name the folder AETHER CODE may work in">no project folder set</button>
+                    <span class="flex-1"></span>
                     <button type="button" id="btn-code-chat-clear" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Forget what was said in this task; the task itself stays in the list">clear this task</button>
                 </div>
                 <div id="code-chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
@@ -2471,7 +2479,19 @@
                         </div>
                     </div>
                     <div class="px-3 pb-3">
-                        <input id="setting-code-workspace-root" type="text" placeholder="e.g. ~/Projects/aether1" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <div class="flex items-center gap-2">
+                            <input id="setting-code-workspace-root" type="text" placeholder="e.g. ~/Projects/aether1" class="flex-1 min-w-0 bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                            <!-- Typing a path correctly is the operator's job only because
+                                 nothing offered to do it for them. This lists the git
+                                 repositories already on this machine -- the same scan the
+                                 Graft panel uses, which is where it was written -- and
+                                 picking one fills the field. app.js removes the button in a
+                                 browser: the scan reads this machine's home directory, and
+                                 the machine a browser is pointed at is not the one in front
+                                 of whoever is reading. -->
+                            <button type="button" id="btn-code-workspace-browse" class="cyber-btn shrink-0 text-xs px-3 py-2" title="List the projects on this machine">Choose folder...</button>
+                        </div>
+                        <div id="code-workspace-found" class="hidden mt-2 max-h-48 overflow-y-auto border border-cyan-500/20 rounded divide-y divide-cyan-500/10"></div>
                     </div>
                     <!-- The autonomy level. It is not a fifth switch: picking one writes
                          the four switches below and beside it, and records the answer in the
