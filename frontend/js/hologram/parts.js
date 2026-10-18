@@ -1337,6 +1337,53 @@
                 };
             },
         },
+
+        /* Adapted from v.I.S.t.A.: the readout graticule wrapping close around whatever it
+           is measuring -- short ticks all the way round with a longer one at each quarter,
+           and a cardinal pip standing off the top. It is the scale an instrument is read
+           against, so it sits still and the pip does the moving; the quarters are what let
+           an eye find the same place on it twice. */
+        graticuleTicks: {
+            label: 'Readout graticule',
+            build(api, options) {
+                const group = new THREE.Group();
+                const COUNT = 36;
+                const mat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.8,
+                });
+                const pts = [];
+                for (let i = 0; i < COUNT; i++) {
+                    const a = (i / COUNT) * Math.PI * 2;
+                    const long = i % 9 === 0;
+                    const inner = options.radius * (long ? 0.8 : 0.88);
+                    pts.push(new THREE.Vector3(Math.cos(a) * inner, Math.sin(a) * inner, 0));
+                    pts.push(new THREE.Vector3(Math.cos(a) * options.radius, Math.sin(a) * options.radius, 0));
+                }
+                group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mat));
+
+                const pipMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                });
+                const pip = new THREE.Mesh(
+                    new THREE.RingGeometry(options.radius * 1.02, options.radius * 1.09, 6, 1, Math.PI / 2 - 0.022, 0.044),
+                    pipMat
+                );
+                group.add(pip);
+
+                return {
+                    object: group,
+                    applyPalette(pal) { mat.color.setHex(pal.hex2); pipMat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        // The pip runs the scale while there is something to read, and parks
+                        // at the top when there is not -- an instrument at rest reads zero.
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        pip.rotation.z = live ? -ctx.time * 1.6 : 0;
+                        mat.opacity = 0.65 + ctx.audio * 0.3;
+                        pipMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Outer rings: a boundary further out ---------------------------------
