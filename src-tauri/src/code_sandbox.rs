@@ -381,7 +381,27 @@ pub fn network_for(sandbox: &Sandbox, db: &MemoryDb) -> Net {
         // `description` is where the honesty about that lives.
         return Net::Unenforced;
     }
-    if !network_allowed(db) {
+    // Local-only mode outranks the sandbox's own network switch, for the same reason it
+    // outranks the internet permission in `code_perms::check_url`: it is the operator's
+    // stated "nothing leaves this machine", and a setting they left on months ago must not
+    // quietly beat the switch whose entire job is to say otherwise.
+    //
+    // Without this the two disagreed in the worst direction. `code_effective`'s web row
+    // reported "Local-only mode is on, so nothing reaches the internet" while a command in
+    // the sandbox could still reach every host on the starter list -- github.com,
+    // crates.io, registry.npmjs.org, pypi.org and the rest -- without being asked, because
+    // the proxy's allow list is the only thing it consults and nothing in that path had
+    // ever heard of local-only mode. A build fetching its dependencies is traffic leaving a
+    // machine whose operator was told nothing would.
+    //
+    // Checked here rather than in `network_allowed` so the setting still reads back as what
+    // the operator chose: the switch is not being rewritten, it is being overruled, and the
+    // network row (which asks this function, not that setting) says so.
+    //
+    // The model bridge is deliberately untouched: it is a separate socket in `Bridges`, and
+    // reaching a model server on this machine or this network is what local-only mode is
+    // *for*.
+    if crate::local_only::enabled(db) || !network_allowed(db) {
         return Net::None;
     }
     match crate::code_proxy::start(db) {
@@ -663,6 +683,52 @@ pub fn bwrap_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_db() -> MemoryDb {
+        let path = std::env::temp_dir().join(format!(
+            "aether1_code_sandbox_{}_{:?}.db",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        MemoryDb::open(&path).expect("open test db")
+    }
+
+    /// The hole this closes: the sandbox had its own network switch and local-only mode was
+    /// not one of the things it asked. An operator who turned the sandbox network on months
+    /// ago to let builds fetch dependencies, and local-only mode on this morning, got a web
+    /// row reading "nothing reaches the internet" and a `cargo build` reaching crates.io.
+    ///
+    /// Asserted through `network_for` rather than `network_allowed`, because that is the
+    /// question every caller actually asks -- including `code_effective`'s network row,
+    /// which is why the report now agrees with the behaviour instead of contradicting it.
+    #[test]
+    fn local_only_mode_cuts_the_sandbox_network_whatever_the_switch_says() {
+        let db = test_db();
+        db.set_setting(NETWORK_SETTING, &serde_json::json!(true))
+            .unwrap();
+        db.set_setting(crate::local_only::SETTING, &serde_json::json!(true))
+            .unwrap();
+
+        // The operator's own switch reads back as they left it -- it is overruled, not
+        // rewritten, and a report that showed it as off would be lying in the other
+        // direction.
+        assert!(
+            network_allowed(&db),
+            "the sandbox network setting is still what the operator chose"
+        );
+
+        // A box that cannot cut the network is a different conversation (see Net::Unenforced
+        // and the row that owns up to it), so this pins the case where enforcement is real.
+        let sandbox = Sandbox::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: true,
+        };
+        assert!(
+            matches!(network_for(&sandbox, &db), Net::None),
+            "local-only mode outranks the sandbox's network switch"
+        );
+    }
 
     fn args_for(network: bool) -> Vec<String> {
         args_for_net(if network {
