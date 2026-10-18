@@ -1091,6 +1091,68 @@
                 };
             },
         },
+        /* Adapted from L1minal: the stone at the brow, the one part of that avatar that is
+           never absent. A blue gem in a bezel, sunk into a dark socket and lit from behind.
+
+           The socket is the whole trick. Additively blended hot colour over the dark panel
+           is bright, but over anything already bright it is white -- drop this on a busy
+           core and without the socket it washes out exactly where it most needs to read.
+           The socket is the floor it is seen against. It pulses but does not turn, so the
+           recipe's spin still owns rotation. */
+        browStone: {
+            label: 'Brow stone',
+            build(api, options) {
+                const group = new THREE.Group();
+                const STONE = 0x2b6bff;
+
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.glowTexture(64), color: STONE,
+                    transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(options.size * 2.2, options.size * 2.2, 1);
+                group.add(glow);
+
+                const socketMat = new THREE.MeshBasicMaterial({
+                    color: 0x04060f, transparent: true, opacity: 0.92,
+                });
+                const socket = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.72, 20), socketMat);
+                socket.position.z = options.size * 0.2;
+                group.add(socket);
+
+                const bezelMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.85,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const bezel = new THREE.Mesh(
+                    new THREE.RingGeometry(options.size * 0.62, options.size * 0.74, 20), bezelMat
+                );
+                bezel.position.z = options.size * 0.24;
+                group.add(bezel);
+
+                const gemMat = new THREE.MeshBasicMaterial({
+                    color: 0x9ec2ff, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
+                });
+                const gem = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.46, 18), gemMat);
+                gem.position.z = options.size * 0.3;
+                group.add(gem);
+
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        bezelMat.color.setHex(pal.hex);
+                        // The gem and its glow keep the stone's own blue -- see above.
+                    },
+                    animate(ctx) {
+                        const pulse = 0.8 + Math.sin(ctx.time * 5) * 0.2;
+                        glowMat.opacity = (0.6 + ctx.audio * 0.4) * pulse;
+                        glow.scale.setScalar(options.size * (2.1 + Math.sin(ctx.time * 5) * 0.2 + ctx.audio * 0.5));
+                        gemMat.opacity = 0.85 + ctx.audio * 0.15;
+                        bezelMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1684,6 +1746,99 @@
                         }
                         matA.opacity = 0.6 + ctx.audio * 0.3;
                         matB.opacity = 0.5 + ctx.audio * 0.28;
+                    },
+                };
+            },
+        },
+        /* Adapted from L1minal: a shell cut into forty horizontal slices, of which only a
+           travelling band is ever present. The rest are not dimmed, they are gone, and the
+           dim framework saying where they would have been is what keeps the silhouette
+           readable while most of it is absent. The band never stops, so something is always
+           materialising and something else dematerialising; the rim it is travelling
+           towards glows red, because that is the edge where matter is arriving.
+
+           One geometry for all forty slices, with only their colours written per frame --
+           the points never move, so a frame costs a colour write and nothing else. */
+        phaseSlices: {
+            label: 'Phase slices',
+            build(api, options) {
+                const group = new THREE.Group();
+                const SLICES = 40;
+                const SEG = 32;
+                // Inside the outer ring's own radius, so a recipe that pairs this with a
+                // boundary part has the slices wrapping the core rather than sharing a
+                // surface with it.
+                const R = options.radius * 0.72;
+                const FRAME = 0xffcc00;
+                const FLUX = 0xff2244;
+
+                const pos = [];
+                const heights = [];
+                for (let i = 0; i < SLICES; i++) {
+                    // The poles are left off: a slice of radius zero is a point.
+                    const t = (i + 0.5) / SLICES;
+                    const y = (t * 2 - 1) * R * 0.97;
+                    const radius = Math.sqrt(Math.max(0, R * R - y * y));
+                    heights.push({ y, radius });
+                    for (let j = 0; j < SEG; j++) {
+                        const a = (j / SEG) * Math.PI * 2;
+                        const b = ((j + 1) / SEG) * Math.PI * 2;
+                        pos.push(Math.cos(a) * radius, y, Math.sin(a) * radius);
+                        pos.push(Math.cos(b) * radius, y, Math.sin(b) * radius);
+                    }
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                geom.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
+                const mat = new THREE.LineBasicMaterial({
+                    vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.LineSegments(geom, mat));
+
+                const frame = new THREE.Color(FRAME);
+                const flux = new THREE.Color(FLUX);
+                const perSlice = SEG * 2 * 3;
+                const EDGE = 0.26;
+                let at = 0.5;
+                let dir = 1;
+
+                return {
+                    object: group,
+                    applyPalette() {
+                        // The framework keeps its own yellow and the arriving rim its red.
+                    },
+                    animate(ctx) {
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        const half = (ctx.state === 'SPEAKING' ? 0.42 + ctx.audio * 0.3
+                            : ctx.state === 'THINKING' ? 0.09
+                                : ctx.state === 'LISTENING' ? 0.16 : 0.17) + ctx.click * 0.1;
+                        const speed = ctx.state === 'LISTENING' ? 0 : live ? 0.5 : 0.26;
+                        at += dir * speed * 0.016;
+                        // Turned at the ends, not wrapped: a band that wraps vanishes from
+                        // the top and reappears at the bottom, which reads as a glitch.
+                        if (at > 1) { at = 1; dir = -1; }
+                        if (at < 0) { at = 0; dir = 1; }
+
+                        const colours = geom.attributes.color.array;
+                        for (let i = 0; i < SLICES; i++) {
+                            const t = (i + 0.5) / SLICES;
+                            const d = Math.abs(t - at) / half;
+                            const presence = d >= 1 ? 0 : d <= 1 - EDGE ? 1 : (1 - d) / EDGE;
+                            const leading = dir > 0 ? t > at : t < at;
+                            const arriving = leading && presence > 0 && presence < 1 ? 1 - presence : 0;
+                            const level = 0.26 + presence * 0.74 + ctx.audio * 0.2;
+                            const r = frame.r * level + flux.r * arriving;
+                            const g = frame.g * level + flux.g * arriving;
+                            const b = frame.b * level + flux.b * arriving;
+                            const from = i * perSlice;
+                            for (let k = 0; k < perSlice; k += 3) {
+                                colours[from + k] = r;
+                                colours[from + k + 1] = g;
+                                colours[from + k + 2] = b;
+                            }
+                        }
+                        geom.attributes.color.needsUpdate = true;
+                        mat.opacity = 0.75 + ctx.audio * 0.25;
                     },
                 };
             },
@@ -2354,6 +2509,31 @@
                         outer.rotation.z = -ctx.time * 0.15;
                         matA.opacity = 0.65 + ctx.audio * 0.3;
                         matB.opacity = 0.4 + ctx.audio * 0.25;
+                    },
+                };
+            },
+        },
+        /* Adapted from L1minal: the teal lattice inside it -- the part that never phases.
+           Two rotations on different axes, and nothing else; it is the still point the
+           matter comes and goes around, so it does not react to anything but the voice. */
+        neuralLattice: {
+            label: 'Neural lattice',
+            build(api, options) {
+                const LATTICE = 0x00ffcc;
+                const mat = new THREE.MeshBasicMaterial({
+                    color: LATTICE, wireframe: true,
+                    transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending,
+                });
+                const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(options.radius, 2), mat);
+                return {
+                    object: mesh,
+                    applyPalette() {
+                        // Keeps its own teal.
+                    },
+                    animate(ctx) {
+                        mesh.rotation.y = -ctx.time * 0.15;
+                        mesh.rotation.x = ctx.time * 0.05;
+                        mat.opacity = 0.35 + ctx.audio * 0.3;
                     },
                 };
             },
@@ -3062,6 +3242,74 @@
                         points.rotation.y = ctx.time * 0.03;
                         points.rotation.x = Math.sin(ctx.time * 0.2) * 0.1;
                         mat.opacity = 0.6 + ctx.audio * 0.3 + ctx.click * 0.15;
+                    },
+                };
+            },
+        },
+        /* Adapted from L1minal: the matter that is not currently being used. Each mote has
+           a place on a shell and a place out in the room, and sits at one or the other
+           depending on whether the band of presence has reached its height yet -- so the
+           space around the avatar fills with the parts of it that are elsewhere.
+
+           Lerped between two fixed points rather than simulated. What it has to say is
+           "this is elsewhere", not "this is falling", and a drift with its own physics
+           would wander off and never come back. */
+        displacedMatter: {
+            label: 'Displaced matter',
+            build(api, options) {
+                const COUNT = 220;
+                const R = options.radius;
+                const pos = new Float32Array(COUNT * 3);
+                const home = new Float32Array(COUNT * 3);
+                const away = new Float32Array(COUNT * 3);
+                const height = new Float32Array(COUNT);
+                for (let i = 0; i < COUNT; i++) {
+                    const t = Math.random();
+                    const y = (t * 2 - 1) * R * 0.95;
+                    const radius = Math.sqrt(Math.max(0, R * R - y * y));
+                    const a = Math.random() * Math.PI * 2;
+                    height[i] = t;
+                    home[i * 3] = Math.cos(a) * radius;
+                    home[i * 3 + 1] = y;
+                    home[i * 3 + 2] = Math.sin(a) * radius;
+                    const out = 1.25 + Math.random() * 0.5;
+                    away[i * 3] = Math.cos(a) * radius * out;
+                    away[i * 3 + 1] = y + (Math.random() - 0.5) * R * 0.42;
+                    away[i * 3 + 2] = Math.sin(a) * radius * out;
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                // Mapped, not bare: an unmapped point sprite is a hard square.
+                const mat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: api.palette.hex2, size: R * 0.05,
+                    transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                const points = new THREE.Points(geom, mat);
+                let at = 0.5;
+                let dir = 1;
+                return {
+                    object: points,
+                    applyPalette(pal) { mat.color.setHex(pal.hex2); },
+                    animate(ctx) {
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        const half = (ctx.state === 'SPEAKING' ? 0.42 + ctx.audio * 0.3
+                            : ctx.state === 'THINKING' ? 0.09
+                                : ctx.state === 'LISTENING' ? 0.16 : 0.17) + ctx.click * 0.1;
+                        const speed = ctx.state === 'LISTENING' ? 0 : live ? 0.5 : 0.26;
+                        at += dir * speed * 0.016;
+                        if (at > 1) { at = 1; dir = -1; }
+                        if (at < 0) { at = 0; dir = 1; }
+                        for (let i = 0; i < COUNT; i++) {
+                            const d = Math.abs(height[i] - at) / half;
+                            const here = d >= 1 ? 0 : d <= 0.74 ? 1 : (1 - d) / 0.26;
+                            const k = i * 3;
+                            pos[k] = away[k] + (home[k] - away[k]) * here;
+                            pos[k + 1] = away[k + 1] + (home[k + 1] - away[k + 1]) * here;
+                            pos[k + 2] = away[k + 2] + (home[k + 2] - away[k + 2]) * here;
+                        }
+                        geom.attributes.position.needsUpdate = true;
+                        mat.opacity = 0.45 + ctx.audio * 0.3;
                     },
                 };
             },
