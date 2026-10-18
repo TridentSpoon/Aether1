@@ -877,6 +877,58 @@
                 };
             },
         },
+
+        /* Adapted from v.I.S.t.A.: the aiming ring with the four segmented arcs around it.
+           The avatar turns the two against each other; a core may not turn itself (see the
+           note at the top of this file), so here they hold their angle and the lock pulse
+           does the work, leaving the recipe's spin setting to decide whether anything
+           moves. Gaps in the arcs rather than a second solid ring, because the gaps are
+           what make it read as a sight and not as a target painted on a wall. */
+        targetReticle: {
+            label: 'Target reticle',
+            build(api, options) {
+                const group = new THREE.Group();
+                const ringMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.9,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(
+                    new THREE.RingGeometry(options.size * 0.62, options.size * 0.66, 48), ringMat
+                ));
+                const arcMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.8,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                for (let i = 0; i < 4; i++) {
+                    const step = (Math.PI * 2) / 4;
+                    group.add(new THREE.Mesh(
+                        new THREE.RingGeometry(options.size * 0.96, options.size, 16, 1, i * step + 0.1, step - 0.2),
+                        arcMat
+                    ));
+                }
+                const hubMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
+                });
+                const hub = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.1, 24), hubMat);
+                hub.position.z = 0.5;
+                group.add(hub);
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        ringMat.color.setHex(pal.hex);
+                        arcMat.color.setHex(pal.hex2);
+                        hubMat.color.setHex(pal.hex);
+                    },
+                    animate(ctx) {
+                        const lock = 1 + Math.sin(ctx.time * 4) * 0.03 - ctx.click * 0.08;
+                        group.scale.set(lock, lock, 1);
+                        ringMat.opacity = 0.7 + ctx.audio * 0.3;
+                        arcMat.opacity = 0.6 + ctx.audio * 0.35;
+                        hubMat.opacity = 0.6 + ctx.audio * 0.4 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1835,6 +1887,42 @@
                 };
             },
         },
+
+        /* Adapted from v.I.S.t.A.: the four corner brackets that frame whatever is being
+           looked at. Each corner is two strokes meeting at a right angle, built from one
+           corner's numbers mirrored into the other three -- four hand-written corners is
+           four chances to typo a sign. They draw in the picture plane rather than around
+           the avatar, so they frame it instead of orbiting it. */
+        cornerBrackets: {
+            label: 'Corner brackets',
+            build(api, options) {
+                const mat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.95,
+                });
+                const bx = options.radius * 0.95;
+                const by = options.radius * 0.74;
+                const arm = options.radius * 0.2;
+                const pts = [];
+                [[-1, 1], [1, 1], [-1, -1], [1, -1]].forEach(([sx, sy]) => {
+                    const corner = new THREE.Vector3(sx * bx, sy * by, 0);
+                    pts.push(corner, new THREE.Vector3(sx * (bx - arm), sy * by, 0));
+                    pts.push(corner.clone(), new THREE.Vector3(sx * bx, sy * (by - arm), 0));
+                });
+                const brackets = new THREE.LineSegments(
+                    new THREE.BufferGeometry().setFromPoints(pts), mat
+                );
+                return {
+                    object: brackets,
+                    applyPalette(pal) { mat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        // Breathing out at rest and snapping in on a click: the gesture is
+                        // the frame closing on something, so it is a scale, not a spin.
+                        brackets.scale.setScalar(1 + Math.sin(ctx.time * 2) * 0.015 - ctx.click * 0.1);
+                        mat.opacity = 0.75 + ctx.audio * 0.25 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Effects: an ambient layer or background ------------------------------
@@ -2312,6 +2400,97 @@
                         scroll = (scroll + (22 + ctx.audio * 30) * 0.016) % CELL;
                         floor.position.z = scroll;
                         mat.opacity = 0.8 + ctx.audio * 0.2 + ctx.click * 0.1;
+                    },
+                };
+            },
+        },
+
+        /* Adapted from v.I.S.t.A.: the drone telemetry network drifting behind the overlay,
+           each node wired to whichever neighbours it is near. Which pairs those are really
+           does change as the nodes drift, so unlike a fixed lattice it has to be re-derived
+           every frame -- but the line buffer is allocated once here and only its draw range
+           moves, and the test runs on squared distances, since a square root per pair buys
+           nothing when the only question is which side of a threshold the pair falls on. */
+        droneNetwork: {
+            label: 'Drone network',
+            build(api, options) {
+                const TELEMETRY = 0x00ffaa;
+                const COUNT = 40;
+                const MAX_LINKS = 320;
+                const box = {
+                    x: options.radius * 1.1, y: options.radius * 0.75, z: options.radius * 0.4,
+                };
+                const link = options.radius * 0.42;
+                const pos = new Float32Array(COUNT * 3);
+                const drift = [];
+                for (let i = 0; i < COUNT; i++) {
+                    pos[i * 3] = (Math.random() - 0.5) * box.x * 2;
+                    pos[i * 3 + 1] = (Math.random() - 0.5) * box.y * 2;
+                    pos[i * 3 + 2] = (Math.random() - 0.5) * box.z * 2;
+                    drift.push({
+                        x: (Math.random() - 0.5) * 0.14,
+                        y: (Math.random() - 0.5) * 0.14,
+                        z: (Math.random() - 0.5) * 0.07,
+                    });
+                }
+                const group = new THREE.Group();
+                const nodeGeom = new THREE.BufferGeometry();
+                nodeGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                const nodeMat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: TELEMETRY, size: options.radius * 0.055,
+                    transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                group.add(new THREE.Points(nodeGeom, nodeMat));
+
+                const linkGeom = new THREE.BufferGeometry();
+                const linkPos = new Float32Array(MAX_LINKS * 6);
+                linkGeom.setAttribute('position', new THREE.BufferAttribute(linkPos, 3));
+                linkGeom.setDrawRange(0, 0);
+                const linkMat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.LineSegments(linkGeom, linkMat));
+
+                const limit = link * link;
+                return {
+                    object: group,
+                    applyPalette(pal) { linkMat.color.setHex(pal.hex2); },
+                    animate(ctx) {
+                        const pace = 1 + ctx.audio * 1.2;
+                        for (let i = 0; i < COUNT; i++) {
+                            pos[i * 3] += drift[i].x * pace;
+                            pos[i * 3 + 1] += drift[i].y * pace;
+                            pos[i * 3 + 2] += drift[i].z * pace;
+                            // Turned at the wall rather than wrapped: a node that wraps
+                            // crosses the field in one frame and drags a line with it.
+                            if (Math.abs(pos[i * 3]) > box.x) drift[i].x *= -1;
+                            if (Math.abs(pos[i * 3 + 1]) > box.y) drift[i].y *= -1;
+                            if (Math.abs(pos[i * 3 + 2]) > box.z) drift[i].z *= -1;
+                        }
+                        nodeGeom.attributes.position.needsUpdate = true;
+
+                        let n = 0;
+                        for (let i = 0; i < COUNT && n < MAX_LINKS; i++) {
+                            for (let j = i + 1; j < COUNT; j++) {
+                                const dx = pos[i * 3] - pos[j * 3];
+                                const dy = pos[i * 3 + 1] - pos[j * 3 + 1];
+                                const dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+                                if (dx * dx + dy * dy + dz * dz > limit) continue;
+                                const at = n * 6;
+                                linkPos[at] = pos[i * 3];
+                                linkPos[at + 1] = pos[i * 3 + 1];
+                                linkPos[at + 2] = pos[i * 3 + 2];
+                                linkPos[at + 3] = pos[j * 3];
+                                linkPos[at + 4] = pos[j * 3 + 1];
+                                linkPos[at + 5] = pos[j * 3 + 2];
+                                if (++n >= MAX_LINKS) break;
+                            }
+                        }
+                        linkGeom.setDrawRange(0, n * 2);
+                        linkGeom.attributes.position.needsUpdate = true;
+                        linkMat.opacity = 0.22 + ctx.audio * 0.25;
+                        nodeMat.opacity = 0.75 + ctx.audio * 0.25 + ctx.click * 0.2;
                     },
                 };
             },
