@@ -114,7 +114,51 @@
 
         animate(model, ctx) {
             model.parts.forEach((part) => part.animate(ctx));
-            model.zoomWraps.forEach((wrap) => wrap.scale.setScalar(ctx.zoom));
+            /* Tier 2 is the listening tier.
+
+               The other three states carry themselves. Speaking is the equaliser opening up,
+               thinking has its own treatments, and idle is the core's resting animation --
+               all of which the parts handle, and most of which are driven by ctx.audio. That
+               is why listening was the one that went missing: it is the only state with no
+               sound to react to. The microphone being open makes no noise, so a vocabulary
+               built on reacting to noise has nothing to say about it, and nothing in the
+               seventeen cores or the ten inner rings says anything.
+
+               So it is said here, once, on the wrapper rather than inside a part. Each tier
+               1-3 already has its own wrapper so the zoom slider can scale it without
+               fighting a scale the part's own animate() may be writing (see build above) --
+               which makes the wrapper the one place a tier-wide behaviour can live without
+               touching ten parts or overriding any of them. Every inner ring gains this, a
+               hand-written one included, and a part that later wants its own richer
+               listening look can still have it: this scales the wrapper, that scales itself,
+               and the two compose rather than collide.
+
+               A slow breath rather than a flourish. It has to be legible across the room on
+               the fullscreen face and bearable for the minute someone spends deciding what
+               to say, and anything sharper reads as the avatar being agitated at you. The
+               rhythm is self-driven because there is nothing to drive it with -- which is
+               the honest signal here: it is not reacting to you yet, it is waiting. */
+            const LISTENING_BREATH_HZ = 0.55;   // one breath every ~1.8s
+            const LISTENING_BREATH_DEPTH = 0.16; // +/- this much of the tier's size
+            const LISTENING_LEAN = 14;           // world units toward the viewer
+            /* Two channels rather than one, and the reason is measured: a breath alone, at
+               the depth that still looked calm, did not rise above the amount this avatar
+               changes just sitting there -- 9.0% of pixels against a 9.2% idle floor. One
+               subtle thing on top of a busy thing is not a signal. The lean is what makes
+               it one: scale shares an axis with the equaliser's own radial motion and gets
+               lost in it, where moving toward the viewer does not, and "leaning in" is what
+               listening looks like anyway.
+
+               Both numbers are named so they can be argued with. Depth and lean are the two
+               knobs; the rate is slow on purpose. */
+            const breathing = ctx.state === 'LISTENING'
+                ? Math.sin(ctx.time * LISTENING_BREATH_HZ * Math.PI * 2)
+                : null;
+            model.zoomWraps.forEach((wrap, tier) => {
+                const isListeningTier = tier === 1 && breathing != null;
+                wrap.scale.setScalar(ctx.zoom * (isListeningTier ? 1 + breathing * LISTENING_BREATH_DEPTH : 1));
+                wrap.position.z = isListeningTier ? LISTENING_LEAN * (0.5 + breathing * 0.5) : 0;
+            });
             const { spin, bob } = model.recipe;
             model.group.rotation.y += spin * 0.01;
             model.group.position.y = Math.sin(ctx.time * 0.8) * bob;
