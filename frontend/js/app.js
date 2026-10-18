@@ -10114,6 +10114,29 @@ document.addEventListener('DOMContentLoaded', () => {
         if (avatarIntroductionBusy || isWaitingForResponse || talkHeld || handsFreeListening) return;
         avatarIntroductionBusy = true;
         try {
+            /* Still speaking is the case that list misses, and it is the common one.
+               `isWaitingForResponse` covers a reply only while its *text* is streaming; the
+               speech outlives it by however long the queued clips take to drain, which on a
+               long answer is most of the time the avatar spends talking. A tap in that
+               window fell straight through the guard above and introduced itself over the
+               top of the reply, with the reply's own remaining clips still arriving behind
+               it -- two voices, from the one gesture that most obviously means "stop".
+
+               So it means stop. The same thing Escape, the button beside Send and the talk
+               key already mean (see hush), reached by the gesture someone sitting in front
+               of the avatar actually makes. Then the microphone opens, because a tap on the
+               avatar has always meant "I want to talk to you" and interrupting it is not a
+               reason to think otherwise.
+
+               It deliberately does not introduce itself first. You do not answer "be quiet"
+               by immediately saying something else, and the introduction is for a tap that
+               arrived into silence. This is also why barging in needs no always-on
+               microphone: the interruption is a deliberate act, which is the same bargain
+               push to talk and hands-free listening already make. */
+            if (hush()) {
+                if (await microphonePresent()) await listenHandsFree();
+                return;
+            }
             const entry = window.Aether1Avatars?.get(currentAvatar) || null;
             const name = (currentAgentName || '').trim() || entry?.label || 'AETHER1';
             const avatarLabel = entry?.label || '';

@@ -242,6 +242,33 @@ fn request(
         .parse()
         .map_err(|_| format!("{address} is not an address this can connect to"))?;
 
+    // A peer is a machine on your own network, and this is the one place that is checked.
+    //
+    // Everything here is written by hand over rustls rather than through `net::get`/
+    // `net::post` (see decision 2 in the module header), which means it does not pass
+    // `net::require_online` and `scripts/check_egress_gate.sh` cannot see it either -- that
+    // guard looks for ureq's verbs, and there are none in this file. So the boundary the
+    // rest of the project states once (docs/SECURITY_MODEL.md section 6, "the local host,
+    // and the LAN, and no further") has to be stated again here, or peering is the way
+    // around it.
+    //
+    // The route in is narrow but real: a machine is found over DNS-SD, and the security
+    // model already says anyone on the network can answer in another's name. What it
+    // advertises includes the address to come back on, and nothing forced that address to
+    // be on this network. Pair with it once -- the fingerprint is confirmed, so the
+    // operator sees a certificate, not an address -- and from then on every question typed
+    // into this machine is posted to a public host, in local-only mode, through the one
+    // path with no gate on it.
+    //
+    // Refused at connect time rather than at pairing, because the store is on disk and
+    // survives: a peer paired before this existed is also refused, instead of being
+    // grandfathered in by having been written down.
+    if !crate::local_only::is_local_ip(ip) {
+        return Err(format!(
+            "{address} is not on this machine or this network, and AETHER1 only pairs with              machines that are. Pair with it by its address on your own network, or if it              is genuinely elsewhere, reach it some other way -- this path does not leave              the LAN."
+        ));
+    }
+
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = Arc::new(PinnedCertificate {
         expected,
@@ -656,6 +683,38 @@ fn device_label() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gate in `request`, from the outside: every call that talks to a peer goes through
+    /// it, so pinning it on one of them pins it on all of them.
+    ///
+    /// A public address is refused before a socket is opened, which is what makes this
+    /// testable at all -- there is no network here, and a gate that let the address through
+    /// would fail with a connection error instead. So the assertion is on *which* refusal
+    /// comes back, not merely that one did.
+    #[test]
+    fn a_peer_that_is_not_on_this_network_is_refused_before_anything_is_sent() {
+        for address in ["203.0.113.7", "8.8.8.8", "2606:4700:4700::1111"] {
+            let refusal = fingerprint_of(address, 8378).unwrap_err();
+            assert!(
+                refusal.contains("not on this machine or this network"),
+                "{address} should be refused as off-network, got: {refusal}"
+            );
+        }
+    }
+
+    /// The other half, and the reason the check is `is_local_ip` rather than "is loopback":
+    /// a peer is normally another machine in the house, so the private ranges have to pass.
+    /// These fail on the connection instead, which is the proof they got past the gate.
+    #[test]
+    fn a_machine_on_this_network_is_not_refused_by_the_locality_check() {
+        for address in ["192.168.1.50", "10.0.0.4", "172.16.3.9", "127.0.0.1"] {
+            let refusal = fingerprint_of(address, 1).unwrap_err();
+            assert!(
+                !refusal.contains("not on this machine or this network"),
+                "{address} is on a local network and should reach the connection attempt,                  got: {refusal}"
+            );
+        }
+    }
 
     fn temp_file(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("aether1-peers-{name}"));
