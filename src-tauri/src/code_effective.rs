@@ -428,6 +428,26 @@ fn run_row(
         };
     }
 
+    // Local-only mode on a machine that cannot cut the network off from a command: run
+    // refuses, whatever the switches say, because the promise cannot be kept for one (see
+    // code_sandbox::local_only_refusal). Reported before the unconfined switch so the row
+    // names the thing actually deciding -- a row saying "runs commands as you" under a mode
+    // that will refuse every one of them is the contradiction this whole area keeps
+    // producing.
+    if crate::local_only::enabled(db) && !sandbox.can_cut_network() {
+        return Row {
+            key: "run",
+            title: "Run commands",
+            action: Action::Deny,
+            decided_by: Source::LocalOnly,
+            rule: format!(
+                "Runs nothing while local-only mode is on: {}. A command here would have your network whatever any switch says, so it is refused rather than run with a promise that cannot be kept. Install bubblewrap, use a machine that can cut the network, or turn local-only mode off.",
+                sandbox.description()
+            ),
+            exceptions: Vec::new(),
+        };
+    }
+
     if unconfined {
         return Row {
             key: "run",
@@ -831,6 +851,60 @@ mod tests {
             "the refusal has to name what is missing: {}",
             run.rule
         );
+    }
+
+    /// The Windows case, and the Linux-without-a-network-namespace case, which are the same
+    /// case: the machine cannot cut a command off from the network, so local-only mode
+    /// cannot be kept for one and `run` refuses.
+    ///
+    /// Asserted with unconfined running *on*, because that is the combination that used to
+    /// contradict itself: the operator had agreed to run without a sandbox -- a statement
+    /// about this machine's files -- and the row read "runs commands as you" while the mode
+    /// whose job is to say nothing leaves was switched on beside it.
+    #[test]
+    fn local_only_outranks_unconfined_on_a_machine_that_cannot_cut_the_network() {
+        let db = db();
+        crate::code_perms::set(&db, Grant::Run, true).unwrap();
+        db.set_setting(
+            crate::code_sandbox::UNCONFINED_SETTING,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        db.set_setting(crate::local_only::SETTING, &serde_json::json!(true))
+            .unwrap();
+        let sandbox =
+            crate::code_sandbox::Sandbox::Unavailable("there is no sandbox for this platform yet");
+
+        let run = run_row(&db, &sandbox, None, true);
+        assert_eq!(run.action, Action::Deny);
+        assert_eq!(
+            run.decided_by,
+            Source::LocalOnly,
+            "the row has to name the thing actually deciding: {}",
+            run.rule
+        );
+        assert!(
+            run.rule.contains("local-only"),
+            "and say so in words: {}",
+            run.rule
+        );
+    }
+
+    /// The same machine with the mode off still runs, so the refusal above is the mode and
+    /// not a machine this code has quietly given up on.
+    #[test]
+    fn the_same_machine_still_runs_with_local_only_off() {
+        let db = db();
+        crate::code_perms::set(&db, Grant::Run, true).unwrap();
+        db.set_setting(
+            crate::code_sandbox::UNCONFINED_SETTING,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        let sandbox =
+            crate::code_sandbox::Sandbox::Unavailable("there is no sandbox for this platform yet");
+
+        assert_eq!(run_row(&db, &sandbox, None, true).action, Action::Allow);
     }
 
     /// Unconfined is the escape hatch, and the row says the thing an operator would want to

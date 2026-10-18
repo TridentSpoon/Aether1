@@ -421,6 +421,20 @@ fn run_inner(db: &MemoryDb, args: &Value, approved_once: bool) -> Result<String,
     if !sandbox.confines() && !crate::code_sandbox::unconfined_allowed(db) {
         return Err(crate::code_sandbox::unconfined_refusal(&sandbox));
     }
+    // And the other half of the boundary, which the confinement question above does not
+    // cover: a machine that cannot cut a command off from the network cannot keep
+    // local-only mode's promise about one. On a machine that can, this is already settled
+    // before here -- `network_for` hands the box `Net::None` and the command runs with no
+    // route anywhere -- so reaching this line means the machine is the problem, not the
+    // setting.
+    //
+    // Checked after confinement rather than before, for the reason the report gives in
+    // `run_row`: "you have no sandbox" is the more fundamental answer and the one worth
+    // reading first, and an operator who has not turned unconfined running on should be
+    // told that rather than being sent to a second switch they also have to understand.
+    if let Some(refusal) = crate::code_sandbox::local_only_blocks_running(db, &sandbox) {
+        return Err(refusal);
+    }
     let confined = sandbox.confines();
 
     // `shell` is one string handed to `sh -lc`, and it exists only inside the sandbox. A
@@ -1113,6 +1127,48 @@ mod tests {
     }
 
     /// The network, which is off unless the operator turns it on. `node -e` stands in for
+    /// The other half of the same promise, for the machines where the half above cannot be
+    /// kept: no network namespace means no way to cut a command off, so with local-only
+    /// mode on the command is refused rather than run with a promise that will not hold.
+    ///
+    /// Windows is always this case -- `detect` returns `Unavailable` there, since the
+    /// restricted token is not written -- and so is a Linux host that forbids unsharing a
+    /// network namespace. Guarded the same way its neighbour is: on a machine that *can*
+    /// cut the network there is nothing here to assert, because `network_for` has already
+    /// handed the box no route at all and that is the case the neighbour covers.
+    #[test]
+    fn local_only_refuses_a_command_a_machine_cannot_cut_off_from_the_network() {
+        let Some((db, _project, home)) = adversarial("localonlynet", &["python3"]) else {
+            return;
+        };
+        if crate::code_sandbox::detect().can_cut_network() {
+            return;
+        }
+        db.set_setting(crate::local_only::SETTING, &serde_json::json!(true))
+            .unwrap();
+        db.set_setting(
+            crate::code_sandbox::UNCONFINED_SETTING,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+
+        let refusal = with_home(&home, || {
+            run(
+                &db,
+                &serde_json::json!({"argv": ["python3", "-c", "print(1)"]}),
+            )
+            .expect_err("local-only mode must refuse a command it cannot cut off")
+        });
+        assert!(
+            refusal.contains("local-only mode is on"),
+            "the refusal names the mode: {refusal}"
+        );
+        assert!(
+            refusal.contains("bubblewrap") || refusal.contains("network namespace"),
+            "and what the machine cannot do: {refusal}"
+        );
+    }
+
     /// every allowlisted interpreter here; they all have a socket call.
     #[test]
     fn a_command_cannot_reach_the_network_by_default() {
