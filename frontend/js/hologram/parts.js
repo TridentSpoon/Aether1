@@ -929,7 +929,7 @@
                 };
             },
         },
-        /* Adapted from m.A.J.o.r.: the plated shell that opens. Six patches of one sphere
+        /* Adapted from CorvA1s: the plated shell that opens. Six patches of one sphere
            around a wireframe heart -- shut, the seams are the only sign there is anything
            inside; working, the plates travel out along their own axes and the heart is
            left standing in the gap. Each plate's direction is read from its own geometry
@@ -1473,7 +1473,7 @@
                 };
             },
         },
-        /* Adapted from m.A.J.o.r.: the dimension ring an opened assembly is measured
+        /* Adapted from CorvA1s: the dimension ring an opened assembly is measured
            against -- a witness line with an extension tick at each quarter and an arrow
            at each end of the span, the way a drawing calls out a distance. The span
            stretches while there is something being worked on and closes again after, so
@@ -2117,7 +2117,7 @@
                 };
             },
         },
-        /* Adapted from m.A.J.o.r.: the three hoops it hangs in, each turning on a
+        /* Adapted from CorvA1s: the three hoops it hangs in, each turning on a
            different pair of axes. Nothing else in that avatar turns on more than one
            axis, and the three of them disagreeing is what keeps a shut assembly from
            reading as a ball sitting still. Wireframe rather than solid, so a hoop caught
@@ -2730,7 +2730,7 @@
                 };
             },
         },
-        /* Adapted from m.A.J.o.r.: the volume the readings are taken from, and the
+        /* Adapted from CorvA1s: the volume the readings are taken from, and the
            callouts reaching into it. A shell of points with six leaders drawn from the
            middle out to anchors fixed in it, each one carrying a tick that sits on its
            anchor at rest and runs the length of the leader while there is a voice -- a

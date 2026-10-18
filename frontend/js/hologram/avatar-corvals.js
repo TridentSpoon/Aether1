@@ -1,4 +1,4 @@
-/* Avatar: m.A.J.o.r. -- Modular Assembly, Judgement, Orchestration and Records. The
+/* Avatar: CorvA1s -- Centralized Operational Routine, Very Adept 1n Service. The
  * eXcelsior Class's seventh, and the only one that takes itself apart.
  *
  * Trident's sketch for this one was a wireframe heart inside three hoops turning on
@@ -29,8 +29,8 @@
  */
 
 HologramAvatar.registerAvatar({
-    id: 'major',
-    label: 'm.A.J.o.r.',
+    id: 'corvals',
+    label: 'CorvA1s',
     // The eXcelsior Class -- see registerAvatar's optional def.group in
     // js/hologram/README.md and index.html's avatar-menu, which groups the same way.
     group: 'The eXcelsior Class',
@@ -119,7 +119,7 @@ HologramAvatar.registerAvatar({
 
         /* His three hoops, on his radii and his six rotation rates. They are the cradle the
            assembly hangs in: nothing else in the avatar turns on more than one axis, and
-           the three of them disagreeing is what keeps a shut m.A.J.o.r. from reading as a
+           the three of them disagreeing is what keeps a shut CorvA1s from reading as a
            ball sitting still. */
         const hoopMats = [
             new THREE.MeshBasicMaterial({ color: api.palette.hex, wireframe: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending }),
