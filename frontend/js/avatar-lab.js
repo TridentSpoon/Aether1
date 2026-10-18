@@ -26,7 +26,8 @@
         // The eXcelsior Class is nowhere in this list on purpose: every member of it is a
         // plugin, so the whole group lives on their own registerAvatar defs (group: 'The
         // eXcelsior Class' in avatar-enxephalon.js, avatar-cicero.js, avatar-praxis.js,
-        // avatar-chrono-maistresse.js, avatar-mairad.js and avatar-valor.js).
+        // avatar-chrono-maistresse.js, avatar-mairad.js, avatar-valor.js and
+        // avatar-major.js).
         // fillAvatarPicker builds the <optgroup> from whatever carries the name, hand-built
         // entry or plugin alike.
     ];

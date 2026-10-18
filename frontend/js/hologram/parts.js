@@ -929,6 +929,95 @@
                 };
             },
         },
+        /* Adapted from m.A.J.o.r.: the plated shell that opens. Six patches of one sphere
+           around a wireframe heart -- shut, the seams are the only sign there is anything
+           inside; working, the plates travel out along their own axes and the heart is
+           left standing in the gap. Each plate's direction is read from its own geometry
+           rather than re-derived from the angles it was cut at, so a re-cut plate cannot
+           fly inward. The travel is a reaction to the state, the same class of thing as a
+           scale or a glow, and not a rotation -- this core still sits still under a spin
+           of zero, which is what the note at the top of this file asks of it. */
+        platedShell: {
+            label: 'Plated shell',
+            build(api, options) {
+                const group = new THREE.Group();
+                const PLATE = options.size * 0.86;
+                const SPREAD = options.size * 0.58;
+                const GAP = 0.2;
+
+                const heartMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, wireframe: true,
+                    transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending,
+                });
+                const heart = new THREE.Mesh(
+                    new THREE.SphereGeometry(options.size * 0.36, 14, 10), heartMat
+                );
+                group.add(heart);
+
+                const plateMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.16,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const edgeMat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.95,
+                    blending: THREE.AdditiveBlending,
+                });
+                const cuts = [
+                    { phi: 0, phiLen: Math.PI * 2, theta: 0, thetaLen: 0.55 },
+                    { phi: 0, phiLen: Math.PI * 2, theta: Math.PI - 0.55, thetaLen: 0.55 },
+                ];
+                for (let i = 0; i < 4; i++) {
+                    const step = (Math.PI * 2) / 4;
+                    cuts.push({
+                        phi: i * step + GAP, phiLen: step - GAP * 2,
+                        theta: 0.55 + GAP, thetaLen: Math.PI - 1.1 - GAP * 2,
+                    });
+                }
+                const plates = cuts.map((cut) => {
+                    const geom = new THREE.SphereGeometry(
+                        PLATE, 14, 8, cut.phi, cut.phiLen, cut.theta, cut.thetaLen
+                    );
+                    geom.computeBoundingBox();
+                    const dir = new THREE.Vector3();
+                    geom.boundingBox.getCenter(dir);
+                    if (dir.length() < 0.001) dir.set(0, 1, 0);
+                    dir.normalize();
+                    const mesh = new THREE.Mesh(geom, plateMat);
+                    // Forty degrees, not the default one: a sphere patch at this
+                    // tessellation bends about twenty degrees a quad, so the default
+                    // keeps every internal edge and the plate reads as a wireframe ball
+                    // instead of a panel. This leaves the border.
+                    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geom, 40), edgeMat));
+                    group.add(mesh);
+                    return { mesh, dir };
+                });
+
+                let open = 0;
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        heartMat.color.setHex(pal.hex2);
+                        plateMat.color.setHex(pal.hex);
+                        edgeMat.color.setHex(pal.hex);
+                    },
+                    animate(ctx) {
+                        const target = ctx.state === 'THINKING' ? 1
+                            : ctx.state === 'SPEAKING' ? 0.35 + ctx.audio * 0.5
+                                : ctx.state === 'LISTENING' ? 0 : ctx.click * 0.5;
+                        // Eased, never set: the travel between shut and open is the part.
+                        open += (target - open) * 0.07;
+                        for (let i = 0; i < plates.length; i++) {
+                            const lag = Math.max(0, Math.min(1, open * 1.6 - i * 0.1));
+                            plates[i].mesh.position.copy(plates[i].dir).multiplyScalar(lag * SPREAD);
+                        }
+                        heart.scale.setScalar(1 + Math.sin(ctx.time * 3) * 0.08);
+                        heartMat.opacity = 0.36 + open * 0.34 + ctx.audio * 0.2;
+                        plateMat.opacity = 0.16 - open * 0.04 + ctx.audio * 0.1;
+                        edgeMat.opacity = 0.95 - open * 0.05 + ctx.click * 0.12;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1380,6 +1469,64 @@
                         pip.rotation.z = live ? -ctx.time * 1.6 : 0;
                         mat.opacity = 0.65 + ctx.audio * 0.3;
                         pipMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from m.A.J.o.r.: the dimension ring an opened assembly is measured
+           against -- a witness line with an extension tick at each quarter and an arrow
+           at each end of the span, the way a drawing calls out a distance. The span
+           stretches while there is something being worked on and closes again after, so
+           the ring reads as a measurement being taken rather than a decoration. */
+        dimensionRing: {
+            label: 'Dimension ring',
+            build(api, options) {
+                const group = new THREE.Group();
+                const lineMat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.75,
+                });
+                const pts = [];
+                const R = options.radius;
+                const SEG = 64;
+                for (let i = 0; i < SEG; i++) {
+                    const a = (i / SEG) * Math.PI * 2;
+                    const b = ((i + 0.62) / SEG) * Math.PI * 2;   // dashed, so it reads as a witness line
+                    pts.push(new THREE.Vector3(Math.cos(a) * R, Math.sin(a) * R, 0));
+                    pts.push(new THREE.Vector3(Math.cos(b) * R, Math.sin(b) * R, 0));
+                }
+                for (let i = 0; i < 4; i++) {
+                    const a = (i / 4) * Math.PI * 2;
+                    pts.push(new THREE.Vector3(Math.cos(a) * R * 0.86, Math.sin(a) * R * 0.86, 0));
+                    pts.push(new THREE.Vector3(Math.cos(a) * R * 1.12, Math.sin(a) * R * 1.12, 0));
+                }
+                group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+
+                /* The span: two arrowheads facing each other across the top of the ring,
+                   held in their own groups so only their angle has to change. */
+                const spanMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.9,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const heads = [0, 1].map((side) => {
+                    const pivot = new THREE.Group();
+                    const head = new THREE.Mesh(new THREE.ConeGeometry(R * 0.04, R * 0.11, 3), spanMat);
+                    head.position.y = R;
+                    head.rotation.z = side ? Math.PI : 0;       // pointing at each other
+                    pivot.add(head);
+                    group.add(pivot);
+                    return pivot;
+                });
+
+                return {
+                    object: group,
+                    applyPalette(pal) { lineMat.color.setHex(pal.hex2); spanMat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        const span = (live ? 0.5 : 0.12) + ctx.audio * 0.25;
+                        heads[0].rotation.z = span;
+                        heads[1].rotation.z = -span;
+                        lineMat.opacity = 0.6 + ctx.audio * 0.3;
+                        spanMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
                     },
                 };
             },
@@ -1970,6 +2117,47 @@
                 };
             },
         },
+        /* Adapted from m.A.J.o.r.: the three hoops it hangs in, each turning on a
+           different pair of axes. Nothing else in that avatar turns on more than one
+           axis, and the three of them disagreeing is what keeps a shut assembly from
+           reading as a ball sitting still. Wireframe rather than solid, so a hoop caught
+           edge-on is a line of mesh and not a bar across the picture. */
+        gimbalHoops: {
+            label: 'Gimbal hoops',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.radius;
+                const mats = [
+                    new THREE.MeshBasicMaterial({ color: api.palette.hex, wireframe: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending }),
+                    new THREE.MeshBasicMaterial({ color: api.palette.hex2, wireframe: true, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending }),
+                    new THREE.MeshBasicMaterial({ color: api.palette.hex, wireframe: true, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending }),
+                ];
+                const hoops = [
+                    new THREE.Mesh(new THREE.TorusGeometry(R * 0.56, R * 0.008, 5, 64), mats[0]),
+                    new THREE.Mesh(new THREE.TorusGeometry(R * 0.77, R * 0.006, 5, 72), mats[1]),
+                    new THREE.Mesh(new THREE.TorusGeometry(R, R * 0.004, 5, 80), mats[2]),
+                ];
+                hoops.forEach((h) => group.add(h));
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        mats[0].color.setHex(pal.hex);
+                        mats[1].color.setHex(pal.hex2);
+                        mats[2].color.setHex(pal.hex);
+                    },
+                    animate(ctx) {
+                        const spin = ctx.state === 'THINKING' ? 1.9 : ctx.state === 'LISTENING' ? 0.45 : 1;
+                        const t = ctx.time * spin;
+                        hoops[0].rotation.set(t * 0.5, t * 0.3, 0);
+                        hoops[1].rotation.set(0, -t * 0.4, t * 0.2);
+                        hoops[2].rotation.set(-t * 0.2, 0, -t * 0.6);
+                        mats[0].opacity = 0.5 + ctx.audio * 0.22;
+                        mats[1].opacity = 0.42 + ctx.audio * 0.2;
+                        mats[2].opacity = 0.32 + ctx.audio * 0.16;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Effects: an ambient layer or background ------------------------------
@@ -2538,6 +2726,101 @@
                         linkGeom.attributes.position.needsUpdate = true;
                         linkMat.opacity = 0.22 + ctx.audio * 0.25;
                         nodeMat.opacity = 0.75 + ctx.audio * 0.25 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from m.A.J.o.r.: the volume the readings are taken from, and the
+           callouts reaching into it. A shell of points with six leaders drawn from the
+           middle out to anchors fixed in it, each one carrying a tick that sits on its
+           anchor at rest and runs the length of the leader while there is a voice -- a
+           line being read off rather than six lights blinking together.
+
+           The anchors are fixed at build. A callout that wandered would be an animation
+           and not a measurement, which is the whole difference between this and a swarm.
+           Leaders and ticks keep one fixed colour through a theme change for the same
+           reason: a measurement that matched the furniture would read as furniture. */
+        annotationShell: {
+            label: 'Annotation shell',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.radius;
+                const POINTS = 420;
+                const LEADERS = 6;
+                const ANNOTATION = 0xffaa00;
+
+                const pos = new Float32Array(POINTS * 3);
+                for (let i = 0; i < POINTS; i++) {
+                    const r = R * (0.58 + Math.random() * 0.42);
+                    const theta = Math.random() * Math.PI * 2;
+                    // Arc cosine of a uniform number, so the points spread evenly over
+                    // the sphere instead of bunching at its poles.
+                    const phi = Math.acos(Math.random() * 2 - 1);
+                    pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+                    pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                    pos[i * 3 + 2] = r * Math.cos(phi);
+                }
+                const shellGeom = new THREE.BufferGeometry();
+                shellGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                // Mapped, not bare: an unmapped point sprite is a hard square.
+                const shellMat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: api.palette.hex2, size: R * 0.037,
+                    transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                const shell = new THREE.Points(shellGeom, shellMat);
+                group.add(shell);
+
+                const starts = [];
+                const anchors = [];
+                for (let i = 0; i < LEADERS; i++) {
+                    const a = (i / LEADERS) * Math.PI * 2;
+                    const tilt = (i % 2 ? 1 : -1) * 0.45;
+                    const dir = new THREE.Vector3(
+                        Math.cos(a) * Math.cos(tilt), Math.sin(tilt), Math.sin(a) * Math.cos(tilt)
+                    );
+                    starts.push(dir.clone().multiplyScalar(R * 0.3));
+                    anchors.push(dir.clone().multiplyScalar(R * 0.84));
+                }
+                const annGeom = new THREE.BufferGeometry();
+                const annPos = new Float32Array(LEADERS * 2 * 6);
+                annGeom.setAttribute('position', new THREE.BufferAttribute(annPos, 3));
+                const annMat = new THREE.LineBasicMaterial({
+                    color: ANNOTATION, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.LineSegments(annGeom, annMat));
+
+                const tick = new THREE.Vector3();
+                const arm = R * 0.06;
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        shellMat.color.setHex(pal.hex2);
+                        // The leaders and ticks keep their fixed colour -- see above.
+                    },
+                    animate(ctx) {
+                        shell.rotation.y = ctx.time * 0.05;
+                        shellMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
+                        const speaking = ctx.state === 'SPEAKING';
+                        let n = 0;
+                        const put = (a, b) => {
+                            const at = n * 6;
+                            annPos[at] = a.x; annPos[at + 1] = a.y; annPos[at + 2] = a.z;
+                            annPos[at + 3] = b.x; annPos[at + 4] = b.y; annPos[at + 5] = b.z;
+                            n++;
+                        };
+                        for (let i = 0; i < LEADERS; i++) {
+                            put(starts[i], anchors[i]);
+                            const u = speaking ? (ctx.time * 0.6 + i * 0.16) % 1 : 1;
+                            tick.lerpVectors(starts[i], anchors[i], u);
+                            put(
+                                tick.clone().add(new THREE.Vector3(-arm, arm * 0.6, 0)),
+                                tick.clone().add(new THREE.Vector3(arm, -arm * 0.6, 0))
+                            );
+                        }
+                        annGeom.setDrawRange(0, n * 2);
+                        annGeom.attributes.position.needsUpdate = true;
+                        annMat.opacity = 0.6 + ctx.audio * 0.3;
                     },
                 };
             },
