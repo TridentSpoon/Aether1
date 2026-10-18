@@ -41,7 +41,7 @@
         'arx-lexico':     { file: 'avatar-arx-lexico.js',     v: 1 },
         'arx-lucre':      { file: 'avatar-arx-lucre.js',      v: 1 },
         'arx-lkemi':      { file: 'avatar-arx-lkemi.js',      v: 1 },
-        'a1':             { file: 'avatar-a1.js',             v: 1 },
+        'a1':             { file: 'avatar-a1.js',             v: 2 },
         'senti':          { file: 'avatar-senti.js',          v: 2 },
         'white-rabbit':   { file: 'avatar-white-rabbit.js',   v: 2 },
         'operator':       { file: 'avatar-operator.js',       v: 3 },
@@ -53,7 +53,7 @@
         /* The custom avatar is assembled from the shared parts library rather than modelled
            by hand, so its file is useless without it -- 56 KB that only this one avatar
            needs, which is exactly the kind of weight worth not carrying at launch. */
-        'custom':         { file: 'avatar-custom.js',         v: 3, needs: [{ file: 'parts.js', v: 2 }] },
+        'custom':         { file: 'avatar-custom.js',         v: 3, needs: [{ file: 'parts.js', v: 3 }] },
     };
 
     /* Older names the HUD and saved settings still use for the same avatar. setAvatar has
