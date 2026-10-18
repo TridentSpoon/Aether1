@@ -878,7 +878,7 @@
             },
         },
 
-        /* Adapted from v.I.S.t.A.: the aiming ring with the four segmented arcs around it.
+        /* Adapted from vA1or: the aiming ring with the four segmented arcs around it.
            The avatar turns the two against each other; a core may not turn itself (see the
            note at the top of this file), so here they hold their angle and the lock pulse
            does the work, leaving the recipe's spin setting to decide whether anything
@@ -1338,7 +1338,7 @@
             },
         },
 
-        /* Adapted from v.I.S.t.A.: the readout graticule wrapping close around whatever it
+        /* Adapted from vA1or: the readout graticule wrapping close around whatever it
            is measuring -- short ticks all the way round with a longer one at each quarter,
            and a cardinal pip standing off the top. It is the scale an instrument is read
            against, so it sits still and the pip does the moving; the quarters are what let
@@ -1935,7 +1935,7 @@
             },
         },
 
-        /* Adapted from v.I.S.t.A.: the four corner brackets that frame whatever is being
+        /* Adapted from vA1or: the four corner brackets that frame whatever is being
            looked at. Each corner is two strokes meeting at a right angle, built from one
            corner's numbers mirrored into the other three -- four hand-written corners is
            four chances to typo a sign. They draw in the picture plane rather than around
@@ -2452,7 +2452,7 @@
             },
         },
 
-        /* Adapted from v.I.S.t.A.: the drone telemetry network drifting behind the overlay,
+        /* Adapted from vA1or: the drone telemetry network drifting behind the overlay,
            each node wired to whichever neighbours it is near. Which pairs those are really
            does change as the nodes drift, so unlike a fixed lattice it has to be re-derived
            every frame -- but the line buffer is allocated once here and only its draw range

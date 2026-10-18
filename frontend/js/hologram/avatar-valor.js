@@ -1,4 +1,4 @@
-/* Avatar: v.I.S.t.A. -- visual Intelligence, Surveillance, targeting and Assistance. The
+/* Avatar: vA1or -- Vanguard Assigned for Legacy Operational Response. The
  * eXcelsior Class's sixth, and the first that is not an object at all.
  *
  * Everything else in this line is a thing standing in space: a shell, a chassis, a dial, a
@@ -25,8 +25,8 @@
  */
 
 HologramAvatar.registerAvatar({
-    id: 'vista',
-    label: 'v.I.S.t.A.',
+    id: 'valor',
+    label: 'vA1or',
     // The eXcelsior Class -- see registerAvatar's optional def.group in
     // js/hologram/README.md and index.html's avatar-menu, which groups the same way.
     group: 'The eXcelsior Class',
@@ -189,7 +189,7 @@ HologramAvatar.registerAvatar({
             glow, glowMat, box: BOX, nodes: NODES, link: LINK, maxLinks: MAX_LINKS,
             tint: new THREE.Color(api.palette.hex3),
         };
-        vistaPaintGrid(model);
+        valorPaintGrid(model);
         return model;
     },
 
@@ -276,7 +276,7 @@ HologramAvatar.registerAvatar({
         model.linkMat.color.setHex(palette.hex2);
         model.glowMat.color.setHex(palette.hex);
         model.tint.setHex(palette.hex3);
-        vistaPaintGrid(model);
+        valorPaintGrid(model);
         // The drone nodes keep their fixed telemetry colour -- see build().
     },
 });
@@ -284,7 +284,7 @@ HologramAvatar.registerAvatar({
 /* Paints the grid's per-vertex brightness: the theme colour scaled by each vertex's own
    falloff, worked out once when the geometry was built. Shared by the first paint and by
    every theme change after it, because they are the same operation. */
-function vistaPaintGrid(model) {
+function valorPaintGrid(model) {
     const attr = model.gridGeom.attributes.color;
     for (let i = 0; i < model.gridFactors.length; i++) {
         attr.array[i * 3] = model.tint.r * model.gridFactors[i];
