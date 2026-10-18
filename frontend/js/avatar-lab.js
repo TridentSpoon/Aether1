@@ -27,7 +27,7 @@
         // plugin, so the whole group lives on their own registerAvatar defs (group: 'The
         // eXcelsior Class' in avatar-enxephalon.js, avatar-cicero.js, avatar-praxis.js,
         // avatar-chrono-maistresse.js, avatar-mairad.js, avatar-valor.js and
-        // avatar-corvals.js).
+        // avatar-corvals.js and avatar-divinai.js).
         // fillAvatarPicker builds the <optgroup> from whatever carries the name, hand-built
         // entry or plugin alike.
     ];

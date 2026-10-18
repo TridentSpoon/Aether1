@@ -28,7 +28,7 @@
  *   js/app.js's EASTER_EGG_RULES, checkEasterEggTriggers and flashEasterEgg.
  * - "The Umbrals": A.R.X.LIMES (2) and A.R.X.LOGOS (5), the A.R.X. name in general.
  * - "The eXcelsior Class": the plugins enXephalon, C.I.C.E.R.O., PRAXIS,
- *   Chrono-mAIstresse, m.A.I.r.a.d., vA1or and CorvA1s. index.html's
+ *   Chrono-mAIstresse, m.A.I.r.a.d., vA1or, CorvA1s and Divinai. index.html's
  *   avatar-menu keeps a family heading off screen while its grid is empty, which is how
  *   this one waited for its first avatar.
  *

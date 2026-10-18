@@ -1018,6 +1018,79 @@
                 };
             },
         },
+        /* Adapted from Divinai: the plasma core the voice pushes about. Every vertex of a
+           wireframe shell travels out along its own rest direction by how loud its band
+           is, over a slow carrier that keeps it breathing in a silence -- so it swells
+           rather than shears, and a quiet moment is still alive. A second, dimmer copy
+           sits inside it a third of a second behind.
+
+           The rest positions are kept because a displaced vertex must never be the input
+           to the next frame's displacement: a shell fed its own output walks off the
+           screen inside a few seconds. Detail 2 and no normals recomputed, because
+           nothing here is lit and the shell is read as a wire drawing. It swells but does
+           not turn, so the recipe's spin still owns rotation. */
+        plasmaCore: {
+            label: 'Plasma core',
+            build(api, options) {
+                const group = new THREE.Group();
+                const FURNACE = 0xff3300;
+
+                const geom = new THREE.IcosahedronGeometry(options.size, 2);
+                const rest = new Float32Array(geom.attributes.position.array);
+                const mat = new THREE.MeshBasicMaterial({
+                    color: FURNACE, wireframe: true,
+                    transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(geom, mat));
+
+                const ghostGeom = new THREE.IcosahedronGeometry(options.size * 0.92, 2);
+                const ghostRest = new Float32Array(ghostGeom.attributes.position.array);
+                const ghostMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, wireframe: true,
+                    transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(ghostGeom, ghostMat));
+
+                const swell = (g, r, ctx, time, scale, gain) => {
+                    const attr = g.attributes.position;
+                    const arr = attr.array;
+                    const data = ctx.audioData;
+                    const bins = data && data.length ? data.length : 0;
+                    for (let i = 0; i < arr.length; i += 3) {
+                        const x = r[i];
+                        const y = r[i + 1];
+                        const z = r[i + 2];
+                        const carrier = Math.sin(time * 3 + x * 0.07 + y * 0.07) * 0.08;
+                        let band = 0;
+                        if (bins) {
+                            // Derived from where the vertex sits, so neighbours share a
+                            // band and the shell swells in patches rather than speckling.
+                            const idx = Math.abs(Math.floor(x * 0.9 + y * 1.7 + z * 0.4)) % bins;
+                            band = (data[idx] || 0) / 255;
+                        }
+                        const push = 1 + (carrier + band * 0.3 * gain) * scale;
+                        arr[i] = x * push;
+                        arr[i + 1] = y * push;
+                        arr[i + 2] = z * push;
+                    }
+                    attr.needsUpdate = true;
+                };
+
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        ghostMat.color.setHex(pal.hex2);
+                        // The core keeps the furnace's own heat -- see above.
+                    },
+                    animate(ctx) {
+                        swell(geom, rest, ctx, ctx.time, 1, 1);
+                        swell(ghostGeom, ghostRest, ctx, ctx.time - 0.33, 0.55, 0.7);
+                        mat.opacity = 0.55 + ctx.audio * 0.35 + ctx.click * 0.1;
+                        ghostMat.opacity = 0.12 + ctx.audio * 0.08;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1527,6 +1600,90 @@
                         heads[1].rotation.z = -span;
                         lineMat.opacity = 0.6 + ctx.audio * 0.3;
                         spanMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from Divinai: five closed ribbons on their own tilted planes, each one's
+           radius pushed out by the stretch of spectrum it answers to.
+
+           Two things keep it a ribbon rather than a scribble. The wobble off the plane is
+           built from whole multiples of the angle, so the loop arrives back where it
+           started instead of leaving a step; and the loudness is read at six points around
+           the loop and blended between them, because neighbouring bins of a spectrum
+           differ freely and a radius taken straight from them is a sawtooth. */
+        voiceRibbons: {
+            label: 'Voice ribbons',
+            build(api, options) {
+                const group = new THREE.Group();
+                const COUNT = 5;
+                const POINTS = 72;
+                const LOBES = 6;
+                const matA = new THREE.LineBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending,
+                });
+                const matB = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending,
+                });
+                const ribbons = [];
+                for (let i = 0; i < COUNT; i++) {
+                    const radius = options.radius * (0.62 + i * 0.09);
+                    const wobble = new Float32Array(POINTS);
+                    const pos = new Float32Array(POINTS * 3);
+                    for (let j = 0; j < POINTS; j++) {
+                        const a = (j / POINTS) * Math.PI * 2;
+                        wobble[j] = (Math.sin(a * 2 + i * 2.3) * 7 + Math.sin(a * 3 + i) * 4)
+                            * (options.radius / 64);
+                    }
+                    const geom = new THREE.BufferGeometry();
+                    geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                    const line = new THREE.LineLoop(geom, i % 2 === 0 ? matA : matB);
+                    line.rotation.x = i * 0.7;
+                    line.rotation.y = i * 1.1;
+                    group.add(line);
+                    ribbons.push({ line, geom, pos, wobble, radius });
+                }
+
+                const shape = (ctx, time, gain) => {
+                    const data = ctx && ctx.audioData;
+                    const bins = data && data.length ? data.length : 0;
+                    for (let r = 0; r < ribbons.length; r++) {
+                        const rib = ribbons[r];
+                        for (let j = 0; j < POINTS; j++) {
+                            const a = (j / POINTS) * Math.PI * 2;
+                            let band = 0;
+                            if (bins) {
+                                const at = (j / POINTS) * LOBES;
+                                const lo = Math.floor(at);
+                                const mix = at - lo;
+                                const binOf = (k) =>
+                                    (data[Math.floor(((k % LOBES) / LOBES) * bins)] || 0) / 255;
+                                band = binOf(lo) * (1 - mix) + binOf(lo + 1) * mix;
+                            }
+                            const breath = Math.sin(time * 2 + a * 3 + r) * 0.02;
+                            const radius = rib.radius * (1 + breath + band * 0.22 * gain);
+                            rib.pos[j * 3] = Math.cos(a) * radius;
+                            rib.pos[j * 3 + 1] = Math.sin(a) * radius;
+                            rib.pos[j * 3 + 2] = rib.wobble[j];
+                        }
+                        rib.geom.attributes.position.needsUpdate = true;
+                    }
+                };
+                shape(null, 0, 0);
+
+                return {
+                    object: group,
+                    applyPalette(pal) { matA.color.setHex(pal.hex); matB.color.setHex(pal.hex2); },
+                    animate(ctx) {
+                        shape(ctx, ctx.time, 1);
+                        for (let i = 0; i < ribbons.length; i++) {
+                            // A function of elapsed time, not advanced per frame: otherwise
+                            // how fast it turns depends on how fast the machine draws.
+                            ribbons[i].line.rotation.x = i * 0.7 + ctx.time * 0.16 * (i + 1);
+                            ribbons[i].line.rotation.y = i * 1.1 + ctx.time * 0.22 * (i + 1);
+                        }
+                        matA.opacity = 0.6 + ctx.audio * 0.3;
+                        matB.opacity = 0.5 + ctx.audio * 0.28;
                     },
                 };
             },
@@ -2154,6 +2311,49 @@
                         mats[0].opacity = 0.5 + ctx.audio * 0.22;
                         mats[1].opacity = 0.42 + ctx.audio * 0.2;
                         mats[2].opacity = 0.32 + ctx.audio * 0.16;
+                    },
+                };
+            },
+        },
+        /* Adapted from Divinai: two dashed tactical rings counter-turning, the inner one
+           coarse and the outer one fine. Every other segment is dropped rather than a gap
+           being drawn, which is what makes it read as a readout and not as a ring with
+           bites out of it. */
+        dashedTacticalRings: {
+            label: 'Dashed tactical rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.radius;
+                const matA = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.8,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const matB = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.5,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const dashed = (radius, dashes, mat) => {
+                    const ring = new THREE.Group();
+                    const step = (Math.PI * 2) / dashes;
+                    for (let i = 1; i < dashes; i += 2) {
+                        ring.add(new THREE.Mesh(
+                            new THREE.RingGeometry(radius, radius + R * 0.019, 16, 1, i * step, step * 0.8),
+                            mat
+                        ));
+                    }
+                    group.add(ring);
+                    return ring;
+                };
+                const inner = dashed(R * 0.86, 12, matA);
+                const outer = dashed(R, 24, matB);
+                return {
+                    object: group,
+                    applyPalette(pal) { matA.color.setHex(pal.hex); matB.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        inner.rotation.z = ctx.time * 0.3;
+                        outer.rotation.z = -ctx.time * 0.15;
+                        matA.opacity = 0.65 + ctx.audio * 0.3;
+                        matB.opacity = 0.4 + ctx.audio * 0.25;
                     },
                 };
             },
@@ -2821,6 +3021,47 @@
                         annGeom.setDrawRange(0, n * 2);
                         annGeom.attributes.position.needsUpdate = true;
                         annMat.opacity = 0.6 + ctx.audio * 0.3;
+                    },
+                };
+            },
+        },
+        /* Adapted from Divinai: the warm ember field behind it, turning slowly on one axis
+           and rocking on another. It keeps its own amber through a theme change, because
+           an ember that came out blue is not an ember. */
+        emberField: {
+            label: 'Ember field',
+            build(api, options) {
+                const COUNT = 520;
+                const R = options.radius;
+                const pos = new Float32Array(COUNT * 3);
+                for (let i = 0; i < COUNT; i++) {
+                    const r = R * (0.47 + Math.random() * 0.53);
+                    const theta = Math.random() * Math.PI * 2;
+                    // Arc cosine of a uniform number, so the embers spread evenly over the
+                    // sphere instead of bunching at its poles.
+                    const phi = Math.acos(Math.random() * 2 - 1);
+                    pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+                    pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                    pos[i * 3 + 2] = r * Math.cos(phi);
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                // Mapped, not bare: an unmapped point sprite is a hard square.
+                const mat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: 0xffaa00, size: R * 0.033,
+                    transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette() {
+                        // The embers keep their own amber -- see above.
+                    },
+                    animate(ctx) {
+                        points.rotation.y = ctx.time * 0.03;
+                        points.rotation.x = Math.sin(ctx.time * 0.2) * 0.1;
+                        mat.opacity = 0.6 + ctx.audio * 0.3 + ctx.click * 0.15;
                     },
                 };
             },

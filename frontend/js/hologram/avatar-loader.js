@@ -52,6 +52,7 @@
         'mairad':         { file: 'avatar-mairad.js',         v: 1 },
         'valor':          { file: 'avatar-valor.js',          v: 1 },
         'corvals':        { file: 'avatar-corvals.js',        v: 1 },
+        'divinai':        { file: 'avatar-divinai.js',        v: 1 },
         /* The custom avatar is assembled from the shared parts library rather than modelled
            by hand, so its file is useless without it -- 56 KB that only this one avatar
            needs, which is exactly the kind of weight worth not carrying at launch. */

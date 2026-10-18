@@ -538,6 +538,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (avatarName === 'mairad') avatarStructureLabel.textContent = 'MUTATIVE RESPONSE SHELL';
         else if (avatarName === 'valor') avatarStructureLabel.textContent = 'TACTICAL OPTICS OVERLAY';
         else if (avatarName === 'corvals') avatarStructureLabel.textContent = 'SELF-OPENING PLATED ASSEMBLY';
+        else if (avatarName === 'divinai') avatarStructureLabel.textContent = 'VOICE-DRIVEN PLASMA CORE';
         // A registered avatar names itself, rather than borrowing hAlcy's label from
         // the fallback below -- see js/hologram/README.md.
         else if (window.HologramAvatar && HologramAvatar.avatarPlugins.has(avatarName)) {
