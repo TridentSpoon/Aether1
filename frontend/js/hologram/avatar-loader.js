@@ -50,10 +50,14 @@
         'praxis':         { file: 'avatar-praxis.js',         v: 1 },
         'chrono-maistresse': { file: 'avatar-chrono-maistresse.js', v: 2 },
         'mairad':         { file: 'avatar-mairad.js',         v: 1 },
+        'valor':          { file: 'avatar-valor.js',          v: 1 },
+        'corvals':        { file: 'avatar-corvals.js',        v: 1 },
+        'divinai':        { file: 'avatar-divinai.js',        v: 1 },
+        'liminal':        { file: 'avatar-liminal.js',        v: 1 },
         /* The custom avatar is assembled from the shared parts library rather than modelled
            by hand, so its file is useless without it -- 56 KB that only this one avatar
            needs, which is exactly the kind of weight worth not carrying at launch. */
-        'custom':         { file: 'avatar-custom.js',         v: 3, needs: [{ file: 'parts.js', v: 2 }] },
+        'custom':         { file: 'avatar-custom.js',         v: 3, needs: [{ file: 'parts.js', v: 3 }] },
     };
 
     /* Older names the HUD and saved settings still use for the same avatar. setAvatar has

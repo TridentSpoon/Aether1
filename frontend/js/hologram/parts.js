@@ -169,6 +169,80 @@
         return { geometry, edges };
     }
 
+    /* A cut gemstone, and the setting one sits in. Both are hexagonal and both are turned
+       a half-step so the hexagon stands on a point rather than an edge -- which is what
+       makes a gem read as tall and cut rather than as a bolt head.
+
+       The gem is faceted with per-vertex colour rather than with light, because every
+       material in this kit is a MeshBasicMaterial and the HUD's lighting never reaches
+       one. The facet brightnesses are constants lit as if from the upper left, so the
+       same facet is the same on every launch and at every angle. `tint` is the stone's
+       own colour as a float triple; the table goes past 1 and comes out the pale version
+       of it that a flat top catches. Shared by the brow stone here and by L1minal, whose
+       stone is the same cut (see avatar-liminal.js). */
+    function cutGemGeometry(rx, ry, depth, tint) {
+        const SIDES = 6;
+        const TABLE = 0.46;        // how far in the flat top sits
+        const pos = [];
+        const col = [];
+
+        const at = (i, scale, z) => {
+            const a = (i / SIDES) * Math.PI * 2 + Math.PI / 2;
+            return [Math.cos(a) * rx * scale, Math.sin(a) * ry * scale, z];
+        };
+        const push = (p, level) => {
+            pos.push(p[0], p[1], p[2]);
+            col.push(tint[0] * level, tint[1] * level, tint[2] * level);
+        };
+
+        for (let i = 0; i < SIDES; i++) {
+            const j = (i + 1) % SIDES;
+            const level = 0.34 + 0.72 * (0.5 + 0.5 * Math.cos((i / SIDES) * Math.PI * 2 - 2.2));
+            const o1 = at(i, 1, 0);
+            const o2 = at(j, 1, 0);
+            const t1 = at(i, TABLE, depth);
+            const t2 = at(j, TABLE, depth);
+            push(o1, level); push(o2, level); push(t2, level * 1.12);
+            push(o1, level); push(t2, level * 1.12); push(t1, level * 1.12);
+            // The keel: back to the middle, dimmer, so a dragged view finds a solid and not a hole.
+            const k = [0, 0, -depth * 0.55];
+            push(o2, level * 0.3); push(o1, level * 0.3); push(k, level * 0.18);
+        }
+        for (let i = 1; i < SIDES - 1; i++) {
+            push(at(0, TABLE, depth), 1.45);
+            push(at(i, TABLE, depth), 1.45);
+            push(at(i + 1, TABLE, depth), 1.45);
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+        return geometry;
+    }
+
+    /* The flat hexagonal band the gem sits in. An inner radius of zero fills it in, which
+       is how the dark socket under the stone is made from the same function. */
+    function gemBezelGeometry(rx, ry, width) {
+        const SIDES = 6;
+        const pos = [];
+        const at = (i, px, py) => {
+            const a = (i / SIDES) * Math.PI * 2 + Math.PI / 2;
+            return [Math.cos(a) * px, Math.sin(a) * py, 0];
+        };
+        for (let i = 0; i < SIDES; i++) {
+            const j = (i + 1) % SIDES;
+            const o1 = at(i, rx + width, ry + width);
+            const o2 = at(j, rx + width, ry + width);
+            const i1 = at(i, rx, ry);
+            const i2 = at(j, rx, ry);
+            pos.push(...o1, ...o2, ...i2);
+            pos.push(...o1, ...i2, ...i1);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        return geometry;
+    }
+
     // ---- Cores: the thing at the middle -------------------------------------
     //
     // Two things sat here and no longer do, so nobody re-adds them under the opt-out
@@ -877,6 +951,292 @@
                 };
             },
         },
+
+        /* Adapted from vA1or: the aiming ring with the four segmented arcs around it.
+           The avatar turns the two against each other; a core may not turn itself (see the
+           note at the top of this file), so here they hold their angle and the lock pulse
+           does the work, leaving the recipe's spin setting to decide whether anything
+           moves. Gaps in the arcs rather than a second solid ring, because the gaps are
+           what make it read as a sight and not as a target painted on a wall. */
+        targetReticle: {
+            label: 'Target reticle',
+            build(api, options) {
+                const group = new THREE.Group();
+                const ringMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.9,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(
+                    new THREE.RingGeometry(options.size * 0.62, options.size * 0.66, 48), ringMat
+                ));
+                const arcMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.8,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                for (let i = 0; i < 4; i++) {
+                    const step = (Math.PI * 2) / 4;
+                    group.add(new THREE.Mesh(
+                        new THREE.RingGeometry(options.size * 0.96, options.size, 16, 1, i * step + 0.1, step - 0.2),
+                        arcMat
+                    ));
+                }
+                const hubMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
+                });
+                const hub = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.1, 24), hubMat);
+                hub.position.z = 0.5;
+                group.add(hub);
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        ringMat.color.setHex(pal.hex);
+                        arcMat.color.setHex(pal.hex2);
+                        hubMat.color.setHex(pal.hex);
+                    },
+                    animate(ctx) {
+                        const lock = 1 + Math.sin(ctx.time * 4) * 0.03 - ctx.click * 0.08;
+                        group.scale.set(lock, lock, 1);
+                        ringMat.opacity = 0.7 + ctx.audio * 0.3;
+                        arcMat.opacity = 0.6 + ctx.audio * 0.35;
+                        hubMat.opacity = 0.6 + ctx.audio * 0.4 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from CorvA1s: the plated shell that opens. Six patches of one sphere
+           around a wireframe heart -- shut, the seams are the only sign there is anything
+           inside; working, the plates travel out along their own axes and the heart is
+           left standing in the gap. Each plate's direction is read from its own geometry
+           rather than re-derived from the angles it was cut at, so a re-cut plate cannot
+           fly inward. The travel is a reaction to the state, the same class of thing as a
+           scale or a glow, and not a rotation -- this core still sits still under a spin
+           of zero, which is what the note at the top of this file asks of it. */
+        platedShell: {
+            label: 'Plated shell',
+            build(api, options) {
+                const group = new THREE.Group();
+                const PLATE = options.size * 0.86;
+                const SPREAD = options.size * 0.58;
+                const GAP = 0.2;
+
+                const heartMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, wireframe: true,
+                    transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending,
+                });
+                const heart = new THREE.Mesh(
+                    new THREE.SphereGeometry(options.size * 0.36, 14, 10), heartMat
+                );
+                group.add(heart);
+
+                const plateMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.16,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const edgeMat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.95,
+                    blending: THREE.AdditiveBlending,
+                });
+                const cuts = [
+                    { phi: 0, phiLen: Math.PI * 2, theta: 0, thetaLen: 0.55 },
+                    { phi: 0, phiLen: Math.PI * 2, theta: Math.PI - 0.55, thetaLen: 0.55 },
+                ];
+                for (let i = 0; i < 4; i++) {
+                    const step = (Math.PI * 2) / 4;
+                    cuts.push({
+                        phi: i * step + GAP, phiLen: step - GAP * 2,
+                        theta: 0.55 + GAP, thetaLen: Math.PI - 1.1 - GAP * 2,
+                    });
+                }
+                const plates = cuts.map((cut) => {
+                    const geom = new THREE.SphereGeometry(
+                        PLATE, 14, 8, cut.phi, cut.phiLen, cut.theta, cut.thetaLen
+                    );
+                    geom.computeBoundingBox();
+                    const dir = new THREE.Vector3();
+                    geom.boundingBox.getCenter(dir);
+                    if (dir.length() < 0.001) dir.set(0, 1, 0);
+                    dir.normalize();
+                    const mesh = new THREE.Mesh(geom, plateMat);
+                    // Forty degrees, not the default one: a sphere patch at this
+                    // tessellation bends about twenty degrees a quad, so the default
+                    // keeps every internal edge and the plate reads as a wireframe ball
+                    // instead of a panel. This leaves the border.
+                    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geom, 40), edgeMat));
+                    group.add(mesh);
+                    return { mesh, dir };
+                });
+
+                let open = 0;
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        heartMat.color.setHex(pal.hex2);
+                        plateMat.color.setHex(pal.hex);
+                        edgeMat.color.setHex(pal.hex);
+                    },
+                    animate(ctx) {
+                        const target = ctx.state === 'THINKING' ? 1
+                            : ctx.state === 'SPEAKING' ? 0.35 + ctx.audio * 0.5
+                                : ctx.state === 'LISTENING' ? 0 : ctx.click * 0.5;
+                        // Eased, never set: the travel between shut and open is the part.
+                        open += (target - open) * 0.07;
+                        for (let i = 0; i < plates.length; i++) {
+                            const lag = Math.max(0, Math.min(1, open * 1.6 - i * 0.1));
+                            plates[i].mesh.position.copy(plates[i].dir).multiplyScalar(lag * SPREAD);
+                        }
+                        heart.scale.setScalar(1 + Math.sin(ctx.time * 3) * 0.08);
+                        heartMat.opacity = 0.36 + open * 0.34 + ctx.audio * 0.2;
+                        plateMat.opacity = 0.16 - open * 0.04 + ctx.audio * 0.1;
+                        edgeMat.opacity = 0.95 - open * 0.05 + ctx.click * 0.12;
+                    },
+                };
+            },
+        },
+        /* Adapted from Divinai: the plasma core the voice pushes about. Every vertex of a
+           wireframe shell travels out along its own rest direction by how loud its band
+           is, over a slow carrier that keeps it breathing in a silence -- so it swells
+           rather than shears, and a quiet moment is still alive. A second, dimmer copy
+           sits inside it a third of a second behind.
+
+           The rest positions are kept because a displaced vertex must never be the input
+           to the next frame's displacement: a shell fed its own output walks off the
+           screen inside a few seconds. Detail 2 and no normals recomputed, because
+           nothing here is lit and the shell is read as a wire drawing. It swells but does
+           not turn, so the recipe's spin still owns rotation. */
+        plasmaCore: {
+            label: 'Plasma core',
+            build(api, options) {
+                const group = new THREE.Group();
+                const FURNACE = 0xff3300;
+
+                const geom = new THREE.IcosahedronGeometry(options.size, 2);
+                const rest = new Float32Array(geom.attributes.position.array);
+                const mat = new THREE.MeshBasicMaterial({
+                    color: FURNACE, wireframe: true,
+                    transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(geom, mat));
+
+                const ghostGeom = new THREE.IcosahedronGeometry(options.size * 0.92, 2);
+                const ghostRest = new Float32Array(ghostGeom.attributes.position.array);
+                const ghostMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, wireframe: true,
+                    transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.Mesh(ghostGeom, ghostMat));
+
+                const swell = (g, r, ctx, time, scale, gain) => {
+                    const attr = g.attributes.position;
+                    const arr = attr.array;
+                    const data = ctx.audioData;
+                    const bins = data && data.length ? data.length : 0;
+                    for (let i = 0; i < arr.length; i += 3) {
+                        const x = r[i];
+                        const y = r[i + 1];
+                        const z = r[i + 2];
+                        const carrier = Math.sin(time * 3 + x * 0.07 + y * 0.07) * 0.08;
+                        let band = 0;
+                        if (bins) {
+                            // Derived from where the vertex sits, so neighbours share a
+                            // band and the shell swells in patches rather than speckling.
+                            const idx = Math.abs(Math.floor(x * 0.9 + y * 1.7 + z * 0.4)) % bins;
+                            band = (data[idx] || 0) / 255;
+                        }
+                        const push = 1 + (carrier + band * 0.3 * gain) * scale;
+                        arr[i] = x * push;
+                        arr[i + 1] = y * push;
+                        arr[i + 2] = z * push;
+                    }
+                    attr.needsUpdate = true;
+                };
+
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        ghostMat.color.setHex(pal.hex2);
+                        // The core keeps the furnace's own heat -- see above.
+                    },
+                    animate(ctx) {
+                        swell(geom, rest, ctx, ctx.time, 1, 1);
+                        swell(ghostGeom, ghostRest, ctx, ctx.time - 0.33, 0.55, 0.7);
+                        mat.opacity = 0.55 + ctx.audio * 0.35 + ctx.click * 0.1;
+                        ghostMat.opacity = 0.12 + ctx.audio * 0.08;
+                    },
+                };
+            },
+        },
+        /* Adapted from L1minal: the stone at the brow, the one part of that avatar that is
+           never absent. A blue gem in a bezel, sunk into a dark socket and lit from behind.
+
+           The socket is the whole trick. Additively blended hot colour over the dark panel
+           is bright, but over anything already bright it is white -- drop this on a busy
+           core and without the socket it washes out exactly where it most needs to read.
+           The socket is the floor it is seen against. It pulses but does not turn, so the
+           recipe's spin still owns rotation. */
+        browStone: {
+            label: 'Brow stone',
+            build(api, options) {
+                const group = new THREE.Group();
+                const STONE = 0x2b6bff;
+
+                const glowMat = new THREE.SpriteMaterial({
+                    map: api.helpers.glowTexture(64), color: STONE,
+                    transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const glow = new THREE.Sprite(glowMat);
+                glow.scale.set(options.size * 2.2, options.size * 2.2, 1);
+                group.add(glow);
+
+                /* Sunk into a dark socket, because the gem is additive and additive over
+                   anything already bright comes out white -- the socket is the floor it
+                   gets read against whatever a recipe puts behind it. */
+                const socketMat = new THREE.MeshBasicMaterial({
+                    color: 0x04060f, transparent: true, opacity: 0.92,
+                });
+                const socket = new THREE.Mesh(gemBezelGeometry(0, options.size * 0.82, 0), socketMat);
+                socket.position.z = options.size * 0.2;
+                group.add(socket);
+
+                const bezelMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.85,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const bezel = new THREE.Mesh(
+                    gemBezelGeometry(options.size * 0.47, options.size * 0.69, options.size * 0.12),
+                    bezelMat
+                );
+                bezel.position.z = options.size * 0.24;
+                group.add(bezel);
+
+                // The stone itself: a cut hexagonal gem standing on a point, faceted by
+                // vertex colour rather than by light -- see cutGemGeometry above.
+                const gemMat = new THREE.MeshBasicMaterial({
+                    vertexColors: true, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
+                });
+                const gem = new THREE.Mesh(
+                    cutGemGeometry(options.size * 0.47, options.size * 0.69, options.size * 0.28,
+                        [0.26, 0.52, 1]),
+                    gemMat
+                );
+                gem.position.z = options.size * 0.3;
+                group.add(gem);
+
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        bezelMat.color.setHex(pal.hex);
+                        // The gem and its glow keep the stone's own blue -- see above.
+                    },
+                    animate(ctx) {
+                        const pulse = 0.8 + Math.sin(ctx.time * 5) * 0.2;
+                        glowMat.opacity = (0.6 + ctx.audio * 0.4) * pulse;
+                        glow.scale.setScalar(options.size * (2.1 + Math.sin(ctx.time * 5) * 0.2 + ctx.audio * 0.5));
+                        gemMat.opacity = 0.85 + ctx.audio * 0.15;
+                        bezelMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Inner rings: a structure wrapping close around the core -------------
@@ -1281,6 +1641,288 @@
                         spin += (1.1 + ctx.audio * 9) * 0.016 + ctx.click * 0.25;
                         reels.forEach(({ reel, direction }) => { reel.rotation.z = spin * direction; });
                         hubMat.opacity = 0.75 + ctx.audio * 0.25;
+                    },
+                };
+            },
+        },
+
+        /* Adapted from vA1or: the readout graticule wrapping close around whatever it
+           is measuring -- short ticks all the way round with a longer one at each quarter,
+           and a cardinal pip standing off the top. It is the scale an instrument is read
+           against, so it sits still and the pip does the moving; the quarters are what let
+           an eye find the same place on it twice. */
+        graticuleTicks: {
+            label: 'Readout graticule',
+            build(api, options) {
+                const group = new THREE.Group();
+                const COUNT = 36;
+                const mat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.8,
+                });
+                const pts = [];
+                for (let i = 0; i < COUNT; i++) {
+                    const a = (i / COUNT) * Math.PI * 2;
+                    const long = i % 9 === 0;
+                    const inner = options.radius * (long ? 0.8 : 0.88);
+                    pts.push(new THREE.Vector3(Math.cos(a) * inner, Math.sin(a) * inner, 0));
+                    pts.push(new THREE.Vector3(Math.cos(a) * options.radius, Math.sin(a) * options.radius, 0));
+                }
+                group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mat));
+
+                const pipMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                });
+                const pip = new THREE.Mesh(
+                    new THREE.RingGeometry(options.radius * 1.02, options.radius * 1.09, 6, 1, Math.PI / 2 - 0.022, 0.044),
+                    pipMat
+                );
+                group.add(pip);
+
+                return {
+                    object: group,
+                    applyPalette(pal) { mat.color.setHex(pal.hex2); pipMat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        // The pip runs the scale while there is something to read, and parks
+                        // at the top when there is not -- an instrument at rest reads zero.
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        pip.rotation.z = live ? -ctx.time * 1.6 : 0;
+                        mat.opacity = 0.65 + ctx.audio * 0.3;
+                        pipMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from CorvA1s: the dimension ring an opened assembly is measured
+           against -- a witness line with an extension tick at each quarter and an arrow
+           at each end of the span, the way a drawing calls out a distance. The span
+           stretches while there is something being worked on and closes again after, so
+           the ring reads as a measurement being taken rather than a decoration. */
+        dimensionRing: {
+            label: 'Dimension ring',
+            build(api, options) {
+                const group = new THREE.Group();
+                const lineMat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.75,
+                });
+                const pts = [];
+                const R = options.radius;
+                const SEG = 64;
+                for (let i = 0; i < SEG; i++) {
+                    const a = (i / SEG) * Math.PI * 2;
+                    const b = ((i + 0.62) / SEG) * Math.PI * 2;   // dashed, so it reads as a witness line
+                    pts.push(new THREE.Vector3(Math.cos(a) * R, Math.sin(a) * R, 0));
+                    pts.push(new THREE.Vector3(Math.cos(b) * R, Math.sin(b) * R, 0));
+                }
+                for (let i = 0; i < 4; i++) {
+                    const a = (i / 4) * Math.PI * 2;
+                    pts.push(new THREE.Vector3(Math.cos(a) * R * 0.86, Math.sin(a) * R * 0.86, 0));
+                    pts.push(new THREE.Vector3(Math.cos(a) * R * 1.12, Math.sin(a) * R * 1.12, 0));
+                }
+                group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+
+                /* The span: two arrowheads facing each other across the top of the ring,
+                   held in their own groups so only their angle has to change. */
+                const spanMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.9,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const heads = [0, 1].map((side) => {
+                    const pivot = new THREE.Group();
+                    const head = new THREE.Mesh(new THREE.ConeGeometry(R * 0.04, R * 0.11, 3), spanMat);
+                    head.position.y = R;
+                    head.rotation.z = side ? Math.PI : 0;       // pointing at each other
+                    pivot.add(head);
+                    group.add(pivot);
+                    return pivot;
+                });
+
+                return {
+                    object: group,
+                    applyPalette(pal) { lineMat.color.setHex(pal.hex2); spanMat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        const span = (live ? 0.5 : 0.12) + ctx.audio * 0.25;
+                        heads[0].rotation.z = span;
+                        heads[1].rotation.z = -span;
+                        lineMat.opacity = 0.6 + ctx.audio * 0.3;
+                        spanMat.opacity = 0.7 + ctx.audio * 0.3 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from Divinai: five closed ribbons on their own tilted planes, each one's
+           radius pushed out by the stretch of spectrum it answers to.
+
+           Two things keep it a ribbon rather than a scribble. The wobble off the plane is
+           built from whole multiples of the angle, so the loop arrives back where it
+           started instead of leaving a step; and the loudness is read at six points around
+           the loop and blended between them, because neighbouring bins of a spectrum
+           differ freely and a radius taken straight from them is a sawtooth. */
+        voiceRibbons: {
+            label: 'Voice ribbons',
+            build(api, options) {
+                const group = new THREE.Group();
+                const COUNT = 5;
+                const POINTS = 72;
+                const LOBES = 6;
+                const matA = new THREE.LineBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending,
+                });
+                const matB = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending,
+                });
+                const ribbons = [];
+                for (let i = 0; i < COUNT; i++) {
+                    const radius = options.radius * (0.62 + i * 0.09);
+                    const wobble = new Float32Array(POINTS);
+                    const pos = new Float32Array(POINTS * 3);
+                    for (let j = 0; j < POINTS; j++) {
+                        const a = (j / POINTS) * Math.PI * 2;
+                        wobble[j] = (Math.sin(a * 2 + i * 2.3) * 7 + Math.sin(a * 3 + i) * 4)
+                            * (options.radius / 64);
+                    }
+                    const geom = new THREE.BufferGeometry();
+                    geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                    const line = new THREE.LineLoop(geom, i % 2 === 0 ? matA : matB);
+                    line.rotation.x = i * 0.7;
+                    line.rotation.y = i * 1.1;
+                    group.add(line);
+                    ribbons.push({ line, geom, pos, wobble, radius });
+                }
+
+                const shape = (ctx, time, gain) => {
+                    const data = ctx && ctx.audioData;
+                    const bins = data && data.length ? data.length : 0;
+                    for (let r = 0; r < ribbons.length; r++) {
+                        const rib = ribbons[r];
+                        for (let j = 0; j < POINTS; j++) {
+                            const a = (j / POINTS) * Math.PI * 2;
+                            let band = 0;
+                            if (bins) {
+                                const at = (j / POINTS) * LOBES;
+                                const lo = Math.floor(at);
+                                const mix = at - lo;
+                                const binOf = (k) =>
+                                    (data[Math.floor(((k % LOBES) / LOBES) * bins)] || 0) / 255;
+                                band = binOf(lo) * (1 - mix) + binOf(lo + 1) * mix;
+                            }
+                            const breath = Math.sin(time * 2 + a * 3 + r) * 0.02;
+                            const radius = rib.radius * (1 + breath + band * 0.22 * gain);
+                            rib.pos[j * 3] = Math.cos(a) * radius;
+                            rib.pos[j * 3 + 1] = Math.sin(a) * radius;
+                            rib.pos[j * 3 + 2] = rib.wobble[j];
+                        }
+                        rib.geom.attributes.position.needsUpdate = true;
+                    }
+                };
+                shape(null, 0, 0);
+
+                return {
+                    object: group,
+                    applyPalette(pal) { matA.color.setHex(pal.hex); matB.color.setHex(pal.hex2); },
+                    animate(ctx) {
+                        shape(ctx, ctx.time, 1);
+                        for (let i = 0; i < ribbons.length; i++) {
+                            // A function of elapsed time, not advanced per frame: otherwise
+                            // how fast it turns depends on how fast the machine draws.
+                            ribbons[i].line.rotation.x = i * 0.7 + ctx.time * 0.16 * (i + 1);
+                            ribbons[i].line.rotation.y = i * 1.1 + ctx.time * 0.22 * (i + 1);
+                        }
+                        matA.opacity = 0.6 + ctx.audio * 0.3;
+                        matB.opacity = 0.5 + ctx.audio * 0.28;
+                    },
+                };
+            },
+        },
+        /* Adapted from L1minal: a shell cut into forty horizontal slices, of which only a
+           travelling band is ever present. The rest are not dimmed, they are gone, and the
+           dim framework saying where they would have been is what keeps the silhouette
+           readable while most of it is absent. The band never stops, so something is always
+           materialising and something else dematerialising; the rim it is travelling
+           towards glows red, because that is the edge where matter is arriving.
+
+           One geometry for all forty slices, with only their colours written per frame --
+           the points never move, so a frame costs a colour write and nothing else. */
+        phaseSlices: {
+            label: 'Phase slices',
+            build(api, options) {
+                const group = new THREE.Group();
+                const SLICES = 40;
+                const SEG = 32;
+                // Inside the outer ring's own radius, so a recipe that pairs this with a
+                // boundary part has the slices wrapping the core rather than sharing a
+                // surface with it.
+                const R = options.radius * 0.72;
+                const FRAME = 0xffcc00;
+                const FLUX = 0xff2244;
+
+                const pos = [];
+                const heights = [];
+                for (let i = 0; i < SLICES; i++) {
+                    // The poles are left off: a slice of radius zero is a point.
+                    const t = (i + 0.5) / SLICES;
+                    const y = (t * 2 - 1) * R * 0.97;
+                    const radius = Math.sqrt(Math.max(0, R * R - y * y));
+                    heights.push({ y, radius });
+                    for (let j = 0; j < SEG; j++) {
+                        const a = (j / SEG) * Math.PI * 2;
+                        const b = ((j + 1) / SEG) * Math.PI * 2;
+                        pos.push(Math.cos(a) * radius, y, Math.sin(a) * radius);
+                        pos.push(Math.cos(b) * radius, y, Math.sin(b) * radius);
+                    }
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                geom.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
+                const mat = new THREE.LineBasicMaterial({
+                    vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.LineSegments(geom, mat));
+
+                const frame = new THREE.Color(FRAME);
+                const flux = new THREE.Color(FLUX);
+                const perSlice = SEG * 2 * 3;
+                const EDGE = 0.26;
+                let at = 0.5;
+                let dir = 1;
+
+                return {
+                    object: group,
+                    applyPalette() {
+                        // The framework keeps its own yellow and the arriving rim its red.
+                    },
+                    animate(ctx) {
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        const half = (ctx.state === 'SPEAKING' ? 0.42 + ctx.audio * 0.3
+                            : ctx.state === 'THINKING' ? 0.09
+                                : ctx.state === 'LISTENING' ? 0.16 : 0.17) + ctx.click * 0.1;
+                        const speed = ctx.state === 'LISTENING' ? 0 : live ? 0.5 : 0.26;
+                        at += dir * speed * 0.016;
+                        // Turned at the ends, not wrapped: a band that wraps vanishes from
+                        // the top and reappears at the bottom, which reads as a glitch.
+                        if (at > 1) { at = 1; dir = -1; }
+                        if (at < 0) { at = 0; dir = 1; }
+
+                        const colours = geom.attributes.color.array;
+                        for (let i = 0; i < SLICES; i++) {
+                            const t = (i + 0.5) / SLICES;
+                            const d = Math.abs(t - at) / half;
+                            const presence = d >= 1 ? 0 : d <= 1 - EDGE ? 1 : (1 - d) / EDGE;
+                            const leading = dir > 0 ? t > at : t < at;
+                            const arriving = leading && presence > 0 && presence < 1 ? 1 - presence : 0;
+                            const level = 0.26 + presence * 0.74 + ctx.audio * 0.2;
+                            const r = frame.r * level + flux.r * arriving;
+                            const g = frame.g * level + flux.g * arriving;
+                            const b = frame.b * level + flux.b * arriving;
+                            const from = i * perSlice;
+                            for (let k = 0; k < perSlice; k += 3) {
+                                colours[from + k] = r;
+                                colours[from + k + 1] = g;
+                                colours[from + k + 2] = b;
+                            }
+                        }
+                        geom.attributes.color.needsUpdate = true;
+                        mat.opacity = 0.75 + ctx.audio * 0.25;
                     },
                 };
             },
@@ -1835,6 +2477,151 @@
                 };
             },
         },
+
+        /* Adapted from vA1or: the four corner brackets that frame whatever is being
+           looked at. Each corner is two strokes meeting at a right angle, built from one
+           corner's numbers mirrored into the other three -- four hand-written corners is
+           four chances to typo a sign. They draw in the picture plane rather than around
+           the avatar, so they frame it instead of orbiting it. */
+        cornerBrackets: {
+            label: 'Corner brackets',
+            build(api, options) {
+                const mat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.95,
+                });
+                const bx = options.radius * 0.95;
+                const by = options.radius * 0.74;
+                const arm = options.radius * 0.2;
+                const pts = [];
+                [[-1, 1], [1, 1], [-1, -1], [1, -1]].forEach(([sx, sy]) => {
+                    const corner = new THREE.Vector3(sx * bx, sy * by, 0);
+                    pts.push(corner, new THREE.Vector3(sx * (bx - arm), sy * by, 0));
+                    pts.push(corner.clone(), new THREE.Vector3(sx * bx, sy * (by - arm), 0));
+                });
+                const brackets = new THREE.LineSegments(
+                    new THREE.BufferGeometry().setFromPoints(pts), mat
+                );
+                return {
+                    object: brackets,
+                    applyPalette(pal) { mat.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        // Breathing out at rest and snapping in on a click: the gesture is
+                        // the frame closing on something, so it is a scale, not a spin.
+                        brackets.scale.setScalar(1 + Math.sin(ctx.time * 2) * 0.015 - ctx.click * 0.1);
+                        mat.opacity = 0.75 + ctx.audio * 0.25 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from CorvA1s: the three hoops it hangs in, each turning on a
+           different pair of axes. Nothing else in that avatar turns on more than one
+           axis, and the three of them disagreeing is what keeps a shut assembly from
+           reading as a ball sitting still. Wireframe rather than solid, so a hoop caught
+           edge-on is a line of mesh and not a bar across the picture. */
+        gimbalHoops: {
+            label: 'Gimbal hoops',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.radius;
+                const mats = [
+                    new THREE.MeshBasicMaterial({ color: api.palette.hex, wireframe: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending }),
+                    new THREE.MeshBasicMaterial({ color: api.palette.hex2, wireframe: true, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending }),
+                    new THREE.MeshBasicMaterial({ color: api.palette.hex, wireframe: true, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending }),
+                ];
+                const hoops = [
+                    new THREE.Mesh(new THREE.TorusGeometry(R * 0.56, R * 0.008, 5, 64), mats[0]),
+                    new THREE.Mesh(new THREE.TorusGeometry(R * 0.77, R * 0.006, 5, 72), mats[1]),
+                    new THREE.Mesh(new THREE.TorusGeometry(R, R * 0.004, 5, 80), mats[2]),
+                ];
+                hoops.forEach((h) => group.add(h));
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        mats[0].color.setHex(pal.hex);
+                        mats[1].color.setHex(pal.hex2);
+                        mats[2].color.setHex(pal.hex);
+                    },
+                    animate(ctx) {
+                        const spin = ctx.state === 'THINKING' ? 1.9 : ctx.state === 'LISTENING' ? 0.45 : 1;
+                        const t = ctx.time * spin;
+                        hoops[0].rotation.set(t * 0.5, t * 0.3, 0);
+                        hoops[1].rotation.set(0, -t * 0.4, t * 0.2);
+                        hoops[2].rotation.set(-t * 0.2, 0, -t * 0.6);
+                        mats[0].opacity = 0.5 + ctx.audio * 0.22;
+                        mats[1].opacity = 0.42 + ctx.audio * 0.2;
+                        mats[2].opacity = 0.32 + ctx.audio * 0.16;
+                    },
+                };
+            },
+        },
+        /* Adapted from Divinai: two dashed tactical rings counter-turning, the inner one
+           coarse and the outer one fine. Every other segment is dropped rather than a gap
+           being drawn, which is what makes it read as a readout and not as a ring with
+           bites out of it. */
+        dashedTacticalRings: {
+            label: 'Dashed tactical rings',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.radius;
+                const matA = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.8,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const matB = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.5,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+                });
+                const dashed = (radius, dashes, mat) => {
+                    const ring = new THREE.Group();
+                    const step = (Math.PI * 2) / dashes;
+                    for (let i = 1; i < dashes; i += 2) {
+                        ring.add(new THREE.Mesh(
+                            new THREE.RingGeometry(radius, radius + R * 0.019, 16, 1, i * step, step * 0.8),
+                            mat
+                        ));
+                    }
+                    group.add(ring);
+                    return ring;
+                };
+                const inner = dashed(R * 0.86, 12, matA);
+                const outer = dashed(R, 24, matB);
+                return {
+                    object: group,
+                    applyPalette(pal) { matA.color.setHex(pal.hex); matB.color.setHex(pal.hex); },
+                    animate(ctx) {
+                        inner.rotation.z = ctx.time * 0.3;
+                        outer.rotation.z = -ctx.time * 0.15;
+                        matA.opacity = 0.65 + ctx.audio * 0.3;
+                        matB.opacity = 0.4 + ctx.audio * 0.25;
+                    },
+                };
+            },
+        },
+        /* Adapted from L1minal: the teal lattice inside it -- the part that never phases.
+           Two rotations on different axes, and nothing else; it is the still point the
+           matter comes and goes around, so it does not react to anything but the voice. */
+        neuralLattice: {
+            label: 'Neural lattice',
+            build(api, options) {
+                const LATTICE = 0x00ffcc;
+                const mat = new THREE.MeshBasicMaterial({
+                    color: LATTICE, wireframe: true,
+                    transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending,
+                });
+                const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(options.radius, 2), mat);
+                return {
+                    object: mesh,
+                    applyPalette() {
+                        // Keeps its own teal.
+                    },
+                    animate(ctx) {
+                        mesh.rotation.y = -ctx.time * 0.15;
+                        mesh.rotation.x = ctx.time * 0.05;
+                        mat.opacity = 0.35 + ctx.audio * 0.3;
+                    },
+                };
+            },
+        },
     };
 
     // ---- Effects: an ambient layer or background ------------------------------
@@ -2312,6 +3099,301 @@
                         scroll = (scroll + (22 + ctx.audio * 30) * 0.016) % CELL;
                         floor.position.z = scroll;
                         mat.opacity = 0.8 + ctx.audio * 0.2 + ctx.click * 0.1;
+                    },
+                };
+            },
+        },
+
+        /* Adapted from vA1or: the drone telemetry network drifting behind the overlay,
+           each node wired to whichever neighbours it is near. Which pairs those are really
+           does change as the nodes drift, so unlike a fixed lattice it has to be re-derived
+           every frame -- but the line buffer is allocated once here and only its draw range
+           moves, and the test runs on squared distances, since a square root per pair buys
+           nothing when the only question is which side of a threshold the pair falls on. */
+        droneNetwork: {
+            label: 'Drone network',
+            build(api, options) {
+                const TELEMETRY = 0x00ffaa;
+                const COUNT = 40;
+                const MAX_LINKS = 320;
+                const box = {
+                    x: options.radius * 1.1, y: options.radius * 0.75, z: options.radius * 0.4,
+                };
+                const link = options.radius * 0.42;
+                const pos = new Float32Array(COUNT * 3);
+                const drift = [];
+                for (let i = 0; i < COUNT; i++) {
+                    pos[i * 3] = (Math.random() - 0.5) * box.x * 2;
+                    pos[i * 3 + 1] = (Math.random() - 0.5) * box.y * 2;
+                    pos[i * 3 + 2] = (Math.random() - 0.5) * box.z * 2;
+                    drift.push({
+                        x: (Math.random() - 0.5) * 0.14,
+                        y: (Math.random() - 0.5) * 0.14,
+                        z: (Math.random() - 0.5) * 0.07,
+                    });
+                }
+                const group = new THREE.Group();
+                const nodeGeom = new THREE.BufferGeometry();
+                nodeGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                const nodeMat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: TELEMETRY, size: options.radius * 0.055,
+                    transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                group.add(new THREE.Points(nodeGeom, nodeMat));
+
+                const linkGeom = new THREE.BufferGeometry();
+                const linkPos = new Float32Array(MAX_LINKS * 6);
+                linkGeom.setAttribute('position', new THREE.BufferAttribute(linkPos, 3));
+                linkGeom.setDrawRange(0, 0);
+                const linkMat = new THREE.LineBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.LineSegments(linkGeom, linkMat));
+
+                const limit = link * link;
+                return {
+                    object: group,
+                    applyPalette(pal) { linkMat.color.setHex(pal.hex2); },
+                    animate(ctx) {
+                        const pace = 1 + ctx.audio * 1.2;
+                        for (let i = 0; i < COUNT; i++) {
+                            pos[i * 3] += drift[i].x * pace;
+                            pos[i * 3 + 1] += drift[i].y * pace;
+                            pos[i * 3 + 2] += drift[i].z * pace;
+                            // Turned at the wall rather than wrapped: a node that wraps
+                            // crosses the field in one frame and drags a line with it.
+                            if (Math.abs(pos[i * 3]) > box.x) drift[i].x *= -1;
+                            if (Math.abs(pos[i * 3 + 1]) > box.y) drift[i].y *= -1;
+                            if (Math.abs(pos[i * 3 + 2]) > box.z) drift[i].z *= -1;
+                        }
+                        nodeGeom.attributes.position.needsUpdate = true;
+
+                        let n = 0;
+                        for (let i = 0; i < COUNT && n < MAX_LINKS; i++) {
+                            for (let j = i + 1; j < COUNT; j++) {
+                                const dx = pos[i * 3] - pos[j * 3];
+                                const dy = pos[i * 3 + 1] - pos[j * 3 + 1];
+                                const dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+                                if (dx * dx + dy * dy + dz * dz > limit) continue;
+                                const at = n * 6;
+                                linkPos[at] = pos[i * 3];
+                                linkPos[at + 1] = pos[i * 3 + 1];
+                                linkPos[at + 2] = pos[i * 3 + 2];
+                                linkPos[at + 3] = pos[j * 3];
+                                linkPos[at + 4] = pos[j * 3 + 1];
+                                linkPos[at + 5] = pos[j * 3 + 2];
+                                if (++n >= MAX_LINKS) break;
+                            }
+                        }
+                        linkGeom.setDrawRange(0, n * 2);
+                        linkGeom.attributes.position.needsUpdate = true;
+                        linkMat.opacity = 0.22 + ctx.audio * 0.25;
+                        nodeMat.opacity = 0.75 + ctx.audio * 0.25 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+        /* Adapted from CorvA1s: the volume the readings are taken from, and the
+           callouts reaching into it. A shell of points with six leaders drawn from the
+           middle out to anchors fixed in it, each one carrying a tick that sits on its
+           anchor at rest and runs the length of the leader while there is a voice -- a
+           line being read off rather than six lights blinking together.
+
+           The anchors are fixed at build. A callout that wandered would be an animation
+           and not a measurement, which is the whole difference between this and a swarm.
+           Leaders and ticks keep one fixed colour through a theme change for the same
+           reason: a measurement that matched the furniture would read as furniture. */
+        annotationShell: {
+            label: 'Annotation shell',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.radius;
+                const POINTS = 420;
+                const LEADERS = 6;
+                const ANNOTATION = 0xffaa00;
+
+                const pos = new Float32Array(POINTS * 3);
+                for (let i = 0; i < POINTS; i++) {
+                    const r = R * (0.58 + Math.random() * 0.42);
+                    const theta = Math.random() * Math.PI * 2;
+                    // Arc cosine of a uniform number, so the points spread evenly over
+                    // the sphere instead of bunching at its poles.
+                    const phi = Math.acos(Math.random() * 2 - 1);
+                    pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+                    pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                    pos[i * 3 + 2] = r * Math.cos(phi);
+                }
+                const shellGeom = new THREE.BufferGeometry();
+                shellGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                // Mapped, not bare: an unmapped point sprite is a hard square.
+                const shellMat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: api.palette.hex2, size: R * 0.037,
+                    transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                const shell = new THREE.Points(shellGeom, shellMat);
+                group.add(shell);
+
+                const starts = [];
+                const anchors = [];
+                for (let i = 0; i < LEADERS; i++) {
+                    const a = (i / LEADERS) * Math.PI * 2;
+                    const tilt = (i % 2 ? 1 : -1) * 0.45;
+                    const dir = new THREE.Vector3(
+                        Math.cos(a) * Math.cos(tilt), Math.sin(tilt), Math.sin(a) * Math.cos(tilt)
+                    );
+                    starts.push(dir.clone().multiplyScalar(R * 0.3));
+                    anchors.push(dir.clone().multiplyScalar(R * 0.84));
+                }
+                const annGeom = new THREE.BufferGeometry();
+                const annPos = new Float32Array(LEADERS * 2 * 6);
+                annGeom.setAttribute('position', new THREE.BufferAttribute(annPos, 3));
+                const annMat = new THREE.LineBasicMaterial({
+                    color: ANNOTATION, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending,
+                });
+                group.add(new THREE.LineSegments(annGeom, annMat));
+
+                const tick = new THREE.Vector3();
+                const arm = R * 0.06;
+                return {
+                    object: group,
+                    applyPalette(pal) {
+                        shellMat.color.setHex(pal.hex2);
+                        // The leaders and ticks keep their fixed colour -- see above.
+                    },
+                    animate(ctx) {
+                        shell.rotation.y = ctx.time * 0.05;
+                        shellMat.opacity = 0.5 + ctx.audio * 0.3 + ctx.click * 0.15;
+                        const speaking = ctx.state === 'SPEAKING';
+                        let n = 0;
+                        const put = (a, b) => {
+                            const at = n * 6;
+                            annPos[at] = a.x; annPos[at + 1] = a.y; annPos[at + 2] = a.z;
+                            annPos[at + 3] = b.x; annPos[at + 4] = b.y; annPos[at + 5] = b.z;
+                            n++;
+                        };
+                        for (let i = 0; i < LEADERS; i++) {
+                            put(starts[i], anchors[i]);
+                            const u = speaking ? (ctx.time * 0.6 + i * 0.16) % 1 : 1;
+                            tick.lerpVectors(starts[i], anchors[i], u);
+                            put(
+                                tick.clone().add(new THREE.Vector3(-arm, arm * 0.6, 0)),
+                                tick.clone().add(new THREE.Vector3(arm, -arm * 0.6, 0))
+                            );
+                        }
+                        annGeom.setDrawRange(0, n * 2);
+                        annGeom.attributes.position.needsUpdate = true;
+                        annMat.opacity = 0.6 + ctx.audio * 0.3;
+                    },
+                };
+            },
+        },
+        /* Adapted from Divinai: the warm ember field behind it, turning slowly on one axis
+           and rocking on another. It keeps its own amber through a theme change, because
+           an ember that came out blue is not an ember. */
+        emberField: {
+            label: 'Ember field',
+            build(api, options) {
+                const COUNT = 520;
+                const R = options.radius;
+                const pos = new Float32Array(COUNT * 3);
+                for (let i = 0; i < COUNT; i++) {
+                    const r = R * (0.47 + Math.random() * 0.53);
+                    const theta = Math.random() * Math.PI * 2;
+                    // Arc cosine of a uniform number, so the embers spread evenly over the
+                    // sphere instead of bunching at its poles.
+                    const phi = Math.acos(Math.random() * 2 - 1);
+                    pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+                    pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                    pos[i * 3 + 2] = r * Math.cos(phi);
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                // Mapped, not bare: an unmapped point sprite is a hard square.
+                const mat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: 0xffaa00, size: R * 0.033,
+                    transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                const points = new THREE.Points(geom, mat);
+                return {
+                    object: points,
+                    applyPalette() {
+                        // The embers keep their own amber -- see above.
+                    },
+                    animate(ctx) {
+                        points.rotation.y = ctx.time * 0.03;
+                        points.rotation.x = Math.sin(ctx.time * 0.2) * 0.1;
+                        mat.opacity = 0.6 + ctx.audio * 0.3 + ctx.click * 0.15;
+                    },
+                };
+            },
+        },
+        /* Adapted from L1minal: the matter that is not currently being used. Each mote has
+           a place on a shell and a place out in the room, and sits at one or the other
+           depending on whether the band of presence has reached its height yet -- so the
+           space around the avatar fills with the parts of it that are elsewhere.
+
+           Lerped between two fixed points rather than simulated. What it has to say is
+           "this is elsewhere", not "this is falling", and a drift with its own physics
+           would wander off and never come back. */
+        displacedMatter: {
+            label: 'Displaced matter',
+            build(api, options) {
+                const COUNT = 220;
+                const R = options.radius;
+                const pos = new Float32Array(COUNT * 3);
+                const home = new Float32Array(COUNT * 3);
+                const away = new Float32Array(COUNT * 3);
+                const height = new Float32Array(COUNT);
+                for (let i = 0; i < COUNT; i++) {
+                    const t = Math.random();
+                    const y = (t * 2 - 1) * R * 0.95;
+                    const radius = Math.sqrt(Math.max(0, R * R - y * y));
+                    const a = Math.random() * Math.PI * 2;
+                    height[i] = t;
+                    home[i * 3] = Math.cos(a) * radius;
+                    home[i * 3 + 1] = y;
+                    home[i * 3 + 2] = Math.sin(a) * radius;
+                    const out = 1.25 + Math.random() * 0.5;
+                    away[i * 3] = Math.cos(a) * radius * out;
+                    away[i * 3 + 1] = y + (Math.random() - 0.5) * R * 0.42;
+                    away[i * 3 + 2] = Math.sin(a) * radius * out;
+                }
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                // Mapped, not bare: an unmapped point sprite is a hard square.
+                const mat = new THREE.PointsMaterial({
+                    map: api.helpers.glowTexture(32), color: api.palette.hex2, size: R * 0.05,
+                    transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
+                    depthWrite: false, sizeAttenuation: true,
+                });
+                const points = new THREE.Points(geom, mat);
+                let at = 0.5;
+                let dir = 1;
+                return {
+                    object: points,
+                    applyPalette(pal) { mat.color.setHex(pal.hex2); },
+                    animate(ctx) {
+                        const live = ctx.state === 'THINKING' || ctx.state === 'SPEAKING';
+                        const half = (ctx.state === 'SPEAKING' ? 0.42 + ctx.audio * 0.3
+                            : ctx.state === 'THINKING' ? 0.09
+                                : ctx.state === 'LISTENING' ? 0.16 : 0.17) + ctx.click * 0.1;
+                        const speed = ctx.state === 'LISTENING' ? 0 : live ? 0.5 : 0.26;
+                        at += dir * speed * 0.016;
+                        if (at > 1) { at = 1; dir = -1; }
+                        if (at < 0) { at = 0; dir = 1; }
+                        for (let i = 0; i < COUNT; i++) {
+                            const d = Math.abs(height[i] - at) / half;
+                            const here = d >= 1 ? 0 : d <= 0.74 ? 1 : (1 - d) / 0.26;
+                            const k = i * 3;
+                            pos[k] = away[k] + (home[k] - away[k]) * here;
+                            pos[k + 1] = away[k + 1] + (home[k + 1] - away[k + 1]) * here;
+                            pos[k + 2] = away[k + 2] + (home[k + 2] - away[k + 2]) * here;
+                        }
+                        geom.attributes.position.needsUpdate = true;
+                        mat.opacity = 0.45 + ctx.audio * 0.3;
                     },
                 };
             },
