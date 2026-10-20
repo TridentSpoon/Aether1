@@ -7,6 +7,10 @@ in this repository.
 
 - Read the relevant module and its callers before editing. Follow the existing Rust, JavaScript,
   and UI patterns instead of introducing a parallel path.
+- Read `docs/HOW_THIS_IS_BUILT.md` first. It lists the properties that must stay true and
+  the script that proves each one, including every way out to the network. Both network
+  holes this codebase has had were introduced by authors who had a good reason for what they
+  wrote and no reason to think about the rule they were breaking.
 - Read `docs/GOALS.md` for product boundaries. For agent permissions, repository access, or
   sandbox changes, also read `docs/AGENT_RUNTIME.md` and `docs/SECURITY_MODEL.md`.
 - Preserve Linux and Windows support. If a capability is platform-specific or unsupported,
@@ -27,7 +31,13 @@ in this repository.
 
 - For reviews, report actionable findings first, ordered by severity, with file and line
   references. Separate confirmed defects from questions and residual risks.
+- Run the guard scripts before proposing a change: `for s in scripts/check_*.sh; do bash "$s" || echo "FAILED: $s"; done`.
+  They are the machine-checked half of `docs/HOW_THIS_IS_BUILT.md`, and each failure message
+  says what to do next.
 - Run focused checks for the affected code when practical. State exactly what was run and
   what could not be verified, especially when a live model, GitHub authentication, or a
   platform-specific environment is needed.
+- When a change adds a way out to the network -- an HTTP request, a socket, or a crate that
+  does its own -- say in the pull request which gate it passes through and cite the rule in
+  `docs/HOW_THIS_IS_BUILT.md` it answers to.
 - Do not claim that an external agent, provider, or repository operation ran unless it did.
