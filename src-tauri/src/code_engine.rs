@@ -203,6 +203,27 @@ pub fn run(
         return Err(crate::code_sandbox::unconfined_refusal(&sandbox));
     }
 
+    // The engine's directory is mounted at `$HOME/aether1-engine` and the four `XDG_*`
+    // variables are built from that same `$HOME`, so a process without one has nowhere to
+    // put either. `code_sandbox` is right to bind nothing and set nothing in that case --
+    // an `XDG_DATA_HOME` pointing into the tmpfs would be worse than none. The consequence
+    // is what this refuses: the engine would run with its state in the `$HOME` tmpfs, lose
+    // every session the moment the command returned, and say nothing about it. "The agent
+    // has forgotten what it was doing", with nothing in the output to explain it, is the
+    // worst shape this bug has, so it is answered here rather than left to be discovered.
+    //
+    // Asked next to the sandbox question because it is the same kind of question -- what
+    // this machine can do -- and before the engine is looked for, so an operator missing
+    // both hears about the one that is theirs to fix either way.
+    if std::env::var("HOME").unwrap_or_default().is_empty() {
+        return Err(format!(
+            "{ENGINE} keeps its sessions in a directory mounted inside the sandbox's own \
+             home folder, and this process has no HOME -- so there would be nowhere to put \
+             them and every task would start again from nothing. Start AETHER1 from a \
+             session that has HOME set, and `--session` will mean something between runs."
+        ));
+    }
+
     let Some(engine) = crate::paths::find_installed_binary(&[ENGINE]) else {
         return Err(format!(
             "{ENGINE} is not installed, so there is no engine to run. `npm install -g \
@@ -513,6 +534,63 @@ mod tests {
             std::fs::read_to_string(root.join("config").join(ENGINE).join("opencode.json"))
                 .expect("config file");
         assert!(!written.contains("/v1/v1"), "{written}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A process with no `HOME` has nowhere to mount the engine's directory, so the engine
+    /// is refused rather than run with its memory in a tmpfs.
+    ///
+    /// Without this the whole of Fix 3 came apart silently on exactly the setups most likely
+    /// to hit it -- a service unit, a container, a bare `env -i` -- because `code_sandbox`
+    /// binds nothing and sets no `XDG_*` when `HOME` is empty, and an engine told nothing
+    /// simply starts again from nothing on every task.
+    ///
+    /// Skips itself where there is no sandbox, because the refusal for that comes first and
+    /// is the honest answer there.
+    #[test]
+    fn with_no_home_the_engine_is_refused_rather_than_run_with_no_memory() {
+        if !crate::code_sandbox::detect().confines() {
+            return;
+        }
+        let db = db();
+        let root = scratch("nohome");
+        db.set_setting(
+            crate::code_workspace::ROOT_SETTING,
+            &serde_json::json!(root.to_string_lossy().to_string()),
+        )
+        .expect("root");
+
+        // The lock `code_workspace`'s own tests take, because two tests swapping HOME at
+        // once is a race.
+        let why = {
+            let _guard = crate::tools::fs_guard::ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var("HOME").ok();
+            std::env::remove_var("HOME");
+            let why = run(
+                &db,
+                "m",
+                "do a thing",
+                None,
+                std::time::Duration::from_secs(1),
+            )
+            .expect_err("no HOME means no engine directory");
+            match previous {
+                Some(p) => std::env::set_var("HOME", p),
+                None => std::env::remove_var("HOME"),
+            }
+            why
+        };
+
+        assert!(
+            why.contains("HOME"),
+            "the refusal should name what is missing: {why}"
+        );
+        assert!(
+            why.contains("session"),
+            "and what it costs, which is the sessions: {why}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

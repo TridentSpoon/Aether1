@@ -908,7 +908,7 @@ pub fn relay_main(net_socket: Option<&str>, model_socket: Option<&str>, argv: &[
         eprintln!("--net-relay needs a command to run after --");
         return 2;
     };
-    let bridges: Vec<(u16, String)> = [
+    let wanted: Vec<(u16, String)> = [
         net_socket.map(|s| (RELAY_PORT, s.to_string())),
         model_socket.map(|s| (crate::code_model::RELAY_PORT, s.to_string())),
     ]
@@ -916,7 +916,43 @@ pub fn relay_main(net_socket: Option<&str>, model_socket: Option<&str>, argv: &[
     .flatten()
     .collect();
 
-    if !bridges.is_empty() {
+    // Bound here, before the command is started, and the whole relay refuses if a bind
+    // fails. Two things were wrong with binding inside the thread instead.
+    //
+    // The first is a race. The thread had to be scheduled, build a runtime and bind, while
+    // this function had already gone on to spawn the command -- so a program that asked for
+    // its model in its first few milliseconds met `ECONNREFUSED` on a port that was about to
+    // open. An engine that cannot reach its model at startup does not sit there retrying; it
+    // reports the model as unavailable and stops, which is the failure this module exists to
+    // prevent.
+    //
+    // The second is silence. A bind that failed returned from `bridge` with nothing said and
+    // the box ran its command regardless: the engine then spoke to a dead port and failed
+    // with something about the model server being unreachable, which is true and names the
+    // wrong machine. Failing closed, with the port in the message, is the only version of
+    // this an operator can act on.
+    let mut bound = Vec::new();
+    for (port, socket) in wanted {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).and_then(|listener| {
+            listener.set_nonblocking(true)?;
+            Ok(listener)
+        });
+        match listener {
+            Ok(listener) => bound.push((listener, socket)),
+            Err(e) => {
+                eprintln!(
+                    "the sandbox relay could not listen on 127.0.0.1:{port}: {e}. The command \
+                     was not started, because it would have had no way to reach {socket}. If \
+                     this box has the host's network rather than one of its own -- which \
+                     `aether1 code effective` reports -- then something else on this machine \
+                     is holding that port."
+                );
+                return 125;
+            }
+        }
+    }
+
+    if !bound.is_empty() {
         std::thread::Builder::new()
             .name("aether1-net-relay".to_string())
             .spawn(move || {
@@ -924,12 +960,16 @@ pub fn relay_main(net_socket: Option<&str>, model_socket: Option<&str>, argv: &[
                     .enable_all()
                     .build()
                 else {
+                    // The ports are open, so a connection would be accepted by nobody and
+                    // hang. Closing them turns that into the refusal it already is.
+                    drop(bound);
+                    eprintln!("the sandbox relay could not start a runtime for its bridges");
                     return;
                 };
                 runtime.block_on(async move {
                     let mut listening = Vec::new();
-                    for (port, socket) in bridges {
-                        listening.push(tokio::spawn(bridge(port, socket)));
+                    for (listener, socket) in bound {
+                        listening.push(tokio::spawn(bridge(listener, socket)));
                     }
                     for task in listening {
                         let _ = task.await;
@@ -948,9 +988,13 @@ pub fn relay_main(net_socket: Option<&str>, model_socket: Option<&str>, argv: &[
     }
 }
 
-/// One loopback port in front of one unix socket, copying bytes and reading none of them.
-async fn bridge(port: u16, socket: String) {
-    let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await else {
+/// One already-bound loopback port in front of one unix socket, copying bytes and reading
+/// none of them.
+///
+/// The listener arrives bound rather than binding here, so `relay_main` can refuse before
+/// the command exists rather than after it has already failed. See the comment there.
+async fn bridge(listener: std::net::TcpListener, socket: String) {
+    let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
         return;
     };
     loop {
@@ -972,6 +1016,67 @@ mod tests {
 
     fn domains(list: &[&str]) -> BTreeSet<String> {
         list.iter().map(|d| d.to_string()).collect()
+    }
+
+    /// The relay's ports are open before the command is, and a port it cannot have stops
+    /// the command rather than being discovered by it.
+    ///
+    /// The failure this closes was quiet in both directions: the bind happened in a thread
+    /// after the command had already been spawned, so an engine that asked for its model
+    /// immediately could be refused by a port that was about to open -- and a bind that
+    /// never succeeded said nothing at all, leaving the engine to report the operator's
+    /// model server as unreachable when the model server was fine.
+    ///
+    /// Proved by holding the model port and watching the command not run: the file it would
+    /// have made is the evidence, because "it exited non-zero" could also mean it ran and
+    /// failed.
+    #[test]
+    fn a_port_the_relay_cannot_have_stops_the_command_rather_than_surprising_it() {
+        let witness = std::env::temp_dir().join(format!(
+            "aether1_relay_witness_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&witness);
+
+        // Held for the duration, so the relay's own bind cannot succeed.
+        let Ok(held) = std::net::TcpListener::bind(("127.0.0.1", crate::code_model::RELAY_PORT))
+        else {
+            // Something else on this machine has the port; the test cannot say anything
+            // honest about a bind it did not cause to fail.
+            return;
+        };
+
+        let status = relay_main(
+            None,
+            Some("/nonexistent/model.sock"),
+            &[
+                "/usr/bin/touch".to_string(),
+                witness.to_string_lossy().to_string(),
+            ],
+        );
+        drop(held);
+
+        assert_eq!(
+            status, 125,
+            "a relay that cannot open its door refuses rather than running the command"
+        );
+        assert!(
+            !witness.exists(),
+            "and the command really did not run: {} was made",
+            witness.display()
+        );
+        let _ = std::fs::remove_file(&witness);
+    }
+
+    /// With nothing to bridge there is no port to fail on, and the command runs as it always
+    /// has -- which is how `code run` works with the network off and no model socket.
+    #[test]
+    fn a_relay_with_no_bridges_still_runs_what_it_was_given() {
+        let status = relay_main(None, None, &["/bin/true".to_string()]);
+        assert_eq!(status, 0);
+        let status = relay_main(None, None, &["/bin/false".to_string()]);
+        assert_eq!(status, 1, "and hands back the command's own status");
     }
 
     #[test]
