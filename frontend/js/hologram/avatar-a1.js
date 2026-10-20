@@ -354,8 +354,12 @@ HologramAvatar.registerAvatar({
         // exclusion passed into the 'A's own sampling. ---
         const shapeOne = roundedOutline(new THREE.Shape(), [
             [15.6, 39.0],
-            [0.0, 27.3],   // top-left beak notch
-            [0.0, 16.9],   // beak thickness
+            // The beak reaches 27.5% less far back than it did. Both of its edges keep
+            // the slopes they always had -- the two points below are the same two edges
+            // sampled at x = 4.29 instead of x = 0 -- so the flag is shorter without
+            // becoming a different angle or a different thickness.
+            [4.29, 30.52], // top-left beak notch
+            [4.29, 19.76], // beak thickness
             [15.6, 27.3],  // beak inner corner
             [15.6, -27.3], // main vertical stem left
             [2.6, -27.3],  // base left extension

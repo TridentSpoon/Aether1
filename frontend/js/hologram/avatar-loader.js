@@ -41,7 +41,7 @@
         'arx-lexico':     { file: 'avatar-arx-lexico.js',     v: 1 },
         'arx-lucre':      { file: 'avatar-arx-lucre.js',      v: 1 },
         'arx-lkemi':      { file: 'avatar-arx-lkemi.js',      v: 1 },
-        'a1':             { file: 'avatar-a1.js',             v: 2 },
+        'a1':             { file: 'avatar-a1.js',             v: 3 },
         'senti':          { file: 'avatar-senti.js',          v: 2 },
         'white-rabbit':   { file: 'avatar-white-rabbit.js',   v: 2 },
         'operator':       { file: 'avatar-operator.js',       v: 3 },
