@@ -169,6 +169,80 @@
         return { geometry, edges };
     }
 
+    /* A cut gemstone, and the setting one sits in. Both are hexagonal and both are turned
+       a half-step so the hexagon stands on a point rather than an edge -- which is what
+       makes a gem read as tall and cut rather than as a bolt head.
+
+       The gem is faceted with per-vertex colour rather than with light, because every
+       material in this kit is a MeshBasicMaterial and the HUD's lighting never reaches
+       one. The facet brightnesses are constants lit as if from the upper left, so the
+       same facet is the same on every launch and at every angle. `tint` is the stone's
+       own colour as a float triple; the table goes past 1 and comes out the pale version
+       of it that a flat top catches. Shared by the brow stone here and by L1minal, whose
+       stone is the same cut (see avatar-liminal.js). */
+    function cutGemGeometry(rx, ry, depth, tint) {
+        const SIDES = 6;
+        const TABLE = 0.46;        // how far in the flat top sits
+        const pos = [];
+        const col = [];
+
+        const at = (i, scale, z) => {
+            const a = (i / SIDES) * Math.PI * 2 + Math.PI / 2;
+            return [Math.cos(a) * rx * scale, Math.sin(a) * ry * scale, z];
+        };
+        const push = (p, level) => {
+            pos.push(p[0], p[1], p[2]);
+            col.push(tint[0] * level, tint[1] * level, tint[2] * level);
+        };
+
+        for (let i = 0; i < SIDES; i++) {
+            const j = (i + 1) % SIDES;
+            const level = 0.34 + 0.72 * (0.5 + 0.5 * Math.cos((i / SIDES) * Math.PI * 2 - 2.2));
+            const o1 = at(i, 1, 0);
+            const o2 = at(j, 1, 0);
+            const t1 = at(i, TABLE, depth);
+            const t2 = at(j, TABLE, depth);
+            push(o1, level); push(o2, level); push(t2, level * 1.12);
+            push(o1, level); push(t2, level * 1.12); push(t1, level * 1.12);
+            // The keel: back to the middle, dimmer, so a dragged view finds a solid and not a hole.
+            const k = [0, 0, -depth * 0.55];
+            push(o2, level * 0.3); push(o1, level * 0.3); push(k, level * 0.18);
+        }
+        for (let i = 1; i < SIDES - 1; i++) {
+            push(at(0, TABLE, depth), 1.45);
+            push(at(i, TABLE, depth), 1.45);
+            push(at(i + 1, TABLE, depth), 1.45);
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+        return geometry;
+    }
+
+    /* The flat hexagonal band the gem sits in. An inner radius of zero fills it in, which
+       is how the dark socket under the stone is made from the same function. */
+    function gemBezelGeometry(rx, ry, width) {
+        const SIDES = 6;
+        const pos = [];
+        const at = (i, px, py) => {
+            const a = (i / SIDES) * Math.PI * 2 + Math.PI / 2;
+            return [Math.cos(a) * px, Math.sin(a) * py, 0];
+        };
+        for (let i = 0; i < SIDES; i++) {
+            const j = (i + 1) % SIDES;
+            const o1 = at(i, rx + width, ry + width);
+            const o2 = at(j, rx + width, ry + width);
+            const i1 = at(i, rx, ry);
+            const i2 = at(j, rx, ry);
+            pos.push(...o1, ...o2, ...i2);
+            pos.push(...o1, ...i2, ...i1);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        return geometry;
+    }
+
     // ---- Cores: the thing at the middle -------------------------------------
     //
     // Two things sat here and no longer do, so nobody re-adds them under the opt-out
@@ -1113,10 +1187,13 @@
                 glow.scale.set(options.size * 2.2, options.size * 2.2, 1);
                 group.add(glow);
 
+                /* Sunk into a dark socket, because the gem is additive and additive over
+                   anything already bright comes out white -- the socket is the floor it
+                   gets read against whatever a recipe puts behind it. */
                 const socketMat = new THREE.MeshBasicMaterial({
                     color: 0x04060f, transparent: true, opacity: 0.92,
                 });
-                const socket = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.72, 20), socketMat);
+                const socket = new THREE.Mesh(gemBezelGeometry(0, options.size * 0.82, 0), socketMat);
                 socket.position.z = options.size * 0.2;
                 group.add(socket);
 
@@ -1125,15 +1202,22 @@
                     side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
                 });
                 const bezel = new THREE.Mesh(
-                    new THREE.RingGeometry(options.size * 0.62, options.size * 0.74, 20), bezelMat
+                    gemBezelGeometry(options.size * 0.47, options.size * 0.69, options.size * 0.12),
+                    bezelMat
                 );
                 bezel.position.z = options.size * 0.24;
                 group.add(bezel);
 
+                // The stone itself: a cut hexagonal gem standing on a point, faceted by
+                // vertex colour rather than by light -- see cutGemGeometry above.
                 const gemMat = new THREE.MeshBasicMaterial({
-                    color: 0x9ec2ff, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
+                    vertexColors: true, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
                 });
-                const gem = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.46, 18), gemMat);
+                const gem = new THREE.Mesh(
+                    cutGemGeometry(options.size * 0.47, options.size * 0.69, options.size * 0.28,
+                        [0.26, 0.52, 1]),
+                    gemMat
+                );
                 gem.position.z = options.size * 0.3;
                 group.add(gem);
 

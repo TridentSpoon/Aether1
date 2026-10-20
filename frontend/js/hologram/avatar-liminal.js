@@ -16,20 +16,22 @@
  * palette is the point: the stone is blue, the framework is yellow, and the edge where a
  * slice is coming back into being glows red -- between them they cover everywhere the
  * stone has been. The teal inner lattice and the crimson of the solid slices come from his
- * file. The cape is the one part that follows the HUD's colour, so the theme still reaches
- * the avatar somewhere.
+ * file. The setting the gem sits in is the one part that follows the HUD's colour, so the
+ * theme still reaches the avatar somewhere.
  *
  * The stone never goes. Every other part of this avatar can be absent on a given frame;
  * that cannot, which is the point of it.
  *
- * Three things about the port. His shell is a MeshPhysicalMaterial with transmission, and
+ * Two things about the port. His shell is a MeshPhysicalMaterial with transmission, and
  * his lights are DirectionalLights over a scene-level exponential fog -- none of those
  * three is in the vendored three.js bundle (see scripts/build_vendor_three.sh), and the
  * HUD owns the scene and its lighting in any case, so the translucency here is additive
- * blending instead. His cape is a 32x32 plane walked every frame; this is 16x16, which is
- * 289 vertices instead of 1,089 and reads the same at the panel's size. And the slices are
- * one LineSegments with per-vertex colour rather than forty objects, so a frame costs a
- * colour write and nothing else.
+ * blending instead. And the slices are one LineSegments with per-vertex colour rather than
+ * forty objects, so a frame costs a colour write and nothing else.
+ *
+ * His file also hangs a cape off it. It was built and then taken out at Trident's word --
+ * it read as a skirt under the shell however it was tapered, leaned or thinned, and the
+ * avatar is cleaner as a thing hanging in space with nothing below it.
  *
  * Registered through the same HologramAvatar.registerAvatar() contract any avatar file
  * uses -- see js/hologram/README.md and avatar-template.js.
@@ -126,55 +128,57 @@ HologramAvatar.registerAvatar({
         const lattice = new THREE.Mesh(new THREE.IcosahedronGeometry(R * 0.82, 2), latticeMat);
         group.add(lattice);
 
-        /* The stone, at the brow, on his own pulse rate. Never absent -- it is not in the
-           slice system at all, which is the whole of why it reads as the constant. */
+        /* The stone at the brow: a cut gem, not a disc. Never absent -- it is not in the
+           slice system at all, which is the whole of why it reads as the constant.
+
+           It is cut by hand because there is no lighting to cut it with. The avatar's
+           materials are unlit, so a faceted solid would come back as one flat silhouette
+           however many faces it had. Instead each facet is given its own brightness at
+           build time, written into vertex colours, and the gem reads as faceted because
+           the facets genuinely differ -- not because anything is being shaded.
+
+           The cut is a tall hexagon with a raised table: an outer girdle, an inner table
+           lifted towards the viewer, crown facets between them, and a flat keel behind so
+           there is no hole when the view is dragged round. */
         const stoneGlowMat = new THREE.SpriteMaterial({
             map: api.helpers.glowTexture(64), color: STONE,
             transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
         });
         const stoneGlow = new THREE.Sprite(stoneGlowMat);
-        stoneGlow.scale.set(40, 40, 1);
+        stoneGlow.scale.set(44, 44, 1);
+
         const stoneMat = new THREE.MeshBasicMaterial({
-            color: 0x9ec2ff, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
+            vertexColors: true, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
         });
-        const stone = new THREE.Mesh(new THREE.CircleGeometry(R * 0.062, 18), stoneMat);
+        const stone = new THREE.Mesh(liminalCutGem(R * 0.085, R * 0.125, R * 0.05), stoneMat);
+
+        /* The setting the gem sits in, and the one part of this avatar that follows the
+           HUD's colour. The stone, the framework and the arriving rim are all Trident's
+           fixed palette, so without this the theme would reach the avatar nowhere at all. */
+        const bezelMat = new THREE.MeshBasicMaterial({
+            color: api.palette.hex, transparent: true, opacity: 0.9,
+            side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+        });
+        const bezel = new THREE.Mesh(liminalGemBezel(R * 0.085, R * 0.125, R * 0.022), bezelMat);
+
         /* Sunk into a dark socket. Additive blue over the dark panel is bright, but the
            band passes behind the brow twice a cycle and additive over something already
            bright is white -- the stone washed out exactly when it was in front of the
            matter it is supposed to be the constant through. The socket is the floor it
            is read against. */
         const socketMat = new THREE.MeshBasicMaterial({ color: 0x04060f, transparent: true, opacity: 0.92 });
-        const socket = new THREE.Mesh(new THREE.CircleGeometry(R * 0.1, 20), socketMat);
+        const socket = new THREE.Mesh(liminalGemBezel(0, R * 0.148, 0), socketMat);
+
         const stoneAt = new THREE.Group();
         stoneAt.position.set(0, R * 0.44, R * 0.94);
         stoneAt.add(stoneGlow);
         socket.position.z = 0.3;
         stoneAt.add(socket);
-        stone.position.z = 0.8;
+        bezel.position.z = 0.6;
+        stoneAt.add(bezel);
+        stone.position.z = 0.9;
         stoneAt.add(stone);
         group.add(stoneAt);
-
-        /* His cape, with his vertex wave, at a quarter of the vertices -- and drawn as a
-           mesh of lines rather than a filled sheet, because a filled quad behind a
-           translucent shell reads as a grey slab hanging off it, not as a veil. Tapered in
-           at the top so it leaves the shell rather than floating under it. */
-        const capeGeom = new THREE.PlaneGeometry(74, 84, 14, 14);
-        const capeRaw = capeGeom.attributes.position;
-        for (let i = 0; i < capeRaw.count; i++) {
-            const y = capeRaw.getY(i);
-            const down = (42 - y) / 84;          // 0 at the top edge, 1 at the hem
-            capeRaw.setX(i, capeRaw.getX(i) * (0.34 + down * 0.66));
-        }
-        const capeRest = new Float32Array(capeRaw.array);
-        const capeMat = new THREE.MeshBasicMaterial({
-            color: api.palette.hex, wireframe: true, transparent: true, opacity: 0.22,
-            side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
-        });
-        const cape = new THREE.Mesh(capeGeom, capeMat);
-        cape.position.set(0, -64, -26);
-        // Leaned back, so it trails behind rather than hanging under the shell like a skirt.
-        cape.rotation.x = 0.34;
-        group.add(cape);
 
         /* The matter that is not currently being used. Each mote belongs to a slice: while
            its slice is present it sits on the shell, and while the slice is absent it hangs
@@ -211,7 +215,7 @@ HologramAvatar.registerAvatar({
         return {
             group, glow, glowMat, frameGeom, frameMat, bandMeshes, bandMat,
             lattice, latticeMat, stoneAt, stoneGlow, stoneGlowMat, stone, stoneMat,
-            cape, capeGeom, capeRest, capeMat, socket, socketMat,
+            bezel, bezelMat, socket, socketMat,
             moteGeom, motePos, moteHome, moteAway, moteSlice, moteMat,
             sliceHeight, slices: SLICES, seg: SEG, radius: R,
             presence: new Float32Array(SLICES),
@@ -306,16 +310,7 @@ HologramAvatar.registerAvatar({
         model.stoneMat.opacity = 0.85 + heat * 0.15;
         model.stoneGlow.scale.setScalar(38 + Math.sin(ctx.time * 5) * 4 + heat * 10);
 
-        // His cape wave, from the rest positions so it does not compound.
-        const cap = model.capeGeom.attributes.position;
-        const arr = cap.array;
-        for (let i = 0; i < arr.length; i += 3) {
-            const x = model.capeRest[i];
-            const y = model.capeRest[i + 1];
-            arr[i + 2] = Math.sin(ctx.time * 3 + y * 0.07 + x * 0.07) * (4 + heat * 5);
-        }
-        cap.needsUpdate = true;
-        model.capeMat.opacity = 0.24 + heat * 0.20
+        model.bezelMat.opacity = 0.75 + heat * 0.25 + ctx.click * 0.15;
 
         /* The motes: on the shell while their slice is here, out in the room while it is
            not. */
@@ -335,7 +330,87 @@ HologramAvatar.registerAvatar({
     },
 
     applyPalette(model, palette) {
-        model.capeMat.color.setHex(palette.hex);
+        model.bezelMat.color.setHex(palette.hex);
         // Everything else keeps Trident's fixed palette -- see the file header.
     },
 });
+
+/* Cuts the gem: a tall hexagonal outline, an inner table raised towards the viewer, the
+   crown facets between the two, and a flat keel closing the back.
+
+   Every facet carries its own brightness in its vertex colours, because the avatar's
+   materials are unlit and a faceted solid under an unlit material is one flat silhouette.
+   The brightnesses are fixed at build -- a gem whose facets changed as it sat there would
+   be a lamp, not a stone. */
+function liminalCutGem(rx, ry, depth) {
+    const SIDES = 6;
+    const TABLE = 0.46;        // how far in the flat top sits
+    const pos = [];
+    const col = [];
+    /* STONE's own blue (0x2b6bff) as a float triple, lifted a little off the floor so the
+       facet turned furthest from the light is still blue rather than black. Each facet
+       multiplies this; the table goes past 1 and comes out the pale blue a table catches. */
+    const tint = [0.26, 0.52, 1];
+
+    const at = (i, scale, z) => {
+        // Turned a half-step so the hexagon stands on a point rather than an edge, which
+        // is what makes it read as tall rather than as a bolt head.
+        const a = (i / SIDES) * Math.PI * 2 + Math.PI / 2;
+        return [Math.cos(a) * rx * scale, Math.sin(a) * ry * scale, z];
+    };
+    const push = (p, level) => {
+        pos.push(p[0], p[1], p[2]);
+        col.push(tint[0] * level, tint[1] * level, tint[2] * level);
+    };
+
+    for (let i = 0; i < SIDES; i++) {
+        const j = (i + 1) % SIDES;
+        /* A fixed spread of brightness around the crown, lit as if from the upper left:
+           it is a constant, not a calculation, so the same facet is the same every launch. */
+        const level = 0.34 + 0.72 * (0.5 + 0.5 * Math.cos((i / SIDES) * Math.PI * 2 - 2.2));
+        const o1 = at(i, 1, 0);
+        const o2 = at(j, 1, 0);
+        const t1 = at(i, TABLE, depth);
+        const t2 = at(j, TABLE, depth);
+        push(o1, level); push(o2, level); push(t2, level * 1.12);
+        push(o1, level); push(t2, level * 1.12); push(t1, level * 1.12);
+        // The keel: back to the middle, dimmer, so a dragged view finds a solid and not a hole.
+        const k = [0, 0, -depth * 0.55];
+        push(o2, level * 0.3); push(o1, level * 0.3); push(k, level * 0.18);
+    }
+    // The table, brightest because it faces the viewer squarely.
+    for (let i = 1; i < SIDES - 1; i++) {
+        push(at(0, TABLE, depth), 1.45);
+        push(at(i, TABLE, depth), 1.45);
+        push(at(i + 1, TABLE, depth), 1.45);
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    return geom;
+}
+
+/* The band around the gem, on the same hexagonal outline so the setting follows the cut
+   rather than being a circle the stone happens to sit in. An inner radius of zero fills
+   it, which is how the dark socket behind the gem is made from the same function. */
+function liminalGemBezel(rx, ry, width) {
+    const SIDES = 6;
+    const pos = [];
+    const at = (i, px, py) => {
+        const a = (i / SIDES) * Math.PI * 2 + Math.PI / 2;
+        return [Math.cos(a) * px, Math.sin(a) * py, 0];
+    };
+    for (let i = 0; i < SIDES; i++) {
+        const j = (i + 1) % SIDES;
+        const o1 = at(i, rx + width, ry + width);
+        const o2 = at(j, rx + width, ry + width);
+        const i1 = at(i, rx, ry);
+        const i2 = at(j, rx, ry);
+        pos.push(...o1, ...o2, ...i2);
+        pos.push(...o1, ...i2, ...i1);
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    return geom;
+}
