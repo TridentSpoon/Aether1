@@ -57,7 +57,7 @@
         /* The custom avatar is assembled from the shared parts library rather than modelled
            by hand, so its file is useless without it -- 56 KB that only this one avatar
            needs, which is exactly the kind of weight worth not carrying at launch. */
-        'custom':         { file: 'avatar-custom.js',         v: 3, needs: [{ file: 'parts.js', v: 3 }] },
+        'custom':         { file: 'avatar-custom.js',         v: 3, needs: [{ file: 'parts.js', v: 4 }] },
     };
 
     /* Older names the HUD and saved settings still use for the same avatar. setAvatar has
