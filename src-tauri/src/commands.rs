@@ -1819,6 +1819,89 @@ pub fn code_agents_ask(
     Ok(results)
 }
 
+/// How long the engine may work on one task before it is stopped.
+///
+/// The same quarter of an hour `aether1 code do` allows, and for the same reason: this is a
+/// coding agent editing a repository, not a chat turn. Long enough for read, change, build,
+/// read the failure, change again; short enough that an engine going in circles stops within
+/// one cup of tea rather than overnight.
+const ENGINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
+/// What came back from a run of the engine.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EngineReply {
+    pub text: String,
+    /// The engine's own exit status. Carried rather than folded into an error, because an
+    /// engine that worked for ten minutes and then exited non-zero has still said something
+    /// the operator needs to read, and throwing that away to return a tidy `Err` is how a
+    /// panel ends up showing "it did not work" about a quarter of an hour of real output.
+    pub status: i32,
+}
+
+/// Hands the engine a task and lets it work, in the project folder, inside the sandbox.
+///
+/// This is the panel's way to the same engine `aether1 code do` drives -- one path, one set
+/// of refusals, one place the model is chosen. What is here rather than in `code_engine` is
+/// the part that belongs to AETHER CODE as a panel: which piece of work this is, which model
+/// this machine writes code with, and writing the exchange into that task's transcript so
+/// reopening the tab shows what the agent did.
+///
+/// **The engine's own memory is a separate question from this transcript.** What is stored
+/// here is what the panel shows. The engine keeps its sessions in the directory
+/// `code_engine` exists to preserve, and nothing here hands it a session id: opencode mints
+/// its own and refuses one it did not mint, so every run starts the engine fresh even though
+/// the panel's record of the task is continuous. Closing that gap needs the id off
+/// `--format json`, which is the same change that would give the panel a tool-activity rail,
+/// and it is not this one.
+pub fn code_engine_run(
+    engine: &LlmEngine,
+    prompt: &str,
+    task: Option<&str>,
+    sink: llm::Sink,
+) -> Result<EngineReply, String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("Nothing to do.".to_string());
+    }
+    // Which piece of work this belongs to, before the engine is started: a run aimed at a
+    // task that has been deleted is refused here rather than landing in whichever
+    // conversation happens to be in focus.
+    let task = crate::code_tasks::resolve(engine.db(), task)?;
+
+    // The coding model, chosen the same way the panel's chat chooses it, so the two never
+    // disagree about which model this machine writes code with.
+    let advice = code_advice(engine);
+    if !advice.model_installed {
+        return Err(format!(
+            "No coding model is downloaded yet. {} is the one for this machine -- download \
+             it from the coding panel under The Brain, and this will use it.",
+            advice.model
+        ));
+    }
+
+    let done = crate::code_engine::run(
+        engine.db(),
+        &advice.model,
+        prompt,
+        None,
+        ENGINE_TIMEOUT,
+        sink,
+    )?;
+
+    // Written down once it has finished, the way `code_chat` does it: a run that failed
+    // halfway is not history the next question should be answered against. Stored even when
+    // the status is non-zero, because what the engine said before it gave up is the most
+    // useful thing on the screen.
+    let text = done.output.trim().to_string();
+    let _ = engine.db().add_message(&task.session(), "user", prompt);
+    let _ = engine.db().add_message(&task.session(), "agent", &text);
+
+    Ok(EngineReply {
+        text,
+        status: done.status,
+    })
+}
+
 /// What has been said in one task, for a panel that was just opened.
 pub fn code_chat_history(
     engine: &LlmEngine,

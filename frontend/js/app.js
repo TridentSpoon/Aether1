@@ -5145,6 +5145,96 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* The engine's own stream. Separate event from code-chat-delta so a panel waiting on one
+       cannot be painted by the other: a chat turn and an engine run are both in flight often
+       enough -- ask a question, then tell it to go and do the thing. */
+    async function streamCodeAgent(text, onDelta) {
+        if (IS_TAURI) {
+            const streamId = `e${Date.now()}${Math.random().toString(16).slice(2)}`;
+            const unlisten = await window.__TAURI__.event.listen('code-engine-delta', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            try {
+                return await tauriInvoke('code_engine_run_rust', { prompt: text, streamId, task: codeTaskId });
+            } finally {
+                unlisten();
+            }
+        }
+        const resp = await apiFetch('/api/code/engine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, task: codeTaskId }),
+        });
+        if (!resp.ok) throw new Error((await resp.text()) || 'the engine did not run');
+        return await resp.json();
+    }
+
+    /* Hands the open task to the engine. Deliberately close to sendCodeChat: the operator is
+       in one conversation and the two buttons under it are two things to do with what they
+       just typed, so what appears in the transcript has to look like the same conversation.
+
+       What is different is the waiting. A chat turn is seconds and a run can be minutes, so
+       the output is shown as plain text in a <pre> rather than rendered as markdown while it
+       streams -- an engine's progress lines are not a document, and formatting half-arrived
+       markdown makes the panel flicker through wrong layouts. */
+    async function sendCodeAgent() {
+        if (codeChatBusy) return;
+        const text = (codeChatInput?.value || '').trim();
+        if (!text) return;
+        codeChatInput.value = '';
+        codeChatBusy = true;
+
+        appendCodeMessage('user', text, []);
+        const replyDiv = appendCodeMessage('agent', '', []);
+        replyDiv?.classList.add('typing-cursor');
+        /* The engine writes lines, not prose, so the bubble keeps its newlines and uses the
+           monospace face the rest of this panel uses for machine output. Set here rather
+           than in appendCodeMessage because a chat reply is markdown and should stay so. */
+        if (replyDiv?.bodyDiv) {
+            replyDiv.bodyDiv.className = 'whitespace-pre-wrap font-mono text-xs';
+            /* Said before the first line arrives, because starting the engine is itself not
+               instant: it builds a box, starts the model socket and writes a config first,
+               and a blank bubble for that long reads as nothing happening. */
+            replyDiv.bodyDiv.textContent = 'working in the project folder...';
+        }
+        let rendered = '';
+
+        try {
+            const reply = await streamCodeAgent(text, (delta) => {
+                if (!delta) return;
+                rendered += delta;
+                replyDiv.bodyDiv.textContent = rendered;
+                codeChatMessages.scrollTop = codeChatMessages.scrollHeight;
+            });
+            const said = (reply && reply.text) || rendered;
+            replyDiv.bodyDiv.textContent = said || 'the engine said nothing.';
+            /* A non-zero status with output is not an error to replace the output with --
+               what it managed to say first is the useful part -- so it is a note under it. */
+            if (reply && reply.status !== 0) {
+                const note = document.createElement('div');
+                note.className = 'text-amber-300 text-[10px] font-mono mt-1';
+                note.textContent = `the engine stopped with status ${reply.status}`;
+                replyDiv.bodyDiv.appendChild(note);
+            }
+        } catch (err) {
+            const why = (err && (err.message || err)) || 'the engine did not run';
+            replyDiv.bodyDiv.textContent = String(why);
+            replyDiv.classList.add('text-amber-300');
+            refreshCodeChatModel();
+            refreshCodeWorkspaceNote();
+        } finally {
+            replyDiv?.classList.remove('typing-cursor');
+            codeChatBusy = false;
+            codeChatMessages.scrollTop = codeChatMessages.scrollHeight;
+            loadCodeTasks({ keepTranscript: true });
+        }
+    }
+
+    document.getElementById('btn-code-agent-run')?.addEventListener('click', () => {
+        voiceEngine.playSFX('click');
+        sendCodeAgent();
+    });
+
     document.getElementById('btn-code-chat-send')?.addEventListener('click', () => {
         voiceEngine.playSFX('click');
         sendCodeChat();

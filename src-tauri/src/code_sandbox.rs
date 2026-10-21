@@ -611,6 +611,31 @@ pub fn bwrap_args(
         }
     }
 
+    // The relay binary, bound back over the tmpfs that has just hidden it.
+    //
+    // When a socket is bridged in, the program the box runs is AETHER1 itself (see
+    // `command`), and a very ordinary install puts AETHER1 under the operator's own home
+    // directory -- `~/.local/bin/aether1`, a build tree in `~/src`, an AppImage in
+    // `~/Applications`. The `--tmpfs` above hides all of it, so `bwrap` could not execute
+    // the one program it had been told to run and failed with
+    // `execvp ...: No such file or directory`: not a message about the model server, and not
+    // one that names the home directory it is really about. Every command with a bridge
+    // refused, on exactly the machines where AETHER1 was not installed system-wide.
+    //
+    // `~/.cargo` and the other cache directories come back above, which is why a
+    // `cargo install`ed AETHER1 worked and hid how general the fault was.
+    //
+    // Read-only, and only for a box that is already running this binary as its entry point:
+    // it is the program the kernel is about to execute either way, so this grants the box
+    // nothing it did not already have. Placed after the caches so a cache bind cannot hide
+    // it, and before the workspace so a project containing it still wins.
+    if bridges.needs_relay() && !home.is_empty() {
+        let relay = Path::new(program);
+        if relay.is_absolute() && relay.starts_with(&home) {
+            push(&["--ro-bind-try", program, program]);
+        }
+    }
+
     // The engine's own directory, after the caches so a cache path cannot hide it and
     // before the workspace so the workspace still wins. Writable regardless of
     // `write_workspace`: it is not part of the project. See `code_engine`.
@@ -896,6 +921,83 @@ mod tests {
         assert!(
             !joined.contains(crate::code_proxy::SOCKET_IN_SANDBOX),
             "a box given the brain has not been given the network: {joined}"
+        );
+    }
+
+    /// An AETHER1 installed inside the operator's own home directory is still executable
+    /// inside the box.
+    ///
+    /// The failure this closes took out every bridged command on an ordinary install.
+    /// `command` runs AETHER1 itself as the box's entry point whenever a socket is bridged,
+    /// and `$HOME` is replaced by a tmpfs -- so an AETHER1 at `~/.local/bin/aether1`, or in a
+    /// build tree under `~`, was hidden from the one program the box had been told to run.
+    /// `bwrap` reported `execvp ...: No such file or directory`, which says nothing about the
+    /// home directory it is really about and nothing about the model server the operator was
+    /// trying to reach. `~/.cargo` comes back with the caches, so a `cargo install`ed AETHER1
+    /// worked and hid how general the fault was. CI met it as three sandbox tests failing,
+    /// because a GitHub runner checks the repository out underneath `/home/runner`.
+    #[test]
+    fn an_aether1_inside_the_home_directory_is_still_runnable_in_the_box() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        if home.is_empty() {
+            return;
+        }
+        let root = std::env::temp_dir();
+        let inside = format!("{home}/.local/bin/aether1");
+        let model = Some(PathBuf::from("/var/aether1/model.sock"));
+
+        let args = bwrap_args(
+            &inside,
+            &[],
+            &root,
+            &root,
+            &Bridges {
+                net: Net::None,
+                model: model.clone(),
+            },
+            &Access::project_only(),
+        );
+
+        // The tmpfs hides it, so the bind that brings it back has to come after.
+        let tmpfs = args
+            .windows(2)
+            .position(|w| w[0] == "--tmpfs" && w[1] == home)
+            .expect("the home tmpfs");
+        let bound = args
+            .windows(3)
+            .position(|w| w[0] == "--ro-bind-try" && w[1] == inside && w[2] == inside)
+            .unwrap_or_else(|| panic!("the relay binary should be bound back: {args:?}"));
+        assert!(
+            tmpfs < bound,
+            "and after the tmpfs, or it would be hidden again: {args:?}"
+        );
+
+        // Read-only: the box runs this binary, it does not get to rewrite it.
+        assert!(
+            !args
+                .windows(2)
+                .any(|w| (w[0] == "--bind" || w[0] == "--bind-try") && w[1] == inside),
+            "the relay binary is never writable: {args:?}"
+        );
+
+        // A box with nothing bridged runs the operator's program directly, so there is no
+        // relay binary to bind and nothing extra is opened up.
+        let plain = bwrap_args(
+            &inside,
+            &[],
+            &root,
+            &root,
+            &Bridges::default(),
+            &Access::project_only(),
+        );
+        // It is still the program at the end of the argv -- that is what the box runs. What
+        // must not be there is the bind, because without a bridge the box runs the
+        // operator's own program and AETHER1 is not its entry point.
+        assert!(
+            !plain
+                .windows(3)
+                .any(|w| w[0] == "--ro-bind-try" && w[1] == inside && w[2] == inside),
+            "nothing bridged means no relay, so nothing to bind back: {plain:?}"
         );
     }
 

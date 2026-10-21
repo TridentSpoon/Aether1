@@ -1306,6 +1306,31 @@ fn code_chat_ask_rust(
     })
 }
 
+/// Hands the engine a task and streams what it says while it works.
+///
+/// `async` for the reason `code_chat_ask_rust` is, only more so: this one can legitimately
+/// run for a quarter of an hour, and a blocking command would hold the window's IPC thread
+/// for all of it -- which is not "slow", it is a frozen window.
+#[tauri::command(async)]
+fn code_engine_run_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
+    prompt: String,
+    stream_id: String,
+    task: Option<String>,
+) -> Result<commands::EngineReply, String> {
+    // The engine reaches the model through the sandbox's model socket, which goes to the
+    // same local server the idle watch may have stopped. Same note as a chat turn.
+    background_services::note_use(&engine, &managed_ollama);
+    commands::code_engine_run(&engine, &prompt, task.as_deref(), &mut |said| {
+        let _ = app.emit(
+            "code-engine-delta",
+            serde_json::json!({ "stream_id": stream_id, "delta": said }),
+        );
+    })
+}
+
 /// Runs the selected Agent Browser analysis profiles through AETHER CODE's shared model.
 #[tauri::command(async)]
 fn code_agents_ask_rust(
@@ -3020,6 +3045,7 @@ fn main() {
             code_local_models_rust,
             code_set_model_preference_rust,
             code_run_approved_rust,
+            code_engine_run_rust,
             code_chat_history_rust,
             code_chat_clear_rust,
             code_tasks_rust,

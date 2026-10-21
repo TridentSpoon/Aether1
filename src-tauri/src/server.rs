@@ -228,6 +228,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/model", post(code_set_model_preference))
         .route("/api/code/conventions", get(code_conventions))
         .route("/api/code/chat", post(code_chat))
+        .route("/api/code/engine", post(code_engine_run))
         .route("/api/code/chat/history", get(code_chat_history))
         .route("/api/code/chat/clear", post(code_chat_clear))
         .route("/api/code/tasks", get(code_tasks).post(code_task_create))
@@ -1311,6 +1312,15 @@ struct CodeChatRequest {
     task: Option<String>,
 }
 
+/// What the engine is being asked to do, and which task it belongs to.
+#[derive(Deserialize)]
+struct CodeEngineRequest {
+    message: String,
+    /// Absent means the task in focus, matching `CodeChatRequest`.
+    #[serde(default)]
+    task: Option<String>,
+}
+
 /// The browser twin of code_chat_ask_rust.
 ///
 /// Answered whole rather than streamed, because the browser fallback has no event channel
@@ -1324,6 +1334,25 @@ async fn code_chat(
     let engine = state.engine.clone();
     let reply = tokio::task::spawn_blocking(move || {
         commands::code_chat_ask(&engine, &req.message, req.task.as_deref(), &mut |_| {})
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(reply))
+}
+
+/// The browser twin of `code_engine_run_rust`.
+///
+/// No deltas here, as with `code_chat`: the browser path waits for the whole answer. That is
+/// a longer wait for the engine than for a chat turn, and it is the honest shape -- a second
+/// channel for progress is a websocket, and the one AETHER1 has is the HUD's own.
+async fn code_engine_run(
+    State(state): State<AppState>,
+    Json(req): Json<CodeEngineRequest>,
+) -> Result<Json<commands::EngineReply>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    let reply = tokio::task::spawn_blocking(move || {
+        commands::code_engine_run(&engine, &req.message, req.task.as_deref(), &mut |_| {})
     })
     .await
     .map_err(internal_error)?

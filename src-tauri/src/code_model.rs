@@ -215,26 +215,44 @@ fn dial_address(endpoint: &Endpoint) -> Result<SocketAddr, String> {
 /// The destination is fixed here, at start. An operator who repoints `llm_endpoint` gets the
 /// new address on the next launch; the alternative is a socket whose destination can change
 /// under a connection, which is a worse thing to own than a stale one.
+///
+/// **Only a working forwarder is remembered.** A refusal is not, and that is the difference
+/// between this table and a cache. Every reason `spawn` can refuse is a condition on the
+/// machine rather than a fact about the settings: a model server that is not up yet, so its
+/// name does not resolve; a directory that could not be made; a thread that could not be
+/// started. Remembering those made the first attempt the only attempt -- an operator who
+/// gave AETHER CODE a task before starting Ollama got that same refusal from every task
+/// afterwards, with nothing they could do but restart AETHER1 and nothing telling them so.
+/// So a refusal is handed back and forgotten, and the next task asks the machine again.
 #[cfg(unix)]
 pub fn start(db: &MemoryDb) -> Result<Brain, String> {
-    static RUNNING: OnceLock<std::sync::Mutex<HashMap<PathBuf, Result<Brain, String>>>> =
-        OnceLock::new();
+    static RUNNING: OnceLock<std::sync::Mutex<HashMap<PathBuf, Brain>>> = OnceLock::new();
     let endpoint = configured(db)?;
     let db_path = db.path().to_path_buf();
     let mut running = RUNNING
         .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
         .lock()
         .map_err(|_| "the model socket table is poisoned".to_string())?;
-    let started = running
-        .entry(db_path.clone())
-        .or_insert_with(|| spawn(&db_path, endpoint));
-    started
-        .as_ref()
-        .map(|brain| Brain {
-            socket: brain.socket.clone(),
-            endpoint: brain.endpoint.clone(),
-        })
-        .map_err(|why| why.clone())
+    // A socket that is no longer on disk is not a forwarder, whatever the table says. A
+    // `/tmp` sweep or an operator clearing the directory would otherwise leave every later
+    // task bind-mounting a path that is not there, which bubblewrap refuses with a message
+    // about a mount point rather than about the brain.
+    if running
+        .get(&db_path)
+        .is_some_and(|brain| !brain.socket.exists())
+    {
+        running.remove(&db_path);
+    }
+    let brain = match running.entry(db_path.clone()) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(spawn(&db_path, endpoint)?)
+        }
+    };
+    Ok(Brain {
+        socket: brain.socket.clone(),
+        endpoint: brain.endpoint.clone(),
+    })
 }
 
 /// Windows has no door, and says so.
@@ -572,6 +590,55 @@ mod tests {
             "a box given the model socket has not been given the network: {spoken}"
         );
     }
+    /// The regression this is here for: a refusal was remembered, so the first attempt was
+    /// the only attempt. An operator who gave AETHER CODE a task before starting their model
+    /// server got that refusal from every task afterwards -- the settings were right by
+    /// then, the server was up, and the answer never changed until AETHER1 was restarted.
+    ///
+    /// Proved in the order it happens to somebody: a name that resolves to nothing is
+    /// refused, then the same database is pointed at a port that is really there and has to
+    /// start. Skips itself if that first endpoint unexpectedly resolves, because a resolver
+    /// that answers for `.local` would make this test pass for the wrong reason.
+    #[cfg(unix)]
+    #[test]
+    fn a_refusal_is_not_remembered_the_way_a_running_socket_is() {
+        let db = db();
+
+        // `.local` passes the name half of rule 2, so this gets as far as resolution and
+        // fails there -- which is exactly where an absent model server fails.
+        pointed_at(
+            &db,
+            "ollama",
+            "http://aether1-no-such-model-host.local:11434",
+        );
+        if start(&db).is_ok() {
+            return;
+        }
+
+        // The server arrives, as it does when the operator starts Ollama and tries again.
+        let server = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = server.local_addr().expect("addr").port();
+        pointed_at(&db, "ollama", &format!("http://127.0.0.1:{port}"));
+        let brain = start(&db).expect("the second attempt is a fresh question, not a cache hit");
+        assert_eq!(brain.endpoint.port, port);
+    }
+
+    /// And the other half of that table: a forwarder that *is* running is handed back as it
+    /// was, rather than a second one being started on a second path every time a task runs.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_socket_is_handed_back_rather_than_started_again() {
+        let db = db();
+        let server = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = server.local_addr().expect("addr").port();
+        pointed_at(&db, "ollama", &format!("http://127.0.0.1:{port}"));
+
+        let first = start(&db).expect("starts");
+        let again = start(&db).expect("starts again");
+        assert_eq!(first.socket, again.socket);
+        assert!(first.socket.exists(), "and it is really there");
+    }
+
     /// Local-only mode does not close this door, and that is deliberate rather than an
     /// oversight: reaching a model server on loopback or the LAN is the whole point of the
     /// platform, and the mode has always allowed it (see `scripts/check_egress_gate.sh`).
