@@ -449,6 +449,15 @@
                         <button id="btn-code-chat-send" class="cyber-btn px-4 py-2 text-sm rounded">
                             Ask
                         </button>
+                        <!-- The other half of the panel, and the reason it exists: Ask puts
+                             the question to the coding model, Do it hands the same words to
+                             the engine, which reads and edits the project folder inside the
+                             sandbox. Two buttons rather than a mode switch, because a mode
+                             is invisible once it is set and "why did it just edit my repo"
+                             is the wrong thing to find out afterwards. -->
+                        <button id="btn-code-agent-run" class="cyber-btn px-4 py-2 text-sm rounded" title="Hand this to the coding agent, which may read and change files in the project folder">
+                            Do it
+                        </button>
                     </div>
                 </div>
                     </div>

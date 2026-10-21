@@ -174,6 +174,22 @@ fn write_config(state: &Path, base_url: &str, model: &str) -> Result<(), String>
     .map_err(|e| format!("{} could not be written: {e}", path.display()))
 }
 
+/// What an operator with no `HOME` is told, and why.
+///
+/// Its own function so it can be read in a test without a test having to unset `HOME` on the
+/// whole process. That matters more than it looks: `std::env::set_var` is process-global and
+/// the suite runs in parallel, so a test that blanks `HOME` for even a moment can be the
+/// reason a sandbox test in another module sees a box built without one. One flaky
+/// cross-module failure costs more than this function saves.
+fn no_home_refusal() -> String {
+    format!(
+        "{ENGINE} keeps its sessions in a directory mounted inside the sandbox's own home \
+         folder, and this process has no HOME -- so there would be nowhere to put them and \
+         every task would start again from nothing. Start AETHER1 from a session that has \
+         HOME set, and `--session` will mean something between runs."
+    )
+}
+
 /// Runs one task through the engine, inside the sandbox, and hands back what it said.
 ///
 /// Everything this needs is something another module already owns: the box from
@@ -191,6 +207,7 @@ pub fn run(
     task: &str,
     session: Option<&str>,
     timeout: std::time::Duration,
+    said: crate::llm::providers::Sink,
 ) -> Result<Done, String> {
     let task = task.trim();
     if task.is_empty() {
@@ -216,12 +233,7 @@ pub fn run(
     // this machine can do -- and before the engine is looked for, so an operator missing
     // both hears about the one that is theirs to fix either way.
     if std::env::var("HOME").unwrap_or_default().is_empty() {
-        return Err(format!(
-            "{ENGINE} keeps its sessions in a directory mounted inside the sandbox's own \
-             home folder, and this process has no HOME -- so there would be nowhere to put \
-             them and every task would start again from nothing. Start AETHER1 from a \
-             session that has HOME set, and `--session` will mean something between runs."
-        ));
+        return Err(no_home_refusal());
     }
 
     let Some(engine) = crate::paths::find_installed_binary(&[ENGINE]) else {
@@ -250,7 +262,7 @@ pub fn run(
     args.push(task.to_string());
 
     let level = crate::code_policy::level(&root);
-    let mut child = crate::code_sandbox::command(
+    let child = crate::code_sandbox::command(
         &sandbox,
         &engine.to_string_lossy(),
         &args,
@@ -272,39 +284,111 @@ pub fn run(
     .spawn()
     .map_err(|e| format!("{ENGINE} could not be started: {e}"))?;
 
-    // Polled rather than waited on, the same way `code_workspace::run` does it, so an engine
-    // that never returns is killed rather than holding everything open until the operator
-    // gives up on it.
-    let started = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {
-                if started.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("{ENGINE} could not be waited on: {e}")),
-        }
-    };
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("{ENGINE}'s output could not be read: {e}"))?;
-    let output =
-        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    collect(child, timeout, said)
+}
 
+/// Reads one running engine to its end, handing every line to `said` as it arrives, and
+/// stops it if it overruns.
+///
+/// Split out from [`run`] so the waiting can be tested without an engine installed: the
+/// streaming and the watchdog are the parts with the timing in them, and they behave the
+/// same whether the child is opencode or `/bin/sh`.
+fn collect(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+    said: crate::llm::providers::Sink,
+) -> Result<Done, String> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("{ENGINE} was started without a way to read its output"))?;
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let overran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let watchdog = {
+        let child = std::sync::Arc::clone(&child);
+        let overran = std::sync::Arc::clone(&overran);
+        std::thread::Builder::new()
+            .name("aether1-engine-timeout".to_string())
+            .spawn(move || {
+                let started = std::time::Instant::now();
+                loop {
+                    // Short naps rather than one long one, so a run that finishes early
+                    // takes this thread with it instead of holding a handle for the whole
+                    // timeout.
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    let Ok(mut child) = child.lock() else { return };
+                    match child.try_wait() {
+                        Ok(Some(_)) => return,
+                        Ok(None) => {}
+                        Err(_) => return,
+                    }
+                    if started.elapsed() >= timeout {
+                        overran.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let _ = child.kill();
+                        return;
+                    }
+                }
+            })
+            .ok()
+    };
+
+    let mut output = String::new();
+    {
+        use std::io::BufRead;
+        let mut lines = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            // Bytes rather than `lines()`, because an engine that writes a progress line
+            // without a newline should still reach the operator, and a lossy conversion here
+            // is better than dropping the run over one bad byte.
+            match lines.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    output.push_str(&line);
+                    said(&line);
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    // Whatever it said on the way out, after the stream has ended: the engine's own
+    // diagnostics land here, and a refusal with an empty body is no use to anybody.
+    let mut status = None;
+    let mut stderr = String::new();
+    if let Ok(mut child) = child.lock() {
+        if let Some(mut pipe) = child.stderr.take() {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            stderr = String::from_utf8_lossy(&buf).to_string();
+        }
+        status = child.wait().ok();
+    }
+    if let Some(watchdog) = watchdog {
+        let _ = watchdog.join();
+    }
+    if !stderr.is_empty() {
+        said(&stderr);
+        output.push_str(&stderr);
+    }
+
+    if overran.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(format!(
+            "{ENGINE} was still going after {} seconds and was stopped. What it had said:\n\n{}",
+            timeout.as_secs(),
+            output.trim()
+        ));
+    }
     match status {
         Some(status) => Ok(Done {
             status: status.code().unwrap_or(1),
             output,
         }),
         None => Err(format!(
-            "{ENGINE} was still going after {} seconds and was stopped. What it had said:\n\n{}",
-            timeout.as_secs(),
-            output.trim()
+            "{ENGINE} could not be waited on. What it said:\n\n{output}"
         )),
     }
 }
@@ -537,61 +621,123 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A process with no `HOME` has nowhere to mount the engine's directory, so the engine
-    /// is refused rather than run with its memory in a tmpfs.
+    /// A process with no `HOME` is refused rather than run with its memory in a tmpfs, and
+    /// the refusal says both what is missing and what it costs.
     ///
-    /// Without this the whole of Fix 3 came apart silently on exactly the setups most likely
-    /// to hit it -- a service unit, a container, a bare `env -i` -- because `code_sandbox`
-    /// binds nothing and sets no `XDG_*` when `HOME` is empty, and an engine told nothing
-    /// simply starts again from nothing on every task.
+    /// Without that check the whole of the engine's state directory came apart silently on
+    /// exactly the setups most likely to hit it -- a service unit, a container, a bare
+    /// `env -i` -- because `code_sandbox` binds nothing and sets no `XDG_*` when `HOME` is
+    /// empty, and an engine told nothing starts again from nothing on every task.
     ///
-    /// Skips itself where there is no sandbox, because the refusal for that comes first and
-    /// is the honest answer there.
+    /// Asserted against the message rather than by unsetting `HOME` and calling `run`:
+    /// `set_var` is process-global, the suite runs in parallel, and a test that blanks `HOME`
+    /// for a moment turns into a sandbox test failing in another module. That is not a
+    /// trade worth making for one call site.
     #[test]
-    fn with_no_home_the_engine_is_refused_rather_than_run_with_no_memory() {
-        if !crate::code_sandbox::detect().confines() {
-            return;
-        }
-        let db = db();
-        let root = scratch("nohome");
-        db.set_setting(
-            crate::code_workspace::ROOT_SETTING,
-            &serde_json::json!(root.to_string_lossy().to_string()),
-        )
-        .expect("root");
-
-        // The lock `code_workspace`'s own tests take, because two tests swapping HOME at
-        // once is a race.
-        let why = {
-            let _guard = crate::tools::fs_guard::ENV_LOCK
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let previous = std::env::var("HOME").ok();
-            std::env::remove_var("HOME");
-            let why = run(
-                &db,
-                "m",
-                "do a thing",
-                None,
-                std::time::Duration::from_secs(1),
-            )
-            .expect_err("no HOME means no engine directory");
-            match previous {
-                Some(p) => std::env::set_var("HOME", p),
-                None => std::env::remove_var("HOME"),
-            }
-            why
-        };
-
+    fn with_no_home_the_refusal_says_what_is_missing_and_what_it_costs() {
+        let why = no_home_refusal();
+        assert!(why.contains("HOME"), "name what is missing: {why}");
         assert!(
-            why.contains("HOME"),
-            "the refusal should name what is missing: {why}"
-        );
-        assert!(
-            why.contains("session"),
+            why.contains("start again from nothing"),
             "and what it costs, which is the sessions: {why}"
         );
-        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Spawns `/bin/sh -c <script>` the way `run` spawns the engine, so `collect` is tested
+    /// against a real child with real pipes rather than a stand-in for one.
+    #[cfg(unix)]
+    fn sh(script: &str) -> std::process::Child {
+        std::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("sh runs")
+    }
+
+    /// The point of the streaming: each line reaches the operator as it is written, not in
+    /// one lump at the end. A panel waiting a quarter of an hour for a coding agent cannot
+    /// tell a long edit from a hung one, and this is what tells it.
+    #[cfg(unix)]
+    #[test]
+    fn what_the_engine_says_arrives_line_by_line_and_in_full() {
+        let mut seen: Vec<String> = Vec::new();
+        let done = collect(
+            sh("echo first; echo second; echo third"),
+            std::time::Duration::from_secs(30),
+            &mut |said| seen.push(said.to_string()),
+        )
+        .expect("it runs");
+
+        assert_eq!(done.status, 0);
+        assert_eq!(done.output, "first\nsecond\nthird\n");
+        // Three deliveries rather than one, which is the difference between streaming and
+        // collecting: the same text arriving at the end would pass an output assertion.
+        assert_eq!(
+            seen,
+            ["first\n", "second\n", "third\n"],
+            "each line should have been handed over as it arrived"
+        );
+    }
+
+    /// An engine that has stopped making progress is stopped, and what it managed to say
+    /// first comes back with the refusal -- the useful half of a run that overran.
+    #[cfg(unix)]
+    #[test]
+    fn an_engine_that_overruns_is_stopped_and_still_reports_what_it_said() {
+        let why = collect(
+            sh("echo starting; sleep 30"),
+            std::time::Duration::from_millis(300),
+            &mut |_| {},
+        )
+        .expect_err("it should be stopped");
+
+        assert!(
+            why.contains("still going"),
+            "the refusal should say what happened: {why}"
+        );
+        assert!(
+            why.contains("starting"),
+            "and carry what it had said before it was stopped: {why}"
+        );
+    }
+
+    /// A non-zero exit is not an error to throw the output away for. An engine that worked
+    /// and then failed has said the most useful thing on the screen, so the status is
+    /// carried beside the text rather than replacing it.
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_engine_still_hands_back_what_it_said() {
+        let done = collect(
+            sh("echo tried this; exit 3"),
+            std::time::Duration::from_secs(30),
+            &mut |_| {},
+        )
+        .expect("a non-zero exit is still an answer");
+        assert_eq!(done.status, 3);
+        assert!(done.output.contains("tried this"), "{}", done.output);
+    }
+
+    /// Whatever it said on the way out is part of the answer. The engine reports why it
+    /// could not do something on stderr, and a panel showing only stdout would show the
+    /// operator a blank bubble for the one run they most need to read.
+    #[cfg(unix)]
+    #[test]
+    fn what_the_engine_said_on_the_way_out_is_not_dropped() {
+        let mut seen = String::new();
+        let done = collect(
+            sh("echo out; echo trouble 1>&2"),
+            std::time::Duration::from_secs(30),
+            &mut |said| seen.push_str(said),
+        )
+        .expect("it runs");
+        assert!(done.output.contains("out"), "{}", done.output);
+        assert!(done.output.contains("trouble"), "{}", done.output);
+        assert!(
+            seen.contains("trouble"),
+            "and it reached the panel too: {seen}"
+        );
     }
 
     /// A task of nothing but spaces is not a task. Worth its own line because the engine would
@@ -600,8 +746,15 @@ mod tests {
     #[test]
     fn an_empty_task_is_refused_before_anything_starts() {
         let db = db();
-        let why = run(&db, "m", "   ", None, std::time::Duration::from_secs(1))
-            .expect_err("nothing to do");
+        let why = run(
+            &db,
+            "m",
+            "   ",
+            None,
+            std::time::Duration::from_secs(1),
+            &mut |_| {},
+        )
+        .expect_err("nothing to do");
         assert!(why.contains("no task"), "{why}");
     }
 }
