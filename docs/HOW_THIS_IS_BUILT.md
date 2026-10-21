@@ -77,6 +77,23 @@ who had good reasons for the socket and no reason to think about the mode:
 Neither named a ureq verb, so the guard of the day passed both. That is why the guard now
 enumerates sockets, and why this section exists.
 
+**One destination breaks the address rule, and it is worth knowing why before you write
+the next one.** Everything above assumes the address a request goes to is where the data in
+it *stops*. That holds for a model server: an Ollama on loopback generates the reply itself,
+which is why local-only mode has always allowed it. It does not hold for anything that
+**forwards**. An LLM gateway -- OpenWork's AI Gateway, a LiteLLM or Bifrost proxy, any of
+the OpenAI-compatible fan-outs -- exists to take a prompt and send it to OpenAI or
+Anthropic, so a gateway on `http://localhost:4000/v1` passes `is_local_endpoint` perfectly
+and the prompt still ends up at a public API. Judging it by its address would have Settings
+report that nothing left the machine while it was on its way out.
+
+So a forwarder asks `net::require_forwarding(action)`, which is `require_online` without
+the local exemption, and takes no URL at all -- the URL is genuinely irrelevant to the
+decision, and accepting one would invite the next author to believe it mattered.
+`net::get_forwarding` and `net::post_forwarding` are its request builders.
+`Provider::Gateway` is the only thing that uses them today. If you add a second kind of
+forwarder, it belongs on the same function, and **not** on `require_online`.
+
 **If you need a new way out**, the sequence is: gate it first —
 `local_only::is_local_ip` for something that must not leave the LAN,
 `local_only::enabled` for something that must not leave the machine — then add it to the

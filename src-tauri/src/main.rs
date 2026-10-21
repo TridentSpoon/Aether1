@@ -1565,6 +1565,30 @@ fn test_llm_connection_rust(
     commands::test_llm_connection(&engine, provider, model, endpoint, api_key)
 }
 
+/// The models a gateway says this key may use, for the model picker in Settings.
+///
+/// Takes the address and key as arguments rather than reading the saved settings, because
+/// the moment this is called is while the operator is typing them in -- a list built from
+/// what is already saved would answer about the previous gateway, or about none at all.
+///
+/// `Ok(vec![])` and `Err` are different answers and both are shown differently: an empty
+/// list is a gateway that answered and has granted this key no models, which is a real
+/// state an administrator can fix, and an error is a gateway that did not answer.
+#[tauri::command(async)]
+fn gateway_models_rust(url: String, api_key: String) -> Result<Vec<String>, String> {
+    if url.trim().is_empty() {
+        return Err("Put the gateway's address in first.".to_string());
+    }
+    model_scanner::gateway_models(&url, &api_key).ok_or_else(|| {
+        format!(
+            "{} did not answer with a model list. Check the address and the key -- and if \
+             local-only mode is on, a gateway is off limits whatever address it is on, \
+             because it forwards prompts on.",
+            model_scanner::gateway_base(&url)
+        )
+    })
+}
+
 /// Rust-native equivalent of GET /api/scanner/status (backend/main.py) -- cloud API key
 /// detection plus Ollama/LM Studio probes. Blocking (matches this file's existing
 /// synchronous command style); each probe has its own short timeout so this can't hang.
@@ -2974,6 +2998,7 @@ fn main() {
             agent_genesis_rust,
             test_llm_connection_rust,
             scan_models_rust,
+            gateway_models_rust,
             speciality_models_rust,
             set_speciality_model_rust,
             flow_mode_rust,

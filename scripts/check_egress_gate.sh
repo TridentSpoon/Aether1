@@ -185,8 +185,37 @@ if ! printf '%s' "$code" | grep -E 'local_only::is_local_endpoint' >/dev/null 2>
     status=1
 fi
 
+# The forwarder rule (docs/HOW_THIS_IS_BUILT.md, "Reaching the network"). `require_online`
+# waves local addresses through because a model server on loopback is where the data stops.
+# A gateway forwards, so the same address is a way off the machine, and `require_forwarding`
+# is the question for those callers. Its whole correctness is that it does *not* consult the
+# address: if someone "helpfully" adds an is_local_endpoint shortcut to it, local-only mode
+# silently gains a hole that a gateway on localhost walks straight through, and every test
+# of the mode still passes. So check the body for that one name.
+#
+# Extracted by brace depth from the function's own line rather than by a line count, so
+# that editing the function cannot quietly move the window off it.
+forwarding=$(printf '%s' "$code" | awk '
+    /pub fn require_forwarding/ { inside = 1 }
+    inside { print; depth += gsub(/\{/, "{"); depth -= gsub(/\}/, "}"); if (depth == 0 && /\}/) exit }
+')
+if [ -z "$forwarding" ]; then
+    echo "FAIL: $gate has no require_forwarding, which is the gate for anything that passes"
+    echo "      data on off this machine -- an LLM gateway, a relay, a proxy. See"
+    echo "      docs/HOW_THIS_IS_BUILT.md, 'Reaching the network'."
+    status=1
+elif printf '%s' "$forwarding" | grep -E 'is_local_endpoint' >/dev/null 2>&1; then
+    echo "FAIL: require_forwarding in $gate consults is_local_endpoint."
+    echo "      That is the one thing it must not do. A forwarder's address says nothing"
+    echo "      about where the data ends up: a gateway on http://localhost:4000 is a local"
+    echo "      address with a public API behind it, and exempting it would let prompts"
+    echo "      leave a machine whose operator was told nothing does. Ask the mode only."
+    status=1
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "One door out: every outbound request is built by src/net.rs, which asks the operator first."
+    echo "Forwarders (gateways, relays) go through require_forwarding, which ignores the address."
 fi
 
 exit "$status"

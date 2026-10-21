@@ -90,11 +90,41 @@ pub fn local_only_on() -> bool {
 /// A URL on this machine or on the local network is always allowed: see the module
 /// comment. A URL that cannot be parsed is not provably local, so it is refused whenever
 /// the mode is on, which is the same way `is_local_endpoint` fails.
+///
+/// The exemption is the whole of the difference between this and `require_forwarding`,
+/// and it rests on an assumption worth naming: that the address a request goes to is
+/// where the data in it *stops*. That is true of an Ollama server, which generates the
+/// reply itself. It is false of anything that forwards, and those callers must ask
+/// `require_forwarding` instead.
 pub fn require_online(url: &str, action: &str) -> Result<(), String> {
     if crate::local_only::is_local_endpoint(url) {
         return Ok(());
     }
+    require_forwarding(action)
+}
 
+/// May this process hand data to something that will pass it on off this machine --
+/// whatever address that forwarder answers on.
+///
+/// This exists because `require_online` judges the destination by its address, and one
+/// kind of destination makes that judgement wrong. An LLM gateway (OpenWork's AI Gateway,
+/// a LiteLLM proxy, any of the OpenAI-compatible fan-outs) is a *forwarder by
+/// definition*: its whole job is to take a prompt and send it to OpenAI or Anthropic. A
+/// gateway on `http://localhost:4000/v1` satisfies `is_local_endpoint` perfectly, and
+/// `localhost:4000` is the example in LiteLLM's own documentation, so this is the
+/// configuration an operator is most likely to actually have. Asking
+/// `is_local_endpoint` about it answers a question nobody cares about: the address is
+/// local, the prompt still ends up at a public API, and local-only mode would have
+/// reported that nothing left the machine.
+///
+/// So there is no `url` parameter. The URL is genuinely irrelevant to the decision, and
+/// taking one would invite a future caller to believe it mattered.
+///
+/// This is deliberately *not* a fourth way out of the machine in the sense of
+/// docs/HOW_THIS_IS_BUILT.md -- the request itself is still built by `get` or `post`
+/// below, and still named only in this file. It is a stricter question asked in front of
+/// them, for callers who know their destination forwards.
+pub fn require_forwarding(action: &str) -> Result<(), String> {
     // Checked before the database so that a machine nailed shut by the environment stays
     // shut even in an entry point that never installed a policy.
     if crate::local_only::env_forced() {
@@ -137,6 +167,28 @@ pub fn post(
     action: &str,
 ) -> Result<ureq::RequestBuilder<ureq::typestate::WithBody>, String> {
     require_online(url, action)?;
+    Ok(ureq::post(url))
+}
+
+/// A GET to something that forwards off this machine. See `require_forwarding`.
+///
+/// Used for a gateway's model list: the list itself is harmless, but asking for it proves
+/// a key against a service that is not on this machine, and a gateway on loopback must
+/// not get that for free with the mode on.
+pub fn get_forwarding(
+    url: &str,
+    action: &str,
+) -> Result<ureq::RequestBuilder<ureq::typestate::WithoutBody>, String> {
+    require_forwarding(action)?;
+    Ok(ureq::get(url))
+}
+
+/// A POST to something that forwards off this machine. See `require_forwarding`.
+pub fn post_forwarding(
+    url: &str,
+    action: &str,
+) -> Result<ureq::RequestBuilder<ureq::typestate::WithBody>, String> {
+    require_forwarding(action)?;
     Ok(ureq::post(url))
 }
 
@@ -231,10 +283,40 @@ mod tests {
         // Unparseable with the mode on: refused, not waved through.
         assert!(require_online("not a url", "x").is_err());
 
+        // The forwarder exemption, which is the point of `require_forwarding`. These are
+        // the same local addresses allowed three lines above, and a gateway answering on
+        // one of them is refused anyway, because the prompt does not stop there. Getting
+        // this wrong is a local-only bypass with a loopback URL on it.
+        for local in [
+            "http://localhost:4000/v1/chat/completions",
+            "http://127.0.0.1:4000/v1/chat/completions",
+            "http://192.168.1.9:4000/v1/chat/completions",
+        ] {
+            assert!(
+                require_online(local, "x").is_ok(),
+                "{local} is a local address and `require_online` must still say so"
+            );
+            assert!(
+                get_forwarding(local, "nothing was sent").is_err(),
+                "{local} forwards, so it must be refused with the mode on"
+            );
+            assert!(
+                post_forwarding(local, "nothing was sent").is_err(),
+                "{local} forwards, so it must be refused with the mode on"
+            );
+        }
+        let forwarded = require_forwarding("no prompt was sent").unwrap_err();
+        assert!(forwarded.contains("local-only mode is on"), "{forwarded}");
+        assert!(forwarded.contains("no prompt was sent"), "{forwarded}");
+
         // Read fresh, not cached: switching it back off reopens the door within the same
         // process, which is what the Settings panel does mid-session.
         set_mode(&db, false);
         assert!(require_online("https://api.openai.com/v1", "x").is_ok());
+        // And the forwarder door opens with it: local-only mode is the only thing that
+        // was ever shutting it, which is what makes a gateway a choice rather than a ban.
+        assert!(require_forwarding("x").is_ok());
+        assert!(post_forwarding("http://localhost:4000/v1/chat/completions", "x").is_ok());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

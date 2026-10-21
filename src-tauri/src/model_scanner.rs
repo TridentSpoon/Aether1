@@ -11,6 +11,12 @@ const OLLAMA_URL: &str = "http://localhost:11434";
 const LMSTUDIO_URL: &str = "http://localhost:1234";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// Longer than `PROBE_TIMEOUT`, because that one is tuned for sweeping loopback ports
+/// where anything slow is a port nobody is serving. A gateway is a deliberate address the
+/// operator typed, is usually across the internet, and may be asking an upstream provider
+/// before it can answer -- so a probe timeout here would read as "your gateway is down".
+const GATEWAY_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
 pub struct CloudKeys {
     pub detected_env_keys: Vec<String>,
@@ -417,6 +423,57 @@ pub fn models_at(endpoint: &str) -> Option<Vec<String>> {
     // Either probe answering still counts as an answer, so "did not answer at all" (None)
     // stays distinct from "answered with nothing loaded" (Some(vec![])).
     native.or(openai)
+}
+
+/// Normalises a gateway base URL to the `/v1` prefix its routes hang off.
+///
+/// Operators paste whatever the gateway's own page showed them, which is sometimes the
+/// bare host and sometimes already ends in `/v1`. Accepting both is one line here and
+/// saves a support conversation about a trailing path segment.
+pub fn gateway_base(url: &str) -> String {
+    let base = url.trim().trim_end_matches('/');
+    if base.ends_with("/v1") {
+        base.to_string()
+    } else {
+        format!("{base}/v1")
+    }
+}
+
+/// The models a gateway says this key may use.
+///
+/// This is the one genuinely new question in gateway support, and the reason a gateway is
+/// worth having: every other provider here either has a model list that is a property of
+/// this machine (Ollama, LM Studio) or none at all, which is why the cloud half of
+/// Settings has only ever been able to offer a free-text box. A gateway answers "which
+/// models may I use" directly, so the operator can pick a model instead of naming a
+/// company and then typing an id from memory.
+///
+/// `None` and `Some(vec![])` mean different things, same as `models_at`: `None` is "it did
+/// not answer", which must never read as "your access was revoked"; an empty list is a
+/// gateway that answered and has granted this key nothing.
+///
+/// Gated by `net::get_forwarding`, not `net::get`: a gateway on loopback is still a
+/// forwarder, and proving a key against one is traffic leaving the machine however local
+/// the address looks. See `net::require_forwarding`.
+pub fn gateway_models(url: &str, api_key: &str) -> Option<Vec<String>> {
+    if url.trim().is_empty() {
+        return None;
+    }
+    let endpoint = format!("{}/models", gateway_base(url));
+    let mut request = crate::net::get_forwarding(&endpoint, "the gateway was not asked")
+        .ok()?
+        .config()
+        .timeout_global(Some(GATEWAY_TIMEOUT))
+        .build();
+    if !api_key.trim().is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key.trim()));
+    }
+    let models: Vec<String> = request
+        .call()
+        .ok()
+        .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
+        .map(|data| data.data.into_iter().map(|m| m.id).collect())?;
+    Some(models)
 }
 
 /// Every local model server that answers, in port order.

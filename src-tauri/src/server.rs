@@ -221,6 +221,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/agent/genesis", post(genesis))
         .route("/api/llm/test-connection", post(test_llm_connection))
         .route("/api/scanner/status", get(scanner_status))
+        .route("/api/llm/gateway-models", post(gateway_models))
         .route("/api/setup/advice", get(setup_advice))
         .route("/api/voice/advice", get(voice_advice))
         .route("/api/code/advice", get(code_advice))
@@ -1202,6 +1203,42 @@ async fn test_llm_connection(
     .map_err(internal_error)?
     .map(|message| Json(serde_json::json!({ "message": message })))
     .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+#[derive(Deserialize)]
+struct GatewayModelsRequest {
+    url: String,
+    #[serde(default)]
+    api_key: String,
+}
+
+/// The browser-flow counterpart of gateway_models_rust. POST rather than GET because the
+/// gateway key is in the body: a key in a query string ends up in access logs and in
+/// browser history, which is the one place a credential must not be.
+async fn gateway_models(
+    Json(req): Json<GatewayModelsRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    if req.url.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Put the gateway's address in first.".to_string(),
+        ));
+    }
+    let base = model_scanner::gateway_base(&req.url);
+    tokio::task::spawn_blocking(move || model_scanner::gateway_models(&req.url, &req.api_key))
+        .await
+        .map_err(internal_error)?
+        .map(|models| Json(serde_json::json!({ "models": models })))
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!(
+                    "{base} did not answer with a model list. Check the address and the key \
+                     -- and if local-only mode is on, a gateway is off limits whatever \
+                     address it is on, because it forwards prompts on."
+                ),
+            )
+        })
 }
 
 #[derive(Deserialize)]

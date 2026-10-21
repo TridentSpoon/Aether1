@@ -38,8 +38,15 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
     let lowered = raw.to_lowercase();
     let local = matches!(provider, Provider::Ollama | Provider::LmStudio);
 
-    // Where the operator would go to fix it, named as it appears in Settings.
-    let key_field = "API KEY in Settings";
+    // Where the operator would go to fix it, named as it appears in Settings. A gateway
+    // has its own key field, and sending someone to the provider one -- which they may
+    // have filled in correctly for something else -- wastes the only useful thing a
+    // refusal carries.
+    let key_field = if provider == Provider::Gateway {
+        "GATEWAY KEY in Settings"
+    } else {
+        "API KEY in Settings"
+    };
 
     if lowered.contains("401") || lowered.contains("unauthorized") {
         return format!("{provider} rejected the API key -- check the {key_field}.");
@@ -61,6 +68,15 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
         return format!("{provider} rejected the request itself: {raw}");
     }
     if lowered.contains("404") || lowered.contains("not found") {
+        if provider == Provider::Gateway {
+            // The id is also how a gateway decides which provider answers, so an id it
+            // does not recognise is not just a typo -- it is a model the operator may not
+            // have been granted. Both fixes start at the list.
+            return "the gateway does not route a model by that name -- pick one from its \
+                    model list in Settings, or ask whoever administers it whether you have \
+                    access to that model."
+                .to_string();
+        }
         return format!(
             "{provider} has no model by that name -- check MODEL NAME / ID in Settings."
         );
@@ -715,6 +731,13 @@ fn openai_defaults(provider: Provider, endpoint: &str) -> (&str, &str) {
             };
             (ep, "local-model")
         }
+        // A gateway gets no default model on purpose. Every other provider here has one
+        // model it is overwhelmingly likely to be asked for, so a default is a helpful
+        // guess; a gateway's model list is whatever an administrator connected, the model
+        // id is what tells it which provider to route to, and an invented id is a 404
+        // with a confusing message on it. `gateway_model` turns the empty case into a
+        // refusal that names the setting instead.
+        Provider::Gateway => (endpoint, ""),
         _ => (endpoint, "gpt-3.5-turbo"),
     }
 }
@@ -880,12 +903,26 @@ fn reports_stream_usage(provider: Provider) -> bool {
     matches!(provider, Provider::OpenAi | Provider::Groq)
 }
 
+/// The one place an OpenAI-shaped request is built, for every provider that speaks that
+/// shape -- which is why the choice of gate belongs here rather than at the two call
+/// sites. `docs/HOW_THIS_IS_BUILT.md` asks for the check at the chokepoint every call
+/// passes through, and this is it.
+///
+/// A gateway forwards, so its gate is `net::post_forwarding`, which does not care that
+/// the address might be loopback. Everything else is judged on its address as usual. See
+/// `net::require_forwarding` for why the distinction exists.
 fn openai_request(
+    provider: Provider,
     url: &str,
     api_key: &str,
     timeout: std::time::Duration,
 ) -> Result<ureq::RequestBuilder<ureq::typestate::WithBody>, String> {
-    let mut request = crate::net::post(url, "the model was not asked")?
+    let gated = if provider == Provider::Gateway {
+        crate::net::post_forwarding(url, "the model was not asked")
+    } else {
+        crate::net::post(url, "the model was not asked")
+    };
+    let mut request = gated?
         .config()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
@@ -907,7 +944,7 @@ pub fn call_openai_compatible(
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
 
     let response: OpenAiResponse =
-        checked(openai_request(&url, api_key, CALL_TIMEOUT)?.send_json(&payload))?
+        checked(openai_request(provider, &url, api_key, CALL_TIMEOUT)?.send_json(&payload))?
             .into_body()
             .read_json()
             .map_err(|e| e.to_string())?;
@@ -947,7 +984,8 @@ pub fn stream_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response = checked(openai_request(&url, api_key, STREAM_TIMEOUT)?.send_json(&payload))?;
+    let response =
+        checked(openai_request(provider, &url, api_key, STREAM_TIMEOUT)?.send_json(&payload))?;
 
     let mut full = String::new();
     let mut usage = None;
@@ -2086,6 +2124,40 @@ mod failure_tests {
         let msg = explain_failure(Provider::OpenAi, "", "http status: 401");
         assert!(msg.contains("rejected the API key"), "{msg}");
         assert!(msg.contains("API KEY in Settings"), "{msg}");
+    }
+
+    /// A gateway's refusals have to send the operator to the gateway's own fields, not to
+    /// the provider ones they may have filled in correctly for something else.
+    #[test]
+    fn a_gateway_refusal_names_the_gateways_own_settings() {
+        let key = explain_failure(Provider::Gateway, "", "http status: 401");
+        assert!(key.contains("GATEWAY KEY"), "{key}");
+        assert!(!key.contains("API KEY"), "{key}");
+
+        // A model id a gateway does not route may be a typo or may be a model this key was
+        // never granted, and the operator cannot tell which from here -- so the message
+        // must not assert the first and must point at the list, which settles both.
+        let model = explain_failure(Provider::Gateway, "", "http status: 404");
+        assert!(model.contains("model list"), "{model}");
+        assert!(
+            !model.contains("MODEL NAME / ID"),
+            "a gateway has no such field: {model}"
+        );
+    }
+
+    /// Guessing a model id for a gateway would pick which company answers and who gets
+    /// billed, so there is deliberately no default to fall back on.
+    #[test]
+    fn a_gateway_gets_no_default_model() {
+        let (_, default_model) = openai_defaults(Provider::Gateway, "https://gw.example/v1");
+        assert!(
+            default_model.is_empty(),
+            "a gateway must not have a guessed default model, got {default_model:?}"
+        );
+        // And its address is used exactly as given, rather than being replaced by one of
+        // the hardcoded provider bases.
+        let (base, _) = openai_defaults(Provider::Gateway, "https://gw.example/v1");
+        assert_eq!(base, "https://gw.example/v1");
     }
 
     #[test]
