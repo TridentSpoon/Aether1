@@ -1,5 +1,10 @@
-/* Avatar: L1minal -- the state of being in between, which is the whole of this one. The
- * eXcelsior Class's ninth, and the only one that is never entirely there.
+/* Avatar: TithesA1s -- Terminal Interface for Theoretic Heuristics, Execution System on
+ * A1 Service. The eXcelsior Class's ninth, and the only one that is never entirely there.
+ *
+ * Trident named it. It shipped as L1minal, which was a placeholder of mine -- the word for
+ * the state of being in between, which is still what the avatar is about. The old id is
+ * kept as an alias in avatar-loader.js, because that one did ship and somebody's saved
+ * settings will still name it.
  *
  * Every other avatar in the line is fully present at all times. This one is a shell cut
  * into forty horizontal slices, of which only a travelling band is ever solid. The rest
@@ -38,8 +43,8 @@
  */
 
 HologramAvatar.registerAvatar({
-    id: 'liminal',
-    label: 'L1minal',
+    id: 'tithesa1s',
+    label: 'TithesA1s',
     // The eXcelsior Class -- see registerAvatar's optional def.group in
     // js/hologram/README.md and index.html's avatar-menu, which groups the same way.
     group: 'The eXcelsior Class',
@@ -150,7 +155,7 @@ HologramAvatar.registerAvatar({
         const stoneMat = new THREE.MeshBasicMaterial({
             vertexColors: true, transparent: true, opacity: 0.95, side: THREE.DoubleSide,
         });
-        const stone = new THREE.Mesh(liminalCutGem(R * 0.085, R * 0.125, R * 0.05), stoneMat);
+        const stone = new THREE.Mesh(tithesCutGem(R * 0.085, R * 0.125, R * 0.05), stoneMat);
 
         /* The setting the gem sits in, and the one part of this avatar that follows the
            HUD's colour. The stone, the framework and the arriving rim are all Trident's
@@ -159,7 +164,7 @@ HologramAvatar.registerAvatar({
             color: api.palette.hex, transparent: true, opacity: 0.9,
             side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
         });
-        const bezel = new THREE.Mesh(liminalGemBezel(R * 0.085, R * 0.125, R * 0.022), bezelMat);
+        const bezel = new THREE.Mesh(tithesGemBezel(R * 0.085, R * 0.125, R * 0.022), bezelMat);
 
         /* Sunk into a dark socket. Additive blue over the dark panel is bright, but the
            band passes behind the brow twice a cycle and additive over something already
@@ -167,7 +172,7 @@ HologramAvatar.registerAvatar({
            matter it is supposed to be the constant through. The socket is the floor it
            is read against. */
         const socketMat = new THREE.MeshBasicMaterial({ color: 0x04060f, transparent: true, opacity: 0.92 });
-        const socket = new THREE.Mesh(liminalGemBezel(0, R * 0.148, 0), socketMat);
+        const socket = new THREE.Mesh(tithesGemBezel(0, R * 0.148, 0), socketMat);
 
         const stoneAt = new THREE.Group();
         stoneAt.position.set(0, R * 0.44, R * 0.94);
@@ -342,7 +347,7 @@ HologramAvatar.registerAvatar({
    materials are unlit and a faceted solid under an unlit material is one flat silhouette.
    The brightnesses are fixed at build -- a gem whose facets changed as it sat there would
    be a lamp, not a stone. */
-function liminalCutGem(rx, ry, depth) {
+function tithesCutGem(rx, ry, depth) {
     const SIDES = 6;
     const TABLE = 0.46;        // how far in the flat top sits
     const pos = [];
@@ -394,7 +399,7 @@ function liminalCutGem(rx, ry, depth) {
 /* The band around the gem, on the same hexagonal outline so the setting follows the cut
    rather than being a circle the stone happens to sit in. An inner radius of zero fills
    it, which is how the dark socket behind the gem is made from the same function. */
-function liminalGemBezel(rx, ry, width) {
+function tithesGemBezel(rx, ry, width) {
     const SIDES = 6;
     const pos = [];
     const at = (i, px, py) => {

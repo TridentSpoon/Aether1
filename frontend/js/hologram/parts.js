@@ -178,8 +178,8 @@
        one. The facet brightnesses are constants lit as if from the upper left, so the
        same facet is the same on every launch and at every angle. `tint` is the stone's
        own colour as a float triple; the table goes past 1 and comes out the pale version
-       of it that a flat top catches. Shared by the brow stone here and by L1minal, whose
-       stone is the same cut (see avatar-liminal.js). */
+       of it that a flat top catches. Shared by the brow stone here and by TithesA1s, whose
+       stone is the same cut (see avatar-tithesa1s.js). */
     function cutGemGeometry(rx, ry, depth, tint) {
         const SIDES = 6;
         const TABLE = 0.46;        // how far in the flat top sits
@@ -1165,7 +1165,7 @@
                 };
             },
         },
-        /* Adapted from L1minal: the stone at the brow, the one part of that avatar that is
+        /* Adapted from TithesA1s: the stone at the brow, the one part of that avatar that is
            never absent. A blue gem in a bezel, sunk into a dark socket and lit from behind.
 
            The socket is the whole trick. Additively blended hot colour over the dark panel
@@ -1834,7 +1834,7 @@
                 };
             },
         },
-        /* Adapted from L1minal: a shell cut into forty horizontal slices, of which only a
+        /* Adapted from TithesA1s: a shell cut into forty horizontal slices, of which only a
            travelling band is ever present. The rest are not dimmed, they are gone, and the
            dim framework saying where they would have been is what keeps the silhouette
            readable while most of it is absent. The band never stops, so something is always
@@ -2597,7 +2597,7 @@
                 };
             },
         },
-        /* Adapted from L1minal: the teal lattice inside it -- the part that never phases.
+        /* Adapted from TithesA1s: the teal lattice inside it -- the part that never phases.
            Two rotations on different axes, and nothing else; it is the still point the
            matter comes and goes around, so it does not react to anything but the voice. */
         neuralLattice: {
@@ -3330,7 +3330,7 @@
                 };
             },
         },
-        /* Adapted from L1minal: the matter that is not currently being used. Each mote has
+        /* Adapted from TithesA1s: the matter that is not currently being used. Each mote has
            a place on a shell and a place out in the room, and sits at one or the other
            depending on whether the band of presence has reached its height yet -- so the
            space around the avatar fills with the parts of it that are elsewhere.
