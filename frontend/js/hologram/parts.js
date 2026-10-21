@@ -42,7 +42,12 @@
  * label is "Nexus Sent" -- it *is* the Nexus Sent avatar under a different filename, not
  * a separate "Senti" avatar, so it falls under this same exception rather than being a
  * gap in the catalogue. White Rabbit was in the kit until its silhouette and ears were
- * withdrawn at the owner's request on 2026-09-20; the avatar itself is untouched.) An adapted part is a fresh, simplified build of the same visual
+ * withdrawn at the owner's request on 2026-09-20; the avatar itself is untouched.) The one
+ * place a hand-built avatar and this kit knowingly draw the same thing is the aurora:
+ * A1 wears a Borealis curtain and veil of its own, built in its own file because A1 is
+ * the default avatar and borrowing from here would pull this whole catalogue into every
+ * launch to draw two layers. The colourways themselves are not A1's design -- they are
+ * the project's, so every avatar gets them. An adapted part is a fresh, simplified build of the same visual
  * idea using only api.helpers, not the original file's code -- it has to stand on its
  * own next to parts it never met.
  *
@@ -1931,12 +1936,200 @@
 
     // ---- Outer rings: a boundary further out ---------------------------------
 
+    // ---- Aurora colourways ---------------------------------------------------
+    /* Two named colourways, shared by the curtain (tier 3) and the veil (tier 4) so a
+       Borealis curtain and a Borealis veil are the same light at two distances rather
+       than two greens that nearly match. Bottom of the curtain to tip.
+
+       Borealis is the northern reading: a dark base, the green that does most of the
+       work in a real aurora, teal through the middle, and the rare violet crown at the
+       tips. Australis is its opposite rather than a recolour -- the accent and the
+       active colour trade ends, so the warm rose Borealis never reaches carries the body
+       and the cold aqua arrives at the tips, and `hang` flips so the curtain descends
+       from above instead of rising from below.
+
+       These are the one kind of part here that does not follow the colour theme. A named
+       colourway whose colours moved with the theme would not be that colourway any more
+       -- the same reasoning the README's "hot accents stay fixed" convention already
+       applies to R.E.D. 9000's lens and the Nexus's eyes -- so their applyPalette is
+       deliberately a no-op. Anyone wanting theme-tinted layers has every other part in
+       these two tiers to choose from. */
+    const AURORA = {
+        borealis: { stops: [0x04221a, 0x16d978, 0x2fe3ff, 0x8f6bff], hang: 1 },
+        australis: { stops: [0x260a33, 0xff3d7f, 0xc86bff, 0x58ffe0], hang: -1 },
+    };
+
+    // Samples a colourway's four stops as one continuous gradient, 0 at the curtain's
+    // base to 1 at its tip, times `brightness` -- which is how every fade here is done.
+    // These layers blend additively, so fading a colour toward black *is* fading it
+    // toward invisible; there is no per-vertex alpha to reach for.
+    const auroraScratch = new THREE.Color();
+    function auroraGradient(stops, t, brightness) {
+        const span = stops.length - 1;
+        const scaled = Math.min(span - 0.0001, Math.max(0, t) * span);
+        const index = Math.floor(scaled);
+        const colour = new THREE.Color(stops[index]);
+        colour.lerp(auroraScratch.setHex(stops[index + 1]), scaled - index);
+        return colour.multiplyScalar(brightness);
+    }
+
+    /* The curtain: six ribbons of light standing on a circle at the edge of the shape,
+       each a column of soft overlapping sprites running up the colourway's gradient.
+       Sprites rather than a quad per ribbon, which is what this started as and is worth
+       not going back to: the renderer's canvas has an alpha channel (see core.js), and an
+       additively blended quad writes its material's alpha over its whole rectangle
+       whatever its vertex colours say -- so a ribbon faded to black at its edges still
+       composited as a visible grey slab with hard corners against the page behind the
+       canvas. A sprite's alpha comes from its own soft texture, so a ribbon has no edge
+       anywhere. */
+    function buildAuroraCurtain(api, options, way) {
+        const BANDS = 6;
+        const BEADS = 14;
+        const radius = options.radius * 1.35;
+        const span = options.radius * 2.1;
+
+        const group = new THREE.Group();
+        const ribbons = [];
+        const texture = api.helpers.glowTexture(64);
+
+        for (let b = 0; b < BANDS; b++) {
+            const centreAngle = (b / BANDS) * Math.PI * 2 + (b % 2) * 0.12;
+            // Three heights and three leans, so six ribbons at one size do not read as a fence.
+            const height = span * (0.78 + (b % 4) * 0.12);
+            const lean = ((b % 3) - 1) * 0.1;
+            const beads = [];
+            for (let i = 0; i < BEADS; i++) {
+                const t = i / (BEADS - 1);
+                // Out at the tip, in at the foot, and gone at both -- a ribbon that simply
+                // stops at its lowest bead draws a hard line under the whole curtain.
+                const brightness = (1 - Math.pow(t, 3.4)) * Math.min(1, t / 0.18);
+                const mat = new THREE.SpriteMaterial({
+                    map: texture,
+                    color: auroraGradient(way.stops, t, 1).getHex(),
+                    transparent: true,
+                    opacity: 0.42 * brightness,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                });
+                const sprite = new THREE.Sprite(mat);
+                sprite.scale.set(radius * 0.38, height * 0.26, 1);
+                group.add(sprite);
+                beads.push({ sprite, mat, t, brightness });
+            }
+            ribbons.push({ beads, centreAngle, height, lean, phase: b * 1.7 });
+        }
+
+        return {
+            object: group,
+            applyPalette() {},
+            animate(ctx) {
+                const sway = 0.7 + ctx.audio * 1.6 + ctx.click * 0.6;
+                // Read straight off the world matrix rather than through
+                // getWorldQuaternion: the vendored three bundle carries only the symbols
+                // the frontend already names (see scripts/build_vendor_three.sh), and a
+                // Quaternion is not one of them. It also picks up the recipe's own spin,
+                // which a part is never told about directly.
+                const world = group.matrixWorld.elements;
+                ribbons.forEach((ribbon) => {
+                    // A ribbon swung round to the front of the circle stands between the
+                    // viewer and the core, so it is dimmed there; behind the core it burns
+                    // at full strength.
+                    const toward = world[2] * Math.cos(ribbon.centreAngle) +
+                        world[10] * Math.sin(ribbon.centreAngle);
+                    const depthFade = 1 - 0.68 * Math.max(0, toward);
+                    ribbon.beads.forEach((bead) => {
+                        const ripple = Math.sin(ctx.time * 0.5 + ribbon.phase + bead.t * 3.4);
+                        const angle = ribbon.centreAngle + (ripple * 0.06 + ribbon.lean) * sway * bead.t;
+                        const r = radius + ripple * span * 0.055 * sway * bead.t;
+                        bead.sprite.position.set(
+                            Math.cos(angle) * r,
+                            (-ribbon.height * 0.42 + bead.t * ribbon.height + ripple * 3 * sway) * way.hang,
+                            Math.sin(angle) * r
+                        );
+                        bead.mat.opacity = bead.brightness * depthFade *
+                            (0.42 + Math.sin(ctx.time * 0.8 + ribbon.phase) * 0.06 + ctx.audio * 0.22);
+                    });
+                });
+            },
+        };
+    }
+
+    /* The veil: three wide soft washes behind everything and a thin scatter of points in
+       front of them. An ambient layer rather than a structure, which is the distinction
+       between the effects tier and the outer-ring tier above it. It only breathes and
+       drifts sideways; anything sharper read as a second avatar competing with the core. */
+    function buildAuroraVeil(api, options, way) {
+        const group = new THREE.Group();
+        const washes = [];
+        const unit = options.radius;
+        [
+            { colour: way.stops[1], scale: [unit * 4.8, unit * 1.9], y: unit * 0.42 * way.hang, opacity: 0.20, speed: 0.11 },
+            { colour: way.stops[2], scale: [unit * 3.9, unit * 1.4], y: -unit * 0.06 * way.hang, opacity: 0.16, speed: -0.08 },
+            { colour: way.stops[3], scale: [unit * 2.9, unit * 0.9], y: unit * 0.71 * way.hang, opacity: 0.12, speed: 0.15 },
+        ].forEach((band, i) => {
+            const mat = new THREE.SpriteMaterial({
+                map: api.helpers.glowTexture(64), color: band.colour, transparent: true,
+                opacity: band.opacity, blending: THREE.AdditiveBlending, depthWrite: false,
+            });
+            const sprite = new THREE.Sprite(mat);
+            sprite.scale.set(band.scale[0], band.scale[1], 1);
+            sprite.position.set(0, band.y, -unit * 1.4 + i * 6);
+            group.add(sprite);
+            washes.push({ sprite, mat, base: band, phase: i * 2.1 });
+        });
+
+        const DUST = 160;
+        const positions = new Float32Array(DUST * 3);
+        const colors = new Float32Array(DUST * 3);
+        for (let i = 0; i < DUST; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * unit * 4.8;
+            positions[i * 3 + 1] = (Math.random() - 0.5) * unit * 3.0;
+            positions[i * 3 + 2] = -unit * 1.1 + Math.random() * unit * 0.8;
+            const colour = auroraGradient(way.stops, 0.35 + Math.random() * 0.65, 0.6 + Math.random() * 0.4);
+            colors[i * 3] = colour.r;
+            colors[i * 3 + 1] = colour.g;
+            colors[i * 3 + 2] = colour.b;
+        }
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const dustMat = new THREE.PointsMaterial({
+            size: 1.5, vertexColors: true, map: api.helpers.glowTexture(32),
+            transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false,
+        });
+        const dust = new THREE.Points(geom, dustMat);
+        group.add(dust);
+
+        return {
+            object: group,
+            applyPalette() {},
+            animate(ctx) {
+                washes.forEach(({ sprite, mat, base, phase }) => {
+                    sprite.position.x = Math.sin(ctx.time * base.speed + phase) * unit * 0.42;
+                    mat.opacity = base.opacity + Math.sin(ctx.time * 0.4 + phase) * 0.04 + ctx.audio * 0.12;
+                });
+                dust.rotation.z = ctx.time * 0.01;
+                dustMat.opacity = 0.6 + Math.sin(ctx.time * 0.7) * 0.15 + ctx.click * 0.2;
+            },
+        };
+    }
+
     const OUTER_RINGS = {
         none: {
             label: 'Nothing',
             build() {
                 return { object: new THREE.Group(), applyPalette() {}, animate() {} };
             },
+        },
+
+        auroraBorealis: {
+            label: 'Aurora curtain (Borealis)',
+            build(api, options) { return buildAuroraCurtain(api, options, AURORA.borealis); },
+        },
+
+        auroraAustralis: {
+            label: 'Aurora curtain (Australis)',
+            build(api, options) { return buildAuroraCurtain(api, options, AURORA.australis); },
         },
 
         rings: {
@@ -2632,6 +2825,16 @@
             build() {
                 return { object: new THREE.Group(), applyPalette() {}, animate() {} };
             },
+        },
+
+        auroraBorealis: {
+            label: 'Aurora veil (Borealis)',
+            build(api, options) { return buildAuroraVeil(api, options, AURORA.borealis); },
+        },
+
+        auroraAustralis: {
+            label: 'Aurora veil (Australis)',
+            build(api, options) { return buildAuroraVeil(api, options, AURORA.australis); },
         },
 
         lattice: {
