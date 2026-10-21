@@ -77,6 +77,80 @@ if grep -REn "$others" src-tauri/Cargo.toml >/dev/null 2>&1; then
     status=1
 fi
 
+# Property 1 covers HTTP requests. It says nothing about a socket, and twice now that has
+# been the hole: peers.rs wrote its pairing requests by hand over rustls, and code_proxy.rs
+# relays the sandbox's traffic through a bare TcpStream. Neither names a ureq verb, so the
+# check above passed both while they reached the network on their own terms -- one of them
+# off the LAN entirely, the other straight through local-only mode.
+#
+# So outbound sockets are enumerated rather than forbidden. A raw socket is sometimes the
+# right answer: ureq cannot report which certificate it accepted, and a CONNECT proxy is not
+# an HTTP client. What is not acceptable is a new one appearing without anybody deciding it
+# should. Each file below is listed with the reason it opens one and what gates it, and a
+# file not on the list fails this check -- which is the review conversation, had at the
+# moment the socket is added instead of months later.
+#
+#   code_model.rs   the sandbox's bridge to a model server on this machine or this LAN
+#   code_proxy.rs   the sandbox's outbound relay; gated by the project policy allow list,
+#                   by the operator's per-host answer, and by local-only mode through
+#                   code_sandbox::network_for
+#   doctor.rs       a reachability probe for the diagnostic report
+#   lan.rs          a reachability probe for a machine found on the LAN
+#   peers.rs        pairing and peer requests, written by hand so the certificate
+#                   fingerprint can be read and pinned; confined to this machine and this
+#                   network by local_only::is_local_ip in its one request() chokepoint
+socket_allowed='src-tauri/src/(code_model|code_proxy|doctor|lan|peers)\.rs'
+sockets='(TcpStream::connect|connect_timeout)'
+socket_offenders=$(grep -REln "$sockets" src-tauri/src --include='*.rs' \
+    | grep -vE "^${socket_allowed}$" || true)
+if [ -n "$socket_offenders" ]; then
+    echo "FAIL: an outbound socket is opened in a file that is not accounted for."
+    echo "      Every way off this machine is either net::get/net::post, which ask the"
+    echo "      operator's local-only setting first, or one of the sockets listed in this"
+    echo "      script with the reason it exists and what gates it. A new one is neither."
+    echo "      If it genuinely needs a socket, gate it -- local_only::is_local_ip for"
+    echo "      something that must not leave the LAN, local_only::enabled for something"
+    echo "      that must not leave the machine -- and add it to socket_allowed above with"
+    echo "      a line saying which."
+    for file in $socket_offenders; do
+        grep -REn "$sockets" "$file" | sed "s|^|      $file:|"
+    done
+    status=1
+fi
+
+# A listed file that no longer opens a socket should come off the list, or the list stops
+# describing the program and starts being folklore.
+for listed in code_model code_proxy doctor lan peers; do
+    file="src-tauri/src/${listed}.rs"
+    if [ -f "$file" ] && ! grep -REq "$sockets" "$file"; then
+        echo "FAIL: $file is listed as opening an outbound socket and no longer does."
+        echo "      Remove it from socket_allowed, so the list keeps meaning something."
+        status=1
+    fi
+done
+
+# The third way out is a crate that does its own networking. msedge-tts is one: it speaks
+# WebSocket to Microsoft's read-aloud service, so neither the verb check nor the socket
+# check above sees it, and what it sends is the text of everything the companion says out
+# loud. Its gate is `TtsEngine::resolve(local_only)`, which turns Auto into Local and
+# overrules an explicit Cloud choice -- but only where a caller remembers to call it, which
+# is the property the rest of this script exists to stop relying on.
+#
+# So: choosing a TTS engine and resolving it against the mode are one expression. Both
+# callers already write it that way; this makes a third that forgets fail here instead of
+# shipping. `TtsEngine::` so the enum's own unit tests, which construct engines by their
+# short name, are not what has to satisfy it.
+tts_unresolved=$(grep -REn 'TtsEngine::from_key' src-tauri/src --include='*.rs' \
+    | grep -v '\.resolve(' || true)
+if [ -n "$tts_unresolved" ]; then
+    echo "FAIL: a TTS engine is chosen without being resolved against local-only mode."
+    echo "      msedge-tts sends the text of everything spoken to Microsoft, and the mode"
+    echo "      says nothing leaves this machine. Chain .resolve(local_only) onto it, as"
+    echo "      the existing callers do, so the switch cannot be beaten by a settings row."
+    printf '%s\n' "$tts_unresolved" | sed 's/^/      /'
+    status=1
+fi
+
 # The gate needs the settings database, and build_llm_engine is the one place every entry
 # point -- the native app, --serve, and each CLI subcommand -- gets its engine. If that
 # call goes, the gate refuses everything and the check above passes vacuously.

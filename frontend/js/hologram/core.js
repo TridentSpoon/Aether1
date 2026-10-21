@@ -28,7 +28,7 @@
  *   js/app.js's EASTER_EGG_RULES, checkEasterEggTriggers and flashEasterEgg.
  * - "The Umbrals": A.R.X.LIMES (2) and A.R.X.LOGOS (5), the A.R.X. name in general.
  * - "The eXcelsior Class": the plugins enXephalon, C.I.C.E.R.O., PRAXIS,
- *   Chrono-mAIstresse and m.A.I.r.a.d. index.html's
+ *   Chrono-mAIstresse, m.A.I.r.a.d., vA1or, CorvA1s, Divinai and TithesA1s. index.html's
  *   avatar-menu keeps a family heading off screen while its grid is empty, which is how
  *   this one waited for its first avatar.
  *
@@ -430,6 +430,12 @@ class HologramAvatar {
 
     // Which 3D shape is visible / animated. Independent of color theme.
     setAvatar(avatar) {
+        /* A saved setting may still name an avatar by a spelling it has since outgrown --
+           see ALIASES in avatar-loader.js. Resolve it once, here, so that everything
+           downstream sees the same id: the plugin lookup below, the per-frame lookup in
+           animate.js, and materialiseAvatar's retry. The built-in branches further down
+           name their own old spellings explicitly and are unaffected either way. */
+        avatar = HologramAvatar.canonicalAvatarId(avatar);
         this.currentAvatar = avatar;
         /* Its file may not be in the page yet -- they arrive on demand (see
            js/hologram/avatar-loader.js). Build it if it is here, otherwise fetch it and come
