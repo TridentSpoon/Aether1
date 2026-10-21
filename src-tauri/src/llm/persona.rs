@@ -841,6 +841,15 @@ pub enum Provider {
     Groq,
     Gemini,
     Anthropic,
+    /// An OpenAI-compatible gateway that fans out to other providers: OpenWork's AI
+    /// Gateway, a LiteLLM or Bifrost proxy, anything of that shape. One key and one
+    /// address stand in for every provider behind it, and the model id decides which one
+    /// answers -- which is why this is a provider in its own right rather than a base-URL
+    /// override on `OpenAi`: the operator picks a model, not a company.
+    ///
+    /// It is also the one provider whose address says nothing about where the prompt
+    /// goes. See `net::require_forwarding`.
+    Gateway,
     Offline,
 }
 
@@ -853,6 +862,7 @@ impl Provider {
             "groq" => Provider::Groq,
             "gemini" => Provider::Gemini,
             "anthropic" => Provider::Anthropic,
+            "gateway" => Provider::Gateway,
             _ => Provider::Offline,
         }
     }
@@ -870,7 +880,11 @@ impl Provider {
     pub fn supports_native_tools(&self) -> bool {
         matches!(
             self,
-            Provider::OpenAi | Provider::Groq | Provider::Gemini | Provider::Anthropic
+            Provider::OpenAi
+                | Provider::Groq
+                | Provider::Gemini
+                | Provider::Anthropic
+                | Provider::Gateway
         )
     }
 
@@ -882,6 +896,7 @@ impl Provider {
             Provider::Groq => "groq",
             Provider::Gemini => "gemini",
             Provider::Anthropic => "anthropic",
+            Provider::Gateway => "gateway",
             Provider::Offline => "offline",
         }
     }
@@ -899,6 +914,7 @@ impl Provider {
             Provider::Groq => "Groq",
             Provider::Gemini => "Gemini",
             Provider::Anthropic => "Anthropic",
+            Provider::Gateway => "AI gateway",
             Provider::Offline => "Offline",
         }
     }
@@ -923,6 +939,18 @@ mod tests {
         assert_eq!(Persona::from_key("a1ter_nul"), Persona::Alt);
         assert_eq!(Persona::from_key("halcy"), Persona::Halcy);
         assert_eq!(Persona::from_key("unknown-garbage"), Persona::Default);
+    }
+
+    /// A provider whose key does not round-trip silently becomes Offline, which reads as
+    /// "no model configured" to everything downstream.
+    #[test]
+    fn the_gateway_provider_round_trips_and_speaks_native_tools() {
+        assert_eq!(Provider::from_key("gateway"), Provider::Gateway);
+        assert_eq!(Provider::Gateway.key(), "gateway");
+        assert!(!Provider::Gateway.label().is_empty());
+        // Everything behind a gateway is a current cloud model, so the fenced-text
+        // fallback written for older local servers would be the wrong protocol for it.
+        assert!(Provider::Gateway.supports_native_tools());
     }
 
     /// The two personas that were dropped when this list was rebuilt around specialities.

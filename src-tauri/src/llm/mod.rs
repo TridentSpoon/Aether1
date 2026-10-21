@@ -239,6 +239,17 @@ impl UsageStats {
 
 /// A provider call that could not be completed. `partial` is whatever text had already
 /// been streamed to the operator before it failed -- empty when nothing had.
+/// Where a gateway's address lives. Separate from `llm_endpoint` so that configuring a
+/// gateway does not overwrite the Ollama address an operator still wants when they switch
+/// back -- the two ends of the spectrum are both real configurations and neither should
+/// cost the other.
+pub const GATEWAY_URL_SETTING: &str = "llm_gateway_url";
+
+/// Where a gateway's key lives. Separate from `llm_api_key` for the same reason, and
+/// because one gateway key stands in for every provider key behind it: overwriting a
+/// provider key with it would lose the thing and gain nothing.
+pub const GATEWAY_KEY_SETTING: &str = "llm_gateway_key";
+
 struct StreamFailure {
     message: String,
     partial: String,
@@ -281,7 +292,45 @@ impl Config {
                 !crate::local_only::is_local_endpoint(&self.endpoint)
             }
             Provider::OpenAi | Provider::Groq | Provider::Gemini | Provider::Anthropic => true,
+            // Unconditionally, and *not* by asking `is_local_endpoint` about the gateway
+            // URL the way the two arms above do for theirs. A gateway forwards: one on
+            // `http://localhost:4000/v1` is a local address with a public API behind it,
+            // so judging it by its address would report that nothing left the machine
+            // while the prompt was on its way to OpenAI. The gate underneath agrees --
+            // see `net::require_forwarding`, which is what actually stops the request.
+            Provider::Gateway => true,
         }
+    }
+
+    /// Why this turn cannot be sent to a gateway yet, when that is the situation.
+    ///
+    /// Only a gateway has this problem. Every other provider either has a sensible
+    /// default model (`openai_defaults`) or generates from whatever is loaded, so an
+    /// unset `llm_model` is recoverable. A gateway's model id is also the routing key
+    /// that decides which provider answers, so there is nothing to fall back to and
+    /// guessing one would bill somebody for a model they did not choose.
+    fn gateway_needs_a_model(&self) -> Option<String> {
+        if self.provider != Provider::Gateway {
+            return None;
+        }
+        let model = self.model_name.trim();
+        // `llm_model`'s default is the offline persona's stand-in, which is not a model
+        // any gateway has heard of, so it counts as unset here rather than being sent.
+        if !model.is_empty() && model != "halcy-core" {
+            return None;
+        }
+        if self.endpoint.is_empty() {
+            return Some(
+                "No gateway is configured yet. Put its address and key in Settings, under \
+                 AI Model Connection, and then pick a model from its list."
+                    .to_string(),
+            );
+        }
+        Some(
+            "No model is chosen for the gateway, and a gateway needs one to know which \
+             provider should answer. Pick one from its model list in Settings."
+                .to_string(),
+        )
     }
 
     /// How the refusal names what it declined to talk to. The endpoint is included only
@@ -291,6 +340,12 @@ impl Config {
         match self.provider {
             Provider::Ollama | Provider::LmStudio => {
                 format!("{} at {} was not contacted", self.provider, self.endpoint)
+            }
+            // Named by address like the local two, for the opposite reason: there is no
+            // one company to name, and "the gateway was not contacted" leaves an operator
+            // with two gateways configured in different profiles none the wiser.
+            Provider::Gateway if !self.endpoint.is_empty() => {
+                format!("the gateway at {} was not contacted", self.endpoint)
             }
             _ => format!("{} was not contacted", self.provider),
         }
@@ -483,6 +538,22 @@ impl LlmEngine {
 
         let provider = Provider::from_key(&provider_key);
         let persona = Persona::from_key(&persona_key);
+
+        // A gateway is addressed and authenticated by its own two settings rather than the
+        // shared pair, so that configuring one does not overwrite an Ollama endpoint or a
+        // provider key the operator still wants when they switch back. From here down it
+        // is just an OpenAI-compatible endpoint with a bearer token, which is why the
+        // dispatch below needs no arm of its own.
+        let (api_key, endpoint) = if provider == Provider::Gateway {
+            (
+                self.db.get_setting_string(GATEWAY_KEY_SETTING, ""),
+                crate::model_scanner::gateway_base(
+                    &self.db.get_setting_string(GATEWAY_URL_SETTING, ""),
+                ),
+            )
+        } else {
+            (api_key, endpoint)
+        };
 
         // Step 19. Only for a local provider: routing between models the operator has
         // installed is the whole point, and quietly swapping the model on a cloud call
@@ -685,6 +756,18 @@ impl LlmEngine {
         ctx: &ChatContext,
         sink: providers::Sink,
     ) -> Result<providers::Completion, StreamFailure> {
+        // Checked before anything is sent, because the two ways this goes wrong otherwise
+        // are both bad: an empty model id gets a 400 whose body talks about a field name,
+        // and `llm_model`'s default ("halcy-core", the offline persona's stand-in) gets a
+        // 404 about a model nobody has ever offered. Neither tells the operator that the
+        // actual problem is that they have not picked a model yet.
+        if let Some(refusal) = config.gateway_needs_a_model() {
+            return Err(StreamFailure {
+                message: refusal,
+                partial: String::new(),
+            });
+        }
+
         let mut partial = String::new();
 
         let streamed = {
@@ -699,7 +782,7 @@ impl LlmEngine {
                     ctx,
                     &mut collect,
                 ),
-                Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
                     providers::stream_openai_compatible(
                         config.provider,
                         &config.endpoint,
@@ -730,7 +813,7 @@ impl LlmEngine {
                     Provider::Ollama => {
                         providers::call_ollama(&config.endpoint, &config.model_name, ctx)
                     }
-                    Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+                    Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
                         providers::call_openai_compatible(
                             config.provider,
                             &config.endpoint,
@@ -810,7 +893,7 @@ impl LlmEngine {
         let started = Instant::now();
         let result = match provider {
             Provider::Ollama => providers::call_ollama(endpoint, model, &ctx),
-            Provider::LmStudio | Provider::OpenAi | Provider::Groq => {
+            Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
                 providers::call_openai_compatible(provider, endpoint, api_key, model, &ctx)
             }
             Provider::Gemini => providers::call_gemini(api_key, model, &ctx),
@@ -1412,6 +1495,109 @@ impl LlmEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Config with only the fields these tests care about set; everything else is the
+    /// cheapest valid value, because a provider decision must not depend on a persona or
+    /// a machine name.
+    fn config_for(provider: Provider, endpoint: &str, model: &str) -> Config {
+        Config {
+            agent_name: String::new(),
+            machine: String::new(),
+            operator_name: String::new(),
+            provider,
+            model_name: model.to_string(),
+            api_key: String::new(),
+            endpoint: endpoint.to_string(),
+            persona: Persona::Default,
+            persona_key: "default".to_string(),
+            custom_directive: String::new(),
+            local_only: false,
+        }
+    }
+
+    /// The decision this whole feature turns on. An Ollama endpoint on loopback does not
+    /// reach the internet; a *gateway* on the very same address does, because it forwards.
+    /// If these two ever agree, local-only mode has a hole in it with a localhost URL on
+    /// it -- and `localhost:4000` is the address in LiteLLM's own documentation, so it is
+    /// the configuration an operator is most likely to have.
+    #[test]
+    fn a_gateway_on_loopback_still_reaches_the_internet() {
+        let gateway = "http://localhost:4000/v1";
+        assert!(
+            !config_for(Provider::Ollama, gateway, "llama3.2").reaches_the_internet(),
+            "a local model server does not reach the internet"
+        );
+        assert!(
+            config_for(Provider::Gateway, gateway, "gpt-4o").reaches_the_internet(),
+            "a gateway forwards, so it reaches the internet whatever address it answers on"
+        );
+        // Not an artefact of that one address.
+        for address in [
+            "http://127.0.0.1:4000/v1",
+            "http://192.168.1.9:4000/v1",
+            "http://aether-box.local:4000/v1",
+            "https://gateway.example/api/v1",
+            "",
+        ] {
+            assert!(
+                config_for(Provider::Gateway, address, "gpt-4o").reaches_the_internet(),
+                "a gateway at {address:?} must still read as reaching the internet"
+            );
+        }
+    }
+
+    /// The refusal has to name which gateway, because an operator with one configured per
+    /// profile learns nothing from "the gateway was not contacted".
+    #[test]
+    fn a_refused_gateway_turn_names_the_address() {
+        let named = config_for(Provider::Gateway, "https://gw.example/api/v1", "gpt-4o")
+            .what_was_not_contacted();
+        assert!(named.contains("gw.example"), "{named}");
+        // With nothing configured there is no address to name, and the generic line is
+        // correct rather than printing an empty one.
+        let bare = config_for(Provider::Gateway, "", "gpt-4o").what_was_not_contacted();
+        assert!(!bare.contains("at "), "{bare}");
+    }
+
+    /// A gateway's model id decides which provider answers and who is billed, so an unset
+    /// one is refused before anything is sent -- and the refusal has to say that, rather
+    /// than passing on a 400 about a field name or a 404 about "halcy-core".
+    #[test]
+    fn a_gateway_without_a_model_refuses_before_sending_anything() {
+        let address = "https://gw.example/api/v1";
+
+        let unset = config_for(Provider::Gateway, address, "")
+            .gateway_needs_a_model()
+            .expect("an empty model must refuse");
+        assert!(unset.contains("model list"), "{unset}");
+
+        // `llm_model`'s default is the offline persona's stand-in. No gateway has heard of
+        // it, so it counts as unset rather than being sent and 404ing.
+        let defaulted = config_for(Provider::Gateway, address, "halcy-core")
+            .gateway_needs_a_model()
+            .expect("the default model must refuse too");
+        assert!(defaulted.contains("model list"), "{defaulted}");
+
+        // Nothing configured at all is a different problem and gets a different sentence,
+        // because "pick a model" is useless advice with no gateway to pick one from.
+        let nothing = config_for(Provider::Gateway, "", "")
+            .gateway_needs_a_model()
+            .expect("no gateway at all must refuse");
+        assert!(nothing.contains("Settings"), "{nothing}");
+
+        // A real model passes, and no other provider is subject to this check at all.
+        assert!(config_for(Provider::Gateway, address, "gpt-4o")
+            .gateway_needs_a_model()
+            .is_none());
+        for provider in [Provider::Ollama, Provider::OpenAi, Provider::Offline] {
+            assert!(
+                config_for(provider, "", "")
+                    .gateway_needs_a_model()
+                    .is_none(),
+                "{provider} must not be held to the gateway's model rule"
+            );
+        }
+    }
 
     #[test]
     fn generated_mission_names_are_short_plain_names() {

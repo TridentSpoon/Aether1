@@ -124,11 +124,19 @@ pub fn is_local_endpoint(endpoint: &str) -> bool {
 pub fn setting_reaches_the_internet(key: &str, value: &serde_json::Value) -> Option<String> {
     let text = value.as_str()?;
     match key {
-        // The wire keys of the four cloud providers, as `Provider::from_key` reads them.
-        "llm_provider" => matches!(text, "openai" | "groq" | "gemini" | "anthropic")
+        // The wire keys of the cloud providers, as `Provider::from_key` reads them.
+        // "gateway" is in the list whatever address it is pointed at, for the same reason
+        // its gate ignores the address: a gateway forwards, so it is a way off this
+        // machine even on loopback. See `net::require_forwarding`.
+        "llm_provider" => matches!(text, "openai" | "groq" | "gemini" | "anthropic" | "gateway")
             .then(|| format!("{text} is a cloud provider")),
         "llm_endpoint" => (!is_local_endpoint(text))
             .then(|| format!("{text} is not on this machine or the local network")),
+        // Deliberately not judged by `is_local_endpoint`: a gateway URL is a forwarder's
+        // address, and "it is on localhost" says nothing about where the prompt ends up.
+        // Any gateway URL at all is a way off the machine.
+        "llm_gateway_url" => (!text.trim().is_empty())
+            .then(|| format!("{text} is a gateway, which forwards prompts off this machine")),
         _ => None,
     }
 }
@@ -143,6 +151,33 @@ pub fn refusal(action: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The companion can set `llm_provider` about itself, so every value of it that
+    /// reaches off the machine has to be caught here or the mode has a one-approval exit.
+    /// "gateway" is the one whose address proves nothing, so it is judged by name.
+    #[test]
+    fn a_gateway_is_a_way_off_this_machine_whatever_its_address() {
+        let by_name = setting_reaches_the_internet("llm_provider", &serde_json::json!("gateway"));
+        assert!(
+            by_name.is_some(),
+            "switching to a gateway reaches the internet"
+        );
+
+        // The point of the whole exercise: a loopback gateway URL is still a way out,
+        // where a loopback *Ollama* URL is not. These two lines must disagree.
+        let loopback = serde_json::json!("http://localhost:4000/v1");
+        assert!(
+            setting_reaches_the_internet("llm_endpoint", &loopback).is_none(),
+            "a local Ollama address does not reach the internet"
+        );
+        assert!(
+            setting_reaches_the_internet("llm_gateway_url", &loopback).is_some(),
+            "a gateway on loopback still forwards off this machine"
+        );
+
+        // Empty is not a gateway, so it is not a way out.
+        assert!(setting_reaches_the_internet("llm_gateway_url", &serde_json::json!("")).is_none());
+    }
 
     #[test]
     fn an_unset_or_empty_variable_is_off() {

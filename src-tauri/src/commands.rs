@@ -639,6 +639,8 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "llm_model": "halcy-core",
         "llm_endpoint": "http://localhost:11434",
         "llm_api_key": "",
+        "llm_gateway_url": "",
+        "llm_gateway_key": "",
         "persona_type": "default",
         "custom_directive": "",
         "voice_name": llm::DEFAULT_VOICE,

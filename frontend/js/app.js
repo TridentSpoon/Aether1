@@ -8928,6 +8928,73 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /// Shows the gateway's own fields only when the gateway is the chosen provider.
+    ///
+    /// Hidden rather than disabled: the two boxes above it mean something different for a
+    /// gateway, and a form showing four address-and-key boxes at once invites filling in
+    /// the wrong pair.
+    function toggleGatewayFields() {
+        const box = document.getElementById('gateway-settings');
+        if (!box) return;
+        const isGateway = document.getElementById('setting-provider')?.value === 'gateway';
+        box.classList.toggle('hidden', !isGateway);
+    }
+
+    /// Asks the gateway which models this key may use and fills the model dropdown.
+    ///
+    /// This is the one thing a gateway can do that no cloud provider in this list can, and
+    /// the reason it is worth having: the cloud half of this form has never been able to
+    /// offer a model list, only a free-text box and a guess.
+    async function handleGatewayModels() {
+        const url = document.getElementById('setting-gateway-url').value.trim();
+        const apiKey = document.getElementById('setting-gateway-key').value;
+        const status = document.getElementById('gateway-models-status');
+        const button = document.getElementById('btn-gateway-models');
+
+        if (button) button.disabled = true;
+        if (status) {
+            status.classList.remove('hidden', 'border-green-500/40', 'border-red-500/40', 'text-green-400', 'text-red-400');
+            status.classList.add('text-cyan-300', 'animate-pulse');
+            status.textContent = 'Asking the gateway...';
+        }
+
+        try {
+            const models = IS_TAURI
+                ? await tauriInvoke('gateway_models_rust', { url, apiKey })
+                : await (async () => {
+                    const resp = await apiFetch('/api/llm/gateway-models', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, api_key: apiKey })
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    if (!resp.ok) throw new Error(data.error || `the gateway was not reached: ${resp.status}`);
+                    return data.models || [];
+                })();
+
+            populateModelPicker({ models });
+            if (status) {
+                status.classList.remove('animate-pulse', 'text-cyan-300');
+                // An empty list is an answer, not a failure, and says something an
+                // operator can act on -- so it does not get the red treatment.
+                if (models.length) {
+                    status.classList.add('text-green-400', 'border-green-500/40');
+                    status.textContent = `✔ ${models.length} model${models.length === 1 ? '' : 's'} available. Pick one from WHICH MODEL above.`;
+                } else {
+                    status.textContent = 'The gateway answered, but this key has no models on it yet. Whoever administers it has to grant some.';
+                }
+            }
+        } catch (e) {
+            if (status) {
+                status.classList.remove('animate-pulse', 'text-cyan-300');
+                status.classList.add('text-red-400', 'border-red-500/40');
+                status.textContent = `⚠ ${e.message || e}`;
+            }
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
     /// Tries whatever is currently typed into the Provider/Model/Endpoint/API Key fields --
     /// not what's saved -- with one real message, so a mistake is caught here instead of
     /// discovered later in chat. Never touches conversation history or token telemetry: this
@@ -8935,8 +9002,16 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleTestConnection() {
         const provider = document.getElementById('setting-provider').value;
         const model = document.getElementById('setting-model').value.trim();
-        const endpoint = document.getElementById('setting-endpoint').value.trim();
-        const apiKey = document.getElementById('setting-apikey').value;
+        // The gateway is addressed and authenticated by its own two boxes, so a test of it
+        // has to read those -- testing it against the Ollama address sitting in the
+        // endpoint box would fail for a reason that has nothing to do with the gateway.
+        const isGateway = provider === 'gateway';
+        const endpoint = isGateway
+            ? document.getElementById('setting-gateway-url').value.trim()
+            : document.getElementById('setting-endpoint').value.trim();
+        const apiKey = isGateway
+            ? document.getElementById('setting-gateway-key').value
+            : document.getElementById('setting-apikey').value;
 
         if (btnTestConnection) btnTestConnection.disabled = true;
         if (testConnectionStatus) {
@@ -10576,6 +10651,9 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-model').value = s.llm_model || 'halcy-core';
             document.getElementById('setting-endpoint').value = s.llm_endpoint || 'http://localhost:11434';
             document.getElementById('setting-apikey').value = s.llm_api_key || '';
+            document.getElementById('setting-gateway-url').value = s.llm_gateway_url || '';
+            document.getElementById('setting-gateway-key').value = s.llm_gateway_key || '';
+            toggleGatewayFields();
             document.getElementById('setting-persona').value = s.persona_type || 'default';
             document.getElementById('setting-custom-directive').value = s.custom_directive || '';
             toggleCustomPersonaField();
@@ -10780,6 +10858,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 llm_model: document.getElementById('setting-model').value,
                 llm_endpoint: document.getElementById('setting-endpoint').value,
                 llm_api_key: document.getElementById('setting-apikey').value,
+                llm_gateway_url: document.getElementById('setting-gateway-url').value.trim(),
+                llm_gateway_key: document.getElementById('setting-gateway-key').value,
                 persona_type: document.getElementById('setting-persona').value,
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
@@ -12055,6 +12135,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (providerSelect) {
         providerSelect.addEventListener('change', (e) => {
             applyDefaultModelForProvider(e.target.value);
+            toggleGatewayFields();
+        });
+    }
+
+    const btnGatewayModels = document.getElementById('btn-gateway-models');
+    if (btnGatewayModels) {
+        btnGatewayModels.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            handleGatewayModels();
         });
     }
 

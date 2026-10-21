@@ -1738,10 +1738,13 @@
                                         <option value="groq">Groq (cloud)</option>
                                         <option value="openai">OpenAI (cloud)</option>
                                         <option value="anthropic">Anthropic Claude (cloud)</option>
+                                        <option value="gateway">An AI gateway -- many providers, one key</option>
                                     </select>
                                     <p class="text-[10px] font-mono text-slate-400 leading-snug">
                                         &quot;On this computer&quot; means nothing you type ever leaves the
-                                        machine. A cloud option sends it to that company.
+                                        machine. A cloud option sends it to that company. A gateway sends it
+                                        on to whichever company the model belongs to, even when the gateway
+                                        itself is running on this machine.
                                     </p>
                                 </div>
 
@@ -1774,6 +1777,48 @@
                                     <label for="setting-apikey" class="text-xs font-mono text-cyan-300 block">API KEY (cloud only)</label>
                                     <input id="setting-apikey" type="password" placeholder="Key for the cloud provider selected above" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                                 </div>
+                            </div>
+
+                            <!-- Only shown for the gateway provider. Its own address and key rather than
+                                 the two boxes above, so that setting a gateway up does not overwrite an
+                                 Ollama address or a provider key still wanted when switching back. -->
+                            <div id="gateway-settings" class="hidden space-y-2 border border-cyan-500/20 rounded p-3 bg-slate-900/40">
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div class="space-y-1">
+                                        <label for="setting-gateway-url" class="text-xs font-mono text-cyan-300 block">GATEWAY ADDRESS</label>
+                                        <input id="setting-gateway-url" type="text" placeholder="https://your-gateway/api/v1" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                        <span class="text-[11px] font-mono text-slate-500 block">
+                                            An OpenWork AI Gateway, a LiteLLM or Bifrost proxy, or anything
+                                            else speaking the OpenAI shape. A local one works too:
+                                            http://localhost:4000/v1
+                                        </span>
+                                    </div>
+
+                                    <div class="space-y-1">
+                                        <label for="setting-gateway-key" class="text-xs font-mono text-cyan-300 block">GATEWAY KEY</label>
+                                        <input id="setting-gateway-key" type="password" placeholder="One key for every provider behind it" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                        <span class="text-[11px] font-mono text-slate-500 block">
+                                            The gateway holds the provider keys. This one never reaches them.
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="text-[11px] font-mono text-slate-500">
+                                        Asks the gateway which models this key may use, and fills WHICH MODEL
+                                        above with the answer.
+                                    </span>
+                                    <button id="btn-gateway-models" class="cyber-btn text-[11px] py-1 px-2.5 text-cyan-300 whitespace-nowrap">
+                                        &#129520; List its models
+                                    </button>
+                                </div>
+                                <div id="gateway-models-status" class="hidden text-xs font-mono bg-slate-900/80 p-2.5 rounded border border-cyan-500/20"></div>
+
+                                <p class="text-[10px] font-mono text-amber-300 leading-snug">
+                                    A gateway passes your words on to another company, so local-only mode
+                                    turns it off -- including a gateway running on this machine, because the
+                                    address being local does not keep the prompt local.
+                                </p>
                             </div>
 
                             <div class="space-y-1.5">
