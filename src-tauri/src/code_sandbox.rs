@@ -418,6 +418,61 @@ pub fn unconfined_allowed(db: &MemoryDb) -> bool {
     db.get_setting_bool(UNCONFINED_SETTING, false)
 }
 
+/// Whether local-only mode can be kept for a command on this machine, and the refusal to
+/// give if it cannot.
+///
+/// Separated from the run path so the decision can be tested against a sandbox that is
+/// handed in rather than detected: the interesting case is a machine that cannot cut the
+/// network, and a test that runs only on such a machine is a test that passes by returning
+/// on every other one. Both are real -- Windows always, a host that forbids unsharing a
+/// network namespace sometimes -- and neither is the machine this is usually written on.
+pub fn local_only_blocks_running(db: &MemoryDb, sandbox: &Sandbox) -> Option<String> {
+    if crate::local_only::enabled(db) && !sandbox.can_cut_network() {
+        return Some(local_only_refusal(sandbox));
+    }
+    None
+}
+
+/// The refusal for a machine that cannot cut a command off from the network while
+/// local-only mode is on.
+///
+/// Two switches that cannot both be honoured here, and the one that gives way is the one
+/// the operator did not ask for. Agreeing to run commands without a sandbox is a statement
+/// about *this machine's files*; it is not agreement to let a command reach the internet
+/// while the mode whose entire job is to say nothing does is switched on. Those are
+/// different consents and the code should not treat one as the other.
+///
+/// So the command does not run. Not "runs with a warning", because the warning would be in
+/// a log nobody reads while the traffic left anyway, and not "runs with the proxy variables
+/// set", because a tool that ignores them is exactly the tool this is about. There is no
+/// way to honour the promise for a command on a machine like this, and the honest move is
+/// to say so rather than to run it and hope.
+///
+/// Note which way this fails on a machine that *can* cut the network: it does not reach
+/// here at all, because `network_for` has already handed the box `Net::None` and the
+/// command runs with no route anywhere. That is the good case, and it is why this refusal
+/// is about the machine rather than about the mode.
+pub fn local_only_refusal(sandbox: &Sandbox) -> String {
+    format!(
+        "run is off because local-only mode is on and this machine cannot cut a command \
+         off from the network: {}.\n\n\
+         Local-only mode says nothing leaves this machine. A command here would have your \
+         network whatever any switch says -- a build fetching its dependencies is traffic \
+         leaving a machine whose operator was told none would -- so it is refused instead \
+         of run with a promise that cannot be kept.\n\n\
+         Three ways on, depending on what you meant: install bubblewrap and the network is \
+         cut properly on this machine; run the command on a machine that can; or turn \
+         local-only mode off, which is the one that actually changes what you are agreeing \
+         to.",
+        match sandbox {
+            Sandbox::Unavailable(why) => (*why).to_string(),
+            Sandbox::Bubblewrap { .. } =>
+                "bubblewrap is here but this host will not let it unshare a network namespace"
+                    .to_string(),
+        }
+    )
+}
+
 /// The refusal a machine with no sandbox gets, which is also the whole explanation of what
 /// switching it off would mean.
 pub fn unconfined_refusal(sandbox: &Sandbox) -> String {
@@ -717,6 +772,54 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(&path).expect("open test db")
+    }
+
+    /// All four combinations of the two things that decide this, against a sandbox handed
+    /// in rather than detected -- so the Windows case is covered on a machine that is not
+    /// Windows, which is the whole reason this lives in its own function.
+    #[test]
+    fn local_only_blocks_running_only_where_the_network_cannot_be_cut() {
+        let cannot = Sandbox::Unavailable("there is no sandbox for this platform yet");
+        let can = Sandbox::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: true,
+        };
+        // Bubblewrap that cannot unshare a network namespace: confinement works, the
+        // network half does not, and that is the Linux shape of the same problem.
+        let half = Sandbox::Bubblewrap {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            can_unshare_net: false,
+        };
+
+        let off = test_db();
+        assert!(
+            local_only_blocks_running(&off, &cannot).is_none(),
+            "with the mode off this is not its business, whatever the machine is"
+        );
+
+        let on = test_db();
+        on.set_setting(crate::local_only::SETTING, &serde_json::json!(true))
+            .unwrap();
+        assert!(
+            local_only_blocks_running(&on, &can).is_none(),
+            "a machine that can cut the network is already handled by network_for, which \
+             hands the box no route at all -- refusing here as well would stop a command \
+             that was never going to reach anything"
+        );
+
+        for sandbox in [&cannot, &half] {
+            let refusal = local_only_blocks_running(&on, sandbox)
+                .expect("a machine that cannot cut the network cannot keep the promise");
+            assert!(
+                refusal.contains("local-only mode is on"),
+                "the refusal names the mode: {refusal}"
+            );
+            assert!(
+                refusal.contains("turn local-only mode off"),
+                "and offers the way out that actually changes what is being agreed to: \
+                 {refusal}"
+            );
+        }
     }
 
     /// The hole this closes: the sandbox had its own network switch and local-only mode was
