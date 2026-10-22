@@ -2216,10 +2216,7 @@ mod tests {
 
         let (today, _) = engine.db.local_now();
         let year = today.split('-').next().unwrap_or_default();
-        assert!(
-            prompt.contains("- Today: "),
-            "no Today line: {prompt}"
-        );
+        assert!(prompt.contains("- Today: "), "no Today line: {prompt}");
         assert!(
             prompt.contains(year) && !year.is_empty(),
             "the Today line does not carry this year ({year}): {prompt}"
