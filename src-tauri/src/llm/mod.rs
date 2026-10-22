@@ -44,6 +44,11 @@ pub use tts::{
 /// enough that a model stuck in a loop stops costing time and tokens.
 const MAX_TOOL_ROUNDS: usize = 6;
 
+/// How many times a round may ask for a tool in a form that cannot be read before the turn
+/// gives up on tools entirely. Counted separately from MAX_TOOL_ROUNDS because the two
+/// failures are different: rounds are progress, and a malformed block is not.
+const MAX_MALFORMED_RETRIES: usize = 2;
+
 /* There was a SESSION_TOKEN_BUDGET here: a flat 100,000 invented in this file, which the
 HUD then divided into to show "Used: 1.3%" and "Budget left: 98.7k" beside a gauge bar.
 Nothing enforced it and no provider reported it, so those three readings were a number this
@@ -611,6 +616,7 @@ impl LlmEngine {
             "{base_persona}\
              [LIVE HOST TELEMETRY]\n\
              - Identity: {agent_name}\n\
+             - Today: {today}\n\
              - Machine: {machine}\n\
              {operator_line}\
              - OS: {os_name} ({architecture})\n\
@@ -622,10 +628,16 @@ impl LlmEngine {
              1. Refer to live telemetry if asked about the system or device health. Name this \
              machine as it is named on the Machine line rather than calling it \"this machine\": \
              the operator may be running AETHER1 on several.\n\
-             2. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly \
+             2. The Today line above is the real current date. Your training ended before it, \
+             so anything you remember as \"the latest\" or \"most recent\" is out of date by \
+             however long that gap is. Date-sensitive questions -- results, releases, prices, \
+             who holds an office -- need a tool. If you have no tool result for one, say what \
+             you know and when you knew it; do not present a remembered answer as current.\n\
+             3. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly \
              useful answer over staying in character.\n\
-             3. Refer to yourself as {agent_name}.",
+             4. Refer to yourself as {agent_name}.",
             agent_name = config.agent_name,
+            today = self.db.local_date_sentence(),
             machine = config.machine,
             operator_line = if config.operator_name.is_empty() {
                 String::new()
@@ -986,6 +998,7 @@ impl LlmEngine {
         calls are read from, and how the round is carried into the next one -- a native
         round becomes an Exchange, a text round becomes two more history messages. */
         let native = config.provider.supports_native_tools();
+        let mut malformed_retries = 0usize;
         let schemas = registry.schemas();
         let none: Vec<crate::tools::ToolSchema> = Vec::new();
         let mut exchanges: Vec<providers::Exchange> = Vec::new();
@@ -1050,10 +1063,14 @@ impl LlmEngine {
             /* Both paths converge on the same list. A text-protocol call has no id of its
             own, so it is given its position in the round -- nothing reads it back on that
             path, and it keeps one shape for the executor to work from. */
+            let mut malformed: Vec<String> = Vec::new();
             let calls: Vec<providers::NativeCall> = if native {
                 native_calls
             } else {
-                crate::tools::protocol::parse_calls(&raw)
+                let round = crate::tools::protocol::parse_round(&raw);
+                malformed = round.malformed;
+                round
+                    .calls
                     .into_iter()
                     .enumerate()
                     .map(|(index, call)| providers::NativeCall {
@@ -1063,6 +1080,48 @@ impl LlmEngine {
                     })
                     .collect()
             };
+
+            /* A round that asked for a tool and got the syntax wrong used to end the turn
+            here, silently: FenceFilter had already hidden the broken block, so the only
+            thing the operator saw was the prose around it. When that prose was the model
+            narrating a web search it had not run, the invented answer was the whole visible
+            reply and nothing in the system contradicted it.
+
+            So it gets a trace line and one chance to say it again. The retry is capped
+            separately from MAX_TOOL_ROUNDS: a model that cannot produce valid JSON will not
+            learn to in six attempts, and spending the whole round budget on syntax leaves
+            none for the question. */
+            if calls.is_empty() && !malformed.is_empty() {
+                let trace = crate::tools::protocol::malformed_trace(&malformed);
+                visible.push_str(&trace);
+                sink(&trace);
+
+                if malformed_retries < MAX_MALFORMED_RETRIES {
+                    malformed_retries += 1;
+                    history.push(Message {
+                        sender: "user".to_string(),
+                        text: current_prompt,
+                        timestamp: String::new(),
+                    });
+                    history.push(Message {
+                        sender: "assistant".to_string(),
+                        text: raw,
+                        timestamp: String::new(),
+                    });
+                    current_prompt = crate::tools::protocol::malformed_notice(&malformed);
+                    continue;
+                }
+
+                // Out of retries. The operator is told rather than left with whatever the
+                // model wrote around the blocks it could not form.
+                let notice = "\n\n[HUD Alert: the model kept asking for a tool in a form that \
+                     could not be read, so no tool ran. Anything above that looks like a tool \
+                     result was not one.]";
+                visible.push_str(notice);
+                sink(notice);
+                return done(visible.trim().to_string(), any_reported, total);
+            }
+
             if calls.is_empty() {
                 return done(visible.trim().to_string(), any_reported, total);
             }
@@ -1175,7 +1234,10 @@ impl LlmEngine {
             system_prompt.push_str(&if config.provider.supports_native_tools() {
                 crate::tools::protocol::native_instructions(&field)
             } else {
-                crate::tools::protocol::instructions(&registry.prompt_catalog(), &field)
+                crate::tools::protocol::instructions(
+                    &registry.prompt_catalog_for(Some(&config.persona)),
+                    &field,
+                )
             });
         }
 
@@ -2141,6 +2203,51 @@ mod tests {
     /// With several boxes running AETHER1, a reply that says "this machine" is a reply the
     /// operator has to go and disambiguate. The prompt always carries a name for the box,
     /// and carries the operator's own once they have given one.
+    /// The one line whose absence made a 2026 operator believe their companion had just
+    /// searched the web and found a race from 2023. A model's only sense of "now" is its
+    /// training cutoff, so "the latest" resolves to whatever year it was trained in unless
+    /// the prompt says otherwise.
+    #[test]
+    fn the_prompt_says_what_day_it_is_and_that_training_ended_before_it() {
+        let _guard = env_guard();
+        let engine = temp_engine("prompt_date");
+        let config = engine.load_config();
+        let prompt = engine.system_prompt(&config, &Telemetry::snapshot());
+
+        let (today, _) = engine.db.local_now();
+        let year = today.split('-').next().unwrap_or_default();
+        assert!(
+            prompt.contains("- Today: "),
+            "no Today line: {prompt}"
+        );
+        assert!(
+            prompt.contains(year) && !year.is_empty(),
+            "the Today line does not carry this year ({year}): {prompt}"
+        );
+        // Saying the date is half of it. The model also has to be told what its own
+        // memory is worth next to it, or it reads the date and answers from 2023 anyway.
+        assert!(prompt.contains("Your training ended before it"), "{prompt}");
+        assert!(prompt.contains("need a tool"), "{prompt}");
+    }
+
+    /// The date is a sentence, not an ISO string: a bare `2026-10-21` reads as a field to
+    /// echo, where "Wednesday, 21 October 2026" reads as a fact to reason from.
+    #[test]
+    fn the_date_is_written_the_way_a_person_says_one() {
+        let engine = temp_engine("date_sentence");
+        let sentence = engine.db.local_date_sentence();
+        let (today, _) = engine.db.local_now();
+        let year = today.split('-').next().unwrap_or_default();
+        assert!(sentence.contains(year), "{sentence}");
+        assert!(sentence.contains("local time"), "{sentence}");
+        // A month name, not a number.
+        assert!(
+            sentence.chars().any(|c| c.is_ascii_alphabetic()),
+            "{sentence}"
+        );
+        assert!(!sentence.contains(&today), "still an ISO date: {sentence}");
+    }
+
     #[test]
     fn the_prompt_always_names_the_machine_it_is_running_on() {
         let _guard = env_guard();

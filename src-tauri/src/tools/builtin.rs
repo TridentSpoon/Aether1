@@ -331,7 +331,7 @@ impl Tool for SearchWeb {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web for recent information using DuckDuckGo. Returns the top results with their titles and URLs. There is no page fetcher here, so report what the results say and give the operator the URL to open."
+        "Search the web for current information. Returns the top results with their titles, URLs and snippets. There is no page fetcher here, so report what the results say and give the operator the URL to open. If the search comes back empty, say so -- do not answer from memory instead."
     }
 
     fn parameters(&self) -> Value {
@@ -351,24 +351,15 @@ impl Tool for SearchWeb {
         false
     }
 
-    fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
-        let query = string_arg(args, "query")?;
-
-        if query.trim().is_empty() {
-            return Err("search query cannot be empty".to_string());
-        }
-
-        // DuckDuckGo's public API endpoint
-        let api_url = format!(
-            "https://api.duckduckgo.com/?q={}&format=json&no_html=1",
-            urlencoding::encode(query)
-        );
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
+        let query = crate::websearch::query_of(args)?;
+        let url = crate::websearch::url_for(&crate::websearch::endpoint(ctx.db), query);
 
         // This path had no local-only check of its own before the gate existed -- the
         // companion's own web search would still have reached DuckDuckGo with the mode
         // on. It cannot now, because the request cannot be built without asking.
-        let response = crate::net::get(&api_url, "the search was not made")?
-            .header("User-Agent", "AETHER1")
+        let response = crate::net::get(&url, "the search was not made")?
+            .header("User-Agent", crate::websearch::USER_AGENT)
             .call()
             .map_err(|e| format!("cannot search the web: {e}"))?;
 
@@ -377,46 +368,7 @@ impl Tool for SearchWeb {
             .read_to_string()
             .map_err(|e| format!("cannot read search results: {e}"))?;
 
-        let json: Value = serde_json::from_str(&body)
-            .map_err(|e| format!("search API returned invalid JSON: {e}"))?;
-
-        let mut results = String::new();
-        results.push_str(&format!("Search results for: {}\n\n", query));
-
-        // Add abstract/featured result if available
-        if let Some(abstract_text) = json.get("AbstractText").and_then(Value::as_str) {
-            if !abstract_text.trim().is_empty() {
-                if let Some(abstract_url) = json.get("AbstractURL").and_then(Value::as_str) {
-                    results.push_str(&format!(
-                        "Featured: {}\n{}\n\n",
-                        abstract_text.trim(),
-                        abstract_url
-                    ));
-                }
-            }
-        }
-
-        // Add main results
-        if let Some(search_results) = json.get("Results").and_then(Value::as_array) {
-            if search_results.is_empty() {
-                results.push_str("No results found.");
-            } else {
-                results.push_str("Results:\n");
-                for (idx, result) in search_results.iter().take(10).enumerate() {
-                    let title = result
-                        .get("Text")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Untitled");
-                    let url = result.get("FirstURL").and_then(Value::as_str).unwrap_or("");
-
-                    if !url.is_empty() {
-                        results.push_str(&format!("{}. {}\n   {}\n", idx + 1, title, url));
-                    }
-                }
-            }
-        } else {
-            results.push_str("No results found.");
-        }
+        let results = crate::websearch::render(query, &crate::websearch::parse(&body));
 
         const MAX_PAGE_BYTES: usize = 32 * 1024;
         Ok(Outcome::text(super::truncate(&results, MAX_PAGE_BYTES)))

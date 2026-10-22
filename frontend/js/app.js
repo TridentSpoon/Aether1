@@ -10401,11 +10401,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let avatarIntroductionBusy = false;
+    let avatarIntroducedAt = 0;
+
+    /* How long an introduction stands for. Any tap within it is somebody clicking the
+       avatar, dragging the view a couple of pixels, or a pointer that bounced -- not
+       somebody who has forgotten who they are talking to since the last sentence.
+
+       Without this, five clicks produced five identical "I am AETHER1." lines in the chat,
+       one after another, which reads as a model stuck in a loop rather than as a UI with no
+       cooldown. The guards above this only cover talking *over* something; two
+       introductions into silence were always allowed. */
+    const AVATAR_INTRODUCTION_COOLDOWN_MS = 30_000;
 
     async function introduceAvatar() {
         // Mid-answer, mid-recording or already introducing itself: a tap is not worth
         // talking over any of those.
         if (avatarIntroductionBusy || isWaitingForResponse || talkHeld || handsFreeListening) return;
+        // Said it recently. A tap still means "I want to talk to you", so it still opens
+        // the microphone -- it just does not say the same sentence again.
+        if (Date.now() - avatarIntroducedAt < AVATAR_INTRODUCTION_COOLDOWN_MS) {
+            if (await microphonePresent()) await listenHandsFree();
+            return;
+        }
         avatarIntroductionBusy = true;
         try {
             /* Still speaking is the case that list misses, and it is the common one.
@@ -10438,6 +10455,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `I am ${name}, on the ${avatarLabel} avatar.`
                 : `I am ${name}.`;
 
+            avatarIntroducedAt = Date.now();
             const mic = await microphonePresent();
             const addressed = operatorDisplayName ? `, ${operatorDisplayName}` : '';
             const spoken = mic

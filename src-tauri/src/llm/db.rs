@@ -486,6 +486,91 @@ impl MemoryDb {
             .unwrap_or_else(|_| ("unknown-date".to_string(), "??:??".to_string()))
     }
 
+    /// Today, written out the way a person would say it: `"Wednesday, 21 October 2026,
+    /// 23:50 local time"`.
+    ///
+    /// This exists for the system prompt. A model's only sense of "now" is its training
+    /// cutoff, so asked for the latest anything it answers for whatever year it was
+    /// trained in -- which is how an operator in 2026 was told the most recent Grand Prix
+    /// was in 2023. Telemetry already carries uptime and load; the one number that makes
+    /// "latest" mean anything was the one missing.
+    ///
+    /// Spelled out rather than left as `2026-10-21`, and the weekday included, because a
+    /// bare ISO date reads as data to be echoed while a sentence reads as a fact to reason
+    /// from. Local time, for the same reason `local_now` is local: the operator's today is
+    /// the one they are living in.
+    pub fn local_date_sentence(&self) -> String {
+        let parts = self.connect().and_then(|conn| {
+            conn.query_row(
+                "SELECT strftime('%w', 'now', 'localtime'), \
+                        strftime('%d', 'now', 'localtime'), \
+                        strftime('%m', 'now', 'localtime'), \
+                        strftime('%Y', 'now', 'localtime'), \
+                        strftime('%H:%M', 'now', 'localtime')",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+        });
+
+        let Ok((weekday, day, month, year, clock)) = parts else {
+            // The date is unavailable rather than wrong. Saying so is better than a
+            // confident fiction, which is the failure this whole function exists to stop.
+            return "the current date is unavailable on this machine".to_string();
+        };
+
+        const WEEKDAYS: [&str; 7] = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ];
+        const MONTHS: [&str; 12] = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+
+        let named = |value: &str, names: &[&str], offset: usize| -> Option<String> {
+            value
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| n.checked_sub(offset))
+                .and_then(|n| names.get(n))
+                .map(|s| s.to_string())
+        };
+
+        // A name we cannot resolve is dropped from the sentence rather than guessed at.
+        let weekday = named(&weekday, &WEEKDAYS, 0)
+            .map(|w| format!("{w}, "))
+            .unwrap_or_default();
+        let month = named(&month, &MONTHS, 1).unwrap_or(month);
+        // Leading zero off the day: "21" and "02 November" is how a database writes a
+        // date, not how anyone says one.
+        let day = day.trim_start_matches('0');
+
+        format!("{weekday}{day} {month} {year}, {clock} local time")
+    }
+
     /// Removes a setting, so it falls back to its default. Used by undo, where "there was
     /// no value before" has to be restorable as faithfully as an old value would be.
     pub fn delete_setting(&self, key: &str) -> rusqlite::Result<()> {

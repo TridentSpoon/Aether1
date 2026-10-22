@@ -211,17 +211,36 @@ impl Registry {
     /// The catalog as the model sees it in a system prompt, for providers without a native
     /// tool-call format. Empty when nothing is registered, so the caller can leave the
     /// tool section out of the prompt entirely rather than announcing an empty toolbox.
-    pub fn prompt_catalog(&self) -> String {
+    /// The catalog as one persona sees it. `None` labels only the mutating tools, which is
+    /// what every caller did before a persona came into it.
+    ///
+    /// Every tool is still listed. What changes is the label: a tool outside the persona's
+    /// field is marked "(needs approval)" alongside the mutating ones, because that is what
+    /// happens when it is called -- `run` proposes it and waits for the operator.
+    ///
+    /// The unlabelled version was a quiet trap. The default persona's field is system logs
+    /// and service state, so `search_web` is outside it, yet the catalog offered it in the
+    /// same unqualified shape as `read_file`. A model told it has a web search, and then
+    /// finding that calling one does not return results, has an obvious and wrong way out:
+    /// write the results itself. Which is what happened.
+    ///
+    /// Nothing is hidden, on purpose. A persona that cannot search without being asked can
+    /// still search -- removing the tool from the list would turn one honest approval card
+    /// into "I have no way to do that", which is false.
+    pub fn prompt_catalog_for(&self, persona: Option<&Persona>) -> String {
         if self.is_empty() {
             return String::new();
         }
+        let domain = persona.map(|p| p.domain());
         self.tools
             .iter()
             .map(|t| {
+                let needs_approval =
+                    t.mutating() || domain.as_ref().is_some_and(|d| !d.allows_tool(t.name()));
                 format!(
                     "- {}{}: {}\n  arguments: {}",
                     t.name(),
-                    if t.mutating() {
+                    if needs_approval {
                         " (needs approval)"
                     } else {
                         ""
@@ -976,15 +995,57 @@ mod tests {
 
     #[test]
     fn the_prompt_catalog_is_empty_when_nothing_is_registered() {
-        assert_eq!(Registry::new().prompt_catalog(), "");
+        assert_eq!(Registry::new().prompt_catalog_for(None), "");
 
         let mut registry = Registry::new();
         registry.register(probe("write_file", true)).unwrap();
-        let catalog = registry.prompt_catalog();
+        let catalog = registry.prompt_catalog_for(None);
         assert!(catalog.contains("write_file"));
         assert!(
             catalog.contains("needs approval"),
             "a mutating tool must be marked as such in the prompt: {catalog}"
+        );
+    }
+
+    /// The quiet trap. The default persona's field is system logs and service state, so
+    /// `search_web` sits outside it and `run` proposes the call rather than performing it.
+    /// The catalog used to offer the tool in the same unqualified shape as a tool the
+    /// persona can simply use -- and a model told it has a web search, then finding that
+    /// calling one returns no results, writes the results itself.
+    #[test]
+    fn the_catalog_marks_a_tool_outside_the_personas_field_as_needing_approval() {
+        let registry = registry();
+        let line_for = |catalog: &str, tool: &str| -> String {
+            catalog
+                .lines()
+                .find(|l| l.starts_with(&format!("- {tool}")))
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        let shown = registry.prompt_catalog_for(Some(&Persona::Default));
+        assert!(
+            line_for(&shown, "search_web").contains("needs approval"),
+            "search_web is outside the default persona's field: {}",
+            line_for(&shown, "search_web")
+        );
+        // A tool the persona does hold must not pick up the label, or the label means
+        // nothing.
+        assert!(
+            !line_for(&shown, "read_event_log").contains("needs approval"),
+            "read_event_log is in its field: {}",
+            line_for(&shown, "read_event_log")
+        );
+
+        // Nothing is hidden: "I have no way to do that" would be a lie.
+        assert_eq!(
+            shown.lines().filter(|l| l.starts_with("- ")).count(),
+            registry
+                .prompt_catalog_for(None)
+                .lines()
+                .filter(|l| l.starts_with("- "))
+                .count(),
+            "a persona's catalog must list every tool, only labelled differently"
         );
     }
 }
