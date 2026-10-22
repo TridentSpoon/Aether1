@@ -121,6 +121,25 @@ operator believes the report.
 
 ---
 
+## One rule that is not checked, and why
+
+`AGENTS.md` opens with who may write to this repository: only the owner's identity, and a
+session acting as anything else stops rather than finding another route. That is a real rule
+and it is deliberately not in the table above, which is the sort of exception this document
+otherwise argues against — so here is the reasoning, rather than a quiet omission.
+
+Part of it *is* checkable: a script could reject a commit whose author is outside an
+allowlist. But the damage this rule guards against is mostly not in the commit history. It
+is a pull request opened, or a merge performed, under the wrong account — which happens on
+GitHub's side and leaves nothing in the tree for a local script to inspect. A check that
+caught the minority case would read as coverage while the majority walked past it, and a
+guard that is trusted further than it reaches is worse than none.
+
+So it is enforced by the tool reading `AGENTS.md` and checking its identity before it writes.
+That is weaker than a script, and saying so is the point: **the enforcement here is the
+author's attention, which is exactly the thing the rest of this document does not rely on.**
+Treat it accordingly.
+
 ## Adding an invariant
 
 1. Write the check first, and watch it fail. A check that has never failed is a check that

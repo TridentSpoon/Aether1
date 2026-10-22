@@ -3,6 +3,31 @@
 These instructions apply to Codex, Claude Code, AETHER CODE, and other coding tools working
 in this repository.
 
+## Who may write to this repository
+
+**This repository is personal property. Only `TridentSpoon` may author, push, merge, or open
+a pull request here.**
+
+Check which GitHub identity the session is acting as before any write -- not after it fails.
+If it is anything other than `TridentSpoon`, stop and say so. Do not look for another way
+through: no fork under the other account, no collaborator grant, no second credential, no
+pushing under one identity to be merged under another.
+
+The reason is ownership rather than permissions. Work done under an identity tied to an
+employer can be that employer's property, so a commit, a merge, or a pull request made under
+one puts that question over this repository -- and the answer to "who owns Aether1" is the
+premise the whole project rests on. A mistake here is not a bad commit that can be reverted;
+it is a claim in the history.
+
+**A refusal from the wrong identity is this rule working, not an obstacle to route around.**
+`403 Resource not accessible by integration` on a merge means the boundary held. The fix is
+to reconnect as the owner and retry, which costs a minute. Granting the other account access
+would make the error go away and the boundary with it, and it would look like a settings
+improvement while doing it.
+
+The mirror case is worth the same care: do not act as `TridentSpoon` in a repository owned
+by someone else.
+
 ## Before changing code
 
 - Read the relevant module and its callers before editing. Follow the existing Rust, JavaScript,
