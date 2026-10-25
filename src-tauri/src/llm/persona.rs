@@ -680,6 +680,17 @@ impl Persona {
             // field covers.
             "self_check",
             "recent_crashes",
+            // Looking something up is not a read of this machine, so a field -- which
+            // scopes what the companion opens *here* -- has nothing to say about it. A
+            // persona asked a question about the world answers it; the control that
+            // decides whether the machine talks to the internet at all is local-only
+            // mode in `net`, and it still applies to every one of these calls.
+            //
+            // It was in nobody's field before, which made every search an "outside its
+            // field" card -- and a model that is told it has a web search, and finds
+            // that calling one returns nothing, writes the results itself. That is the
+            // failure in docs/SECURITY_AUDIT_S4.md and it cost a whole PR to diagnose.
+            "search_web",
         ];
         const READS_FILES: &[&str] = &[
             "read_file",
@@ -688,6 +699,9 @@ impl Persona {
             "search_memory",
             "self_check",
             "recent_crashes",
+            // See MINIMUM_TOOLS: a web search reads nothing on this machine, so it is
+            // part of every field rather than an elevation.
+            "search_web",
         ];
         /// What the two machine-facing personas share: the file tools, plus the two that
         /// answer "what is this machine doing" -- the process table, and the Windows event
@@ -705,6 +719,8 @@ impl Persona {
             "search_memory",
             "self_check",
             "recent_crashes",
+            // See MINIMUM_TOOLS.
+            "search_web",
         ];
 
         match self {

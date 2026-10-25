@@ -416,6 +416,14 @@ mode in Settings takes effect mid-session. Before that install has run it refuse
 not provably local, which is the direction worth failing in; `aether1 doctor` reports whether
 it has.
 
+`search_web` is in every persona's field, so a lookup needs no approval card. The reasoning
+is in `docs/PERSONA_ACCESS.md`: a field scopes what is read *on this machine*, and a search
+reads nothing here. The gate above is what governs it instead — with local-only mode on, the
+request cannot be built, whatever the field says. What stays true either way, and is worth
+naming rather than hiding behind a card nobody read as a boundary, is that the model chooses
+the query string, so a search is a channel out for anything the model already holds. The
+grant that matters there is the network itself.
+
 ## 6a. What a stray string can do
 
 Everything above is about what the agent and the network may reach. This is about the

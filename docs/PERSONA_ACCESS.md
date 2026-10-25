@@ -70,22 +70,31 @@ pub enum Root {
 
 | Persona | Tools | Roots |
 |---|---|---|
-| **System Diagnosis** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | SystemLogs, ServiceState |
-| **Security & White Hat** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | NetworkConfig, ServiceState |
-| **Coding** | `read_file`, `list_dir`, `search_memory` | ProjectTree |
-| **Defence & Hardening** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | NetworkConfig, ServiceState |
-| **Assistant & System Ops** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log` | SystemLogs, ServiceState |
-| **Software Development** | `read_file`, `list_dir`, `search_memory` | ProjectTree |
-| **Scanning & Extraction** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
-| **Reference & Fact-Checking** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
-| **Teaching & Docs** | `search_memory`, `read_file`, `list_dir` | Vault, ProjectTree |
-| **Worldbuilding & Fiction** | `search_memory`, `read_file`, `list_dir` | Vault |
-| **Signal & Logic** | `search_memory`, `read_file`, `list_dir` | Vault |
-| **Cost & Budget** | `telemetry_detail`, `search_memory` | Vault |
-| **Conversational** | `telemetry_detail`, `search_memory` | Vault |
-| **To the Point** | `telemetry_detail`, `search_memory` | Vault |
-| **Model's Own** | `telemetry_detail`, `search_memory` | Vault |
-| **Custom** | `telemetry_detail`, `search_memory` | Vault |
+| **System Diagnosis** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log`, `search_web` | SystemLogs, ServiceState |
+| **Security & White Hat** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log`, `search_web` | NetworkConfig, ServiceState |
+| **Coding** | `read_file`, `list_dir`, `search_memory`, `search_web` | ProjectTree |
+| **Defence & Hardening** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log`, `search_web` | NetworkConfig, ServiceState |
+| **Assistant & System Ops** | `list_processes`, `telemetry_detail`, `read_file`, `list_dir`, `read_event_log`, `search_web` | SystemLogs, ServiceState |
+| **Software Development** | `read_file`, `list_dir`, `search_memory`, `search_web` | ProjectTree |
+| **Scanning & Extraction** | `search_memory`, `read_file`, `list_dir`, `search_web` | Vault, ProjectTree |
+| **Reference & Fact-Checking** | `search_memory`, `read_file`, `list_dir`, `search_web` | Vault, ProjectTree |
+| **Teaching & Docs** | `search_memory`, `read_file`, `list_dir`, `search_web` | Vault, ProjectTree |
+| **Worldbuilding & Fiction** | `search_memory`, `read_file`, `list_dir`, `search_web` | Vault |
+| **Signal & Logic** | `search_memory`, `read_file`, `list_dir`, `search_web` | Vault |
+| **Cost & Budget** | `telemetry_detail`, `search_memory`, `search_web` | Vault |
+| **Conversational** | `telemetry_detail`, `search_memory`, `search_web` | Vault |
+| **To the Point** | `telemetry_detail`, `search_memory`, `search_web` | Vault |
+| **Model's Own** | `telemetry_detail`, `search_memory`, `search_web` | Vault |
+| **Custom** | `telemetry_detail`, `search_memory`, `search_web` | Vault |
+
+**`search_web` is in every row, and that is not an oversight.** A field scopes what the
+companion opens *on this machine*; a web search opens nothing here, so a field has nothing to
+say about it. It was in nobody's field originally, which made every single lookup an "outside
+its field" card — and a model that is told it has a web search, and finds that calling one
+returns nothing, writes the results itself. That is the fabrication documented in
+`docs/SECURITY_AUDIT_S4.md`, and the approval card was one of its causes rather than a
+mitigation. The control that decides whether the machine talks to the internet at all is
+local-only mode in `net`, and it still refuses every one of these calls when it is on.
 
 **Not every persona has a field, and the table should not pretend otherwise.** To the Point,
 Model's Own and Custom are styles rather than specialities; Conversational is a manner. Giving

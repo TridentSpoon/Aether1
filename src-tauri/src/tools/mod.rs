@@ -218,15 +218,17 @@ impl Registry {
     /// field is marked "(needs approval)" alongside the mutating ones, because that is what
     /// happens when it is called -- `run` proposes it and waits for the operator.
     ///
-    /// The unlabelled version was a quiet trap. The default persona's field is system logs
-    /// and service state, so `search_web` is outside it, yet the catalog offered it in the
-    /// same unqualified shape as `read_file`. A model told it has a web search, and then
-    /// finding that calling one does not return results, has an obvious and wrong way out:
-    /// write the results itself. Which is what happened.
+    /// The unlabelled version was a quiet trap. `search_web` used to sit outside every
+    /// persona's field, yet the catalog offered it in the same unqualified shape as
+    /// `read_file`. A model told it has a web search, and then finding that calling one
+    /// does not return results, has an obvious and wrong way out: write the results
+    /// itself. Which is what happened. (`search_web` is now in every field -- it reads
+    /// nothing on this machine -- so that particular line is no longer labelled, but the
+    /// labelling is what makes the catalog honest for everything that still is.)
     ///
-    /// Nothing is hidden, on purpose. A persona that cannot search without being asked can
-    /// still search -- removing the tool from the list would turn one honest approval card
-    /// into "I have no way to do that", which is false.
+    /// Nothing is hidden, on purpose. A persona that cannot call something without being
+    /// asked can still call it -- removing the tool from the list would turn one honest
+    /// approval card into "I have no way to do that", which is false.
     pub fn prompt_catalog_for(&self, persona: Option<&Persona>) -> String {
         if self.is_empty() {
             return String::new();
@@ -1007,11 +1009,11 @@ mod tests {
         );
     }
 
-    /// The quiet trap. The default persona's field is system logs and service state, so
-    /// `search_web` sits outside it and `run` proposes the call rather than performing it.
-    /// The catalog used to offer the tool in the same unqualified shape as a tool the
-    /// persona can simply use -- and a model told it has a web search, then finding that
-    /// calling one returns no results, writes the results itself.
+    /// The quiet trap. A conversational persona's field is its notes, so `read_event_log`
+    /// sits outside it and `run` proposes the call rather than performing it. The catalog
+    /// used to offer such a tool in the same unqualified shape as a tool the persona can
+    /// simply use -- and a model told it has a capability, then finding that using it
+    /// returns nothing, writes the answer itself.
     #[test]
     fn the_catalog_marks_a_tool_outside_the_personas_field_as_needing_approval() {
         let registry = registry();
@@ -1023,19 +1025,29 @@ mod tests {
                 .to_string()
         };
 
-        let shown = registry.prompt_catalog_for(Some(&Persona::Default));
+        let shown = registry.prompt_catalog_for(Some(&Persona::Halcy));
         assert!(
-            line_for(&shown, "search_web").contains("needs approval"),
-            "search_web is outside the default persona's field: {}",
-            line_for(&shown, "search_web")
+            line_for(&shown, "read_event_log").contains("needs approval"),
+            "read_event_log is outside a conversational persona's field: {}",
+            line_for(&shown, "read_event_log")
         );
         // A tool the persona does hold must not pick up the label, or the label means
         // nothing.
         assert!(
-            !line_for(&shown, "read_event_log").contains("needs approval"),
-            "read_event_log is in its field: {}",
-            line_for(&shown, "read_event_log")
+            !line_for(&shown, "telemetry_detail").contains("needs approval"),
+            "telemetry_detail is in every field: {}",
+            line_for(&shown, "telemetry_detail")
         );
+        // And the one this whole label exists because of: a web search is in every
+        // field now, so it must read as something the persona can simply use.
+        for persona in Persona::all() {
+            let line = line_for(&registry.prompt_catalog_for(Some(&persona)), "search_web");
+            assert!(
+                !line.is_empty() && !line.contains("needs approval"),
+                "{} must be offered a web search it can actually make: {line}",
+                persona.key()
+            );
+        }
 
         // Nothing is hidden: "I have no way to do that" would be a lie.
         assert_eq!(
