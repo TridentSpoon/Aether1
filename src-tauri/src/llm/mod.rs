@@ -1009,6 +1009,11 @@ impl LlmEngine {
         let mut exchanges: Vec<providers::Exchange> = Vec::new();
 
         for _round in 0..MAX_TOOL_ROUNDS {
+            // Where this round's text starts, so a round that turns out to have forged a
+            // tool result can be taken back off the end rather than left on screen. The
+            // frontend re-renders from the returned text, so dropping it here drops it
+            // there -- see the authoritative-reply note in the send path.
+            let visible_before = visible.len();
             let ctx = ChatContext {
                 system_prompt,
                 history: &history,
@@ -1122,6 +1127,46 @@ impl LlmEngine {
                 let notice = "\n\n[HUD Alert: the model kept asking for a tool in a form that \
                      could not be read, so no tool ran. Anything above that looks like a tool \
                      result was not one.]";
+                visible.push_str(notice);
+                sink(notice);
+                return done(visible.trim().to_string(), any_reported, total);
+            }
+
+            /* No tool ran, and the model wrote a tool result anyway. The malformed-block
+            check above cannot see this one: there is no block to be malformed, so the turn
+            is indistinguishable from chatting -- which is how an operator came to read
+            invented Grand Prix podiums under a `[TOOL RESULTS]` heading three builds in a
+            row.
+
+            The forged text comes off the end of the reply rather than being left with a
+            warning beside it. A fabricated answer that stays on screen is still an answer
+            somebody can act on, and the one thing worse than no result is a convincing
+            wrong one. */
+            if calls.is_empty() && !native && crate::tools::protocol::forged_results(&raw) {
+                visible.truncate(visible_before);
+                let trace = crate::tools::protocol::forged_trace();
+                visible.push_str(&trace);
+                sink(&trace);
+
+                if malformed_retries < MAX_MALFORMED_RETRIES {
+                    malformed_retries += 1;
+                    history.push(Message {
+                        sender: "user".to_string(),
+                        text: current_prompt,
+                        timestamp: String::new(),
+                    });
+                    history.push(Message {
+                        sender: "assistant".to_string(),
+                        text: raw,
+                        timestamp: String::new(),
+                    });
+                    current_prompt = crate::tools::protocol::forged_notice();
+                    continue;
+                }
+
+                let notice = "\n\n[HUD Alert: the model kept writing tool results without \
+                     calling a tool. Nothing was looked up, so nothing it wrote about the \
+                     result can be relied on, and it has been withheld.]";
                 visible.push_str(notice);
                 sink(notice);
                 return done(visible.trim().to_string(), any_reported, total);

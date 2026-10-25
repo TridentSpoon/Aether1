@@ -1076,11 +1076,14 @@ mod tests {
         );
     }
 
-    /// The quiet trap. The default persona's field is system logs and service state, so
-    /// `search_web` sits outside it and `run` proposes the call rather than performing it.
-    /// The catalog used to offer the tool in the same unqualified shape as a tool the
-    /// persona can simply use -- and a model told it has a web search, then finding that
-    /// calling one returns no results, writes the results itself.
+    /// The quiet trap: the catalog used to offer a tool the persona cannot actually use in
+    /// the same unqualified shape as one it can, so a model called it, got "proposed,
+    /// waiting", and wrote the results itself.
+    ///
+    /// `fetch_url` is the example rather than `search_web`, which used to be: the operator
+    /// has since asked for web search to be free, and it is now in every persona's field
+    /// (see `domain::every_persona_can_search_the_web_without_being_asked_about_it`). The
+    /// labelling rule is unchanged -- what moved is which tool it applies to.
     #[test]
     fn the_catalog_marks_a_tool_outside_the_personas_field_as_needing_approval() {
         let registry = registry();
@@ -1093,9 +1096,21 @@ mod tests {
         };
 
         let shown = registry.prompt_catalog_for(Some(&Persona::Default));
+        let outside = registry
+            .schemas()
+            .iter()
+            .map(|s| s.name)
+            .find(|name| !Persona::Default.domain().allows_tool(name))
+            .expect("some tool has to sit outside the default persona's field");
         assert!(
-            line_for(&shown, "search_web").contains("needs approval"),
-            "search_web is outside the default persona's field: {}",
+            line_for(&shown, outside).contains("needs approval"),
+            "{outside} is outside the default persona's field: {}",
+            line_for(&shown, outside)
+        );
+        // And the tool the operator asked to be free does not carry the label at all.
+        assert!(
+            !line_for(&shown, "search_web").contains("needs approval"),
+            "search_web is in every persona's field now: {}",
             line_for(&shown, "search_web")
         );
         // A tool the persona does hold must not pick up the label, or the label means
