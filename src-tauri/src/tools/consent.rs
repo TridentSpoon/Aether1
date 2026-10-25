@@ -90,9 +90,17 @@ pub fn propose(
     args: &Value,
     mutating: bool,
     reason: Option<&str>,
+    session_id: Option<&str>,
 ) -> Result<i64, String> {
-    db.log_action(tool, args, mutating, ActionStatus::Proposed, reason)
-        .map_err(|e| format!("could not record the proposed action: {e}"))
+    db.log_action(
+        tool,
+        args,
+        mutating,
+        ActionStatus::Proposed,
+        reason,
+        session_id,
+    )
+    .map_err(|e| format!("could not record the proposed action: {e}"))
 }
 
 /// Everything currently waiting, stale proposals having been retired first, each carrying
@@ -318,7 +326,15 @@ mod tests {
         let (db, registry) = fixture("waits");
         let ctx = ToolContext::new(&db);
 
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
         let waiting = pending(&db, &registry);
         assert_eq!(waiting.len(), 1);
         assert_eq!(waiting[0].id, id);
@@ -339,7 +355,15 @@ mod tests {
     #[test]
     fn a_rejection_is_recorded_rather_than_forgotten() {
         let (db, registry) = fixture("rejects");
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         reject(&db, id).unwrap();
         let record = db.get_action(id).unwrap().unwrap();
@@ -352,7 +376,15 @@ mod tests {
     fn an_action_cannot_be_approved_twice() {
         let (db, registry) = fixture("twice");
         let ctx = ToolContext::new(&db);
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         approve(&registry, &ctx, id, "operator").unwrap();
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
@@ -363,7 +395,15 @@ mod tests {
     fn a_rejected_action_cannot_then_be_approved() {
         let (db, registry) = fixture("rejected_then_approved");
         let ctx = ToolContext::new(&db);
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         reject(&db, id).unwrap();
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
@@ -376,7 +416,7 @@ mod tests {
         // run. Trusting the proposal would make the log the security boundary.
         let (db, registry) = fixture("revalidate");
         let ctx = ToolContext::new(&db);
-        let id = propose(&db, "probe_writer", &json!({"path": 7}), true, None).unwrap();
+        let id = propose(&db, "probe_writer", &json!({"path": 7}), true, None, None).unwrap();
 
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("should be a string"), "{err}");
@@ -391,7 +431,15 @@ mod tests {
         let (db, _registry) = fixture("gone");
         let ctx = ToolContext::new(&db);
         let empty = Registry::new();
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         let err = approve(&empty, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("no longer available"), "{err}");
@@ -401,7 +449,15 @@ mod tests {
     fn stale_proposals_expire_instead_of_waiting_forever() {
         let (db, registry) = fixture("stale");
         let ctx = ToolContext::new(&db);
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Backdate it past the TTL.
         db.set_setting("unused", &json!(1)).unwrap();
@@ -427,7 +483,15 @@ mod tests {
     fn an_executed_action_can_be_undone_once() {
         let (db, registry) = fixture("undo");
         let ctx = ToolContext::new(&db);
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
         approve(&registry, &ctx, id, "operator").unwrap();
 
         let result = undo(&registry, &ctx, id).unwrap();
@@ -445,7 +509,15 @@ mod tests {
     fn a_proposal_that_never_ran_cannot_be_undone() {
         let (db, registry) = fixture("undo_pending");
         let ctx = ToolContext::new(&db);
-        let id = propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         let err = undo(&registry, &ctx, id).unwrap_err();
         assert!(err.contains("only something that ran"), "{err}");
@@ -504,8 +576,24 @@ mod tests {
         registry.register(Box::new(Writer)).unwrap();
         registry.register(Box::new(Unallowable)).unwrap();
 
-        propose(&db, "probe_writer", &json!({"path": "/tmp/x"}), true, None).unwrap();
-        propose(&db, "probe_runner", &json!({"path": "/tmp/x"}), true, None).unwrap();
+        propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        propose(
+            &db,
+            "probe_runner",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         let waiting = pending(&db, &registry);
         let allowable = |name: &str| {

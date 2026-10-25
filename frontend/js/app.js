@@ -2904,6 +2904,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? await tauriInvoke('approve_action_rust', { id: action.id })
                     : await toolsApi(`/api/actions/${action.id}/approve`, { method: 'POST' });
                 settle(`✔ Done — ${data && data.result ? data.result : 'no output'}`, 'text-emerald-300');
+                /* The half that was missing. Printing the output into this card and
+                   stopping is what made approving pointless: the model's own tool result
+                   had been "PROPOSED ... do not assume it happened", so it answered from
+                   memory while the real answer sat here, in the one place nothing reads
+                   back. Now the result goes to the model and it answers again knowing it.
+
+                   Only when the proposal came from a conversation -- one raised from the
+                   CLI has no session to resume, and Rust says so by sending no session_id
+                   rather than by guessing at the one currently open. */
+                if (data && data.session_id) await resumeAfterAction(action.id);
             } catch (e) {
                 settle(`✖ Failed: ${e.message || e}`, 'text-rose-300');
             }
@@ -3210,6 +3220,58 @@ document.addEventListener('DOMContentLoaded', () => {
             socket.onerror = () => reject(new Error('chat socket failed'));
             socket.onclose = () => reject(new Error('chat socket closed before the reply finished'));
         });
+    }
+
+    /// Streams the answer the model gives once an approved action's output reaches it.
+    ///
+    /// Deliberately thinner than the send path: there is no new operator turn, no flow
+    /// hand-off (the same node is still answering) and no thinking animation, because the
+    /// operator has just watched the tool run and knows what is happening. It speaks the
+    /// finished reply rather than chunking it as it arrives -- a resumed answer is short,
+    /// and the chunked speech chain is the send path's complication, not this one's.
+    async function resumeAfterAction(actionId) {
+        const replyDiv = appendMessage(currentAgentName, '');
+        let rendered = '';
+        const onDelta = (delta) => {
+            if (!delta) return;
+            rendered += delta;
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        };
+
+        let data;
+        try {
+            if (IS_TAURI) {
+                const streamId = `r${Date.now()}${Math.random().toString(16).slice(2)}`;
+                const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
+                    if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+                });
+                try {
+                    data = await tauriInvoke('resume_after_action_rust', { id: actionId, streamId });
+                } finally {
+                    unlisten();
+                }
+            } else {
+                data = await toolsApi(`/api/actions/${actionId}/resume`, { method: 'POST' });
+            }
+        } catch (e) {
+            // The tool ran and its output is on the card above; only the second answer
+            // failed. Say that, rather than letting an empty bubble stand.
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(
+                `_The result is above, but I could not answer from it: ${e.message || e}_`
+            );
+            return;
+        }
+
+        const reply = (data && data.reply) || rendered;
+        replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
+        if (data && data.agent_name) updateAgentNameDisplay(data.agent_name);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+
+        if (autoSpeak && reply.trim()) {
+            const url = await synthesizeSpeechUrl(reply, null);
+            if (url) await voiceEngine.playTTSAudio(url);
+        }
     }
 
     /* Whether the last probe said something is still missing. Held here so the send path

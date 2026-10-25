@@ -1674,6 +1674,7 @@ pub fn apply_with(
             true,
             ActionStatus::Proposed,
             Some(&format!("Repairing {}", check.title())),
+            None,
         )
         .ok();
     record_attempt_in_session(key);

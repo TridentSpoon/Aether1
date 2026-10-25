@@ -93,6 +93,14 @@ pub struct ToolContext<'a> {
     /// Who is asking. The persona decides which read-only calls run without the operator
     /// being asked first (see `domain`), so it belongs to the call rather than to the tool.
     pub persona: Persona,
+    /// The conversation this call belongs to, when it has one.
+    ///
+    /// Carried only so that a *proposal* can record where it came from. An approved action
+    /// has to be able to hand its output back to the model that asked for it: before this,
+    /// `approve` ran the tool, returned the result to the frontend, and the conversation
+    /// never heard about it -- so the model answered from memory while its own search
+    /// results sat on screen underneath. Nothing a tool does depends on this value.
+    pub session_id: Option<String>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -104,7 +112,15 @@ impl<'a> ToolContext<'a> {
         ToolContext {
             db,
             persona: Persona::from_key(&key),
+            session_id: None,
         }
+    }
+
+    /// The same context, told which conversation it is running in. Used by the chat's tool
+    /// loop; a call from the CLI or a test has no session and resumes nothing.
+    pub fn in_session(mut self, session_id: Option<&str>) -> ToolContext<'a> {
+        self.session_id = session_id.map(str::to_string);
+        self
     }
 
     /// The context for a specific persona, so a test can state which one it is exercising.
@@ -113,7 +129,11 @@ impl<'a> ToolContext<'a> {
     /// one the operator selected.
     #[cfg(test)]
     pub fn for_persona(db: &'a MemoryDb, persona: Persona) -> ToolContext<'a> {
-        ToolContext { db, persona }
+        ToolContext {
+            db,
+            persona,
+            session_id: None,
+        }
     }
 }
 
@@ -392,7 +412,14 @@ pub fn run(
     // say so, and gone the moment it has run. Elevation is per request and nothing else --
     // a second identical call is proposed again.
     if let Some(reason) = domain::elevation_needed(ctx, tool, args) {
-        let id = consent::propose(ctx.db, name, args, tool.mutating(), Some(&reason))?;
+        let id = consent::propose(
+            ctx.db,
+            name,
+            args,
+            tool.mutating(),
+            Some(&reason),
+            ctx.session_id.as_deref(),
+        )?;
         return Ok(format!(
             "PROPOSED (id {id}): {} is waiting for the operator to approve it. {reason} Do \
              not assume it happened, and do not propose it again -- tell them what you want \
@@ -408,7 +435,7 @@ pub fn run(
         // to be pre-approved stays proposed even if its name is somehow on that list --
         // from an older database, or a tool that used to allow it and no longer does.
         if !tool.always_allowable() || !consent::is_always_allowed(ctx.db, name) {
-            let id = consent::propose(ctx.db, name, args, true, None)?;
+            let id = consent::propose(ctx.db, name, args, true, None, ctx.session_id.as_deref())?;
             return Ok(format!(
                 "PROPOSED (id {id}): {} is waiting for the operator to approve it. Do not \
                  assume it happened, and do not propose it again -- tell them what you want \
@@ -433,7 +460,14 @@ fn run_now(
 ) -> Result<String, String> {
     let id = ctx
         .db
-        .log_action(name, args, tool.mutating(), ActionStatus::Proposed, None)
+        .log_action(
+            name,
+            args,
+            tool.mutating(),
+            ActionStatus::Proposed,
+            None,
+            None,
+        )
         .ok();
 
     let outcome = tool.call(args, ctx);
@@ -840,6 +874,41 @@ mod tests {
         );
     }
 
+    /// The gap that made approving a tool pointless. A proposal has to remember which
+    /// conversation wanted it, or its output has nowhere to go once approved: the operator
+    /// sees the result on the card and the model that asked never does, so it answers from
+    /// memory with the real answer sitting on screen beside it.
+    #[test]
+    fn a_proposal_records_the_conversation_that_asked_for_it() {
+        let db = temp_db("domain_session");
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos).in_session(Some("sess-42"));
+        let mut registry = Registry::new();
+        registry.register(probe("list_processes", false)).unwrap();
+
+        run(&registry, &ctx, "list_processes", &json!({"path": "/tmp"})).unwrap();
+        let waiting = consent::pending(&db, &registry);
+        assert_eq!(waiting[0].session_id.as_deref(), Some("sess-42"));
+    }
+
+    /// And a call from outside a conversation records none, rather than borrowing whichever
+    /// session happens to be open. Guessing here would drop one operator's search results
+    /// into an unrelated chat.
+    #[test]
+    fn a_proposal_from_outside_a_conversation_records_no_session() {
+        let db = temp_db("domain_no_session");
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
+        let mut registry = Registry::new();
+        registry.register(probe("list_processes", false)).unwrap();
+
+        run(&registry, &ctx, "list_processes", &json!({"path": "/tmp"})).unwrap();
+        let waiting = consent::pending(&db, &registry);
+        assert!(
+            waiting[0].session_id.is_none(),
+            "{:?}",
+            waiting[0].session_id
+        );
+    }
+
     /// The test that catches elevation quietly becoming a mode. Approving runs that one
     /// call; the identical call straight afterwards is proposed all over again.
     #[test]
@@ -915,7 +984,7 @@ mod tests {
         assert!(err.contains("off limits"), "{err}");
 
         // And through the approval path, which is the road an elevation takes.
-        let id = consent::propose(&db, "read_file", &args, false, Some("elevation")).unwrap();
+        let id = consent::propose(&db, "read_file", &args, false, Some("elevation"), None).unwrap();
         let err = consent::approve(registry, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("off limits"), "{err}");
     }

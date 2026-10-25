@@ -1700,6 +1700,29 @@ fn approve_action_rust(
     commands::approve_action(&engine, id)
 }
 
+/// Hands an approved action's output back to the model and streams what it says once it can
+/// see the result, as `chat-delta` events -- the same event the operator's own turns use, so
+/// the answer lands in the conversation rather than in a card nothing reads back.
+///
+/// `async` because this runs a whole model turn, and a blocking command would hold the
+/// window's IPC thread for the length of it.
+#[tauri::command(async)]
+fn resume_after_action_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
+    id: i64,
+    stream_id: String,
+) -> Result<serde_json::Value, String> {
+    background_services::note_use(&engine, &managed_ollama);
+    commands::resume_after_action(&engine, id, &mut |delta| {
+        let _ = app.emit(
+            "chat-delta",
+            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+        );
+    })
+}
+
 #[tauri::command(async)]
 fn undo_action_rust(engine: tauri::State<LlmEngine>, id: i64) -> Result<serde_json::Value, String> {
     commands::undo_action(&engine, id)
@@ -3026,6 +3049,7 @@ fn main() {
             get_actions_rust,
             pending_actions_rust,
             approve_action_rust,
+            resume_after_action_rust,
             undo_action_rust,
             reject_action_rust,
             set_always_allowed_rust,
