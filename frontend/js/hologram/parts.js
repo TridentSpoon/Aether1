@@ -248,6 +248,17 @@
         return geometry;
     }
 
+    /* The face recess a blank head puts behind its face plane. Every face part blends
+       additively, so it needs something darker than the head's own shell to be bright
+       against -- but a recess that is actually opaque turns an empty head into a black
+       disc with a rim, which is what the first version did. A tint, not a hole. */
+    function faceRecessMaterial(opacity = 0.42) {
+        return new THREE.MeshBasicMaterial({
+            color: 0x04060f, side: THREE.DoubleSide,
+            transparent: true, opacity, depthWrite: false,
+        });
+    }
+
     // ---- Cores: the thing at the middle -------------------------------------
     //
     // Two things sat here and no longer do, so nobody re-adds them under the opt-out
@@ -472,8 +483,13 @@
                 innerShellMat.opacity = 0.14;
                 group.add(new THREE.Mesh(innerGeom, innerShellMat));
 
+                /* This core was drawn with its own face long before the face tiers
+                   existed, and it keeps it, because it is what the part looks like. But a
+                   recipe that also picks eyes or a mouth would land a second face on top
+                   of this one, so the recipe says so and this one stands down. */
                 const faceGroup = new THREE.Group();
                 faceGroup.position.z = options.size * 0.68 * scaleZ * 1.1;
+                faceGroup.visible = !options.faceSupplied;
                 group.add(faceGroup);
 
                 const eyeMat = new THREE.MeshBasicMaterial({ color: HOT, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending });
@@ -494,8 +510,12 @@
 
                 return {
                     object: group,
+                    faceZ: options.size * 0.68 * scaleZ * 1.1,
                     applyPalette(p) { shellMat.color.setHex(p.hex); outerWireMat.color.setHex(p.hex2); },
                     animate(ctx) {
+                        /* Everything animated on this core belongs to its face, so there
+                           is nothing to do once the recipe has taken the face over. */
+                        if (!faceGroup.visible) return;
                         const blinkCycle = 4.2, blinkWindow = 0.18;
                         const t = ctx.time % blinkCycle;
                         const blink = t < blinkWindow ? 1 - Math.pow(Math.sin((t / blinkWindow) * Math.PI), 2) : 1;
@@ -504,6 +524,300 @@
                             : ctx.state === 'THINKING' ? 0.7 + Math.abs(Math.sin(ctx.time * 6)) * 0.3 : 0.7 + ctx.click * 0.3;
                         eyeMat.opacity = pulse;
                         mouthMat.opacity = pulse * 0.8;
+                    },
+                };
+            },
+        },
+
+        /* ---- Blank heads ---------------------------------------------------------
+         *
+         * Five heads with nothing on the front. They exist so the eyes, brows and mouths
+         * further down have somewhere to live: every other core in this tier is already
+         * something in its own right, and hanging a face on a tape reel or a terminal
+         * prompt is a joke rather than a companion.
+         *
+         * Each one returns a `faceZ`: how far forward of the core's origin the face plane
+         * belongs, in the same units as options.size. The recipe reads it and lifts the
+         * whole face group there, so a face lands correctly on a shallow mask and on a
+         * deep helm without either knowing about the other. A core that leaves it out
+         * gets the recipe's fallback, which is why the older heads still work.
+         *
+         * They all put a dark panel behind that plane. Every face part blends additively,
+         * and an additive hot colour over anything already bright renders white -- the
+         * panel is what keeps an eye reading as an eye rather than as a hole.
+         */
+
+        /* The recess every blank head puts behind its face plane. It is a tint rather
+           than a hole: dark enough that an additively blended eye has something to be
+           bright against, light enough that an empty head still reads as a head. The
+           first try was 0.9 opaque and the head came back a black disc with a rim. */
+        blankHead: {
+            label: 'Blank head',
+            build(api, options) {
+                const group = new THREE.Group();
+                const scaleY = 1.18, scaleZ = 0.86;
+
+                const shellMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.2, depthWrite: false,
+                });
+                /* The contour lines are thin annuli rather than a LineBasicMaterial,
+                   because what is wanted is a band on the surface of the head, not a
+                   one-pixel line that thins out as the head turns. */
+                const contourMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.5, depthWrite: false,
+                });
+
+                const geom = new THREE.SphereGeometry(options.size, 20, 14);
+                geom.scale(1, scaleY, scaleZ);
+                group.add(new THREE.Mesh(geom, shellMat));
+
+                /* Latitudes rather than a full wireframe: a 20x14 sphere in wire is a net,
+                   and the face has to be the busiest thing on the head. Latitudes only,
+                   because a meridian drawn the same way lies in the yz plane -- exactly
+                   edge-on to the HUD's level camera, which renders it as nothing at all. */
+                [0.42, 0.0, -0.46].forEach((at) => {
+                    const r = Math.sqrt(Math.max(0, 1 - at * at));
+                    const ring = new THREE.Mesh(
+                        new THREE.RingGeometry(options.size * r * 0.97, options.size * r, 40), contourMat
+                    );
+                    ring.rotation.x = Math.PI / 2;
+                    ring.position.y = options.size * scaleY * at;
+                    ring.scale.z = scaleZ;
+                    group.add(ring);
+                });
+                const panelMat = faceRecessMaterial();
+                const panel = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.58, 28), panelMat);
+                panel.scale.y = 1.2;
+                panel.position.z = options.size * 0.6;
+                group.add(panel);
+
+                return {
+                    object: group,
+                    faceZ: options.size * 0.8,
+                    applyPalette(p) { shellMat.color.setHex(p.hex); contourMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        shellMat.opacity = 0.16 + ctx.audio * 0.1 + ctx.click * 0.1;
+                        contourMat.opacity = 0.42 + ctx.audio * 0.2 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        /* The same head under a crest, with two plates down the cheeks. Reads as armour
+           rather than skin, and the recess is deeper because the plates stand proud. */
+        blankHelm: {
+            label: 'Helm head',
+            build(api, options) {
+                const group = new THREE.Group();
+                const scaleY = 1.16, scaleZ = 0.88;
+
+                const shellMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.17, depthWrite: false,
+                });
+                const plateMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.55, depthWrite: false,
+                });
+
+                const geom = new THREE.SphereGeometry(options.size, 18, 12);
+                geom.scale(1, scaleY, scaleZ);
+                group.add(new THREE.Mesh(geom, shellMat));
+                group.add(new THREE.LineSegments(
+                    new THREE.EdgesGeometry(geom, 18),
+                    new THREE.LineBasicMaterial({ color: api.palette.hex, transparent: true, opacity: 0.35 })
+                ));
+
+                /* The crest is a ring sector stood on edge: angle 0 is +x and the sector
+                   runs over the top, so turning the mesh a quarter turn about y lays it
+                   front to back. Done on the mesh, not the geometry, so the sector can be
+                   scaled to the head's own proportions afterwards. */
+                const crest = new THREE.Mesh(
+                    new THREE.RingGeometry(options.size * 0.94, options.size * 1.1, 32, 1, Math.PI * 0.06, Math.PI * 0.88),
+                    plateMat
+                );
+                crest.rotation.y = Math.PI / 2;
+                crest.scale.set(scaleZ, scaleY, 1);
+                group.add(crest);
+
+                const cheekGeom = new THREE.BoxGeometry(options.size * 0.16, options.size * 0.82, options.size * 0.1);
+                [-1, 1].forEach((side) => {
+                    const cheek = new THREE.Mesh(cheekGeom, plateMat);
+                    cheek.position.set(side * options.size * 0.72, -options.size * 0.2, options.size * 0.42);
+                    cheek.rotation.z = side * 0.12;
+                    cheek.rotation.y = side * -0.5;
+                    group.add(cheek);
+                });
+
+                const panelMat = faceRecessMaterial();
+                const panel = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.56, 28), panelMat);
+                panel.scale.y = 1.15;
+                panel.position.z = options.size * 0.64;
+                group.add(panel);
+
+                return {
+                    object: group,
+                    faceZ: options.size * 0.86,
+                    applyPalette(p) { shellMat.color.setHex(p.hex); plateMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        shellMat.opacity = 0.14 + ctx.audio * 0.08 + ctx.click * 0.08;
+                        plateMat.opacity = 0.48 + ctx.audio * 0.2 + ctx.click * 0.2;
+                    },
+                };
+            },
+        },
+
+        /* A lathed capsule: the tallest and smoothest of the five, and the only one whose
+           silhouette is a profile rather than a scaled sphere, so it does not read as the
+           blank head stretched. */
+        blankCapsule: {
+            label: 'Capsule head',
+            build(api, options) {
+                const group = new THREE.Group();
+                const r = options.size * 0.82, h = options.size * 0.52;
+
+                const profile = [];
+                const CAP = 7;
+                for (let i = 0; i <= CAP; i++) {
+                    const a = (i / CAP) * (Math.PI / 2);
+                    profile.push(new THREE.Vector2(Math.sin(a) * r, h + Math.cos(a) * r * 0.95));
+                }
+                for (let i = CAP; i >= 0; i--) {
+                    const a = (i / CAP) * (Math.PI / 2);
+                    profile.push(new THREE.Vector2(Math.sin(a) * r * 0.96, -h - Math.cos(a) * r * 0.82));
+                }
+
+                const shellMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.2, depthWrite: false,
+                });
+                const geom = new THREE.LatheGeometry(profile, 26);
+                geom.scale(1, 1, 0.84);
+                group.add(new THREE.Mesh(geom, shellMat));
+
+                const bandMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.6, depthWrite: false,
+                });
+                const bands = [];
+                [h * 0.9, -h * 0.9].forEach((at) => {
+                    const band = new THREE.Mesh(new THREE.RingGeometry(r * 0.97, r * 1.04, 36), bandMat);
+                    band.rotation.x = Math.PI / 2;
+                    band.position.y = at;
+                    band.scale.z = 0.84;
+                    group.add(band);
+                    bands.push(band);
+                });
+
+                const panelMat = faceRecessMaterial();
+                const panel = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.54, 28), panelMat);
+                panel.scale.y = 1.3;
+                panel.position.z = r * 0.6;
+                group.add(panel);
+
+                return {
+                    object: group,
+                    faceZ: r * 0.78,
+                    applyPalette(p) { shellMat.color.setHex(p.hex); bandMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        shellMat.opacity = 0.16 + ctx.audio * 0.1 + ctx.click * 0.1;
+                        const lift = ctx.state === 'LISTENING' ? 0.08 : 0;
+                        bands.forEach((b, i) => {
+                            b.position.y = (i === 0 ? h : -h) * (0.9 + lift * (i === 0 ? 1 : -1));
+                        });
+                    },
+                };
+            },
+        },
+
+        /* A box with its edges drawn, flat across the front. The most mechanical of the
+           five and the one a visor band belongs on: the face plane and the front face of
+           the head are the same plane, so nothing floats. */
+        blankMonolith: {
+            label: 'Monolith head',
+            build(api, options) {
+                const group = new THREE.Group();
+                const w = options.size * 1.5, hh = options.size * 1.9, d = options.size * 1.3;
+
+                const shellMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.16, depthWrite: false,
+                });
+                const geom = new THREE.BoxGeometry(w, hh, d);
+                group.add(new THREE.Mesh(geom, shellMat));
+
+                const edgeMat = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.85 });
+                /* A threshold is needed on a box as much as anywhere: the default one
+                   degree keeps the triangulation diagonal across every face. */
+                group.add(new THREE.LineSegments(new THREE.EdgesGeometry(geom, 40), edgeMat));
+
+                const innerMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, side: THREE.DoubleSide,
+                    transparent: true, opacity: 0.12, depthWrite: false,
+                });
+                const inner = new THREE.Mesh(new THREE.BoxGeometry(w * 0.72, hh * 0.78, d * 0.72), innerMat);
+                group.add(inner);
+
+                const panelMat = faceRecessMaterial();
+                const panel = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.7, hh * 0.56), panelMat);
+                panel.position.z = d * 0.5 - 0.6;
+                group.add(panel);
+
+                return {
+                    object: group,
+                    faceZ: d * 0.5 + options.size * 0.06,
+                    applyPalette(p) {
+                        shellMat.color.setHex(p.hex);
+                        innerMat.color.setHex(p.hex);
+                        edgeMat.color.setHex(p.hex2);
+                    },
+                    animate(ctx) {
+                        edgeMat.opacity = 0.7 + ctx.audio * 0.25 + ctx.click * 0.25;
+                        inner.scale.setScalar(1 + ctx.audio * 0.05);
+                    },
+                };
+            },
+        },
+
+        /* Lines only, no surface at all. The lightest head here, and the one that keeps a
+           face from competing with the head it is on -- useful when the brows and mouth
+           are doing the work. */
+        blankWireSkull: {
+            label: 'Wire skull',
+            build(api, options) {
+                const group = new THREE.Group();
+                const scaleY = 1.2, scaleZ = 0.85;
+
+                const geom = new THREE.IcosahedronGeometry(options.size, 1);
+                geom.scale(1, scaleY, scaleZ);
+                const wireMat = new THREE.LineBasicMaterial({ color: api.palette.hex, transparent: true, opacity: 0.45 });
+                group.add(new THREE.LineSegments(new THREE.WireframeGeometry(geom), wireMat));
+
+                const jawGeom = new THREE.IcosahedronGeometry(options.size * 0.62, 0);
+                jawGeom.scale(1, 0.5, 0.8);
+                const jawMat = new THREE.LineBasicMaterial({ color: api.palette.hex2, transparent: true, opacity: 0.8 });
+                const jaw = new THREE.LineSegments(new THREE.WireframeGeometry(jawGeom), jawMat);
+                jaw.position.set(0, -options.size * 0.92, options.size * 0.16);
+                group.add(jaw);
+
+                const panelMat = faceRecessMaterial(0.3);
+                const panel = new THREE.Mesh(new THREE.CircleGeometry(options.size * 0.56, 24), panelMat);
+                panel.scale.y = 1.15;
+                panel.position.z = options.size * 0.56;
+                group.add(panel);
+
+                return {
+                    object: group,
+                    faceZ: options.size * 0.76,
+                    applyPalette(p) { wireMat.color.setHex(p.hex); jawMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        wireMat.opacity = 0.4 + ctx.audio * 0.25 + ctx.click * 0.2;
+                        /* The jaw is the only moving part, so it carries the whole of
+                           "this head is speaking" when the mouth tier is set to nothing. */
+                        const drop = ctx.state === 'SPEAKING' ? ctx.audio * options.size * 0.16 : 0;
+                        jaw.position.y = -options.size * 0.92 - drop;
                     },
                 };
             },
@@ -3603,6 +3917,445 @@
         },
     };
 
+    // ---- The face: eyes, brows and a mouth -----------------------------------
+    //
+    // Three tiers that share one plane. Every part below draws itself in x and y around
+    // its own origin and never places itself in z: the recipe lifts the whole face
+    // forward as one group so the features stand just proud of the core (see
+    // avatar-custom.js), and a part that set its own z would fight that.
+    //
+    // The y bands are shared and fixed, which is the whole reason three tiers can be
+    // mixed freely -- any brow sits above any eye sits above any mouth, whichever three
+    // you pick. They are fractions of the core's size, so a face scales with its head.
+    //
+    // None of these turns itself, for the same reason a core does not: the recipe's spin
+    // owns rotation, and a face revolving independently of its head is not a face.
+
+    const FACE = {
+        brow: 0.46,     // y of the brows, as a fraction of options.size
+        eye: 0.14,      // y of the eyes
+        mouth: -0.36,   // y of the mouth
+        apart: 0.36,    // x offset of one half of a left/right pair
+    };
+
+    /* One blink clock for every eye that blinks, so a face never blinks twice. Returns 1
+       with the eye open and falls to 0 at the shut moment; eyes scale their own y by it,
+       which is why the lid has to be a group with nothing else in it. */
+    function blink(time) {
+        const CYCLE = 4.2, WINDOW = 0.18;
+        const t = time % CYCLE;
+        return t < WINDOW ? 1 - Math.pow(Math.sin((t / WINDOW) * Math.PI), 2) : 1;
+    }
+
+    /* How bright a feature should be for what the companion is doing. Speaking tracks the
+       voice, thinking has a pulse of its own, and the rest sits at a resting level that a
+       click lifts. Shared so a mouth and a pair of eyes picked from different tiers still
+       agree about what the avatar is up to. */
+    function faceLevel(ctx, rest = 0.7) {
+        if (ctx.state === 'SPEAKING') return rest + ctx.audio * (1 - rest);
+        if (ctx.state === 'THINKING') return rest + Math.abs(Math.sin(ctx.time * 6)) * (1 - rest);
+        return rest + ctx.click * (1 - rest);
+    }
+
+    const EYES = {
+        none: {
+            label: 'Nothing',
+            build() {
+                return { object: new THREE.Group(), applyPalette() {}, animate() {} };
+            },
+        },
+
+        /* Adapted from Chrono-mAIstresse, whose two lens eyes sit above the dial's centre.
+           A disc inside a rim, with a pupil that tightens when there is something to look
+           at -- the one eye here that reads as watching you rather than lit up. */
+        lensEyes: {
+            label: 'Lens eyes',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.size * 0.2;
+                const irisMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.45,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const rimMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
+                });
+                const pupilMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.95,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const pupils = [];
+                [-1, 1].forEach((side) => {
+                    const eye = new THREE.Group();
+                    eye.position.set(side * options.size * FACE.apart, options.size * FACE.eye, 0);
+                    eye.add(new THREE.Mesh(new THREE.CircleGeometry(R, 24), irisMat));
+                    // A rim drawn as a thin annulus rather than a line loop: a LineLoop
+                    // around a CircleGeometry includes its centre vertex and draws a spoke.
+                    eye.add(new THREE.Mesh(new THREE.RingGeometry(R * 0.86, R, 24), rimMat));
+                    const pupil = new THREE.Mesh(new THREE.CircleGeometry(R * 0.34, 16), pupilMat);
+                    pupil.position.z = 0.2;
+                    eye.add(pupil);
+                    pupils.push(pupil);
+                    group.add(eye);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) {
+                        irisMat.color.setHex(p.hex);
+                        rimMat.color.setHex(p.hex2);
+                        pupilMat.color.setHex(p.hex2);
+                    },
+                    animate(ctx) {
+                        group.scale.y = blink(ctx.time);
+                        const level = faceLevel(ctx);
+                        irisMat.opacity = level * 0.62;
+                        // Tightening, not widening: a pupil that grows with volume reads as
+                        // the eye getting brighter, which the iris is already saying.
+                        const tight = ctx.state === 'LISTENING' ? 0.7 : 1 - ctx.audio * 0.35;
+                        pupils.forEach((p) => p.scale.setScalar(tight));
+                    },
+                };
+            },
+        },
+
+        /* Adapted from the Faceted head core, which has these built into it. Two tall
+           shards, cut flat -- the least human of the four and the one that suits a
+           wireframe head. */
+        shardEyes: {
+            label: 'Shard eyes',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.9,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const geom = new THREE.OctahedronGeometry(options.size * 0.22, 0);
+                geom.scale(0.75, 1.5, 0.45);
+                [-1, 1].forEach((side) => {
+                    const eye = new THREE.Mesh(geom, mat);
+                    eye.position.set(side * options.size * FACE.apart, options.size * FACE.eye, 0);
+                    group.add(eye);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        group.scale.y = blink(ctx.time);
+                        mat.opacity = faceLevel(ctx) * 0.95;
+                    },
+                };
+            },
+        },
+
+        /* One eye across the whole face rather than two: a lit band behind a dark slot,
+           with a highlight that sweeps it. Does not blink -- there is no lid on a visor,
+           and scaling this one shut reads as the head closing rather than the eye. */
+        visorEye: {
+            label: 'Visor band',
+            build(api, options) {
+                const group = new THREE.Group();
+                const W = options.size * 1.04, H = options.size * 0.17;
+                const slotMat = new THREE.MeshBasicMaterial({ color: 0x04060f, transparent: true, opacity: 0.95, side: THREE.DoubleSide });
+                const slot = new THREE.Mesh(new THREE.PlaneGeometry(W * 1.08, H * 1.5), slotMat);
+                slot.position.set(0, options.size * FACE.eye, -0.4);
+                group.add(slot);
+
+                const bandMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.55,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const band = new THREE.Mesh(new THREE.PlaneGeometry(W, H), bandMat);
+                band.position.y = options.size * FACE.eye;
+                group.add(band);
+
+                const hotMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.9,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const hot = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.14, H), hotMat);
+                hot.position.set(0, options.size * FACE.eye, 0.2);
+                group.add(hot);
+
+                return {
+                    object: group,
+                    applyPalette(p) { bandMat.color.setHex(p.hex); hotMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        const level = faceLevel(ctx, 0.5);
+                        bandMat.opacity = level * 0.7;
+                        // The sweep is the only thing alive here while nothing is said, so
+                        // it runs on the clock and merely speeds up when there is a voice.
+                        const rate = ctx.state === 'LISTENING' ? 0.25 : 0.8 + ctx.audio * 1.6;
+                        hot.position.x = Math.sin(ctx.time * rate) * W * 0.42;
+                        hotMat.opacity = 0.5 + level * 0.5;
+                    },
+                };
+            },
+        },
+
+        /* Two open rings, nothing in the middle. The quietest pair: at rest they are
+           outlines, and they only fill in when the companion has something to say. */
+        ringEyes: {
+            label: 'Ring eyes',
+            build(api, options) {
+                const group = new THREE.Group();
+                const R = options.size * 0.21;
+                const rimMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.85,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const coreMat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.2,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const cores = [];
+                [-1, 1].forEach((side) => {
+                    const eye = new THREE.Group();
+                    eye.position.set(side * options.size * FACE.apart, options.size * FACE.eye, 0);
+                    eye.add(new THREE.Mesh(new THREE.RingGeometry(R * 0.72, R, 28), rimMat));
+                    const fill = new THREE.Mesh(new THREE.CircleGeometry(R * 0.66, 20), coreMat);
+                    fill.position.z = 0.2;
+                    eye.add(fill);
+                    cores.push(fill);
+                    group.add(eye);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { rimMat.color.setHex(p.hex); coreMat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        group.scale.y = blink(ctx.time);
+                        const level = faceLevel(ctx, 0.3);
+                        rimMat.opacity = 0.55 + level * 0.4;
+                        coreMat.opacity = level * 0.55;
+                        cores.forEach((c) => c.scale.setScalar(0.72 + level * 0.28));
+                    },
+                };
+            },
+        },
+    };
+
+    const BROWS = {
+        none: {
+            label: 'Nothing',
+            build() {
+                return { object: new THREE.Group(), applyPalette() {}, animate() {} };
+            },
+        },
+
+        /* Two straight bars, angled down toward the middle. The expression lives in the
+           angle: they drop into a frown while the companion is thinking and lift while it
+           speaks, which is most of what a brow is for. */
+        angledBrows: {
+            label: 'Angled bars',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.85,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const geom = new THREE.BoxGeometry(options.size * 0.42, options.size * 0.07, options.size * 0.05);
+                const sides = [];
+                [-1, 1].forEach((side) => {
+                    const brow = new THREE.Mesh(geom, mat);
+                    brow.position.set(side * options.size * FACE.apart, options.size * FACE.brow, 0);
+                    group.add(brow);
+                    sides.push({ brow, side });
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        const angry = ctx.state === 'THINKING' ? 1 : 0;
+                        const raised = ctx.state === 'SPEAKING' ? ctx.audio : 0;
+                        sides.forEach(({ brow, side }) => {
+                            // Positive tilt on the left and negative on the right is a
+                            // frown; swapping the sign is a surprise. One number does both.
+                            brow.rotation.z = side * (-0.16 - angry * 0.22 + raised * 0.2);
+                            brow.position.y = options.size * (FACE.brow + raised * 0.05 - angry * 0.03);
+                        });
+                        mat.opacity = faceLevel(ctx, 0.6) * 0.9;
+                    },
+                };
+            },
+        },
+
+        /* Two arcs rather than two bars -- the same expression on a rounder face. Drawn as
+           ring sectors so they curve with the head instead of cutting across it. */
+        archBrows: {
+            label: 'Arched',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex2, transparent: true, opacity: 0.85,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const R = options.size * 0.3;
+                const geom = new THREE.RingGeometry(R * 0.86, R, 20, 1, Math.PI * 0.18, Math.PI * 0.64);
+                const sides = [];
+                [-1, 1].forEach((side) => {
+                    const brow = new THREE.Mesh(geom, mat);
+                    brow.position.set(side * options.size * FACE.apart, options.size * (FACE.brow - 0.22), 0);
+                    brow.scale.x = side;   // mirrored, so both arcs rise toward the outside
+                    group.add(brow);
+                    sides.push({ brow, side });
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex2); },
+                    animate(ctx) {
+                        const angry = ctx.state === 'THINKING' ? 1 : 0;
+                        const raised = ctx.state === 'SPEAKING' ? ctx.audio : 0;
+                        sides.forEach(({ brow, side }) => {
+                            brow.rotation.z = side * (-angry * 0.2 + raised * 0.16);
+                            brow.position.y = options.size * (FACE.brow - 0.22 + raised * 0.05 - angry * 0.03);
+                        });
+                        mat.opacity = faceLevel(ctx, 0.6) * 0.9;
+                    },
+                };
+            },
+        },
+
+        /* One ridge across the whole face, broken by a notch in the middle. Not an
+           expression so much as a frame -- it suits a helm, and it is the one brow that
+           does not move, because a ridge that flexed would be a different material. */
+        ridgeBrow: {
+            label: 'Single ridge',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.8,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const half = new THREE.BoxGeometry(options.size * 0.5, options.size * 0.085, options.size * 0.05);
+                [-1, 1].forEach((side) => {
+                    const bar = new THREE.Mesh(half, mat);
+                    bar.position.set(side * options.size * 0.3, options.size * FACE.brow, 0);
+                    bar.rotation.z = side * -0.07;
+                    group.add(bar);
+                });
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) { mat.opacity = faceLevel(ctx, 0.55) * 0.85; },
+                };
+            },
+        },
+    };
+
+    const MOUTHS = {
+        none: {
+            label: 'Nothing',
+            build() {
+                return { object: new THREE.Group(), applyPalette() {}, animate() {} };
+            },
+        },
+
+        /* Adapted from the Faceted head core: a single bar that opens with the voice. The
+           plainest of the three and the one that reads at the smallest size. */
+        speakBar: {
+            label: 'Speaking bar',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.7,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const bar = new THREE.Mesh(
+                    new THREE.BoxGeometry(options.size * 0.55, options.size * 0.07, options.size * 0.05), mat
+                );
+                bar.position.y = options.size * FACE.mouth;
+                group.add(bar);
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const open = ctx.state === 'SPEAKING' ? 1 + ctx.audio * 5 : 1;
+                        bar.scale.y = open;
+                        mat.opacity = faceLevel(ctx) * 0.8;
+                    },
+                };
+            },
+        },
+
+        /* Adapted from Chrono-mAIstresse, and carrying the rule her mouth was rebuilt
+           around: the opening must share the smile's own inner radius and angles, or it
+           reads as a second mouth at every depth short of fully open. So this is one ring
+           sector getting thicker outward -- eight depths pre-built and taking turns being
+           visible -- rather than a shape moving inside another shape. */
+        smileArc: {
+            label: 'Smile',
+            build(api, options) {
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.8,
+                    side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const INNER = options.size * 0.3;
+                const DEPTHS = 8;
+                const THETA = Math.PI + 0.35, SPAN = Math.PI - 0.7;
+                const steps = [];
+                for (let i = 0; i < DEPTHS; i++) {
+                    const outer = INNER * (1.06 + (i / (DEPTHS - 1)) * 1.1);
+                    const step = new THREE.Mesh(new THREE.RingGeometry(INNER, outer, 28, 1, THETA, SPAN), mat);
+                    step.visible = i === 0;
+                    group.add(step);
+                    steps.push(step);
+                }
+                group.position.y = options.size * (FACE.mouth + 0.3);
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const open = ctx.state === 'SPEAKING' ? Math.min(1, ctx.audio * 1.6) : 0;
+                        const want = Math.round(open * (steps.length - 1));
+                        steps.forEach((s, i) => { s.visible = i === want; });
+                        mat.opacity = faceLevel(ctx) * 0.85;
+                    },
+                };
+            },
+        },
+
+        /* A row of bars reading the spectrum rather than the volume, so the mouth moves
+           with the shape of what is being said instead of only its loudness. Silent, it
+           settles flat, which is the difference between a mouth at rest and one switched
+           off. */
+        vocoderMouth: {
+            label: 'Vocoder bars',
+            build(api, options) {
+                const BARS = 7;
+                const group = new THREE.Group();
+                const mat = new THREE.MeshBasicMaterial({
+                    color: api.palette.hex, transparent: true, opacity: 0.85,
+                    blending: THREE.AdditiveBlending, depthWrite: false,
+                });
+                const w = options.size * 0.075;
+                const geom = new THREE.BoxGeometry(w, options.size * 0.06, options.size * 0.05);
+                const bars = [];
+                for (let i = 0; i < BARS; i++) {
+                    const bar = new THREE.Mesh(geom, mat);
+                    bar.position.set((i - (BARS - 1) / 2) * w * 1.7, options.size * FACE.mouth, 0);
+                    group.add(bar);
+                    bars.push(bar);
+                }
+                return {
+                    object: group,
+                    applyPalette(p) { mat.color.setHex(p.hex); },
+                    animate(ctx) {
+                        const data = ctx.audioData;
+                        const speaking = ctx.state === 'SPEAKING';
+                        bars.forEach((bar, i) => {
+                            // Read across the usable part of the spectrum rather than the
+                            // first seven bins, which are nearly the same number.
+                            const bin = data ? (data[Math.floor((i / BARS) * 48) + 2] || 0) / 255 : 0;
+                            const want = speaking ? 1 + bin * 6 : 1;
+                            bar.scale.y += (want - bar.scale.y) * 0.3;
+                        });
+                        mat.opacity = faceLevel(ctx, 0.6) * 0.9;
+                    },
+                };
+            },
+        },
+    };
+
     /* One place for a picker to read, so adding a part here makes it appear in the
        builder without the builder knowing anything about it. */
     function catalogue(kinds) {
@@ -3614,12 +4367,18 @@
         innerRings: INNER_RINGS,
         outerRings: OUTER_RINGS,
         effects: EFFECTS,
+        eyes: EYES,
+        brows: BROWS,
+        mouths: MOUTHS,
         band,
         options: {
             cores: () => catalogue(CORES),
             innerRings: () => catalogue(INNER_RINGS),
             outerRings: () => catalogue(OUTER_RINGS),
             effects: () => catalogue(EFFECTS),
+            eyes: () => catalogue(EYES),
+            brows: () => catalogue(BROWS),
+            mouths: () => catalogue(MOUTHS),
         },
     };
 })();

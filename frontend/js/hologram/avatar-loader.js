@@ -55,9 +55,9 @@
         'divinai':        { file: 'avatar-divinai.js',        v: 1 },
         'tithesa1s':      { file: 'avatar-tithesa1s.js',      v: 1 },
         /* The custom avatar is assembled from the shared parts library rather than modelled
-           by hand, so its file is useless without it -- 56 KB that only this one avatar
+           by hand, so its file is useless without it -- 227 KB that only this one avatar
            needs, which is exactly the kind of weight worth not carrying at launch. */
-        'custom':         { file: 'avatar-custom.js',         v: 3, needs: [{ file: 'parts.js', v: 4 }] },
+        'custom':         { file: 'avatar-custom.js',         v: 4, needs: [{ file: 'parts.js', v: 5 }] },
     };
 
     /* Older names the HUD and saved settings still use for the same avatar. setAvatar has
