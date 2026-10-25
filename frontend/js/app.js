@@ -8364,6 +8364,19 @@ document.addEventListener('DOMContentLoaded', () => {
         loading: false,
         loaded: false,
         pollTimer: null,
+        /* The Hugging Face tab. Its rows come from the hub rather than from a catalogue
+           compiled into the binary, so they arrive on a request and the tab has states the
+           other two do not: searching, failed, and "nothing matched". `hfQuery` is the
+           query the rows on screen belong to, which is what stops a slow reply for an
+           earlier query from overwriting a later one's results. */
+        hf: [],
+        hfQuery: null,
+        hfLoading: false,
+        hfError: '',
+        hfOnlyTools: true,
+        hfQuants: {},
+        hfChosenQuant: {},
+        hfSearchTimer: null,
     };
 
     // The last telemetry reading, kept so the hub's chips can say what the machine has
@@ -8404,6 +8417,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 existing.purposes = Array.from(new Set(existing.purposes.concat(entry.purposes)));
                 existing.recommended = existing.recommended || entry.recommended;
                 existing.runs_aether1 = existing.runs_aether1 || entry.runs_aether1;
+                existing.tools = existing.tools || entry.tools;
                 return;
             }
             byName.set(entry.name, entry);
@@ -8427,6 +8441,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // run on; the flag only means something on the coding list, where a model
                 // can be too small to hold the written tool protocol.
                 runs_aether1: true,
+                // Whether it can call a tool at all, which is what decides whether the
+                // companion running it can search the web. See setup::Entry::tools.
+                tools: !!model.tools,
             });
         }
 
@@ -8476,7 +8493,55 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* A Hugging Face repository in the same shape as a catalogue row, so one list
+       renderer and one detail panel serve all three tabs. The fields a catalogue entry has
+       and a repository cannot -- a memory estimate, a download size -- are left absent
+       rather than guessed: the hub does not know how big an arbitrary GGUF is until a
+       quantisation is chosen, and inventing a figure there is how somebody ends up
+       downloading nineteen gigabytes onto a laptop. */
+    function hubHfRows() {
+        const installed = hub.installed || [];
+        return hub.hf
+            .filter(repo => !hub.hfOnlyTools || repo.tools !== 'none')
+            .map(repo => {
+                const chosen = hub.hfChosenQuant[repo.id];
+                const pull = chosen ? `hf.co/${repo.id}:${chosen}` : null;
+                return {
+                    name: repo.id,
+                    label: repo.id.split('/').pop(),
+                    blurb: hubHfBlurb(repo),
+                    download: '',
+                    needs_gb: 0,
+                    needs_vram_gb: 0,
+                    fits: true,
+                    fits_on_gpu: false,
+                    recommended: false,
+                    installed: !!pull && installed.some(have => have.toLowerCase() === pull.toLowerCase()),
+                    purposes: ['chat'],
+                    runs_aether1: repo.tools !== 'none',
+                    tools: repo.tools === 'known',
+                    hf: repo,
+                };
+            });
+    }
+
+    function hubHfBlurb(repo) {
+        const downloads = repo.downloads >= 1000
+            ? `${Math.round(repo.downloads / 1000)}k downloads in the last month`
+            : `${repo.downloads} downloads in the last month`;
+        const tools = repo.tools === 'known'
+            ? 'This family can call tools, so a companion running it can search the web and look at this machine.'
+            : repo.tools === 'none'
+                ? 'This family cannot call tools, so it cannot search the web or look at anything — it can only talk.'
+                : 'Whether this one can call tools is not something Hugging Face reports. Aether1 asks the server once it is downloaded, and the model page under RUNS AETHER1 ITSELF will say.';
+        const gated = repo.gated
+            ? ' This repository is gated: it will refuse a download until you have accepted its terms on Hugging Face and signed in.'
+            : '';
+        return `Published by ${repo.owner}. ${downloads}, ${repo.likes} likes. ${tools}${gated}`;
+    }
+
     function hubVisibleRows() {
+        if (hub.tab === 'hf') return hubHfRows();
         let rows = hub.tab === 'device' ? hubDeviceRows() : hub.models.slice();
 
         const term = hub.search.trim().toLowerCase();
@@ -8600,6 +8665,12 @@ document.addEventListener('DOMContentLoaded', () => {
             pick.textContent = 'best for code';
             meta.appendChild(pick);
         }
+        if (!model.unknown && model.tools === false) {
+            const mute = document.createElement('span');
+            mute.style.color = 'var(--text-dim, #94a3b8)';
+            mute.textContent = 'no tools';
+            meta.appendChild(mute);
+        }
         body.appendChild(meta);
         row.appendChild(body);
 
@@ -8620,7 +8691,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (title) {
             title.textContent = hub.tab === 'device'
                 ? `${rows.length} downloaded on this computer`
-                : `${rows.length} models for this computer`;
+                : hub.tab === 'hf'
+                    ? (hub.hfLoading ? 'Searching Hugging Face...' : `${rows.length} from Hugging Face`)
+                    : `${rows.length} models for this computer`;
         }
 
         list.innerHTML = '';
@@ -8630,7 +8703,10 @@ document.addEventListener('DOMContentLoaded', () => {
             empty.textContent = hub.tab === 'device'
                 ? 'Nothing is downloaded yet, or no model server answered on this computer. '
                   + 'Pick one under Discover and press Download.'
-                : 'Nothing matches that search.';
+                : hub.tab === 'hf'
+                    ? (hub.hfError
+                        || (hub.hfLoading ? 'Searching Hugging Face...' : hubHfEmptyText()))
+                    : 'Nothing matches that search.';
             list.appendChild(empty);
             return;
         }
@@ -8687,6 +8763,11 @@ document.addEventListener('DOMContentLoaded', () => {
         sub.textContent = model.name;
         panel.appendChild(sub);
 
+        if (model.hf) {
+            renderHubHfDetail(panel, model);
+            return;
+        }
+
         const localInfo = hub.localModels.find(choice => choice.name === model.name);
         if (localInfo && (localInfo.parameter_size || localInfo.quantization)) {
             const specs = document.createElement('div');
@@ -8703,6 +8784,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (model.recommended) tags.appendChild(hubTag('Best fit for this computer', 'pick'));
         if (model.best_for_code) tags.appendChild(hubTag('Best coding model here', 'pick'));
         if (model.installed) tags.appendChild(hubTag('✔ Downloaded', 'on'));
+        // Said as loudly as the fit, because it is the same class of fact: a model that
+        // cannot call a tool is a companion that cannot search the web or look at this
+        // machine, however well it writes, and the name does not tell anybody that.
+        if (!model.unknown && !model.tools) tags.appendChild(hubTag('Cannot use tools', 'off'));
         if (!model.fits && !model.unknown) tags.appendChild(hubTag('More memory than this computer has', 'off'));
         if (tags.childElementCount) panel.appendChild(tags);
 
@@ -8790,6 +8875,9 @@ document.addEventListener('DOMContentLoaded', () => {
             : 'Partly on the processor'));
         if (!model.unknown) {
             facts.appendChild(hubFact('RUNS AETHER1 ITSELF', model.runs_aether1 ? 'Yes' : 'Too small'));
+            facts.appendChild(hubFact('TOOLS', model.tools
+                ? 'Can search the web'
+                : 'Talk only'));
         }
         if (facts.childElementCount) panel.appendChild(facts);
 
@@ -8801,6 +8889,177 @@ document.addEventListener('DOMContentLoaded', () => {
             note.className = 'text-[10px] font-mono text-slate-500 leading-snug';
             note.textContent = hub.sizedAgainst;
             panel.appendChild(note);
+        }
+    }
+
+    function hubHfEmptyText() {
+        if (hub.hfOnlyTools) {
+            return 'Nothing on Hugging Face matched that from a family known to support tools. '
+                + 'Clear "only models that can use tools" to see everything that matched.';
+        }
+        return 'Hugging Face returned nothing for that. Try a family name — qwen3, llama, mistral.';
+    }
+
+    /* The detail panel for a Hugging Face repository.
+       Different from a catalogue model in one way that matters: there is nothing to
+       download until a quantisation is chosen, because a repository holds a dozen of them
+       at sizes an order of magnitude apart. So the panel asks for the file list the first
+       time somebody looks at a repository, and the Download button stays disabled until
+       there is a name to pull. */
+    function renderHubHfDetail(panel, model) {
+        const repo = model.hf;
+
+        const tags = document.createElement('div');
+        tags.className = 'hub-tags';
+        if (repo.params) tags.appendChild(hubTag(`${repo.params} parameters`));
+        if (repo.tools === 'known') tags.appendChild(hubTag('Can use tools', 'on'));
+        if (repo.tools === 'none') tags.appendChild(hubTag('Cannot use tools', 'off'));
+        if (repo.tools === 'unknown') tags.appendChild(hubTag('Tool support unknown'));
+        if (repo.gated) tags.appendChild(hubTag('Gated repository', 'off'));
+        if (model.installed) tags.appendChild(hubTag('✔ Downloaded', 'on'));
+        if (tags.childElementCount) panel.appendChild(tags);
+
+        const quants = hub.hfQuants[repo.id];
+        const action = document.createElement('div');
+        action.className = 'hub-action';
+
+        const size = document.createElement('span');
+        size.className = 'hub-action-size';
+        if (quants === undefined) {
+            size.textContent = 'Looking at the files in this repository...';
+        } else if (!quants.length) {
+            size.textContent = 'No GGUF file here that Ollama can pull.';
+        } else {
+            size.textContent = 'Quality and size:';
+        }
+        action.appendChild(size);
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex gap-2 flex-wrap items-center';
+
+        if (quants && quants.length) {
+            const picker = document.createElement('select');
+            picker.className = 'hub-select';
+            picker.setAttribute('aria-label', 'Which quantisation to download');
+            for (const quant of quants) {
+                const option = document.createElement('option');
+                option.value = quant.label;
+                option.textContent = quant.preferred ? `${quant.label} (recommended)` : quant.label;
+                picker.appendChild(option);
+            }
+            picker.value = hub.hfChosenQuant[repo.id] || (quants.find(q => q.preferred) || quants[0]).label;
+            hub.hfChosenQuant[repo.id] = picker.value;
+            picker.addEventListener('change', () => {
+                hub.hfChosenQuant[repo.id] = picker.value;
+                renderHubList();
+                renderHubDetail();
+            });
+            buttons.appendChild(picker);
+
+            const pull = `hf.co/${repo.id}:${hub.hfChosenQuant[repo.id]}`;
+            if (model.installed) {
+                const use = document.createElement('button');
+                use.type = 'button';
+                use.className = 'cyber-btn cyber-btn-active text-xs py-1.5 px-3 whitespace-nowrap';
+                use.textContent = '✔ Use this one';
+                use.addEventListener('click', () => hubUseModel({ name: pull }));
+                buttons.appendChild(use);
+            } else {
+                const download = document.createElement('button');
+                download.type = 'button';
+                download.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+                download.textContent = '⬇ Download';
+                download.disabled = !hub.canInstall;
+                download.title = hub.canInstall
+                    ? `Pulls ${pull}`
+                    : 'Downloading from here needs Ollama on this computer.';
+                download.addEventListener('click', () => hubDownload({ name: pull }, download));
+                buttons.appendChild(download);
+            }
+        }
+
+        const open = document.createElement('a');
+        open.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+        open.href = `https://huggingface.co/${repo.id}`;
+        open.target = '_blank';
+        open.rel = 'noopener noreferrer';
+        open.textContent = 'Open on Hugging Face';
+        buttons.appendChild(open);
+
+        action.appendChild(buttons);
+        panel.appendChild(action);
+
+        const blurb = document.createElement('div');
+        blurb.className = 'hub-blurb';
+        blurb.textContent = model.blurb;
+        panel.appendChild(blurb);
+
+        const facts = document.createElement('div');
+        facts.className = 'hub-facts';
+        facts.appendChild(hubFact('DOWNLOADS', String(repo.downloads)));
+        facts.appendChild(hubFact('LIKES', String(repo.likes)));
+        if (repo.updated) facts.appendChild(hubFact('LAST UPDATED', repo.updated.slice(0, 10)));
+        panel.appendChild(facts);
+
+        // Said on every repository, because it is the one thing this tab cannot know and
+        // the one thing that decides whether the companion works afterwards.
+        const note = document.createElement('div');
+        note.className = 'text-[10px] font-mono text-slate-500 leading-snug';
+        note.textContent = 'Aether1 asks the model server what a downloaded model can '
+            + 'actually do, so whether it can call tools is settled after the download, not '
+            + 'by this list.';
+        panel.appendChild(note);
+
+        if (quants === undefined) hubLoadQuants(repo.id);
+    }
+
+    /* One listing per repository, kept once fetched. A repository's file list does not
+       change while somebody is browsing, and re-asking on every re-render would make
+       clicking down the list a request per keystroke. */
+    async function hubLoadQuants(repoId) {
+        if (hub.hfQuants[repoId] !== undefined) return;
+        hub.hfQuants[repoId] = undefined;
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('hf_quants_rust', { repo: repoId })
+                : await (await apiFetch(`/api/models/huggingface/quants?repo=${encodeURIComponent(repoId)}`)).json();
+            hub.hfQuants[repoId] = data.quants || [];
+            if (data.error) setHubStatus(`⚠ ${data.error}`, 'bad');
+        } catch (error) {
+            hub.hfQuants[repoId] = [];
+            setHubStatus(`⚠ ${error.message || error}`, 'bad');
+        }
+        if (hub.selected === repoId) renderHubDetail();
+    }
+
+    /* One search of Hugging Face. An empty box is the hub's own front page -- the most
+       downloaded GGUF repositories there are -- rather than an empty list, because
+       somebody who does not know what to type is exactly who this tab is for. */
+    async function hubSearchHf() {
+        const query = hub.search.trim();
+        if (hub.hfQuery === query && !hub.hfError) return;
+        hub.hfLoading = true;
+        hub.hfError = '';
+        renderHubList();
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('hf_search_rust', { query })
+                : await (await apiFetch(`/api/models/huggingface?q=${encodeURIComponent(query)}`)).json();
+            // A reply for a query nobody is looking at any more is dropped rather than
+            // drawn: two searches in flight otherwise finish in whichever order the network
+            // decides, and the box stops agreeing with the list under it.
+            if (hub.search.trim() !== query) return;
+            hub.hf = data.models || [];
+            hub.hfError = data.error || '';
+            hub.hfQuery = query;
+        } catch (error) {
+            hub.hf = [];
+            hub.hfError = `Hugging Face could not be reached: ${error.message || error}`;
+        } finally {
+            hub.hfLoading = false;
+            hub.selected = null;
+            renderHubList();
+            renderHubDetail();
         }
     }
 
@@ -8919,6 +9178,14 @@ document.addEventListener('DOMContentLoaded', () => {
             hub.search = search.value;
             renderHubList();
             renderHubDetail();
+            // The two local tabs filter a list already in memory, so they redraw on every
+            // keystroke. Hugging Face is a request, so it waits for the typing to stop --
+            // a search per keystroke is a dozen requests for one query and a rate limit
+            // for the next person on the address.
+            if (hub.tab === 'hf') {
+                clearTimeout(hub.hfSearchTimer);
+                hub.hfSearchTimer = setTimeout(() => hubSearchHf(), 400);
+            }
         });
         for (const tab of document.querySelectorAll('[data-hub-tab]')) {
             tab.addEventListener('click', () => {
@@ -8927,10 +9194,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     other.classList.toggle('is-active', other === tab);
                 });
                 hub.selected = null;
+                document.getElementById('hub-hf-tools-only')
+                    ?.closest('label')
+                    ?.classList.toggle('hidden', hub.tab !== 'hf');
                 renderHubList();
                 renderHubDetail();
+                // The first visit to the tab is the one that needs a request; after that
+                // the rows are already there and the box drives it.
+                if (hub.tab === 'hf' && hub.hfQuery === null) hubSearchHf();
             });
         }
+        const toolsOnly = document.getElementById('hub-hf-tools-only');
+        toolsOnly?.addEventListener('change', () => {
+            hub.hfOnlyTools = toolsOnly.checked;
+            hub.selected = null;
+            renderHubList();
+            renderHubDetail();
+        });
+        toolsOnly?.closest('label')?.classList.add('hidden');
         const bind = (id, key) => {
             const el = document.getElementById(id);
             el?.addEventListener('change', () => {

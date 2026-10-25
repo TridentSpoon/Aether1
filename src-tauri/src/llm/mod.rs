@@ -30,7 +30,7 @@ pub use genesis::{local_voice_for as persona_local_voice, voice_for as persona_v
 // is built from the enum rather than written out again in the markup.
 pub use persona::{Domain, Persona, Provider, Root};
 use providers::ChatContext;
-pub use providers::Sink;
+pub use providers::{forget_local_facts, Sink};
 pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio, transcribe};
 pub use telemetry::{Pulse, Sampler, Telemetry};
 pub use tts::{
@@ -48,6 +48,33 @@ const MAX_TOOL_ROUNDS: usize = 6;
 /// gives up on tools entirely. Counted separately from MAX_TOOL_ROUNDS because the two
 /// failures are different: rounds are progress, and a malformed block is not.
 const MAX_MALFORMED_RETRIES: usize = 2;
+
+/// Which tool protocol this turn is on: the provider's own tool-calling format, or the
+/// fenced-text one.
+///
+/// The provider decides whether the *transport* can carry a tool list. For a local model
+/// that is not the whole question, and getting it wrong was most of why a local companion
+/// could not search the web. Ollama carries tools on `/api/chat`, but a model is only able
+/// to emit one if it ships a template that can -- `gemma3` and the `deepseek-r1` distills
+/// do not, and no amount of attaching schemas makes them. Ollama answers the question
+/// directly, per model, so it is asked rather than assumed: a model it reports as
+/// tool-capable gets real schemas, and one it reports as not falls back to the fenced-text
+/// protocol, which is the only thing left that might work.
+///
+/// An older Ollama that reports no capabilities at all is treated as capable. The probe is
+/// the new information here; without it this is the provider-level answer, and a model that
+/// ignores an attached tool list behaves no worse than one that ignores a text catalogue.
+fn native_tools_for(config: &Config) -> bool {
+    if !config.provider.supports_native_tools() {
+        return false;
+    }
+    if config.provider != Provider::Ollama {
+        return true;
+    }
+    providers::ollama_facts(&config.endpoint, &config.model_name)
+        .tools
+        .unwrap_or(true)
+}
 
 /* There was a SESSION_TOKEN_BUDGET here: a flat 100,000 invented in this file, which the
 HUD then divided into to show "Used: 1.3%" and "Budget left: 98.7k" beside a gauge bar.
@@ -1002,7 +1029,7 @@ impl LlmEngine {
         differ in three places and nowhere else: what goes into the request, where the
         calls are read from, and how the round is carried into the next one -- a native
         round becomes an Exchange, a text round becomes two more history messages. */
-        let native = config.provider.supports_native_tools();
+        let native = native_tools_for(config);
         let mut malformed_retries = 0usize;
         let schemas = registry.schemas();
         let none: Vec<crate::tools::ToolSchema> = Vec::new();
@@ -1281,7 +1308,13 @@ impl LlmEngine {
         let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
         if tools_on {
             let field = config.persona.domain().field();
-            system_prompt.push_str(&if config.provider.supports_native_tools() {
+            // The same question the tool loop asks, and it has to get the same answer: a
+            // prompt that says "the tools are attached to this request" to a model that is
+            // actually on the fenced-text protocol describes a mechanism the model has no
+            // way to use, and a prompt carrying the text catalogue to a model being sent
+            // real schemas describes the tools twice in two incompatible ways. Both were
+            // reachable while the decision was the provider's alone.
+            system_prompt.push_str(&if native_tools_for(&config) {
                 crate::tools::protocol::native_instructions(&field)
             } else {
                 crate::tools::protocol::instructions(
