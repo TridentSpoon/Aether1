@@ -1011,10 +1011,68 @@ pub fn pending_actions(engine: &LlmEngine) -> Vec<ActionRecord> {
 }
 
 /// Approves and runs one proposed action.
+///
+/// `session_id` comes back so the caller knows whether the conversation that asked for this
+/// can be resumed -- see `resume_after_action`, which is the half that makes an approved
+/// tool worth approving.
 pub fn approve_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
     let ctx = tools::ToolContext::new(engine.db());
     let result = tools::consent::approve(tools::registry(), &ctx, id, "operator")?;
-    Ok(serde_json::json!({ "id": id, "result": result }))
+    let session_id = engine
+        .db()
+        .get_action(id)
+        .ok()
+        .flatten()
+        .and_then(|record| record.session_id);
+    Ok(serde_json::json!({ "id": id, "result": result, "session_id": session_id }))
+}
+
+/// Hands an approved action's output back to the model that asked for it, and streams the
+/// answer it gives once it can finally see the result.
+///
+/// This closes the gap that made the whole approval mechanism pointless. `approve` ran the
+/// tool and returned its output to the frontend, which printed it into the approval card
+/// and stopped. The model's own tool result had been the string
+/// `PROPOSED (id N): ... Do not assume it happened` -- so it answered from memory, and the
+/// real answer sat on screen underneath, in the one place nothing would ever read it. An
+/// operator watched their companion search the web competently and then say it had no
+/// way to know.
+///
+/// The envelope is `protocol::format_results`, the same one the tool loop uses for a call
+/// that needed no approval, so a model cannot tell the two apart -- which is the point.
+/// Like the loop, it is transient: only the reply is stored, never the envelope, so the
+/// transcript reads as the conversation looked rather than carrying a synthetic operator
+/// turn full of search results.
+pub fn resume_after_action(engine: &LlmEngine, id: i64, sink: llm::Sink) -> Result<Value, String> {
+    let record = engine
+        .db()
+        .get_action(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no action {id}"))?;
+
+    if record.status != llm::ActionStatus::Executed {
+        return Err(format!(
+            "action {id} is {}, so it has no output to hand back",
+            record.status.as_str()
+        ));
+    }
+    let Some(result) = record.result else {
+        return Err(format!("action {id} recorded no output"));
+    };
+    // Proposed outside a chat -- from the CLI, or by a build old enough not to have
+    // recorded where it came from. There is no conversation to resume, and inventing one
+    // would put somebody else's search results into whichever session happened to be open.
+    let Some(session_id) = record.session_id else {
+        return Err(format!("action {id} was not proposed in a conversation"));
+    };
+    let session_id = valid_session_id(Some(session_id))?;
+
+    let envelope = tools::protocol::format_results(&[(record.tool, Ok(result))]);
+    let reply = engine.generate_response_streamed_with_media(&envelope, &session_id, &[], sink);
+    let agent_name = engine.agent_name();
+    engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
+
+    Ok(serde_json::json!({ "reply": reply, "agent_name": agent_name }))
 }
 
 /// Reverses an action that ran.
@@ -2182,6 +2240,122 @@ pub fn graft_version() -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn resume_engine(name: &str) -> LlmEngine {
+        let path =
+            std::env::temp_dir().join(format!("aether1_resume_{name}_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        LlmEngine::new(llm::MemoryDb::open(path).unwrap())
+    }
+
+    /// The whole point of the change. An approved action's output has to come back as a
+    /// model turn stored in the conversation that asked -- before this it went to the
+    /// frontend's approval card and nowhere else, so the model answered from memory while
+    /// its own result sat on screen underneath.
+    #[test]
+    fn an_approved_action_is_answered_in_the_session_that_asked() {
+        let engine = resume_engine("answers");
+        let id = engine
+            .db()
+            .log_action(
+                "search_web",
+                &serde_json::json!({"query": "latest F1 race"}),
+                false,
+                llm::ActionStatus::Executed,
+                None,
+                Some("sess-7"),
+            )
+            .unwrap();
+        engine
+            .db()
+            .set_action_outcome(
+                id,
+                llm::ActionStatus::Executed,
+                Some("1. F1 2026 RACE RESULTS\n   https://www.formula1.com/en/results"),
+                None,
+                Some("operator"),
+            )
+            .unwrap();
+
+        let mut streamed = String::new();
+        let value =
+            resume_after_action(&engine, id, &mut |delta| streamed.push_str(delta)).unwrap();
+
+        // No model is configured here, so the offline reply is what comes back -- enough to
+        // prove the turn ran, was streamed, and was filed under the right session.
+        assert!(
+            !value["reply"].as_str().unwrap_or_default().is_empty(),
+            "{value}"
+        );
+        assert!(!streamed.is_empty(), "the answer has to reach the sink too");
+
+        let stored = engine.db().get_messages("sess-7", 8).unwrap();
+        assert!(
+            stored.iter().any(|m| m.sender != "user"),
+            "the answer must be stored in the asking session: {stored:?}"
+        );
+        // The envelope is transient, exactly as it is inside the tool loop: a transcript
+        // carrying a synthetic operator turn full of search results reads as something the
+        // operator typed.
+        assert!(
+            !stored.iter().any(|m| m.text.contains("[TOOL RESULTS]")),
+            "the envelope was stored as a message: {stored:?}"
+        );
+    }
+
+    /// A proposal raised outside a chat (the CLI, or a build older than the column) has no
+    /// conversation to resume. Refusing is the only safe answer: picking whichever session
+    /// is open would drop these results into an unrelated one.
+    #[test]
+    fn an_action_with_no_session_is_refused_rather_than_guessed_at() {
+        let engine = resume_engine("no_session");
+        let id = engine
+            .db()
+            .log_action(
+                "search_web",
+                &serde_json::json!({"query": "x"}),
+                false,
+                llm::ActionStatus::Executed,
+                None,
+                None,
+            )
+            .unwrap();
+        engine
+            .db()
+            .set_action_outcome(
+                id,
+                llm::ActionStatus::Executed,
+                Some("results"),
+                None,
+                Some("operator"),
+            )
+            .unwrap();
+
+        let err = resume_after_action(&engine, id, &mut |_| {}).unwrap_err();
+        assert!(err.contains("not proposed in a conversation"), "{err}");
+    }
+
+    /// Nothing to hand back yet. A still-proposed action has produced no output, and a
+    /// resume that invented one would be the same failure wearing a different hat.
+    #[test]
+    fn an_action_still_waiting_has_no_output_to_hand_back() {
+        let engine = resume_engine("still_proposed");
+        let id = engine
+            .db()
+            .log_action(
+                "search_web",
+                &serde_json::json!({"query": "x"}),
+                false,
+                llm::ActionStatus::Proposed,
+                None,
+                Some("sess-1"),
+            )
+            .unwrap();
+
+        let err = resume_after_action(&engine, id, &mut |_| {}).unwrap_err();
+        assert!(err.contains("no output to hand back"), "{err}");
+        assert!(resume_after_action(&engine, 9999, &mut |_| {}).is_err());
+    }
 
     #[test]
     fn approved_command_parser_rejects_shell_composition_and_preserves_quoted_args() {

@@ -264,6 +264,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/actions", get(get_actions))
         .route("/api/actions/pending", get(get_pending_actions))
         .route("/api/actions/{id}/approve", post(approve_action))
+        .route("/api/actions/{id}/resume", post(resume_after_action))
         .route("/api/actions/{id}/undo", post(undo_action))
         .route("/api/actions/{id}/reject", post(reject_action))
         .route("/api/tools/always-allow", post(set_always_allowed))
@@ -1125,6 +1126,23 @@ async fn approve_action(
         .map_err(internal_error)?
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+/// The browser twin of `resume_after_action_rust`. It waits for the whole answer rather than
+/// streaming it: the native window has an event channel for deltas and this does not, and a
+/// resumed turn is short enough that buffering it is not the thing worth fixing here.
+async fn resume_after_action(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        commands::resume_after_action(&engine, id, &mut |_delta| {})
+    })
+    .await
+    .map_err(internal_error)?
+    .map(Json)
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 async fn undo_action(

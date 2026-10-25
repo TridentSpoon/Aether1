@@ -151,6 +151,10 @@ pub struct ActionRecord {
     /// checkbox the consent layer would refuse. None when the tool is no longer known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub always_allowable: Option<bool>,
+    /// The conversation this was proposed in, so an approved action's output can be handed
+    /// back to the model that asked for it. None when it was not proposed inside a chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Who let this run: "operator" for an explicit approval, "always-allow" for one the
     /// operator had pre-approved for this tool, "automatic" for a read-only call that
     /// needed no approval at all. None while a proposal is still waiting.
@@ -269,6 +273,14 @@ impl MemoryDb {
         }
         if !columns.iter().any(|c| c == "reason") {
             conn.execute("ALTER TABLE action_log ADD COLUMN reason TEXT", [])?;
+        }
+        // Which conversation asked for this. Without it an approved tool's output has
+        // nowhere to go: it was shown to the operator and never reached the model that
+        // asked, so the model answered from memory while the answer sat on screen beside
+        // it. A proposal raised outside a chat (the CLI, a test) has none, and then there
+        // is simply nothing to resume.
+        if !columns.iter().any(|c| c == "session_id") {
+            conn.execute("ALTER TABLE action_log ADD COLUMN session_id TEXT", [])?;
         }
         Ok(())
     }
@@ -635,17 +647,19 @@ impl MemoryDb {
         mutating: bool,
         status: ActionStatus,
         reason: Option<&str>,
+        session_id: Option<&str>,
     ) -> rusqlite::Result<i64> {
         let conn = self.connect()?;
         conn.execute(
-            "INSERT INTO action_log (tool, args_json, mutating, status, reason) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO action_log (tool, args_json, mutating, status, reason, session_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 tool,
                 args.to_string(),
                 mutating as i64,
                 status.as_str(),
-                reason
+                reason,
+                session_id
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -680,7 +694,8 @@ impl MemoryDb {
     pub fn pending_actions(&self) -> rusqlite::Result<Vec<ActionRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason \
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
+             session_id \
              FROM action_log WHERE status = 'proposed' ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([], action_from_row)?;
@@ -702,7 +717,8 @@ impl MemoryDb {
     pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
         self.connect()?
             .query_row(
-                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason \
+                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
+             session_id \
                  FROM action_log WHERE id = ?1",
                 params![id],
                 action_from_row,
@@ -714,7 +730,8 @@ impl MemoryDb {
     pub fn recent_actions(&self, limit: u32) -> rusqlite::Result<Vec<ActionRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason \
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
+             session_id \
              FROM action_log ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], action_from_row)?;
@@ -893,6 +910,7 @@ fn action_from_row(row: &rusqlite::Row) -> rusqlite::Result<ActionRecord> {
         reason: row.get(9)?,
         preview: None,
         always_allowable: None,
+        session_id: row.get(10)?,
     })
 }
 
@@ -1163,7 +1181,14 @@ mod tests {
         // Logged as proposed, with no outcome yet -- this is the state a mutating call
         // sits in while it waits for the operator.
         let id = db
-            .log_action("write_file", &args, true, ActionStatus::Proposed, None)
+            .log_action(
+                "write_file",
+                &args,
+                true,
+                ActionStatus::Proposed,
+                None,
+                None,
+            )
             .unwrap();
         let logged = db.get_action(id).unwrap().expect("action should be stored");
         assert_eq!(logged.tool, "write_file");
@@ -1198,6 +1223,7 @@ mod tests {
                 &serde_json::json!({"n": i}),
                 false,
                 ActionStatus::Executed,
+                None,
                 None,
             )
             .unwrap();

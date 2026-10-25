@@ -956,10 +956,15 @@ impl LlmEngine {
         user_prompt: &str,
         images: &[providers::MediaAttachment],
         preamble: &str,
+        session_id: &str,
         sink: providers::Sink,
     ) -> providers::Completion {
         let registry = crate::tools::registry();
-        let tool_ctx = crate::tools::ToolContext::new(&self.db);
+        // The session travels with the context so that a call this loop has to propose
+        // records which conversation wanted it. Approving it then has somewhere to send the
+        // output; before this it had none, and the result reached the operator's screen but
+        // never the model that asked.
+        let tool_ctx = crate::tools::ToolContext::new(&self.db).in_session(Some(session_id));
 
         let mut history = base_history;
         let mut current_prompt = user_prompt.to_string();
@@ -1307,6 +1312,7 @@ impl LlmEngine {
                 prompt,
                 images,
                 &self.vault_trace(),
+                session_id,
                 sink,
             );
             reported = completion.usage;
