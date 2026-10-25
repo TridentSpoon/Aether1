@@ -670,11 +670,24 @@ impl Persona {
     /// fs_guard's deny list is checked first and is not overridable by a domain, by an
     /// approval, or by elevation.
     pub fn domain(&self) -> Domain {
-        // The two tools with no path argument that every persona keeps: what the HUD is
+        // The tools with no path argument that every persona keeps: what the HUD is
         // already displaying, and the operator's own notes.
+        //
+        // `search_web` is here on the operator's instruction (2026-10-25: "I shouldn't need
+        // to invoke search_web as this is a free tool to use"). It was previously outside
+        // every persona's field, which made each search an approval card -- and a model
+        // told it has a web search, then finding that calling one returns "proposed,
+        // waiting", invents the results instead. That is the failure three sessions in a
+        // row produced, and the approval card was not protecting anything the operator
+        // wanted protected.
+        //
+        // What still holds the line is `net::require_online`: with local-only mode on, the
+        // request cannot be built at all, whatever the domain says. The mode is the
+        // boundary; this was only ever a prompt.
         const MINIMUM_TOOLS: &[&str] = &[
             "telemetry_detail",
             "search_memory",
+            "search_web",
             // A program explaining its own failure is not a privilege: every persona
             // can read AETHER1's self-check and its crash record, whatever else its
             // field covers.
@@ -686,6 +699,7 @@ impl Persona {
             "list_dir",
             "telemetry_detail",
             "search_memory",
+            "search_web",
             "self_check",
             "recent_crashes",
         ];
@@ -703,6 +717,7 @@ impl Persona {
             // meant the two machine-facing personas fell *below* the minimum, which is not
             // a minimum -- and made "have I told you about this box before?" a proposal.
             "search_memory",
+            "search_web",
             "self_check",
             "recent_crashes",
         ];
