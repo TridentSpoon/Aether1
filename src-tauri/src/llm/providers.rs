@@ -316,15 +316,10 @@ pub struct Completion {
 
 /// A stream that produced no text at all is a failure even when the transport succeeded --
 /// an empty reply would otherwise reach the operator as silence.
-fn finish(accumulated: String, usage: Option<TokenUsage>) -> Result<Completion, String> {
-    finish_with(accumulated, usage, Vec::new())
-}
-
-/// As `finish`, for the native tool-calling paths.
 ///
-/// A turn that asked for a tool and said nothing else is not an empty reply -- it is the
-/// most ordinary shape there is, and the emptiness check that protects the text path would
-/// reject every one of them.
+/// A turn that asked for a tool and said nothing else is not an empty reply, though -- it
+/// is the most ordinary shape there is -- so the emptiness check applies only when there
+/// are no calls either.
 fn finish_with(
     accumulated: String,
     usage: Option<TokenUsage>,
@@ -342,27 +337,120 @@ fn finish_with(
 }
 
 // ---------------------------------------------------------------- Ollama
+//
+// Driven through `/api/chat`, not `/api/generate`.
+//
+// `/api/generate` takes one `prompt` string, so the only way to give it a conversation was
+// to flatten the whole thing into a fake transcript -- "USER: ...\nA1: ..." -- and hand it
+// over as a single user turn. Two things followed from that, and both were reported as the
+// product not working:
+//
+//   * The model's own chat template was applied to the transcript rather than to the turns
+//     inside it. A model trained to answer the last user message instead saw a block of
+//     dialogue, and answered the way a model does when it is asked to continue a script:
+//     echoing the question back, inventing the next few turns, losing the system prompt.
+//   * There is no `tools` field on `/api/generate` at all. Every local model was therefore
+//     on the fenced-text protocol whatever it was capable of, and a 7B asked to emit JSON
+//     in a fence mostly does not -- so the companion could not search the web, and said so
+//     in whatever words it liked.
+//
+// `/api/chat` takes `messages` with roles, `tools` in the same shape OpenAI uses, and
+// `tool_calls` back on the assistant message. So a model Ollama reports as tool-capable
+// gets real tool calling, and every model gets its own template applied to real turns.
+//
+// `num_ctx` is set explicitly for the same class of reason. Ollama's default context is
+// 4096 tokens regardless of what the model can do, and AETHER1's system prompt (persona,
+// telemetry, the code graph, the tool rules) plus eight messages of history goes past that
+// on a long conversation. What falls off the front when it does is the system prompt --
+// so the model stopped knowing it had tools, or who it was, for reasons nothing reported.
+
+/// How much context to ask a local model for when its own limit is larger.
+///
+/// Context is memory: a 128K window on a 7B is several gigabytes of KV cache, and asking
+/// for it on a 16GB card to hold a chat is how a model ends up swapping to CPU and taking
+/// a minute a reply. 16K is comfortably more than a system prompt plus a tool round plus
+/// the history AETHER1 sends, which is the whole requirement.
+const LOCAL_CTX_CEILING: u64 = 16_384;
+
+/// The floor, for a model that reports something tiny or reports nothing at all. Ollama's
+/// own default is 4096 and that is the number that was overflowing.
+const LOCAL_CTX_FLOOR: u64 = 8_192;
 
 #[derive(Serialize)]
 struct OllamaOptions {
     temperature: f32,
     top_p: f32,
+    num_ctx: u64,
 }
 
 #[derive(Serialize)]
-struct OllamaRequest {
+struct OllamaChatRequest {
     model: String,
-    prompt: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    images: Vec<String>,
+    messages: Vec<OllamaMessage>,
     stream: bool,
     options: OllamaOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OpenAiToolDef>>,
+}
+
+/// One message in Ollama's chat shape. Images ride on the message they belong to as bare
+/// base64, and a tool result is role `tool` with the name of the tool that produced it --
+/// Ollama has no call ids, so the name is what pairs a result to its question.
+#[derive(Serialize, Clone, Debug)]
+struct OllamaMessage {
+    role: String,
+    content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+}
+
+impl OllamaMessage {
+    fn plain(role: &str, content: String) -> OllamaMessage {
+        OllamaMessage {
+            role: role.to_string(),
+            content,
+            images: Vec::new(),
+            tool_calls: None,
+            tool_name: None,
+        }
+    }
+}
+
+/// A tool call as Ollama reports it. No id and no streamed fragments: the whole call
+/// arrives in one object, and `arguments` is a JSON *object* rather than the string
+/// OpenAI sends.
+#[derive(Deserialize, Default, Clone)]
+struct OllamaToolCall {
+    #[serde(default)]
+    function: OllamaCallFunction,
+}
+
+#[derive(Deserialize, Default, Clone)]
+struct OllamaCallFunction {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+#[derive(Deserialize, Default)]
+struct OllamaChatMessage {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tool_calls: Option<Vec<OllamaToolCall>>,
 }
 
 #[derive(Deserialize, Default)]
 struct OllamaResponse {
+    /// `/api/chat` answers under `message`; the field is optional because the final object
+    /// of a stream carries only the counts.
     #[serde(default)]
-    response: String,
+    message: Option<OllamaChatMessage>,
     /// Only on the final object of a stream (and on a non-streamed reply), which is why
     /// each is an Option rather than a count that happens to be zero most of the time.
     #[serde(default)]
@@ -381,33 +469,141 @@ impl OllamaResponse {
             eval_nanos: self.eval_duration,
         })
     }
+
+    fn text(&self) -> &str {
+        self.message
+            .as_ref()
+            .map(|m| m.content.as_str())
+            .unwrap_or("")
+    }
+
+    /// The calls on this object, given positional ids. Ollama issues none, and the loop
+    /// that sends results back needs something to pair them with.
+    fn calls(&self, from: usize) -> Vec<NativeCall> {
+        self.message
+            .as_ref()
+            .and_then(|m| m.tool_calls.as_ref())
+            .map(|calls| {
+                calls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, call)| NativeCall {
+                        id: format!("call_{}", from + index),
+                        tool: call.function.name.clone(),
+                        arguments: if call.function.arguments.is_null() {
+                            Value::Object(Default::default())
+                        } else {
+                            call.function.arguments.clone()
+                        },
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
-fn ollama_payload(model: &str, ctx: &ChatContext, stream: bool) -> OllamaRequest {
-    let mut prompt_body = format!("{}\n\n", ctx.system_prompt);
-    for msg in ctx.history {
-        prompt_body.push_str(&format!("{}: {}\n", msg.sender.to_uppercase(), msg.text));
-    }
-    prompt_body.push_str(&format!("USER: {}\n{}:", ctx.prompt, ctx.agent_name));
+fn ollama_payload(
+    model: &str,
+    ctx: &ChatContext,
+    stream: bool,
+    facts: LocalFacts,
+) -> OllamaChatRequest {
+    let model = if model.is_empty() { "llama3.1" } else { model };
 
-    OllamaRequest {
-        model: if model.is_empty() { "llama3" } else { model }.to_string(),
-        prompt: prompt_body,
+    let mut messages = vec![OllamaMessage::plain(
+        "system",
+        ctx.system_prompt.to_string(),
+    )];
+    for msg in ctx.history {
+        messages.push(OllamaMessage::plain(
+            &role_for(&msg.sender, "assistant"),
+            msg.text.clone(),
+        ));
+    }
+    messages.push(OllamaMessage {
+        role: "user".to_string(),
+        content: ctx.prompt.to_string(),
         images: ctx
             .images
             .iter()
             .map(|image| image.data_base64.clone())
             .collect(),
+        tool_calls: None,
+        tool_name: None,
+    });
+
+    // This turn's tool rounds, replayed in Ollama's shape so the model sees what it asked
+    // for and what came back.
+    for exchange in ctx.exchanges {
+        match exchange {
+            Exchange::Called { text, calls } => messages.push(OllamaMessage {
+                role: "assistant".to_string(),
+                content: text.clone(),
+                images: Vec::new(),
+                tool_calls: Some(
+                    calls
+                        .iter()
+                        .map(|call| {
+                            json!({"function": {"name": call.tool, "arguments": call.arguments}})
+                        })
+                        .collect(),
+                ),
+                tool_name: None,
+            }),
+            Exchange::Returned(results) => {
+                for result in results {
+                    messages.push(OllamaMessage {
+                        role: "tool".to_string(),
+                        content: result.output.clone(),
+                        images: Vec::new(),
+                        tool_calls: None,
+                        tool_name: Some(result.tool.clone()),
+                    });
+                }
+            }
+        }
+    }
+
+    OllamaChatRequest {
+        model: model.to_string(),
+        messages,
         stream,
         options: OllamaOptions {
             temperature: 0.7,
             top_p: 0.9,
+            num_ctx: local_context_window(facts.context_tokens),
         },
+        tools: (!ctx.tools.is_empty()).then(|| {
+            ctx.tools
+                .iter()
+                .map(|t| OpenAiToolDef {
+                    kind: "function",
+                    function: OpenAiFunctionDef {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.input_schema.clone(),
+                    },
+                })
+                .collect()
+        }),
     }
 }
 
 fn ollama_url(endpoint: &str) -> String {
-    format!("{}/api/generate", endpoint.trim_end_matches('/'))
+    format!("{}/api/chat", endpoint.trim_end_matches('/'))
+}
+
+/// The context size to ask for, from what the model says it was built with.
+///
+/// Clamped at both ends: above, because a long window costs memory that a reply would
+/// rather have (see `LOCAL_CTX_CEILING`); below, because a model reporting a 2048-token
+/// window cannot be given more than it has, and asking for more is how Ollama ends up
+/// refusing or silently truncating.
+pub fn local_context_window(reported: Option<u64>) -> u64 {
+    match reported {
+        Some(limit) if limit > 0 => limit.min(LOCAL_CTX_CEILING).max(limit.min(LOCAL_CTX_FLOOR)),
+        _ => LOCAL_CTX_FLOOR,
+    }
 }
 
 pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
@@ -420,21 +616,23 @@ pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Com
             .timeout_global(Some(CALL_TIMEOUT))
             .http_status_as_error(false)
             .build()
-            .send_json(ollama_payload(model, ctx, false)),
+            .send_json(ollama_payload(
+                model,
+                ctx,
+                false,
+                ollama_facts(endpoint, model),
+            )),
     )?
     .into_body()
     .read_json()
     .map_err(|e| e.to_string())?;
 
-    Ok(Completion {
-        text: response.response.trim().to_string(),
-        usage: response.usage(),
-        calls: Vec::new(),
-    })
+    let calls = response.calls(0);
+    finish_with(response.text().to_string(), response.usage(), calls)
 }
 
 /// Ollama streams newline-delimited JSON rather than SSE: one object per token, each with
-/// the incremental text in `response`.
+/// the incremental text under `message.content`.
 pub fn stream_ollama(
     endpoint: &str,
     model: &str,
@@ -447,11 +645,17 @@ pub fn stream_ollama(
             .timeout_global(Some(STREAM_TIMEOUT))
             .http_status_as_error(false)
             .build()
-            .send_json(ollama_payload(model, ctx, true)),
+            .send_json(ollama_payload(
+                model,
+                ctx,
+                true,
+                ollama_facts(endpoint, model),
+            )),
     )?;
 
     let mut full = String::new();
     let mut usage = None;
+    let mut calls: Vec<NativeCall> = Vec::new();
     for_each_line(response, |line| {
         let line = line.trim();
         if line.is_empty() {
@@ -459,10 +663,14 @@ pub fn stream_ollama(
         }
         let chunk: OllamaResponse = serde_json::from_str(line)
             .map_err(|e| format!("unparseable chunk from Ollama: {e}"))?;
-        if !chunk.response.is_empty() {
-            full.push_str(&chunk.response);
-            sink(&chunk.response);
+        let delta = chunk.text();
+        if !delta.is_empty() {
+            full.push_str(delta);
+            sink(delta);
         }
+        // Unlike OpenAI, a call is not fragmented across chunks -- it arrives whole, on
+        // whichever object the model finished it on, so each one is appended as it lands.
+        calls.extend(chunk.calls(calls.len()));
         // The counts ride on the last object of the stream, so this overwrites nothing.
         if let Some(reported) = chunk.usage() {
             usage = Some(reported);
@@ -470,7 +678,7 @@ pub fn stream_ollama(
         Ok(true)
     })?;
 
-    finish(full, usage)
+    finish_with(full, usage, calls)
 }
 
 // -------------------------------------------------- OpenAI-compatible (OpenAI, Groq, LM Studio)
@@ -682,28 +890,10 @@ struct OllamaShowRequest<'a> {
 /// Deliberately short-timeout: this is decoration on a telemetry panel, and it must never
 /// be the reason a reply feels slow.
 pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability> {
-    let url = format!("{}/api/show", endpoint.trim_end_matches('/'));
-    let body: serde_json::Value = crate::net::post(&url, "the model was not asked")
-        .ok()?
-        .config()
-        .timeout_global(Some(std::time::Duration::from_millis(2500)))
-        .build()
-        .send_json(OllamaShowRequest { model })
-        .ok()?
-        .into_body()
-        .read_json()
-        .ok()?;
-
+    let body = ollama_show(endpoint, model)?;
     let details = body.get("details");
     let capability = LocalCapability {
-        context_tokens: body
-            .get("model_info")
-            .and_then(|info| info.as_object())
-            .and_then(|info| {
-                info.iter()
-                    .find(|(key, _)| key.ends_with(".context_length"))
-                    .and_then(|(_, value)| value.as_u64())
-            }),
+        context_tokens: context_length_of(&body),
         parameter_size: details
             .and_then(|d| d.get("parameter_size"))
             .and_then(|v| v.as_str())
@@ -716,6 +906,118 @@ pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability>
 
     // Nothing known is not the same as a model with no properties; say so with None.
     (!capability.is_empty()).then_some(capability)
+}
+
+/// What a local model can be asked to do, as its own server describes it.
+///
+/// Two questions, both of which AETHER1 was previously guessing the answer to:
+///
+///   * **Can it call tools?** Ollama answers this directly -- `/api/show` returns a
+///     `capabilities` array, and `"tools"` is in it exactly when the model ships a template
+///     that can emit a tool call. A model without one cannot be made to by any amount of
+///     prompting, and the companion needs to know which of the two protocols it is on
+///     *before* it writes its system prompt.
+///   * **How much context has it got?** For `num_ctx`, which Ollama otherwise defaults to
+///     4096 whatever the model was built with.
+///
+/// `None` for either means the server did not say -- an older Ollama, or something else
+/// answering on the port. A missing answer is never filled in with a plausible one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocalFacts {
+    pub tools: Option<bool>,
+    pub context_tokens: Option<u64>,
+}
+
+/// Probes cost a round trip, and the answer is a property of the model rather than of the
+/// turn, so each (endpoint, model) pair is asked once per process. The negative answer is
+/// cached too: a model that cannot call tools would otherwise be re-probed on every
+/// message of a conversation that is already slower for being on the text protocol.
+static LOCAL_FACTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, LocalFacts>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Asks Ollama what one model can do, once per process.
+///
+/// Nothing here can fail loudly: this runs in front of a reply, and a probe that could
+/// refuse a question would be a worse bug than the one it exists to fix. A server that is
+/// not Ollama, is not running, or is too old to report capabilities produces
+/// `LocalFacts::default()`, which puts the model on the fenced-text protocol with the
+/// floor context -- exactly what every local model got before this existed.
+pub fn ollama_facts(endpoint: &str, model: &str) -> LocalFacts {
+    if model.trim().is_empty() {
+        return LocalFacts::default();
+    }
+    let key = format!("{endpoint}\u{1f}{model}");
+    if let Some(known) = LOCAL_FACTS.lock().ok().and_then(|c| c.get(&key).copied()) {
+        return known;
+    }
+
+    let facts = probe_ollama_facts(endpoint, model).unwrap_or_default();
+    if let Ok(mut cache) = LOCAL_FACTS.lock() {
+        cache.insert(key, facts);
+    }
+    facts
+}
+
+fn probe_ollama_facts(endpoint: &str, model: &str) -> Option<LocalFacts> {
+    let body = ollama_show(endpoint, model)?;
+    Some(LocalFacts {
+        // Present and not containing "tools" is a real answer -- this model cannot. Absent
+        // entirely is no answer, and stays None rather than becoming a false.
+        tools: tool_capability_of(&body),
+        context_tokens: context_length_of(&body),
+    })
+}
+
+/// Whether an `/api/show` body says this model can call tools.
+///
+/// Three answers, not two. `capabilities` present and containing `"tools"` is yes; present
+/// and not containing it is a real no, and no amount of prompting will change it; absent
+/// altogether is an older Ollama that does not report capabilities, which is not the same
+/// as a no and must not be recorded as one.
+fn tool_capability_of(body: &serde_json::Value) -> Option<bool> {
+    body.get("capabilities")
+        .and_then(|c| c.as_array())
+        .map(|list| list.iter().any(|c| c.as_str() == Some("tools")))
+}
+
+/// Clears the cache, for a settings change that could have changed the answer -- pulling a
+/// newer tag of the same name, or restarting Ollama after an upgrade.
+pub fn forget_local_facts() {
+    if let Ok(mut cache) = LOCAL_FACTS.lock() {
+        cache.clear();
+    }
+}
+
+/// The context length out of an `/api/show` body.
+///
+/// The key is architecture-prefixed -- `llama.context_length`, `qwen2.context_length`,
+/// `gemma3.context_length` -- so rather than keeping a list of architectures that would be
+/// out of date by the next release, any key ending in `.context_length` counts.
+fn context_length_of(body: &serde_json::Value) -> Option<u64> {
+    body.get("model_info")
+        .and_then(|info| info.as_object())
+        .and_then(|info| {
+            info.iter()
+                .find(|(key, _)| key.ends_with(".context_length"))
+                .and_then(|(_, value)| value.as_u64())
+        })
+}
+
+/// One `/api/show` call. Deliberately short-timeout: every caller is decoration or a
+/// decision with a safe default, and none of them may be the reason a reply feels slow.
+fn ollama_show(endpoint: &str, model: &str) -> Option<serde_json::Value> {
+    let url = format!("{}/api/show", endpoint.trim_end_matches('/'));
+    crate::net::post(&url, "the model was not asked")
+        .ok()?
+        .config()
+        .timeout_global(Some(std::time::Duration::from_millis(2500)))
+        .build()
+        .send_json(OllamaShowRequest { model })
+        .ok()?
+        .into_body()
+        .read_json()
+        .ok()
 }
 
 /// The per-provider base URL and the model to use when none is configured.
@@ -1931,7 +2233,7 @@ mod tests {
     #[test]
     fn ollama_reports_its_counts_and_its_own_generation_time() {
         let final_chunk: OllamaResponse = serde_json::from_str(
-            r#"{"response":"","done":true,"prompt_eval_count":41,"eval_count":128,"eval_duration":2000000000}"#,
+            r#"{"message":{"content":""},"done":true,"prompt_eval_count":41,"eval_count":128,"eval_duration":2000000000}"#,
         )
         .unwrap();
         let usage = final_chunk
@@ -1943,7 +2245,8 @@ mod tests {
 
         // Every chunk before the last one has no counts, and must not claim any.
         let mid: OllamaResponse =
-            serde_json::from_str(r#"{"response":"hi","done":false}"#).unwrap();
+            serde_json::from_str(r#"{"message":{"content":"hi"},"done":false}"#).unwrap();
+        assert_eq!(mid.text(), "hi");
         assert_eq!(mid.usage(), None);
     }
 
@@ -2070,8 +2373,13 @@ mod tests {
 
     #[test]
     fn an_empty_stream_is_an_error_not_an_empty_reply() {
-        assert!(finish("   \n ".to_string(), None).is_err());
-        assert_eq!(finish(" hello ".to_string(), None).unwrap().text, "hello");
+        assert!(finish_with("   \n ".to_string(), None, Vec::new()).is_err());
+        assert_eq!(
+            finish_with(" hello ".to_string(), None, Vec::new())
+                .unwrap()
+                .text,
+            "hello"
+        );
     }
 
     #[test]
@@ -2105,7 +2413,11 @@ mod tests {
             tools: &[],
             exchanges: &[],
         };
-        assert_eq!(ollama_payload("", &ctx, true).model, "llama3");
+        assert_eq!(
+            ollama_payload("", &ctx, true, LocalFacts::default()).model,
+            "llama3.1",
+            "the fallback is a model that can call tools, not one that cannot"
+        );
         let (url, payload) = openai_payload(Provider::Groq, "", "", &ctx, true);
         assert_eq!(payload.model, "llama-3.3-70b-versatile");
         assert!(url.starts_with("https://api.groq.com/"));
@@ -2509,12 +2821,11 @@ mod failure_tests {
         assert!(finish_with(String::new(), None, Vec::new()).is_err());
     }
 
-    /// The two local providers stay on the fenced text protocol: Ollama is driven through
-    /// an endpoint with no tools field, and LM Studio is the one most likely to be an old
-    /// build that would reject the request outright.
+    /// Ollama carries tools now; LM Studio does not. See `Provider::supports_native_tools`
+    /// for why the two local providers are split.
     #[test]
-    fn the_local_providers_stay_on_the_text_protocol() {
-        assert!(!Provider::Ollama.supports_native_tools());
+    fn ollama_carries_tools_and_lm_studio_does_not() {
+        assert!(Provider::Ollama.supports_native_tools());
         assert!(!Provider::LmStudio.supports_native_tools());
         assert!(!Provider::Offline.supports_native_tools());
         for provider in [
@@ -2525,5 +2836,131 @@ mod failure_tests {
         ] {
             assert!(provider.supports_native_tools(), "{provider}");
         }
+    }
+
+    /// A model that says nothing about its context gets the floor rather than Ollama's
+    /// 4096 default, a model that reports less than the floor gets what it has, and a
+    /// 128K model is capped -- a window that size is gigabytes of KV cache.
+    #[test]
+    fn the_local_context_window_is_clamped_at_both_ends() {
+        assert_eq!(local_context_window(None), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(0)), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(2048)), 2048);
+        assert_eq!(local_context_window(Some(4096)), 4096);
+        assert_eq!(local_context_window(Some(8192)), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(32_768)), LOCAL_CTX_CEILING);
+        assert_eq!(local_context_window(Some(131_072)), LOCAL_CTX_CEILING);
+    }
+
+    /// `capabilities` present and without "tools" is a real "it cannot"; the field missing
+    /// altogether is no answer at all, and must not become a false.
+    #[test]
+    fn tool_capability_distinguishes_no_from_unknown() {
+        let says_yes = json!({"capabilities": ["completion", "tools", "vision"]});
+        let says_no = json!({"capabilities": ["completion"]});
+        let silent = json!({"details": {"parameter_size": "7B"}});
+        assert_eq!(tool_capability_of(&says_yes), Some(true));
+        assert_eq!(tool_capability_of(&says_no), Some(false));
+        assert_eq!(tool_capability_of(&silent), None);
+    }
+
+    /// The chat payload sends real turns with real roles. The old `/api/generate` payload
+    /// flattened them into one "USER: ...\nA1: ..." string handed over as a single user
+    /// message, which is why a model answered by continuing the script instead of replying.
+    #[test]
+    fn the_chat_payload_sends_turns_not_a_transcript() {
+        let history = vec![
+            Message {
+                sender: "user".to_string(),
+                text: "first question".to_string(),
+                timestamp: String::new(),
+            },
+            Message {
+                sender: "a1".to_string(),
+                text: "first answer".to_string(),
+                timestamp: String::new(),
+            },
+        ];
+        let ctx = ChatContext {
+            system_prompt: "you are A1",
+            history: &history,
+            prompt: "second question",
+            images: &[],
+            agent_name: "A1",
+            tools: &[],
+            exchanges: &[],
+        };
+        let payload = ollama_payload("llama3.1", &ctx, true, LocalFacts::default());
+        let roles: Vec<&str> = payload.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "user"]);
+        assert_eq!(payload.messages[3].content, "second question");
+        assert!(payload.tools.is_none(), "no tools offered, so none sent");
+    }
+
+    /// A tool round goes back in Ollama's shape: the assistant message carries
+    /// `tool_calls`, and each result is its own `tool` message naming the tool it answers.
+    #[test]
+    fn a_tool_round_is_replayed_in_ollamas_shape() {
+        let exchanges = vec![
+            Exchange::Called {
+                text: String::new(),
+                calls: vec![NativeCall {
+                    id: "call_0".to_string(),
+                    tool: "search_web".to_string(),
+                    arguments: json!({"query": "latest f1 result"}),
+                }],
+            },
+            Exchange::Returned(vec![CallResult {
+                id: "call_0".to_string(),
+                tool: "search_web".to_string(),
+                output: "eight results".to_string(),
+            }]),
+        ];
+        let schema = crate::tools::ToolSchema {
+            name: "search_web",
+            description: "search the web",
+            input_schema: json!({"type": "object"}),
+            mutating: false,
+            always_allowable: true,
+        };
+        let schemas = [schema];
+        let ctx = ChatContext {
+            system_prompt: "you are A1",
+            history: &[],
+            prompt: "who won",
+            images: &[],
+            agent_name: "A1",
+            tools: &schemas,
+            exchanges: &exchanges,
+        };
+        let payload = ollama_payload("llama3.1", &ctx, true, LocalFacts::default());
+        let roles: Vec<&str> = payload.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "tool"]);
+        assert!(payload.messages[2].tool_calls.is_some());
+        assert_eq!(
+            payload.messages[3].tool_name.as_deref(),
+            Some("search_web"),
+            "Ollama has no call ids, so the tool name is what pairs a result to its call"
+        );
+        let tools = payload.tools.expect("the schema was offered");
+        assert_eq!(tools.len(), 1);
+    }
+
+    /// A streamed call arrives whole, on one object, with no id -- unlike OpenAI, where it
+    /// is reassembled from fragments keyed by index.
+    #[test]
+    fn a_streamed_ollama_call_is_read_off_one_object() {
+        let chunk: OllamaResponse = serde_json::from_str(
+            r#"{"message":{"content":"","tool_calls":[{"function":{"name":"search_web","arguments":{"query":"f1"}}}]},"done":false}"#,
+        )
+        .expect("a chat chunk parses");
+        let calls = chunk.calls(0);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool, "search_web");
+        assert_eq!(calls[0].arguments, json!({"query": "f1"}));
+        assert_eq!(
+            calls[0].id, "call_0",
+            "positional, because Ollama issues none"
+        );
     }
 }

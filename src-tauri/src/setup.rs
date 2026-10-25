@@ -174,6 +174,13 @@ pub struct ModelChoice {
     pub fits_on_gpu: bool,
     /// The one pre-selected for this machine.
     pub recommended: bool,
+    /// Whether this model can call a tool at all -- see `Entry::tools`.
+    ///
+    /// On the wire because it is the single most consequential thing about a choice here
+    /// and the one a person cannot see from the name. A model without it is a companion
+    /// that cannot search the web, read a file or look at the machine, however good its
+    /// answers are when it is only talking.
+    pub tools: bool,
 }
 
 /// Every model the guided install offers, grouped by the memory a machine needs for it
@@ -191,171 +198,275 @@ pub struct ModelChoice {
 /// theoretical minimum and then swaps for forty seconds per sentence is, to the person
 /// who followed this wizard, a broken program -- and they will blame Aether1, correctly.
 /// Better to recommend something small that answers immediately.
-const CATALOGUE: &[(&str, &str, &str, &str, f64, f64)] = &[
+/// One entry. A struct rather than the tuple this used to be: the sixth and seventh fields
+/// were already hard to read at the call site, and `tools` is the one field a wrong value
+/// in actively misleads somebody choosing a model.
+struct Entry {
+    /// What to pass to `ollama pull`, and what goes in the model box.
+    name: &'static str,
+    label: &'static str,
+    blurb: &'static str,
+    download: &'static str,
+    needs_gb: f64,
+    needs_vram_gb: f64,
+    /// Whether this model ships a template that can emit a tool call.
+    ///
+    /// This is the field that decides whether AETHER1 can search the web for somebody, and
+    /// it is not a matter of degree: a model without a tool template cannot produce a call
+    /// at all, and attaching schemas to the request or explaining the protocol in the
+    /// system prompt does not change that. `gemma3`, `gemma2` and the `deepseek-r1`
+    /// distills are the ones most likely to be picked by accident -- they are good models
+    /// and several of them were recommended here, and every one of them left the companion
+    /// unable to look anything up.
+    ///
+    /// It is only ever used to choose what to *recommend* and what to warn about. What a
+    /// turn actually does is decided by asking the server at the time
+    /// (`providers::ollama_facts`), so a stale value here cannot make a working model fail
+    /// or a broken one be trusted -- it can only put the wrong name at the top of a list.
+    tools: bool,
+}
+
+const fn entry(
+    name: &'static str,
+    label: &'static str,
+    blurb: &'static str,
+    download: &'static str,
+    needs_gb: f64,
+    needs_vram_gb: f64,
+    tools: bool,
+) -> Entry {
+    Entry {
+        name,
+        label,
+        blurb,
+        download,
+        needs_gb,
+        needs_vram_gb,
+        tools,
+    }
+}
+
+const CATALOGUE: &[Entry] = &[
     // Runs on almost anything, including an old laptop or a mini PC.
-    (
+    entry(
         "qwen2.5:0.5b",
         "Qwen 2.5 (tiny)",
-        "The smallest thing here that still holds a conversation. For machines with very little memory.",
+        "The smallest thing here that still holds a conversation, and it can still use tools. For machines with very little memory.",
         "about 400 MB",
         2.0,
         1.0,
+        true,
     ),
-    (
+    entry(
         "gemma3:1b",
         "Gemma 3 (tiny)",
-        "Google's small one. Writes more naturally than its size suggests.",
+        "Google's small one. Writes more naturally than its size suggests, but it cannot use tools, so it cannot look anything up.",
         "about 815 MB",
         2.0,
         1.5,
+        false,
     ),
-    (
-        "qwen2.5:1.5b",
-        "Qwen 2.5 (small)",
-        "Fast, and noticeably better at following instructions than most models this size.",
-        "about 1 GB",
-        2.0,
-        1.8,
-    ),
-    (
+    entry(
         "deepseek-r1:1.5b",
         "DeepSeek R1 (small)",
-        "Thinks a problem through before answering, so it is slower but better at puzzles and maths.",
+        "Thinks a problem through before answering, so it is slower but better at puzzles and maths. Cannot use tools.",
         "about 1.1 GB",
         2.0,
         1.8,
+        false,
     ),
-    (
+    entry(
         "llama3.2:1b",
         "Llama 3.2 (small)",
         "Quick and light. Good for chatting and simple questions; it will get hard facts wrong sometimes.",
         "about 1.3 GB",
         2.0,
         1.8,
+        true,
+    ),
+    entry(
+        "qwen2.5:1.5b",
+        "Qwen 2.5 (small)",
+        "Fast, and noticeably better at following instructions than most models this size.",
+        "about 1 GB",
+        2.0,
+        1.8,
+        true,
     ),
     // The ordinary 8 GB desktop or laptop.
-    (
+    entry(
         "gemma2:2b",
         "Gemma 2 (medium)",
-        "A step up in writing quality for a small step up in size.",
+        "A step up in writing quality for a small step up in size. Cannot use tools.",
         "about 1.6 GB",
         5.0,
         2.5,
+        false,
     ),
-    (
+    entry(
+        "gemma3:4b",
+        "Gemma 3 (medium)",
+        "The best writing of the medium models, and a little slower for it. Cannot use tools.",
+        "about 3.3 GB",
+        5.0,
+        4.5,
+        false,
+    ),
+    entry(
+        "phi4-mini",
+        "Phi 4 (mini)",
+        "Microsoft's small one. Strong at reasoning and maths for its size, and it can call tools.",
+        "about 2.5 GB",
+        5.0,
+        3.5,
+        true,
+    ),
+    entry(
         "qwen2.5:3b",
         "Qwen 2.5 (medium)",
         "Careful with instructions and good at code for something this small.",
         "about 1.9 GB",
         5.0,
         3.0,
+        true,
     ),
-    (
-        "phi4-mini",
-        "Phi 4 (mini)",
-        "Microsoft's small one. Strong at reasoning and maths for its size.",
-        "about 2.5 GB",
-        5.0,
-        3.5,
-    ),
-    (
-        "gemma3:4b",
-        "Gemma 3 (medium)",
-        "The best writing of the medium models, and a little slower for it.",
-        "about 3.3 GB",
-        5.0,
-        4.5,
-    ),
-    (
+    entry(
         "llama3.2:3b",
         "Llama 3.2 (medium)",
-        "Handles longer conversations and keeps track of what was said. The best all-rounder at this size.",
+        "Handles longer conversations and keeps track of what was said.",
         "about 2 GB",
         5.0,
         3.0,
+        true,
+    ),
+    entry(
+        "qwen3:4b",
+        "Qwen 3 (medium)",
+        "The newest of the small ones, and the most reliable at this size at actually calling a tool rather than talking about calling one. The best all-rounder for an ordinary laptop.",
+        "about 2.6 GB",
+        5.0,
+        3.5,
+        true,
     ),
     // A 16 GB machine.
-    (
+    entry(
+        "deepseek-r1:8b",
+        "DeepSeek R1 (large)",
+        "Works through its reasoning before answering. Slow, and hard to beat on tricky questions -- but it cannot use tools, so it cannot look anything up.",
+        "about 5.2 GB",
+        10.0,
+        6.5,
+        false,
+    ),
+    entry(
         "mistral",
         "Mistral (large)",
-        "Clearly better answers, and slower. Worth it if this machine has the memory.",
+        "Clearly better answers than the medium models, and slower. Can call tools.",
         "about 4.1 GB",
         10.0,
         5.5,
+        true,
     ),
-    (
+    entry(
+        "llama3.1:8b",
+        "Llama 3.1 (large)",
+        "The most widely used model on this list and a dependable all-rounder, though it is noticeably less willing to call a tool than the Qwen 3 of the same size.",
+        "about 4.9 GB",
+        10.0,
+        6.5,
+        true,
+    ),
+    entry(
         "qwen2.5:7b",
         "Qwen 2.5 (large)",
         "Very good at code and at doing exactly what it was asked.",
         "about 4.7 GB",
         10.0,
         6.0,
+        true,
     ),
-    (
-        "deepseek-r1:8b",
-        "DeepSeek R1 (large)",
-        "Works through its reasoning before answering. Slow, and hard to beat on tricky questions.",
+    entry(
+        "qwen3:8b",
+        "Qwen 3 (large)",
+        "Reliable at using tools and at holding a conversation, which is what makes the difference between a companion that can look something up and one that explains why it cannot. The best pick for an ordinary gaming PC.",
         "about 5.2 GB",
         10.0,
         6.5,
-    ),
-    (
-        "llama3.1:8b",
-        "Llama 3.1 (large)",
-        "The most widely used model on this list, and a dependable all-rounder. The best pick for an ordinary gaming PC.",
-        "about 4.9 GB",
-        10.0,
-        6.5,
+        true,
     ),
     // A 32 GB workstation.
-    (
+    entry(
         "gemma3:12b",
         "Gemma 3 (very large)",
-        "Writes about as well as anything you can run at home. Needs a serious machine.",
+        "Writes about as well as anything you can run at home. Needs a serious machine, and cannot use tools.",
         "about 8.1 GB",
         20.0,
         10.0,
+        false,
     ),
-    (
+    entry(
         "deepseek-r1:14b",
         "DeepSeek R1 (very large)",
-        "The reasoning one, at a size where the reasoning really shows. Takes its time.",
+        "The reasoning one, at a size where the reasoning really shows. Takes its time, and cannot use tools.",
         "about 9 GB",
         20.0,
         11.0,
+        false,
     ),
-    (
+    entry(
         "qwen2.5:14b",
         "Qwen 2.5 (very large)",
-        "The best all-round answers you can get without a workstation-class machine.",
+        "Excellent all-round answers, and solid with tools.",
         "about 9 GB",
         20.0,
         11.0,
+        true,
     ),
-    (
+    entry(
+        "qwen3:14b",
+        "Qwen 3 (very large)",
+        "The best all-round answers you can get without a workstation-class machine, and the most dependable tool user on this list. Fits on a 16 GB graphics card.",
+        "about 9.3 GB",
+        20.0,
+        11.0,
+        true,
+    ),
+    entry(
+        "qwen3:30b-a3b",
+        "Qwen 3 30B (mixture of experts)",
+        "Thirty billion parameters but only three billion active per token, so it answers about as fast as an 8B while thinking like something much larger. Good with tools.",
+        "about 19 GB",
+        36.0,
+        20.0,
+        true,
+    ),
+    entry(
         "qwen2.5:32b-instruct-q4_K_M",
         "Qwen 2.5 32B (Q4_K_M)",
         "A quantised 32 billion parameter chat model for high-memory computers. Check the memory estimate before downloading.",
         "about 20 GB",
         36.0,
         22.0,
+        true,
     ),
     // 64 GB and up, or a machine with a lot of video memory.
-    (
+    entry(
         "mixtral:8x7b",
         "Mixtral (huge)",
-        "Splits the work between several smaller experts, so it answers faster than its size suggests.",
+        "Splits the work between several smaller experts, so it answers faster than its size suggests. Its Ollama template cannot emit a tool call.",
         "about 26 GB",
         48.0,
         30.0,
+        false,
     ),
-    (
+    entry(
         "llama3.3:70b",
         "Llama 3.3 (huge)",
         "As close to a commercial cloud assistant as a home machine gets. Only for very large amounts of memory.",
         "about 43 GB",
         48.0,
         44.0,
+        true,
     ),
 ];
 
@@ -378,27 +489,38 @@ pub fn models_for(ram_total_gb: f64, vram_gb: Option<f64>) -> Vec<ModelChoice> {
 
     let mut choices: Vec<ModelChoice> = CATALOGUE
         .iter()
-        .map(
-            |(name, label, blurb, download, needs_gb, needs_vram_gb)| ModelChoice {
-                name: name.to_string(),
-                label: label.to_string(),
-                blurb: blurb.to_string(),
-                download: download.to_string(),
-                needs_gb: *needs_gb,
-                fits: *needs_gb <= usable,
-                needs_vram_gb: *needs_vram_gb,
-                fits_on_gpu: usable_vram.is_some_and(|room| *needs_vram_gb <= room),
-                recommended: false,
-            },
-        )
+        .map(|entry| ModelChoice {
+            name: entry.name.to_string(),
+            label: entry.label.to_string(),
+            blurb: entry.blurb.to_string(),
+            download: entry.download.to_string(),
+            needs_gb: entry.needs_gb,
+            fits: entry.needs_gb <= usable,
+            needs_vram_gb: entry.needs_vram_gb,
+            fits_on_gpu: usable_vram.is_some_and(|room| entry.needs_vram_gb <= room),
+            recommended: false,
+            tools: entry.tools,
+        })
         .collect();
 
-    // The largest that fits, or the smallest on the list if nothing does -- a machine below
-    // the floor still gets a recommendation, because "your computer is unsuitable" is not a
-    // next step and the smallest model is genuinely worth a try.
+    /* The largest that fits *and can call a tool*, or the smallest that can if nothing
+    fits -- a machine below the floor still gets a recommendation, because "your computer
+    is unsuitable" is not a next step and the smallest model is genuinely worth a try.
+
+    The tool condition is the correction. This used to pick the largest that fit, full
+    stop, and the list is ordered so that the last entry of a memory group is the one
+    recommended for that class of machine -- which meant a group ending in a Gemma or a
+    DeepSeek distill recommended a model physically unable to search the web. Somebody
+    then followed the wizard, took its recommendation, asked their companion to look
+    something up and was told it could not. Everything about that was working as built.
+
+    Models that cannot are still listed, with blurbs that say so: they are good at what
+    they are good at, and somebody who only wants to talk should be able to pick one. */
+    let can_use_tools = |choice: &ModelChoice| choice.tools;
     let best = choices
         .iter()
-        .rposition(|choice| choice.needs_gb <= usable)
+        .rposition(|choice| choice.needs_gb <= usable && can_use_tools(choice))
+        .or_else(|| choices.iter().position(can_use_tools))
         .unwrap_or(0);
     choices[best].recommended = true;
     choices
@@ -736,14 +858,14 @@ mod tests {
     fn an_ordinary_machine_is_recommended_a_middling_model() {
         let models = models_for(8.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
-        assert_eq!(pick.name, "llama3.2:3b");
+        assert_eq!(pick.name, "qwen3:4b");
     }
 
     #[test]
     fn a_small_machine_is_recommended_a_small_model() {
         let models = models_for(4.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
-        assert_eq!(pick.name, "llama3.2:1b");
+        assert_eq!(pick.name, "qwen2.5:1.5b");
     }
 
     #[test]
@@ -754,12 +876,15 @@ mod tests {
     }
 
     /// 16 GB is the ordinary gaming PC, and the class of machine most likely to be running
-    /// a HUD with a 3D avatar in it. It should land on an 8B model.
+    /// a HUD with a 3D avatar in it. It should land on an 8B model -- and specifically on
+    /// the 8B most willing to actually call a tool, which is not the one that used to be
+    /// recommended here.
     #[test]
     fn a_gaming_pc_is_recommended_a_large_model() {
         let models = models_for(16.0, None);
         let pick = models.iter().find(|m| m.recommended).unwrap();
-        assert_eq!(pick.name, "llama3.1:8b");
+        assert_eq!(pick.name, "qwen3:8b");
+        assert!(pick.tools);
     }
 
     /// A machine below every threshold still gets one pick. "Nothing here will run" is not a
@@ -778,7 +903,7 @@ mod tests {
     #[test]
     fn catalogue_is_ordered_by_memory() {
         let mut previous = 0.0;
-        for (name, _, _, _, needs_gb, _) in CATALOGUE {
+        for Entry { name, needs_gb, .. } in CATALOGUE {
             assert!(
                 *needs_gb >= previous,
                 "{name} needs {needs_gb} GB, less than the entry above it ({previous} GB) -- \
@@ -810,7 +935,14 @@ mod tests {
     /// with a name but no explanation is a dead end in the one place that cannot afford one.
     #[test]
     fn every_model_explains_itself() {
-        for (name, label, blurb, download, _, _) in CATALOGUE {
+        for Entry {
+            name,
+            label,
+            blurb,
+            download,
+            ..
+        } in CATALOGUE
+        {
             assert!(!label.is_empty(), "{name} has no label");
             assert!(blurb.len() > 30, "{name} has no real blurb");
             assert!(
@@ -829,7 +961,13 @@ mod tests {
     /// picks by this column, so each entry states its own need.
     #[test]
     fn no_model_wants_more_video_memory_than_memory() {
-        for (name, _, _, _, needs_gb, needs_vram_gb) in CATALOGUE {
+        for Entry {
+            name,
+            needs_gb,
+            needs_vram_gb,
+            ..
+        } in CATALOGUE
+        {
             assert!(
                 needs_vram_gb < needs_gb,
                 "{name} wants {needs_vram_gb} GB of video memory but only {needs_gb} GB of \
@@ -859,11 +997,89 @@ mod tests {
     /// thing, and one of them would be wrong.
     #[test]
     fn no_model_is_listed_twice() {
-        let mut names: Vec<&str> = CATALOGUE.iter().map(|(name, ..)| *name).collect();
+        let mut names: Vec<&str> = CATALOGUE.iter().map(|entry| entry.name).collect();
         names.sort_unstable();
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len(), "a model is listed twice");
+    }
+
+    /// The recommendation must be a model that can actually use a tool.
+    ///
+    /// This is the bug the `tools` column exists for. The pick is the last entry that fits,
+    /// and the last entry of a memory group used to be whichever one read best -- so an
+    /// 8 GB machine was recommended a Gemma and a 32 GB one a Gemma 3 12B, both of which
+    /// are unable to emit a tool call, which means unable to search the web or look at the
+    /// machine they are installed on. Checked across the whole range rather than at one
+    /// size, because every group has at least one entry that cannot.
+    #[test]
+    fn the_recommended_model_can_always_use_tools() {
+        for (ram, vram) in [
+            (1.0, None),
+            (4.0, None),
+            (8.0, Some(4.0)),
+            (16.0, Some(8.0)),
+            (32.0, Some(16.0)),
+            (64.0, Some(24.0)),
+            (128.0, Some(48.0)),
+        ] {
+            let models = models_for(ram, vram);
+            let pick = models
+                .iter()
+                .find(|m| m.recommended)
+                .expect("every machine gets a recommendation");
+            assert!(
+                pick.tools,
+                "{ram} GB was recommended {}, which cannot call a tool",
+                pick.name
+            );
+        }
+    }
+
+    /// Exactly one, still: the recommendation is a pre-selection in a radio group.
+    #[test]
+    fn exactly_one_model_is_recommended() {
+        for ram in [1.0, 8.0, 16.0, 64.0] {
+            assert_eq!(
+                models_for(ram, None)
+                    .iter()
+                    .filter(|m| m.recommended)
+                    .count(),
+                1,
+                "{ram} GB",
+            );
+        }
+    }
+
+    /// A model that cannot use tools is still offered -- it is good at what it is good at,
+    /// and somebody who only wants to talk should be able to choose one. The catalogue
+    /// steers, it does not gate.
+    #[test]
+    fn models_without_tools_are_still_listed_and_say_so() {
+        let models = models_for(32.0, Some(16.0));
+        let mute: Vec<&ModelChoice> = models.iter().filter(|m| !m.tools).collect();
+        assert!(!mute.is_empty(), "the ones that cannot are still offered");
+        for model in mute {
+            let blurb = model.blurb.to_lowercase();
+            assert!(
+                blurb.contains("cannot use tools")
+                    || blurb.contains("cannot emit a tool call")
+                    || blurb.contains("cannot look anything up"),
+                "{} does not say in its blurb that it cannot use tools",
+                model.name
+            );
+        }
+    }
+
+    /// The biggest thing a 16 GB graphics card can hold and still use tools is what a
+    /// machine like that should be pointed at. Pinned because the recommendation for the
+    /// most common enthusiast configuration is the one worth noticing a regression in.
+    #[test]
+    fn a_32_gb_machine_with_a_16_gb_card_is_recommended_a_14b() {
+        let models = models_for(32.0, Some(16.0));
+        let pick = models.iter().find(|m| m.recommended).unwrap();
+        assert_eq!(pick.name, "qwen3:14b");
+        assert!(pick.fits_on_gpu, "it has to fit on the card to be worth it");
     }
 
     /// The whole catalogue is always offered, whatever the machine: the list is advice, not

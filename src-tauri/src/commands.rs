@@ -172,6 +172,29 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
     }))
 }
 
+/// What Hugging Face has, for the model picker's third tab.
+///
+/// Two commands rather than one because the two questions cost differently: a search is one
+/// listing call, and enumerating a repository's quantisations is a call per repository that
+/// is only worth making for the one somebody has clicked on.
+///
+/// Both return `{models: [...]}` or `{error: "..."}` rather than failing the call. A hub
+/// whose third tab is empty because the network is down should say that in the tab, and a
+/// refusal from local-only mode is a sentence worth reading rather than a rejected promise.
+pub fn hf_search(query: String) -> Value {
+    match crate::hf::search(&query) {
+        Ok(models) => serde_json::json!({"models": models}),
+        Err(error) => serde_json::json!({"error": error, "models": []}),
+    }
+}
+
+pub fn hf_quants(repo: String) -> Value {
+    match crate::hf::quants(&repo) {
+        Ok(quants) => serde_json::json!({"quants": quants}),
+        Err(error) => serde_json::json!({"error": error, "quants": []}),
+    }
+}
+
 /// Where this machine is on the road to having a model, and the single next thing to do.
 ///
 /// The three facts the advisor needs are gathered here rather than inside it: a fresh probe
@@ -179,6 +202,13 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
 /// provider and model. Keeping `setup::advise` a pure function of those three is what lets
 /// every case it can land in be tested without a model server anywhere near the test.
 pub fn setup_advice(engine: &LlmEngine) -> Value {
+    // What a model can do is cached for the life of the process, because it is a property
+    // of the model rather than of a turn and asking costs a round trip in front of a reply.
+    // Opening or refreshing the hub is the one moment that is worth re-asking at: it is
+    // where somebody lands after pulling a new tag of a name they already had, or after
+    // upgrading Ollama to a build that reports capabilities at all, and in both cases the
+    // cached answer is now wrong in the direction that matters.
+    crate::llm::forget_local_facts();
     let scan = model_scanner::scan_all();
     let ram_total_gb = llm::Telemetry::snapshot().ram_total_gb;
 
