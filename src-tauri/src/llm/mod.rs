@@ -30,7 +30,7 @@ pub use genesis::{local_voice_for as persona_local_voice, voice_for as persona_v
 // is built from the enum rather than written out again in the markup.
 pub use persona::{Domain, Persona, Provider, Root};
 use providers::ChatContext;
-pub use providers::{forget_local_facts, Sink};
+pub use providers::{default_model_for, forget_local_facts, ollama_facts, Sink};
 pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio, transcribe};
 pub use telemetry::{Pulse, Sampler, Telemetry};
 pub use tts::{
@@ -282,6 +282,40 @@ pub const GATEWAY_URL_SETTING: &str = "llm_gateway_url";
 /// provider key with it would lose the thing and gain nothing.
 pub const GATEWAY_KEY_SETTING: &str = "llm_gateway_key";
 
+/// Where one cloud provider's key lives: `llm_api_key_openai`, `llm_api_key_anthropic`,
+/// and so on.
+///
+/// There was one key slot, `llm_api_key`, shared by whichever cloud provider happened to
+/// be selected. That is fine while somebody uses one company and is the whole problem the
+/// moment they use two: switching from OpenAI to Claude carried the OpenAI key to
+/// Anthropic, which answers with a 401 about an invalid key, and switching back meant
+/// typing the first one in again. A quick "where should this answer come from" control is
+/// not possible at all on one slot, because the answer to "is Claude ready?" is "only if
+/// Claude is the one currently selected".
+///
+/// Same reasoning as `GATEWAY_KEY_SETTING`, which was split out first for the same reason
+/// and is left alone here: a gateway key stands in for every provider key behind it.
+pub fn key_setting_for(provider: Provider) -> String {
+    format!("llm_api_key_{}", provider.key())
+}
+
+/// The key to use for one provider, newest storage first.
+///
+/// The shared slot is the fallback rather than dead, because every install before this
+/// change has its key in there and nobody should have to re-enter one to upgrade. A write
+/// goes to the per-provider slot (see `commands::save_settings`), so the shared one drains
+/// naturally as providers are reconfigured.
+pub fn api_key_for(db: &MemoryDb, provider: Provider) -> String {
+    if provider == Provider::Gateway {
+        return db.get_setting_string(GATEWAY_KEY_SETTING, "");
+    }
+    let own = db.get_setting_string(&key_setting_for(provider), "");
+    if !own.trim().is_empty() {
+        return own;
+    }
+    db.get_setting_string("llm_api_key", "")
+}
+
 struct StreamFailure {
     message: String,
     partial: String,
@@ -532,7 +566,6 @@ impl LlmEngine {
         let mut agent_name = self.db.get_setting_string("agent_name", "HALCY");
         let mut provider_key = self.db.get_setting_string("llm_provider", "offline");
         let model_name = self.db.get_setting_string("llm_model", "halcy-core");
-        let mut api_key = self.db.get_setting_string("llm_api_key", "");
         let endpoint = self
             .db
             .get_setting_string("llm_endpoint", "http://localhost:11434");
@@ -553,6 +586,9 @@ impl LlmEngine {
         }
 
         let local_only = crate::local_only::enabled(&self.db);
+
+        // Read after the provider key, because which key to read depends on it.
+        let mut api_key = api_key_for(&self.db, Provider::from_key(&provider_key));
 
         // A cloud key lying around in the environment is a convenience: it saves an
         // operator who already has one from typing it in again. It is also the one place
@@ -662,7 +698,7 @@ impl LlmEngine {
              you know and when you knew it; do not present a remembered answer as current.\n\
              3. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly \
              useful answer over staying in character.\n\
-             4. Refer to yourself as {agent_name}.",
+             4. Refer to yourself as {agent_name}.{operator_instruction}",
             agent_name = config.agent_name,
             today = self.db.local_date_sentence(),
             machine = config.machine,
@@ -670,6 +706,22 @@ impl LlmEngine {
                 String::new()
             } else {
                 format!("- Operator: {}\n", config.operator_name)
+            },
+            // The name was stated as a fact among the telemetry and never used, so an
+            // operator who had filled in their name in Profile -- and watched the vault
+            // load a note containing it -- was still addressed as nobody, and reasonably
+            // concluded the whole feature did nothing. A fact in a prompt is not an
+            // instruction to use it.
+            operator_instruction = if config.operator_name.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n             5. The person you are talking to is called {}. Address them by \
+                     name when it is natural to -- greeting them, answering something they asked \
+                     about themselves, or telling them something they need to act on. Not in every \
+                     sentence.",
+                    config.operator_name
+                )
             },
             os_name = telem.os_name,
             architecture = telem.architecture,
@@ -1304,9 +1356,29 @@ impl LlmEngine {
 
         // Tools are off by default and the catalog can be empty, in which case the prompt
         // says nothing about tools and the turn is exactly what it was before they existed.
+        // Filled in below when there is something about the tools the operator has to be
+        // told before they read the answer.
+        let mut cannot_call_tools: Option<String> = None;
         let registry = crate::tools::registry();
         let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
         if tools_on {
+            // Said to the operator, once per turn, when the model behind the provider
+            // cannot emit a tool call. It is the difference between "it refused to search"
+            // and "it was never able to", and only the server can answer it -- so a turn
+            // that is about to go out on the text protocol because the model has no tool
+            // template says so rather than leaving the operator to infer it from an answer
+            // that reads like a refusal.
+            if !native_tools_for(&config)
+                && config.provider == Provider::Ollama
+                && providers::ollama_facts(&config.endpoint, &config.model_name).tools
+                    == Some(false)
+            {
+                cannot_call_tools = Some(crate::tools::protocol::trace_of(&format!(
+                    "{} cannot call tools -- it has no tool template, so nothing can be \
+                     looked up with it. The Brain suggests one that can.",
+                    config.model_name
+                )));
+            }
             let field = config.persona.domain().field();
             // The same question the tool loop asks, and it has to get the same answer: a
             // prompt that says "the tools are attached to this request" to a model that is
@@ -1389,7 +1461,11 @@ impl LlmEngine {
                 history,
                 prompt,
                 images,
-                &self.vault_trace(),
+                &format!(
+                    "{}{}",
+                    self.vault_trace(),
+                    cannot_call_tools.unwrap_or_default()
+                ),
                 session_id,
                 sink,
             );
@@ -2282,6 +2358,14 @@ mod tests {
         let config = engine.load_config();
         let after = engine.system_prompt(&config, &Telemetry::snapshot());
         assert!(after.contains("- Operator: Ada"), "{after}");
+        // Stating the name is not the same as being told to use it. It was a data line
+        // among the telemetry, and an operator who had filled in Profile -- and watched
+        // the vault load a note containing their name -- was still addressed as nobody,
+        // and reasonably concluded the whole feature did nothing.
+        assert!(
+            after.contains("called Ada") && after.contains("Address them by name"),
+            "the prompt has to ask for the name to be used, not just state it: {after}"
+        );
     }
 
     /// With several boxes running AETHER1, a reply that says "this machine" is a reply the

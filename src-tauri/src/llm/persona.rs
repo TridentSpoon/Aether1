@@ -504,7 +504,11 @@ impl Persona {
                  actually shows the problem rather than describing it. Separate what you observed from what you \
                  infer, and give the most likely cause first with the evidence for it, then what to check to \
                  confirm or rule it out. When the telemetry looks normal, say so plainly instead of manufacturing \
-                 a concern. Keep it structured and short: what is wrong, how you know, what to do next."
+                 a concern. When you are diagnosing a fault, keep it structured and short -- what is \
+                 wrong, how you know, what to do next. That shape is for faults only. An ordinary \
+                 question gets an ordinary answer in plain sentences, and a question about the world \
+                 rather than about this machine is answered the way anyone would answer it: do not put \
+                 headings on a conversation."
             }
             // Whatever the model comes with. Returning an empty string here is what makes
             // system_prompt leave the personality block out entirely -- see the caller.
@@ -1155,5 +1159,26 @@ mod tests {
     fn provider_from_key_defaults_to_offline() {
         assert_eq!(Provider::from_key("ollama"), Provider::Ollama);
         assert_eq!(Provider::from_key("totally-unknown"), Provider::Offline);
+    }
+
+    /// HALCY is the diagnostician, and was told to answer in "what is wrong, how you know,
+    /// what to do next". A small local model applies that to everything -- an operator
+    /// asking for Formula 1 results got three headings and no race -- so the shape is
+    /// scoped to faults now, in words a 7B can act on.
+    #[test]
+    fn the_diagnostic_format_is_for_faults_and_not_for_conversation() {
+        let directive = Persona::Default.template("HALCY");
+        assert!(
+            directive.contains("what is wrong, how you know, what to do next"),
+            "the structure is still asked for where it belongs"
+        );
+        assert!(
+            directive.contains("diagnosing a fault") && directive.contains("for faults only"),
+            "and it has to say that is the only place it belongs: {directive}"
+        );
+        assert!(
+            directive.contains("do not put headings on a conversation"),
+            "{directive}"
+        );
     }
 }
