@@ -375,6 +375,96 @@ impl Tool for SearchWeb {
     }
 }
 
+// ------------------------------------------------------------ fetch_url
+
+/// Reads one web page.
+///
+/// `search_web` answers "what exists"; this answers "what does it say". Without it a
+/// companion that has searched can only repeat an eight-word snippet or fill the rest in
+/// from its own memory, and filling it in from memory -- confidently, with the search as
+/// cover -- is the exact failure the search work has kept running into. A result list with
+/// nothing to open is half a tool.
+///
+/// The same egress gate as every other outbound request: `net::get` refuses in local-only
+/// mode, and the refusal names what did not happen.
+pub struct FetchUrl;
+
+/// Enough of a page for an answer, and not enough to spend a local model's whole context
+/// on one document. A 7B with an 8K window cannot be handed 200KB of HTML.
+const MAX_PAGE_CHARS: usize = 12_000;
+
+impl Tool for FetchUrl {
+    fn name(&self) -> &'static str {
+        "fetch_url"
+    }
+
+    fn description(&self) -> &'static str {
+        "Read one web page and return its text. Use it after search_web to read a result rather than answering from its snippet. http and https only, and the page comes back as plain text with the markup stripped -- a site that needs JavaScript to say anything will come back nearly empty, which means read a different result rather than guess at this one."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full address of the page, including http:// or https://."
+                }
+            },
+            "required": ["url"]
+        })
+    }
+
+    fn mutating(&self) -> bool {
+        false
+    }
+
+    fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
+        let url = args
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "fetch_url needs a url: {\"url\": \"https://...\"}".to_string())?
+            .trim();
+
+        // A model that has been told to fetch a page will sometimes offer a `file://` or a
+        // bare hostname. Neither is a web page, and `file://` in particular is a way to ask
+        // this tool to read the disk without going through the path guard that exists for
+        // exactly that -- so the scheme is checked here rather than left to ureq.
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(format!(
+                "fetch_url reads web pages, so the address has to start with http:// or \
+                 https:// -- {url:?} does not. To read a file on this computer, use read_file."
+            ));
+        }
+
+        let response = crate::net::get(url, "the page was not fetched")?
+            .header("User-Agent", crate::websearch::USER_AGENT)
+            .call()
+            .map_err(|e| format!("cannot fetch {url}: {e}"))?;
+
+        let body = response
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("cannot read {url}: {e}"))?;
+
+        let text = crate::websearch::readable_text(&body);
+        if text.trim().is_empty() {
+            // Said plainly, because the alternative is a model receiving an empty string
+            // and treating it as permission to describe the page from memory.
+            return Ok(Outcome::text(format!(
+                "{url} returned no readable text. It may need JavaScript, or it may not be a \
+                 page. Nothing is known about its contents -- read another result rather \
+                 than describing this one."
+            )));
+        }
+
+        Ok(Outcome::text(format!(
+            "[PAGE] {url}\n\n{}",
+            super::truncate(&text, MAX_PAGE_CHARS)
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +666,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `file://` through a web fetcher would be a way to read the disk without passing the
+    /// path guard that exists for exactly that, so the scheme is refused before any request
+    /// is built -- which is also why this test needs no network.
+    #[test]
+    fn fetch_url_reads_web_pages_and_not_the_disk() {
+        let db = temp_db("fetch_scheme");
+        let ctx = ToolContext::new(&db);
+        for address in [
+            "file:///etc/passwd",
+            "/etc/passwd",
+            "ftp://example.com/x",
+            "example.com",
+        ] {
+            let err = FetchUrl
+                .call(&json!({"url": address}), &ctx)
+                .expect_err("{address} is not a web page");
+            assert!(err.contains("http://"), "{address}: {err}");
+            assert!(err.contains("read_file"), "{address}: {err}");
+        }
+    }
+
+    #[test]
+    fn fetch_url_needs_an_address() {
+        let db = temp_db("fetch_noargs");
+        let ctx = ToolContext::new(&db);
+        let err = FetchUrl.call(&json!({}), &ctx).unwrap_err();
+        assert!(err.contains("url"), "{err}");
     }
 }

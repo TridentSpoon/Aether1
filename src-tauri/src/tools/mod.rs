@@ -292,6 +292,7 @@ pub fn registry() -> &'static Registry {
             Box::new(builtin::TelemetryDetail),
             Box::new(builtin::SearchMemory),
             Box::new(builtin::SearchWeb),
+            Box::new(builtin::FetchUrl),
             Box::new(eventlog::ReadEventLog),
             // AETHER1's own two diagnostic records, so "why did that break?" has an
             // answer that is not the system log pasted into the conversation.

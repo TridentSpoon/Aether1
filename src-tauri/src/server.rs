@@ -223,6 +223,8 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/scanner/status", get(scanner_status))
         .route("/api/llm/gateway-models", post(gateway_models))
         .route("/api/setup/advice", get(setup_advice))
+        .route("/api/models/huggingface", get(hf_search))
+        .route("/api/models/huggingface/quants", get(hf_quants))
         .route("/api/voice/advice", get(voice_advice))
         .route("/api/code/advice", get(code_advice))
         .route("/api/code/models", get(code_local_models))
@@ -1319,6 +1321,31 @@ async fn setup_advice(State(state): State<AppState>) -> Json<serde_json::Value> 
         tokio::task::spawn_blocking(move || commands::setup_advice(&state.engine))
             .await
             .expect("setup_advice panicked"),
+    )
+}
+
+#[derive(Deserialize)]
+struct HfQuery {
+    q: Option<String>,
+    repo: Option<String>,
+}
+
+/// Searching Hugging Face reads a public listing and changes nothing here, so it is a GET.
+async fn hf_search(Query(query): Query<HfQuery>) -> Json<serde_json::Value> {
+    let q = query.q.unwrap_or_default();
+    Json(
+        tokio::task::spawn_blocking(move || commands::hf_search(q))
+            .await
+            .expect("hf_search panicked"),
+    )
+}
+
+async fn hf_quants(Query(query): Query<HfQuery>) -> Json<serde_json::Value> {
+    let repo = query.repo.unwrap_or_default();
+    Json(
+        tokio::task::spawn_blocking(move || commands::hf_quants(repo))
+            .await
+            .expect("hf_quants panicked"),
     )
 }
 

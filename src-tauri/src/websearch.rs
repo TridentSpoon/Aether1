@@ -206,6 +206,136 @@ fn decode_entities(text: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+/// Turns a fetched page into something a model can read.
+///
+/// `search_web` hands back titles, URLs and one-line snippets, which answers "what exists"
+/// and not "what does it say". A companion that can search and not read has to either stop
+/// at the snippet or fill the rest in from memory, and filling it in from memory is the
+/// failure this whole area of the code keeps coming back to. So `fetch_url` reads one page,
+/// and this is what it reads it with.
+///
+/// Not an HTML parser, deliberately, and the same trade `parse` makes: `script`, `style`,
+/// `head` and the obvious page furniture are cut, every remaining tag is dropped, entities
+/// are decoded and whitespace is collapsed. The failure mode is a page that reads badly,
+/// never a page that reads as something it is not. A site that needs JavaScript to say
+/// anything produces almost nothing, which is the honest answer for a client with no
+/// browser -- and better than a plausible paragraph of navigation links.
+pub fn readable_text(html: &str) -> String {
+    // Cut the elements whose *content* is not prose before dropping tags, because once the
+    // tags are gone a stylesheet is indistinguishable from a paragraph.
+    let mut page = html.to_string();
+    for element in [
+        "script", "style", "head", "nav", "footer", "svg", "noscript",
+    ] {
+        page = without_element(&page, element);
+    }
+
+    // A block-level tag is a line break; everything else just goes.
+    let mut text = String::with_capacity(page.len());
+    let mut inside_tag = false;
+    let mut tag = String::new();
+    for ch in page.chars() {
+        match ch {
+            '<' => {
+                inside_tag = true;
+                tag.clear();
+            }
+            '>' if inside_tag => {
+                inside_tag = false;
+                let name = tag.trim_start_matches('/').to_lowercase();
+                let name = name.split([' ', '\t', '\n', '/']).next().unwrap_or("");
+                if BREAKS_THE_LINE.contains(&name) {
+                    text.push('\n');
+                } else {
+                    text.push(' ');
+                }
+            }
+            _ if inside_tag => tag.push(ch),
+            _ => text.push(ch),
+        }
+    }
+
+    collapse(&decode_entities(&text))
+}
+
+/// One element and everything inside it, removed.
+fn without_element(page: &str, element: &str) -> String {
+    let open = format!("<{element}");
+    let close = format!("</{element}>");
+    let mut kept = String::with_capacity(page.len());
+    let mut remaining = page;
+    loop {
+        let lowered = remaining.to_lowercase();
+        let Some(start) = lowered.find(&open) else {
+            kept.push_str(remaining);
+            return kept;
+        };
+        // `<script` matches `<scriptish` too, so the character after the name has to be one
+        // that can end a tag name.
+        let after = lowered[start + open.len()..].chars().next();
+        if after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-') {
+            kept.push_str(&remaining[..start + open.len()]);
+            remaining = &remaining[start + open.len()..];
+            continue;
+        }
+        kept.push_str(&remaining[..start]);
+        match lowered[start..].find(&close) {
+            Some(offset) => remaining = &remaining[start + offset + close.len()..],
+            // An unclosed one takes the rest of the page with it, which is the right
+            // reading: whatever follows an unterminated <script> is inside it.
+            None => return kept,
+        }
+    }
+}
+
+/// Tags whose boundary is a line break rather than a space. Without this a page of list
+/// items arrives as one paragraph with the words run together.
+const BREAKS_THE_LINE: &[&str] = &[
+    "p",
+    "div",
+    "br",
+    "li",
+    "tr",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "section",
+    "article",
+    "header",
+    "blockquote",
+    "pre",
+    "table",
+    "ul",
+    "ol",
+    "dd",
+    "dt",
+];
+
+/// Runs of blank space become one space, runs of blank lines become one blank line.
+fn collapse(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_lines = 0;
+    for line in text.lines() {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if line.is_empty() {
+            blank_lines += 1;
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+            if blank_lines > 0 {
+                out.push('\n');
+            }
+        }
+        blank_lines = 0;
+        out.push_str(&line);
+    }
+    out
+}
+
 fn truncate_chars(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
@@ -362,5 +492,57 @@ mod tests {
         assert!(query_of(&serde_json::json!({})).is_err());
         assert!(query_of(&serde_json::json!({"query": "   "})).is_err());
         assert_eq!(query_of(&serde_json::json!({"query": "f1"})).unwrap(), "f1");
+    }
+
+    #[test]
+    fn a_page_becomes_readable_text_without_its_machinery() {
+        let html = r#"<html><head><title>t</title><style>body{color:red}</style></head>
+            <body><nav>Home About</nav><h1>Race result</h1>
+            <p>Driver A won the Grand&nbsp;Prix.</p>
+            <ul><li>First: A</li><li>Second: B</li></ul>
+            <script>var tracking = "Driver Z won";</script>
+            <footer>&copy; nobody</footer></body></html>"#;
+        let text = readable_text(html);
+        assert!(text.contains("Race result"), "{text}");
+        assert!(text.contains("Driver A won the Grand Prix."), "{text}");
+        // Each list item on its own line, not run together into one word.
+        assert!(text.contains("First: A"), "{text}");
+        assert!(text.contains("Second: B"), "{text}");
+        // The furniture and the script are gone. A tracking variable that happens to
+        // contain a sentence is the worst thing that could reach a model from a page.
+        assert!(!text.contains("Driver Z"), "{text}");
+        assert!(!text.contains("color:red"), "{text}");
+        assert!(!text.contains("Home About"), "{text}");
+    }
+
+    /// `<script` is a prefix of `<scription`, and cutting on the prefix alone would delete
+    /// the rest of a page from the first word that merely started the same way.
+    #[test]
+    fn an_element_whose_name_merely_starts_the_same_is_kept() {
+        let text = readable_text("<p>before</p><scriptish>kept</scriptish><p>after</p>");
+        assert!(text.contains("kept"), "{text}");
+        assert!(text.contains("before") && text.contains("after"), "{text}");
+    }
+
+    /// A page that says nothing readable produces nothing, rather than a guess. The tool
+    /// turns this into a sentence telling the model not to describe the page.
+    #[test]
+    fn a_page_with_no_prose_produces_no_text() {
+        assert!(
+            readable_text("<html><body><script>x=1</script></body></html>")
+                .trim()
+                .is_empty()
+        );
+        assert!(readable_text("").is_empty());
+    }
+
+    /// An unterminated script takes the rest of the page with it: whatever follows one is
+    /// inside it, and leaking JavaScript into a model's context as prose is the failure
+    /// this is guarding, not a missing paragraph.
+    #[test]
+    fn an_unclosed_script_does_not_leak_its_contents() {
+        let text = readable_text("<p>kept</p><script>var a = 'not prose';");
+        assert!(text.contains("kept"), "{text}");
+        assert!(!text.contains("not prose"), "{text}");
     }
 }

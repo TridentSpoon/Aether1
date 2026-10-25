@@ -684,10 +684,19 @@ impl Persona {
         // What still holds the line is `net::require_online`: with local-only mode on, the
         // request cannot be built at all, whatever the domain says. The mode is the
         // boundary; this was only ever a prompt.
+        //
+        // `fetch_url` is here for the same reason and is the other half of the same tool.
+        // A search returns titles and one-line snippets, so a companion that can search and
+        // not read has to answer from the snippet or from memory -- and a result list it
+        // cannot open is what made "I searched and found" a sentence with nothing behind
+        // it. The grant that matters is the network, which is one setting away and is the
+        // same grant the search already needed; a second approval card in front of the page
+        // would only reproduce the failure one step later.
         const MINIMUM_TOOLS: &[&str] = &[
             "telemetry_detail",
             "search_memory",
             "search_web",
+            "fetch_url",
             // A program explaining its own failure is not a privilege: every persona
             // can read AETHER1's self-check and its crash record, whatever else its
             // field covers.
@@ -700,6 +709,7 @@ impl Persona {
             "telemetry_detail",
             "search_memory",
             "search_web",
+            "fetch_url",
             "self_check",
             "recent_crashes",
         ];
@@ -718,6 +728,7 @@ impl Persona {
             // a minimum -- and made "have I told you about this box before?" a proposal.
             "search_memory",
             "search_web",
+            "fetch_url",
             "self_check",
             "recent_crashes",
         ];
@@ -885,17 +896,24 @@ impl Provider {
     /// Whether the provider takes a tool list in its own request format and answers with
     /// structured calls, rather than needing the fenced-text protocol.
     ///
-    /// The two local providers are deliberately out. Ollama is driven through
-    /// `/api/generate`, which has no tools field at all -- tools live on `/api/chat`, a
-    /// different endpoint with a different shape. LM Studio's OpenAI-compatible server
-    /// does accept tools on recent builds, but it is the provider most likely to be an
-    /// older install on someone's desktop, and a silent 400 there costs more than the
-    /// text protocol does. Both stay on the fenced protocol, which is what it was written
-    /// for.
+    /// Ollama is in, now that it is driven through `/api/chat` rather than
+    /// `/api/generate`: `/api/chat` carries `tools` in the same shape OpenAI uses and
+    /// returns `tool_calls` on the assistant message. It was out while the only endpoint
+    /// in use had no tools field at all, and the consequence was that *every* local model
+    /// was on the fenced-text protocol however capable it was -- which is most of why a
+    /// local companion could not search the web. Whether the *model* behind Ollama can
+    /// call tools is a separate question, answered per model by
+    /// `providers::ollama_facts`; this says only that the transport can carry one.
+    ///
+    /// LM Studio stays out. Its OpenAI-compatible server accepts tools on recent builds,
+    /// but it is the provider most likely to be an older install on somebody's desktop,
+    /// it reports no capabilities to probe, and a 400 from sending a field it does not
+    /// know costs more than the text protocol does.
     pub fn supports_native_tools(&self) -> bool {
         matches!(
             self,
-            Provider::OpenAi
+            Provider::Ollama
+                | Provider::OpenAi
                 | Provider::Groq
                 | Provider::Gemini
                 | Provider::Anthropic

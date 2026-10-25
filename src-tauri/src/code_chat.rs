@@ -362,7 +362,6 @@ pub fn ask_in_session(
             also goes past `parse_calls`. The thinking is dropped rather than shown,
             because this panel has nowhere to show it. */
             reasoning: providers::Reasoning::Off,
-            thinking_capable: false,
         };
 
         let mut filter = ToolFenceFilter::new();

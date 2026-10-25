@@ -43,6 +43,7 @@ mod downloads;
 mod github_auth;
 mod gpu;
 mod graft;
+mod hf;
 mod hotkey;
 mod installs;
 mod lan;
@@ -1609,6 +1610,17 @@ fn scan_models_rust() -> model_scanner::ScanResult {
     model_scanner::scan_all()
 }
 
+/// The Hugging Face side of the model picker. See `commands::hf_search`.
+#[tauri::command(async)]
+fn hf_search_rust(query: Option<String>) -> serde_json::Value {
+    commands::hf_search(query.unwrap_or_default())
+}
+
+#[tauri::command(async)]
+fn hf_quants_rust(repo: String) -> serde_json::Value {
+    commands::hf_quants(repo)
+}
+
 /// Where this machine is on the road to having a model, and what to do about it. Drives
 /// the setup wizard; safe to call as often as the wizard likes, since it is only probes.
 #[tauri::command(async)]
@@ -3056,6 +3068,8 @@ fn main() {
             doctor_attend_rust,
             run_diagnostics_rust,
             setup_advice_rust,
+            hf_search_rust,
+            hf_quants_rust,
             pull_model_rust,
             start_download_rust,
             download_status_rust,
