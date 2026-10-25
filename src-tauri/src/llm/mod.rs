@@ -255,6 +255,12 @@ pub const GATEWAY_URL_SETTING: &str = "llm_gateway_url";
 /// provider key with it would lose the thing and gain nothing.
 pub const GATEWAY_KEY_SETTING: &str = "llm_gateway_key";
 
+/// How much of its own reasoning the model is asked to show: `off`, `auto`, `low`,
+/// `medium` or `high`. See `providers::Reasoning`, which is where those words mean
+/// something. Absent means `auto`, which is what every install before this had in effect
+/// -- a thinking model was thinking, it just wrote the thought into the chat.
+pub const REASONING_SETTING: &str = "llm_reasoning";
+
 struct StreamFailure {
     message: String,
     partial: String,
@@ -282,6 +288,12 @@ struct Config {
     /// every decision below reads the same answer, even if the operator flips the setting
     /// while a reply is being generated.
     local_only: bool,
+    /// How much of its own reasoning the model is asked to do, and whether to show it.
+    reasoning: providers::Reasoning,
+    /// Whether the local server says this model can think. Resolved once per turn for the
+    /// same reason `local_only` is, and only ever true for Ollama -- it is the one server
+    /// that will say, and the one that refuses the field when the answer is no.
+    thinking_capable: bool,
 }
 
 impl Config {
@@ -486,10 +498,13 @@ impl LlmEngine {
 
     /// After a turn on a local model, ask the server what that model is -- once per
     /// endpoint-and-model pair, and never again until one of them changes.
+    /// Not gated on the endpoint being local, though the panel that displays this is.
+    /// The other thing it answers is whether `think` may be sent (`thinking_support`), and
+    /// an Ollama on the LAN runs the same models as one on loopback -- refusing to ask it
+    /// would turn reasoning off for anyone whose model server is the other machine. What
+    /// is shown stays gated where it is shown; see `snapshot`.
     fn refresh_capability(&self, config: &Config) {
-        if Self::telemetry_mode(config.provider, &config.endpoint) != "local"
-            || config.provider != Provider::Ollama
-        {
+        if config.provider != Provider::Ollama {
             return;
         }
         let key = format!("{}|{}", config.endpoint, config.model_name);
@@ -499,6 +514,28 @@ impl LlmEngine {
         if let Some(found) = providers::ollama_capability(&config.endpoint, &config.model_name) {
             *self.capability.lock().unwrap() = Some((key, found));
         }
+    }
+
+    /// Whether this model may be sent a `think` field at all.
+    ///
+    /// Asked *before* the turn rather than after it, which is the whole reason
+    /// `refresh_capability` is called from here: the answer decides what goes into the
+    /// request, and a capability learned afterwards would always be one turn late -- so
+    /// the first question of every session would be the one that did not think.
+    ///
+    /// False for every provider but Ollama. None of the others will say what a model can
+    /// do, and the ones with reasoning of their own are asked for it in their own way; a
+    /// guess here would be a request that comes back 400.
+    fn thinking_support(&self, config: &Config) -> bool {
+        if config.provider != Provider::Ollama {
+            return false;
+        }
+        self.refresh_capability(config);
+        let key = format!("{}|{}", config.endpoint, config.model_name);
+        matches!(
+            self.capability.lock().unwrap().as_ref(),
+            Some((known, found)) if *known == key && found.thinking == Some(true)
+        )
     }
 
     fn load_config(&self) -> Config {
@@ -570,7 +607,7 @@ impl LlmEngine {
             _ => model_name,
         };
 
-        Config {
+        let mut config = Config {
             agent_name,
             machine,
             operator_name,
@@ -582,7 +619,15 @@ impl LlmEngine {
             persona_key,
             custom_directive,
             local_only,
-        }
+            reasoning: providers::Reasoning::from_setting(
+                &self.db.get_setting_string(REASONING_SETTING, "auto"),
+            ),
+            thinking_capable: false,
+        };
+        // Needs the rest of the config -- the endpoint and the routed model name -- so it
+        // is resolved here rather than inline above.
+        config.thinking_capable = self.thinking_support(&config);
+        config
     }
 
     fn system_prompt(&self, config: &Config, telem: &Telemetry) -> String {
@@ -766,7 +811,7 @@ impl LlmEngine {
         &self,
         config: &Config,
         ctx: &ChatContext,
-        sink: providers::Sink,
+        relay: &mut providers::Relay,
     ) -> Result<providers::Completion, StreamFailure> {
         // Checked before anything is sent, because the two ways this goes wrong otherwise
         // are both bad: an empty model id gets a 400 whose body talks about a field name,
@@ -780,47 +825,37 @@ impl LlmEngine {
             });
         }
 
-        let mut partial = String::new();
-
-        let streamed = {
-            let mut collect = |delta: &str| {
-                partial.push_str(delta);
-                sink(delta);
-            };
-            match config.provider {
-                Provider::Ollama => providers::stream_ollama(
+        let streamed = match config.provider {
+            Provider::Ollama => {
+                providers::stream_ollama(&config.endpoint, &config.model_name, ctx, relay)
+            }
+            Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
+                providers::stream_openai_compatible(
+                    config.provider,
                     &config.endpoint,
-                    &config.model_name,
-                    ctx,
-                    &mut collect,
-                ),
-                Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
-                    providers::stream_openai_compatible(
-                        config.provider,
-                        &config.endpoint,
-                        &config.api_key,
-                        &config.model_name,
-                        ctx,
-                        &mut collect,
-                    )
-                }
-                Provider::Gemini => {
-                    providers::stream_gemini(&config.api_key, &config.model_name, ctx, &mut collect)
-                }
-                Provider::Anthropic => providers::stream_anthropic(
                     &config.api_key,
                     &config.model_name,
                     ctx,
-                    &mut collect,
-                ),
-                // Handled before this is ever called.
-                Provider::Offline => Ok(providers::Completion::default()),
+                    relay,
+                )
             }
+            Provider::Gemini => {
+                providers::stream_gemini(&config.api_key, &config.model_name, ctx, relay)
+            }
+            Provider::Anthropic => {
+                providers::stream_anthropic(&config.api_key, &config.model_name, ctx, relay)
+            }
+            // Handled before this is ever called.
+            Provider::Offline => Ok(providers::Completion::default()),
         };
 
         match streamed {
             Ok(completion) => Ok(completion),
-            Err(stream_error) if partial.is_empty() => {
+            // The relay is what knows whether anything reached the operator: it is the
+            // thing holding the answer, and under a thinking model a stream can have run
+            // for a minute and produced reasoning but no answer yet. Retrying then is
+            // right -- nothing is on screen to be written over twice.
+            Err(stream_error) if relay.so_far().is_empty() => {
                 let blocking = match config.provider {
                     Provider::Ollama => {
                         providers::call_ollama(&config.endpoint, &config.model_name, ctx)
@@ -844,7 +879,11 @@ impl LlmEngine {
                 };
                 match blocking {
                     Ok(completion) => {
-                        sink(&completion.text);
+                        // Already split by the provider's own relay, so it goes through
+                        // without the splitter -- and the reasoning goes to its own sink
+                        // rather than being dropped because this path is the fallback.
+                        relay.thinking(&completion.reasoning);
+                        relay.answered(&completion.text);
                         Ok(completion)
                     }
                     Err(call_error) => Err(StreamFailure {
@@ -855,7 +894,7 @@ impl LlmEngine {
             }
             Err(stream_error) => Err(StreamFailure {
                 message: stream_error,
-                partial,
+                partial: relay.so_far().to_string(),
             }),
         }
     }
@@ -900,6 +939,10 @@ impl LlmEngine {
             // probe, not a real turn, so there is nothing native tool-calling needs to see.
             tools: &[],
             exchanges: &[],
+            // A probe wants the shortest round trip there is, and whether the model
+            // thinks says nothing about whether the address and the key work.
+            reasoning: providers::Reasoning::Off,
+            thinking_capable: false,
         };
 
         let started = Instant::now();
@@ -958,6 +1001,7 @@ impl LlmEngine {
         preamble: &str,
         session_id: &str,
         sink: providers::Sink,
+        thought: providers::Sink,
     ) -> providers::Completion {
         let registry = crate::tools::registry();
         // The session travels with the context so that a call this loop has to propose
@@ -992,6 +1036,9 @@ impl LlmEngine {
         let done = |text: String, any_reported: bool, total: providers::TokenUsage| {
             providers::Completion {
                 text,
+                // The reasoning has already gone out on its own sink as it arrived, and
+                // the loop's own value carries only what the conversation keeps.
+                reasoning: String::new(),
                 usage: any_reported.then_some(total),
                 calls: Vec::new(),
             }
@@ -1022,6 +1069,8 @@ impl LlmEngine {
                 agent_name: &config.agent_name,
                 tools: if native { &schemas } else { &none },
                 exchanges: &exchanges,
+                reasoning: config.reasoning,
+                thinking_capable: config.thinking_capable,
             };
 
             // Nothing to filter on the native path: the calls never appear in the text, so
@@ -1039,7 +1088,16 @@ impl LlmEngine {
                         sink(&shown);
                     }
                 };
-                self.call_provider(config, &ctx, &mut round_sink)
+                /* The order of these two is the whole reason reasoning cannot break the
+                tool protocol: the relay takes the thinking out first, and only what is
+                left reaches the fence filter and -- through `completion.text` -- the
+                parser. A thinking model reasoning about whether to call a tool writes a
+                `tool` fence inside `<think>` constantly; that is what thinking out loud
+                looks like. A fence filter fed that would swallow prose until the next
+                ``` and the parser would run a call the model was only considering. */
+                let mut relay =
+                    providers::Relay::new(&mut round_sink, &mut *thought, config.reasoning.shown());
+                self.call_provider(config, &ctx, &mut relay)
             };
             let tail = filter.finish();
             if !native && !tail.is_empty() {
@@ -1244,12 +1302,18 @@ impl LlmEngine {
 
     /// Generates a reply with request-scoped media, feeding each streamed delta to `sink`.
     /// The returned String is always the concatenation of everything the sink was given.
+    ///
+    /// `thought` is the second channel: the model's own reasoning, as it arrives, and
+    /// never any part of the returned reply. Two sinks rather than one tagged delta
+    /// because the two go to different places on screen and only one of them is ever
+    /// spoken, stored or parsed -- see `providers::Relay`.
     pub fn generate_response_streamed_with_media(
         &self,
         prompt: &str,
         session_id: &str,
         images: &[providers::MediaAttachment],
         sink: providers::Sink,
+        thought: providers::Sink,
     ) -> String {
         let config = self.load_config();
         let start = Instant::now();
@@ -1359,6 +1423,7 @@ impl LlmEngine {
                 &self.vault_trace(),
                 session_id,
                 sink,
+                thought,
             );
             reported = completion.usage;
             completion.text
@@ -1379,8 +1444,11 @@ impl LlmEngine {
                 agent_name: &config.agent_name,
                 tools: &[],
                 exchanges: &[],
+                reasoning: config.reasoning,
+                thinking_capable: config.thinking_capable,
             };
-            let text = match self.call_provider(&config, &ctx, sink) {
+            let mut relay = providers::Relay::new(sink, thought, config.reasoning.shown());
+            let text = match self.call_provider(&config, &ctx, &mut relay) {
                 Ok(completion) => {
                     reported = completion.usage;
                     completion.text
@@ -1499,8 +1567,13 @@ impl LlmEngine {
             agent_name: "Genesis Forge",
             tools: &[],
             exchanges: &[],
+            // One short name is wanted and nobody is watching it arrive, so there is
+            // nothing to gain from making the model think about it first.
+            reasoning: providers::Reasoning::Off,
+            thinking_capable: false,
         };
-        let completion = self.call_provider(&config, &ctx, &mut |_| {}).ok()?;
+        let mut relay = providers::Relay::quiet(false);
+        let completion = self.call_provider(&config, &ctx, &mut relay).ok()?;
         normalize_mission_name(&completion.text)
     }
 
@@ -1625,6 +1698,8 @@ mod tests {
             persona_key: "default".to_string(),
             custom_directive: String::new(),
             local_only: false,
+            reasoning: providers::Reasoning::Off,
+            thinking_capable: false,
         }
     }
 
@@ -1939,6 +2014,7 @@ mod tests {
             "default",
             &[],
             &mut |delta| streamed.push_str(delta),
+            &mut |_| {},
         );
 
         assert!(reply.contains("local-only mode is on"), "{reply}");
@@ -1964,8 +2040,13 @@ mod tests {
             .db
             .set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true));
 
-        let reply =
-            engine.generate_response_streamed_with_media("hello", "default", &[], &mut |_| {});
+        let reply = engine.generate_response_streamed_with_media(
+            "hello",
+            "default",
+            &[],
+            &mut |_| {},
+            &mut |_| {},
+        );
         assert!(reply.contains("local-only mode is on"), "{reply}");
         assert!(reply.contains("ollama.example.com"), "{reply}");
     }
@@ -1989,8 +2070,13 @@ mod tests {
         // Nothing is listening at that address in a test run, so the turn ends in the
         // normal provider-failure path -- what matters is that it was attempted at all
         // rather than refused by the mode.
-        let reply =
-            engine.generate_response_streamed_with_media("hello", "default", &[], &mut |_| {});
+        let reply = engine.generate_response_streamed_with_media(
+            "hello",
+            "default",
+            &[],
+            &mut |_| {},
+            &mut |_| {},
+        );
         assert!(!reply.contains("local-only mode is on"), "{reply}");
     }
 
@@ -2107,6 +2193,8 @@ mod tests {
             persona_key: "default".into(),
             custom_directive: String::new(),
             local_only: false,
+            reasoning: providers::Reasoning::Off,
+            thinking_capable: false,
         };
         assert_eq!(
             LlmEngine::telemetry_mode(local.provider, &local.endpoint),
@@ -2150,10 +2238,13 @@ mod tests {
     /// are exactly the reply that was returned.
     fn generate(engine: &LlmEngine, prompt: &str, session_id: &str) -> String {
         let mut streamed = String::new();
-        let reply =
-            engine.generate_response_streamed_with_media(prompt, session_id, &[], &mut |delta| {
-                streamed.push_str(delta)
-            });
+        let reply = engine.generate_response_streamed_with_media(
+            prompt,
+            session_id,
+            &[],
+            &mut |delta| streamed.push_str(delta),
+            &mut |_| {},
+        );
         assert_eq!(
             streamed, reply,
             "the sink's deltas must reconstruct the returned reply"

@@ -1256,6 +1256,11 @@ fn generate_response_streaming_rust(
     // before there is anything in it.
     let handover_app = app.clone();
     let handover_stream = stream_id.clone();
+    // Its own event, for the same reason the hand-off has one: reasoning is not part of
+    // the answer, and a frontend that had to pick the two apart out of one stream would be
+    // doing the splitting a second time, in a language with no tests on it.
+    let thought_app = app.clone();
+    let thought_stream = stream_id.clone();
     commands::generate_response_streamed_with_media(
         &engine,
         prompt,
@@ -1265,6 +1270,12 @@ fn generate_response_streaming_rust(
             let _ = app.emit(
                 "chat-delta",
                 serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+            );
+        },
+        &mut |delta| {
+            let _ = thought_app.emit(
+                "chat-reasoning",
+                serde_json::json!({ "stream_id": thought_stream, "delta": delta }),
             );
         },
         &mut |handover| {
@@ -1715,12 +1726,24 @@ fn resume_after_action_rust(
     stream_id: String,
 ) -> Result<serde_json::Value, String> {
     background_services::note_use(&engine, &managed_ollama);
-    commands::resume_after_action(&engine, id, &mut |delta| {
-        let _ = app.emit(
-            "chat-delta",
-            serde_json::json!({ "stream_id": stream_id, "delta": delta }),
-        );
-    })
+    let thought_app = app.clone();
+    let thought_stream = stream_id.clone();
+    commands::resume_after_action(
+        &engine,
+        id,
+        &mut |delta| {
+            let _ = app.emit(
+                "chat-delta",
+                serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+            );
+        },
+        &mut |delta| {
+            let _ = thought_app.emit(
+                "chat-reasoning",
+                serde_json::json!({ "stream_id": thought_stream, "delta": delta }),
+            );
+        },
+    )
 }
 
 #[tauri::command(async)]

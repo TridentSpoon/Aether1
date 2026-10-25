@@ -356,6 +356,13 @@ pub fn ask_in_session(
             // definition: see `tool_instructions`.
             tools: &[],
             exchanges: &[],
+            /* Off, so no `think` field is sent and the coding model keeps whatever it does
+            by default. The relay below still splits: the panel is for writing code, and a
+            `<think>` block in it is the same problem it was in chat -- except that here it
+            also goes past `parse_calls`. The thinking is dropped rather than shown,
+            because this panel has nowhere to show it. */
+            reasoning: providers::Reasoning::Off,
+            thinking_capable: false,
         };
 
         let mut filter = ToolFenceFilter::new();
@@ -367,17 +374,17 @@ pub fn ask_in_session(
                     sink(&shown);
                 }
             };
+            let mut discard = |_: &str| {};
+            let mut relay = providers::Relay::new(&mut round_sink, &mut discard, false);
             match api {
-                LocalApi::Native => {
-                    providers::stream_ollama(endpoint, model, &ctx, &mut round_sink)
-                }
+                LocalApi::Native => providers::stream_ollama(endpoint, model, &ctx, &mut relay),
                 LocalApi::OpenAi => providers::stream_openai_compatible(
                     crate::llm::Provider::LmStudio,
                     endpoint,
                     "",
                     model,
                     &ctx,
-                    &mut round_sink,
+                    &mut relay,
                 ),
             }
         }?;
