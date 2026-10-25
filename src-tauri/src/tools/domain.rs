@@ -370,6 +370,31 @@ mod tests {
         }
     }
 
+    /// Looking something up on the web reads nothing on this machine, so no field has
+    /// anything to say about it and no persona may be sent to an approval card for it.
+    /// Every persona, because a search that is free for eleven of them and a card for the
+    /// twelfth is the same confusion in a smaller place.
+    #[test]
+    fn a_web_search_is_in_every_personas_field() {
+        let db = temp_db("search_web_in_field");
+        let search = super::super::builtin::SearchWeb;
+        let args = serde_json::json!({ "query": "latest kernel release" });
+        for persona in Persona::all() {
+            assert!(
+                persona.domain().allows_tool("search_web"),
+                "{} must be able to search the web without asking",
+                persona.key()
+            );
+            let ctx = ToolContext::for_persona(&db, persona.clone());
+            assert_eq!(
+                elevation_needed(&ctx, &search, &args),
+                None,
+                "{} was sent to an approval card for a web search",
+                persona.key()
+            );
+        }
+    }
+
     #[test]
     fn the_field_reads_as_a_sentence() {
         assert_eq!(

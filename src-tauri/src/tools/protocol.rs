@@ -38,7 +38,10 @@ pub fn instructions(catalog: &str, field: &str) -> String {
          Your field is {field}. Reads inside it happen straight away. Anything else -- \
          another tool, or a path outside it -- is shown to the operator first and runs only \
          if they approve it, for that one call. Say what you want to look at and why, then \
-         wait; asking again does not make it happen faster.\n\n\
+         wait; asking again does not make it happen faster. Searching the web is the one \
+         exception and never needs approval, because it reads nothing on this machine -- so \
+         look something up whenever the answer is out in the world rather than on this box, \
+         and never answer from memory in its place.\n\n\
          To call one, emit a fenced block tagged `tool` containing JSON, and stop:\n\
          {FENCE}{TOOL_TAG}\n\
          {{\"tool\": \"read_file\", \"arguments\": {{\"path\": \"/etc/hostname\"}}}}\n\
@@ -65,7 +68,10 @@ pub fn native_instructions(field: &str) -> String {
          Your field is {field}. Reads inside it happen straight away. Anything else -- \
          another tool, or a path outside it -- is shown to the operator first and runs only \
          if they approve it, for that one call. Say what you want to look at and why, then \
-         wait; asking again does not make it happen faster.\n\n\
+         wait; asking again does not make it happen faster. Searching the web is the one \
+         exception and never needs approval, because it reads nothing on this machine -- so \
+         look something up whenever the answer is out in the world rather than on this box, \
+         and never answer from memory in its place.\n\n\
          Rules:\n\
          - Call a tool only when you actually need what it returns. Most questions need none.\n\
          - Never claim you did something you did not call a tool to do.\n\
@@ -557,5 +563,26 @@ mod tests {
         assert!(text.contains("system logs and service state"), "{text}");
         assert!(text.contains("approve"), "{text}");
         assert!(!text.contains(FENCE), "{text}");
+    }
+
+    /// Both prompts say "anything outside your field is shown to the operator first", and
+    /// that sentence is read by the model as the whole rule -- so if a web search is free
+    /// and the prompt does not say so, the model believes it has to ask and answers from
+    /// memory instead. Which is the fabrication this project has already debugged once.
+    #[test]
+    fn both_prompts_say_a_web_search_needs_no_approval() {
+        for text in [
+            instructions(
+                "- search_web: looks things up\n  arguments: {}",
+                "your notes",
+            ),
+            native_instructions("your notes"),
+        ] {
+            assert!(
+                text.contains("Searching the web is the one exception and never needs approval"),
+                "a prompt that does not say the search is free teaches the model to \
+                 invent results instead: {text}"
+            );
+        }
     }
 }
