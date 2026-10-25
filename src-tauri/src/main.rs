@@ -66,6 +66,7 @@ mod vault;
 mod voice_download;
 mod voice_setup;
 mod watchers;
+mod websearch;
 
 // installs::Machine is the trait the scan reads the machine through; brought in as `_` because
 // only its methods are called here, never its name.

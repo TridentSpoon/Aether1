@@ -73,28 +73,62 @@ pub fn native_instructions(field: &str) -> String {
     )
 }
 
-/// Extracts every tool call in `text`, in order. Malformed blocks are skipped rather than
-/// reported: the model gets the same "no tool was called" path as if it had emitted prose,
-/// which it recovers from better than an error about its own syntax.
-pub fn parse_calls(text: &str) -> Vec<ToolCall> {
-    let mut calls = Vec::new();
+/// What one round of model output asked for: the calls that could be read, and a line
+/// about each `tool` block that could not.
+#[derive(Debug, Default, PartialEq)]
+pub struct Round {
+    pub calls: Vec<ToolCall>,
+    /// One line per unreadable block, in the order they appeared, written to be read back
+    /// to the model.
+    pub malformed: Vec<String>,
+}
+
+/// Extracts every tool call in `text`, in order, and says what it could not read.
+///
+/// A skipped block used to be silent -- the same "no tool was called" path as prose. That
+/// turned out to be the worst of the options. `FenceFilter` hides the block from the
+/// operator, so a model that emitted a `tool` block with a trailing comma in it produced a
+/// turn where nothing ran, nothing was reported, and the only thing on screen was whatever
+/// prose surrounded the block. When that prose was the model narrating a search it had not
+/// performed, the fabrication was the entire visible answer. So the failure is named now,
+/// to the model so it can retry and to the operator so they can tell a tool that ran from
+/// one that did not.
+pub fn parse_round(text: &str) -> Round {
+    let mut round = Round::default();
     let mut rest = text;
 
     while let Some(start) = rest.find(&format!("{FENCE}{TOOL_TAG}")) {
         let after_tag = &rest[start + FENCE.len() + TOOL_TAG.len()..];
         let Some(end) = after_tag.find(FENCE) else {
-            break; // unterminated block: nothing complete left to parse
+            // An unterminated block is the one case that is usually not the model's fault:
+            // a stream cut off mid-call looks exactly like this. Reported all the same,
+            // because the operator's question still went unanswered.
+            round
+                .malformed
+                .push("a `tool` block was never closed, so the call was not read".to_string());
+            break;
         };
         let body = &after_tag[..end];
         rest = &after_tag[end + FENCE.len()..];
 
-        let Ok(parsed) = serde_json::from_str::<Value>(body.trim()) else {
-            continue;
+        let parsed = match serde_json::from_str::<Value>(body.trim()) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                // The parser's own message, which names the position: more use to a model
+                // correcting itself than "invalid JSON" is.
+                round
+                    .malformed
+                    .push(format!("a `tool` block was not valid JSON ({e})"));
+                continue;
+            }
         };
         let Some(name) = parsed.get("tool").and_then(Value::as_str) else {
+            round.malformed.push(
+                "a `tool` block parsed but had no \"tool\" key naming the tool to call".to_string(),
+            );
             continue;
         };
-        calls.push(ToolCall {
+        round.calls.push(ToolCall {
             tool: name.to_string(),
             arguments: parsed
                 .get("arguments")
@@ -103,7 +137,47 @@ pub fn parse_calls(text: &str) -> Vec<ToolCall> {
         });
     }
 
-    calls
+    round
+}
+
+/// The calls alone, for callers with nothing to do about a malformed one.
+pub fn parse_calls(text: &str) -> Vec<ToolCall> {
+    parse_round(text).calls
+}
+
+/// Fed back as the next round's prompt when a round asked for a tool and got the syntax
+/// wrong.
+///
+/// The last paragraph is the point. A model that has just failed to call a tool will
+/// happily answer from memory instead and present it as the tool's output -- it has the
+/// envelope format in its own system prompt to imitate. Saying "no tool ran" is not
+/// enough; it has to be told what it may not do with that fact.
+pub fn malformed_notice(reasons: &[String]) -> String {
+    format!(
+        "[TOOL CALL FAILED]\nYou asked for a tool but the request could not be read, so \
+         **nothing ran and you have no results**:\n\n{}\n\n\
+         Emit the call again as a single fenced block tagged `tool` containing one JSON \
+         object with a \"tool\" key and an \"arguments\" object, and nothing else inside \
+         the fence.\n\n\
+         Do not write a [TOOL RESULTS] block yourself, and do not answer from memory as \
+         though the tool had run. If you cannot call it, tell the operator plainly that the \
+         tool did not run.",
+        reasons
+            .iter()
+            .map(|r| format!("- {r}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
+/// The operator's side of the same failure: one trace line, in the slot where the `⚙` line
+/// for a call that actually ran would have been. Without it, the absence of a trace is the
+/// only evidence, and an absence is not something anyone notices.
+pub fn malformed_trace(reasons: &[String]) -> String {
+    trace_of(&format!(
+        "a tool call was malformed and did not run ({})",
+        reasons.len()
+    ))
 }
 
 /// The one-line trace shown to the operator in place of the tool call they didn't see.
@@ -271,6 +345,76 @@ mod tests {
         assert_eq!(calls[0].tool, "a");
         assert_eq!(calls[0].arguments, json!({}));
         assert_eq!(calls[1].arguments, json!({"x": 1}));
+    }
+
+    /// The fault this was changed for. A block the parser cannot read used to leave no
+    /// trace anywhere: FenceFilter hid it from the operator and parse_calls dropped it, so
+    /// a model that narrated a web search around a broken call produced a turn where the
+    /// narration was the entire visible answer.
+    #[test]
+    fn a_malformed_block_is_named_rather_than_dropped() {
+        let round = parse_round("I'll search.\n```tool\n{\"tool\": \"search_web\",}\n```");
+        assert!(round.calls.is_empty());
+        assert_eq!(round.malformed.len(), 1, "{round:#?}");
+        assert!(round.malformed[0].contains("not valid JSON"), "{round:#?}");
+    }
+
+    #[test]
+    fn a_block_with_no_tool_key_and_an_unclosed_one_are_both_reported() {
+        let no_key = parse_round("```tool\n{\"name\": \"search_web\"}\n```");
+        assert!(no_key.calls.is_empty());
+        assert!(
+            no_key.malformed[0].contains("no \"tool\" key"),
+            "{no_key:#?}"
+        );
+
+        let unclosed = parse_round("```tool\n{\"tool\": \"read_");
+        assert!(unclosed.calls.is_empty());
+        assert!(
+            unclosed.malformed[0].contains("never closed"),
+            "{unclosed:#?}"
+        );
+    }
+
+    /// A round can get one call right and another wrong. The good one still has to run --
+    /// refusing the whole round over a syntax error in the second block would make a model
+    /// that batches calls strictly worse off than one that does not.
+    #[test]
+    fn a_good_call_survives_a_broken_one_beside_it() {
+        let round = parse_round(
+            "```tool\n{\"tool\": \"read_file\", \"arguments\": {\"path\": \"/etc/hostname\"}}\n```\n\
+             ```tool\n{oops}\n```",
+        );
+        assert_eq!(round.calls.len(), 1);
+        assert_eq!(round.calls[0].tool, "read_file");
+        assert_eq!(round.malformed.len(), 1);
+    }
+
+    /// Reporting that nothing ran is not enough on its own. A model with the result
+    /// envelope in its own system prompt will write one and answer from memory, which is
+    /// exactly the failure being fixed -- so the notice has to forbid that, not just
+    /// describe the situation.
+    #[test]
+    fn the_notice_forbids_inventing_the_result() {
+        let notice = malformed_notice(&["a `tool` block was not valid JSON".to_string()]);
+        assert!(notice.contains("nothing ran"), "{notice}");
+        assert!(
+            notice.contains("Do not write a [TOOL RESULTS] block"),
+            "{notice}"
+        );
+        assert!(notice.contains("do not answer from memory"), "{notice}");
+        assert!(notice.contains("not valid JSON"), "{notice}");
+    }
+
+    /// The operator's side of it. Without a line here, the only evidence that a tool did
+    /// not run is the absence of the `⚙` line that would have been there -- and nobody
+    /// notices an absence.
+    #[test]
+    fn the_operator_gets_a_trace_line_for_a_call_that_did_not_run() {
+        let trace = malformed_trace(&["one".to_string(), "two".to_string()]);
+        assert!(trace.contains("did not run"), "{trace}");
+        assert!(trace.contains('⚙'), "{trace}");
+        assert_eq!(trace.matches('\n').count(), 2, "one line: {trace:?}");
     }
 
     #[test]
