@@ -264,7 +264,17 @@
 
     // ---- The builder --------------------------------------------------------
 
-    const RECIPE_FIELDS = ['core', 'innerRing', 'outerRing', 'effect', 'size', 'radius', 'spin', 'bob'];
+    /* Every control in the builder, by the id suffix it shares with its recipe field.
+       The three face fields are named here rather than read from
+       CustomAvatarRecipe.faceTiers because this runs before the avatars have loaded; the
+       functions below, which run after, do read the table. */
+    const RECIPE_FIELDS = [
+        'core', 'innerRing', 'outerRing', 'effect',
+        'eyes', 'brows', 'mouth',
+        'size', 'radius', 'spin', 'bob',
+    ];
+
+    const faceTiers = () => window.CustomAvatarRecipe.faceTiers;
 
     function fillPartPickers() {
         const map = {
@@ -273,6 +283,9 @@
             'build-outerRing': window.AvatarParts.options.outerRings(),
             'build-effect': window.AvatarParts.options.effects(),
         };
+        faceTiers().forEach(({ field, kinds }) => {
+            map[`build-${field}`] = window.AvatarParts.options[kinds]();
+        });
         Object.keys(map).forEach((id) => {
             const picker = $(id);
             picker.innerHTML = '';
@@ -286,7 +299,9 @@
     }
 
     function readRecipeFromControls() {
-        return {
+        const face = {};
+        faceTiers().forEach(({ field }) => { face[field] = $(`build-${field}`).value; });
+        return Object.assign(face, {
             core: $('build-core').value,
             innerRing: $('build-innerRing').value,
             outerRing: $('build-outerRing').value,
@@ -297,7 +312,7 @@
             // unusable; the recipe wants the small number.
             spin: Number($('build-spin').value) / 100,
             bob: Number($('build-bob').value),
-        };
+        });
     }
 
     function writeRecipeToControls(recipe) {
@@ -305,6 +320,7 @@
         $('build-innerRing').value = recipe.innerRing;
         $('build-outerRing').value = recipe.outerRing;
         $('build-effect').value = recipe.effect;
+        faceTiers().forEach(({ field }) => { $(`build-${field}`).value = recipe[field]; });
         $('build-size').value = recipe.size;
         $('build-radius').value = recipe.radius;
         $('build-spin').value = Math.round(recipe.spin * 100);
@@ -390,7 +406,8 @@ HologramAvatar.registerAvatar({
     build(api) {
         const recipe = ${JSON.stringify(recipe, null, 8).replace(/\n/g, '\n        ')};
         const group = new THREE.Group();
-        const options = { size: recipe.size, radius: recipe.radius };
+        const faceSupplied = recipe.eyes !== 'none' || recipe.brows !== 'none' || recipe.mouth !== 'none';
+        const options = { size: recipe.size, radius: recipe.radius, faceSupplied };
         const parts = [
             AvatarParts.cores[recipe.core].build(api, options),
             AvatarParts.innerRings[recipe.innerRing].build(api, options),
@@ -398,6 +415,22 @@ HologramAvatar.registerAvatar({
             AvatarParts.effects[recipe.effect].build(api, options),
         ];
         parts.forEach((part) => group.add(part.object));
+
+        // The eyes, brows and mouth draw themselves in x and y only; one group carries
+        // all three out to the front of the core, which is what its faceZ says.
+        const face = new THREE.Group();
+        face.position.z = Number.isFinite(parts[0].faceZ) ? parts[0].faceZ : recipe.size * 0.9;
+        group.add(face);
+        [
+            AvatarParts.eyes[recipe.eyes],
+            AvatarParts.brows[recipe.brows],
+            AvatarParts.mouths[recipe.mouth],
+        ].forEach((kind) => {
+            const part = kind.build(api, options);
+            face.add(part.object);
+            parts.push(part);
+        });
+
         return { group, parts, recipe };
     },
 
