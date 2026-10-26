@@ -319,6 +319,14 @@ struct Config {
     reasoning: providers::Reasoning,
 }
 
+/// How many turns of history the deliberation pass gets to see.
+///
+/// Fewer than the answering turn's eight, and deliberately: the notes are about the
+/// question that was just asked, the pass costs a whole generation of its own, and the
+/// prompt it re-reads is the expensive half of that on a local model. Two turns is enough
+/// for "it" and "that one" to still mean something.
+const DELIBERATION_HISTORY: usize = 2;
+
 impl Config {
     /// Whether answering this turn would send the prompt off the local host or the local
     /// network. The provider alone does not settle it: Ollama and LM Studio are addressed
@@ -340,6 +348,43 @@ impl Config {
             // see `net::require_forwarding`, which is what actually stops the request.
             Provider::Gateway => true,
         }
+    }
+
+    /// Whether this model produces reasoning of its own when it is asked for some.
+    ///
+    /// Not a guess about the model so much as a record of what was *asked* of it. The
+    /// cloud providers are asked in their own request format at an explicit level, so they
+    /// are already doing the thinking and asking twice would be paying twice. Ollama is the
+    /// one that says what a model can do, and LM Studio is the one that is never sent a
+    /// reasoning field at all -- so those two are the ones that may need the help.
+    fn thinks_unaided(&self, tools_on: bool) -> bool {
+        match self.provider {
+            Provider::Ollama => {
+                providers::ollama_facts(&self.endpoint, &self.model_name).thinking == Some(true)
+            }
+            // Never sent `reasoning_effort` (see `takes_reasoning_effort`) and will not say
+            // what it is running, so it is assumed not to -- the assumption that costs a
+            // slow reply rather than the one that costs no reasoning at all.
+            Provider::LmStudio => false,
+            // The documented hole in extended thinking, filled: with tools on the request,
+            // Anthropic cannot be asked to think natively, because its thinking blocks
+            // would have to be replayed with signatures an Exchange does not carry. Thinking
+            // on paper needs no signature.
+            Provider::Anthropic => !tools_on,
+            Provider::OpenAi | Provider::Groq | Provider::Gateway | Provider::Gemini => true,
+            // Never reaches a model at all.
+            Provider::Offline => true,
+        }
+    }
+
+    /// Whether to make this turn think on paper first.
+    ///
+    /// Only at an explicit effort level. `Auto` is the default and means "take reasoning
+    /// where it is free", and a second whole generation of every reply is the opposite of
+    /// free -- on a 4 GB card it is the difference between a pause and a wait. Asking for a
+    /// level is the operator saying they want the thinking more than they want the speed.
+    fn deliberates(&self, tools_on: bool) -> bool {
+        self.reasoning.effort().is_some() && !self.thinks_unaided(tools_on)
     }
 
     /// Why this turn cannot be sent to a gateway yet, when that is the situation.
@@ -972,6 +1017,139 @@ impl LlmEngine {
         format!("{}…", &text[..end])
     }
 
+    /// What to ask for on the scratchpad, by how much thinking was asked for.
+    ///
+    /// Written as instructions to someone working a problem out, not as a description of
+    /// reasoning: "consider alternatives" gets a list of alternatives, which is the shape
+    /// of thinking rather than the thing. The last two lines are the ones that matter most
+    /// -- without them a model writes the reply here instead, and then writes it again.
+    fn scratchpad_directive(level: providers::Reasoning) -> String {
+        let work = match level {
+            providers::Reasoning::High => {
+                "Work the question out carefully. Say what is actually being asked, what \
+                 you know that bears on it, and how you get from one to the other. Where \
+                 more than one answer is defensible, give each and say which you will \
+                 stand behind. Then look for what you have assumed without checking."
+            }
+            providers::Reasoning::Medium => {
+                "Work the question out. Say what is actually being asked, what you know \
+                 that bears on it, and the steps from one to the other."
+            }
+            // Low, and the two that never get here.
+            _ => {
+                "Think briefly. A few lines on what is actually being asked and what the \
+                 answer turns on."
+            }
+        };
+        // The last sentence is what stops the pass being a first draft of the reply --
+        // without it a model writes the answer here, and then writes it again.
+        format!(
+            "\n\n[SCRATCHPAD]\nBefore you answer, think on paper. {work}\n\n\
+             These are private working notes, not the reply. Do not greet or address the \
+             operator, do not call any tool, and do not write the final answer here -- you \
+             will be asked for it next, with these notes in front of you."
+        )
+    }
+
+    /// How the notes are put in front of the answering turn.
+    ///
+    /// Appended to the system prompt rather than to the operator's question, which is not
+    /// a detail: notes arriving as part of what the operator said get answered as though
+    /// the operator had written them, and a model that is told "the user said all this"
+    /// summarises it back. As context, they read as what they are.
+    fn notes_block(notes: &str) -> String {
+        format!(
+            "\n\n[YOUR NOTES]\nYou already worked this question out on paper. These are \
+             your own notes:\n\n{notes}\n\nAnswer the operator now. Use the notes, \
+             correct them where they turn out to be wrong, and do not read them back -- \
+             the operator can already see them."
+        )
+    }
+
+    /// One extra turn, before the answering one, in which the model is asked to think on
+    /// paper -- and the whole of what it says is treated as reasoning.
+    ///
+    /// This is how a model that cannot think gets to reason: not by a trained habit of
+    /// backtracking, which no prompt supplies, but by having written the problem out once
+    /// before it has to commit to an answer. It helps on a question with steps in it and
+    /// does nothing for an ordinary one, which is why it runs only when asked for.
+    ///
+    /// Three things keep it from being a second reply rather than a thought. It is handed
+    /// no tools, so it cannot act on a question it is only considering. Every token it
+    /// produces goes to the reasoning channel, including any the model wrapped in
+    /// `<think>` -- so none of it can reach the answer, the transcript, the speech, or the
+    /// tool parser, whatever the model writes. And a pass that fails returns None, because
+    /// an unanswered question is a worse outcome than an unconsidered one.
+    fn deliberate(
+        &self,
+        config: &Config,
+        system_prompt: &str,
+        history: &[Message],
+        prompt: &str,
+        images: &[providers::MediaAttachment],
+        thought: providers::Sink,
+    ) -> Option<providers::Completion> {
+        let scratchpad = format!(
+            "{system_prompt}{}",
+            Self::scratchpad_directive(config.reasoning)
+        );
+        let recent = history
+            .len()
+            .saturating_sub(DELIBERATION_HISTORY * 2)
+            .min(history.len());
+        let ctx = ChatContext {
+            system_prompt: &scratchpad,
+            history: &history[recent..],
+            prompt,
+            images,
+            agent_name: &config.agent_name,
+            // No tools, and no rounds to replay. A model weighing up whether to search is
+            // not a model that should be searching.
+            tools: &[],
+            exchanges: &[],
+            // Passed through rather than forced: an Ollama model that cannot think is the
+            // ordinary case here and is sent nothing, but one reached through LM Studio
+            // may well think inline, and that belongs in the panel with the rest.
+            reasoning: config.reasoning,
+        };
+
+        /* Both of the relay's channels go to the same place, which is the whole point:
+        on this pass there is no answer, only thinking. Two `&mut dyn FnMut` cannot borrow
+        one sink between them, so the sink and the accumulator are shared through RefCells
+        -- single-threaded, and the alternative is collecting the pass in silence and
+        showing it when it ends, which on the model this exists for is the entire wait. */
+        let drafted = std::cell::RefCell::new(String::new());
+        let out = std::cell::RefCell::new(thought);
+        let mut as_answer = |delta: &str| {
+            drafted.borrow_mut().push_str(delta);
+            (out.borrow_mut())(delta);
+        };
+        let mut as_thought = |delta: &str| {
+            drafted.borrow_mut().push_str(delta);
+            (out.borrow_mut())(delta);
+        };
+        let mut relay = providers::Relay::new(&mut as_answer, &mut as_thought, true);
+
+        match self.call_provider(config, &ctx, &mut relay) {
+            Ok(mut completion) => {
+                drop(relay);
+                // The relay split the pass into an answer half and a thinking half; here
+                // they are both notes, so the completion carries the whole of it.
+                completion.text = drafted.into_inner().trim().to_string();
+                (!completion.text.is_empty()).then_some(completion)
+            }
+            Err(failure) => {
+                // Said rather than shown: the operator gets their answer, and the terminal
+                // says why it arrived without notes.
+                eprintln!(
+                    "[AETHER1] the scratchpad pass failed, answering without it: {}",
+                    failure.message
+                );
+                None
+            }
+        }
+    }
+
     /// Runs rounds of model call -> tool calls -> results until the model answers without
     /// asking for a tool, and returns what the operator saw.
     ///
@@ -1352,6 +1530,21 @@ impl LlmEngine {
             });
         }
 
+        /* Thinking on paper, before anything is said. Guarded by the same two conditions
+        as the branches below that actually reach a model: there is nothing to deliberate
+        about on a turn that is going to be refused for leaving the machine, or answered
+        from the offline persona. Its tokens are counted with the turn's at the end --
+        a second generation that reported nothing would be exactly the comfortable
+        under-count the accounting here exists to remove. */
+        let reaches_a_model = !(config.local_only && config.reaches_the_internet())
+            && config.provider != Provider::Offline;
+        let deliberation = (reaches_a_model && config.deliberates(tools_on))
+            .then(|| self.deliberate(&config, &system_prompt, &history, prompt, images, thought))
+            .flatten();
+        if let Some(notes) = &deliberation {
+            system_prompt.push_str(&Self::notes_block(&notes.text));
+        }
+
         // Local-only mode refuses the cloud rather than quietly routing around it. The
         // operator still gets an answer -- going mute would be its own kind of failure --
         // but they are told which provider was not contacted, so "it still worked" can
@@ -1489,6 +1682,22 @@ impl LlmEngine {
             };
             format!("{vault_trace}{text}")
         };
+
+        // The scratchpad's tokens were spent on this answer as surely as the answering
+        // turn's were, so they are reported with them rather than quietly left off.
+        if let Some(spent) = deliberation.and_then(|pass| pass.usage) {
+            reported = Some(match reported {
+                Some(answering) => providers::TokenUsage {
+                    prompt_tokens: answering.prompt_tokens + spent.prompt_tokens,
+                    completion_tokens: answering.completion_tokens + spent.completion_tokens,
+                    eval_nanos: match (answering.eval_nanos, spent.eval_nanos) {
+                        (Some(a), Some(b)) => Some(a + b),
+                        (only, None) | (None, only) => only,
+                    },
+                },
+                None => spent,
+            });
+        }
 
         self.usage.lock().unwrap().record_usage(
             prompt,
@@ -1695,6 +1904,89 @@ mod tests {
             local_only: false,
             reasoning: providers::Reasoning::Off,
         }
+    }
+
+    /// A model with no reasoning of its own gets the scratchpad pass; one that is already
+    /// being asked to reason does not, because that would be paying for the same thinking
+    /// twice.
+    #[test]
+    fn only_a_model_that_cannot_think_is_made_to_think_on_paper() {
+        let mut lm_studio = config_for(Provider::LmStudio, "http://localhost:1234/v1", "local");
+        lm_studio.reasoning = providers::Reasoning::Medium;
+        assert!(
+            lm_studio.deliberates(false),
+            "LM Studio is never sent a reasoning field, so nothing else will do the thinking"
+        );
+
+        let mut openai = config_for(Provider::OpenAi, "", "o3-mini");
+        openai.reasoning = providers::Reasoning::Medium;
+        assert!(
+            !openai.deliberates(false),
+            "it was asked for reasoning in its own request format already"
+        );
+    }
+
+    /// The documented hole in Anthropic's extended thinking, covered. With tools on the
+    /// request it cannot be asked to think natively -- its thinking blocks would have to be
+    /// replayed with signatures an Exchange does not carry -- so the scratchpad is the only
+    /// reasoning available there, and it needs no signature.
+    #[test]
+    fn anthropic_thinks_on_paper_exactly_when_it_cannot_think_natively() {
+        let mut anthropic = config_for(Provider::Anthropic, "", "claude-opus-5");
+        anthropic.reasoning = providers::Reasoning::High;
+        assert!(
+            anthropic.deliberates(true),
+            "tools on: nothing else can reason"
+        );
+        assert!(
+            !anthropic.deliberates(false),
+            "tools off: extended thinking is asked for and will arrive"
+        );
+    }
+
+    /// The guard that keeps every reply from costing two generations. `Auto` is the default
+    /// and means "take reasoning where it is free"; a second whole pass is not free, and on
+    /// a 4 GB card the difference is a pause against a wait.
+    #[test]
+    fn automatic_and_off_never_spend_a_second_generation() {
+        for level in [providers::Reasoning::Auto, providers::Reasoning::Off] {
+            let mut config = config_for(Provider::LmStudio, "http://localhost:1234/v1", "local");
+            config.reasoning = level;
+            assert!(
+                !config.deliberates(false),
+                "{level:?} must not double the cost of a turn"
+            );
+        }
+    }
+
+    /// The scratchpad has one job that is not "answer", and the directive has to say so in
+    /// the words that actually stop a model writing the reply twice.
+    #[test]
+    fn the_scratchpad_is_told_it_is_not_the_reply() {
+        for level in [
+            providers::Reasoning::Low,
+            providers::Reasoning::Medium,
+            providers::Reasoning::High,
+        ] {
+            let said = LlmEngine::scratchpad_directive(level);
+            assert!(said.contains("not the reply"), "{level:?}: {said}");
+            assert!(said.contains("do not call any tool"), "{level:?}: {said}");
+        }
+        // And more is asked for at a higher level, or the levels mean nothing.
+        assert!(
+            LlmEngine::scratchpad_directive(providers::Reasoning::High).len()
+                > LlmEngine::scratchpad_directive(providers::Reasoning::Low).len()
+        );
+    }
+
+    /// Notes go to the model as context, not as something the operator said. A model told
+    /// its own working was part of the question summarises it back at them.
+    #[test]
+    fn the_notes_are_context_and_say_not_to_read_them_back() {
+        let block = LlmEngine::notes_block("the race was after my training");
+        assert!(block.contains("the race was after my training"));
+        assert!(block.contains("your own notes"));
+        assert!(block.contains("do not read them back"));
     }
 
     /// The decision this whole feature turns on. An Ollama endpoint on loopback does not

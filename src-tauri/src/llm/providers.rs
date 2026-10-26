@@ -1665,6 +1665,54 @@ fn openai_request(
     Ok(request)
 }
 
+/// Whether a refusal is the provider objecting to `reasoning_effort` specifically.
+///
+/// Deliberately narrow. The field name has to be in the body, so a 400 about anything else
+/// is left alone and reaches the operator as itself -- a blanket "retry 400s without the
+/// extras" would hide a wrong model name behind a second identical failure.
+fn refused_the_effort_field(error: &str) -> bool {
+    let lowered = error.to_lowercase();
+    lowered.contains("reasoning_effort")
+        && (lowered.contains("400")
+            || lowered.contains("unrecognized")
+            || lowered.contains("unsupported")
+            || lowered.contains("not supported")
+            || lowered.contains("invalid"))
+}
+
+/// Sends an OpenAI-shaped request, and sends it once more without the effort field if that
+/// is what the provider objected to.
+///
+/// `reasoning_effort` is not a field every model behind an OpenAI-shaped API accepts: the
+/// reasoning models take it and the ordinary ones reject the whole request for carrying
+/// it. Which is which is a list that stops being true within a month, so it is not kept
+/// here -- the provider is asked, and is allowed to say no once. Somebody who picked an
+/// effort level and then a model that cannot use one should get a plainer answer, not a
+/// conversation where every turn fails.
+///
+/// The cost when it happens is one refused request per turn. A model that cannot reason
+/// also cannot be asked again later with a different answer, so remembering the refusal
+/// would be better -- but remembering it wrongly, across a model the operator has since
+/// changed, is how a reasoning model ends up silently never asked.
+fn openai_send(
+    provider: Provider,
+    url: &str,
+    api_key: &str,
+    timeout: std::time::Duration,
+    payload: &mut OpenAiRequest,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let sent = checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload));
+    match sent {
+        Err(refusal)
+            if payload.reasoning_effort.is_some() && refused_the_effort_field(&refusal) =>
+        {
+            payload.reasoning_effort = None;
+            checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
+        }
+        other => other,
+    }
+}
+
 pub fn call_openai_compatible(
     provider: Provider,
     endpoint: &str,
@@ -1672,10 +1720,10 @@ pub fn call_openai_compatible(
     model: &str,
     ctx: &ChatContext,
 ) -> Result<Completion, String> {
-    let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
+    let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, false);
 
     let response: OpenAiResponse =
-        checked(openai_request(provider, &url, api_key, CALL_TIMEOUT)?.send_json(&payload))?
+        openai_send(provider, &url, api_key, CALL_TIMEOUT, &mut payload)?
             .into_body()
             .read_json()
             .map_err(|e| e.to_string())?;
@@ -1723,10 +1771,9 @@ pub fn stream_openai_compatible(
     ctx: &ChatContext,
     relay: &mut Relay,
 ) -> Result<Completion, String> {
-    let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
+    let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response =
-        checked(openai_request(provider, &url, api_key, STREAM_TIMEOUT)?.send_json(&payload))?;
+    let response = openai_send(provider, &url, api_key, STREAM_TIMEOUT, &mut payload)?;
 
     let mut usage = None;
     let mut builder = OpenAiCallBuilder::default();
@@ -3540,6 +3587,34 @@ mod failure_tests {
             relay.finish(),
             ("Hi".to_string(), "who is asking".to_string())
         );
+    }
+
+    /// The failure this exists to stop: an operator picks an effort level, then a model
+    /// that cannot use one, and every reply fails for carrying a field they never typed.
+    #[test]
+    fn a_model_that_rejects_the_effort_field_is_asked_again_without_it() {
+        assert!(refused_the_effort_field(
+            "http status: 400 -- {\"error\":{\"message\":\"Unrecognized request argument \
+             supplied: reasoning_effort\"}}"
+        ));
+        assert!(refused_the_effort_field(
+            "http status: 400 -- reasoning_effort is not supported with this model"
+        ));
+    }
+
+    /// Narrow on purpose. A blanket "retry a 400 without the extras" would hide a wrong
+    /// model name behind a second identical failure, and the body naming the model is the
+    /// most useful thing the operator gets.
+    #[test]
+    fn any_other_refusal_is_left_to_reach_the_operator() {
+        assert!(!refused_the_effort_field(
+            "http status: 404 -- model gpt-4o-mimi does not exist"
+        ));
+        assert!(!refused_the_effort_field(
+            "http status: 400 -- invalid value for temperature"
+        ));
+        // The field named without a refusal around it is not a refusal of the field.
+        assert!(!refused_the_effort_field("reasoning_effort: high"));
     }
 
     #[test]

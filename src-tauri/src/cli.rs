@@ -2167,8 +2167,10 @@ fn run_reasoning(level: Option<&str>) -> Result<String, String> {
                                 produces any. Nothing is asked of a provider that might \
                                 refuse the request for asking.",
             Reasoning::Low | Reasoning::Medium | Reasoning::High =>
-                "Every provider that takes an effort level is asked for this one. Cloud \
-                 providers bill for thinking tokens.",
+                "Every provider that takes an effort level is asked for this one, and a \
+                 model that cannot reason is made to think on paper first -- one extra \
+                 pass per turn, shown in the reasoning panel. Cloud providers bill for \
+                 both.",
         }
     ))
 }
