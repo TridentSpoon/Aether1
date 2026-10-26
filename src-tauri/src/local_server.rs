@@ -111,12 +111,32 @@ pub fn choose(
     let endpoint_matches = endpoint.trim_end_matches('/') == best.endpoint.trim_end_matches('/');
     let provider_matches = provider == best.provider_key;
 
-    // Already pointed at the server we would have chosen. The model may still be wrong --
-    // the operator pulled a new one, or the old one was removed -- but a model that the
-    // server does not list is not something to fix behind their back when the address is
-    // right; the request itself will say so, naming the model.
+    // Already pointed at the server we would have chosen. Usually nothing to do -- but not
+    // when the configured model is one the server does not have.
+    //
+    // That case used to return None here, on the reasoning that a model the operator chose
+    // is not ours to change behind their back. A chat log settled it the other way: five
+    // questions in a row answered with "ollama has no model by that name -- check MODEL
+    // NAME / ID in Settings", while the server sat there listing models AETHER1 could have
+    // used. Declining to choose is not deference when the alternative is five hard
+    // failures, and the operator's choice is not being overruled by a judgement -- it is
+    // not installed. So a server that lists something gets switched to it, loudly.
     if configured_locally && endpoint_matches && provider_matches {
-        return None;
+        let model_is_missing =
+            !model.is_empty() && !best.models.is_empty() && !best.models.iter().any(|m| m == model);
+        if !model_is_missing {
+            return None;
+        }
+        return Some(Adoption {
+            provider: best.provider_key,
+            endpoint: best.endpoint.clone(),
+            model: best.models.first().cloned(),
+            why: format!(
+                "The configured model `{model}` is not installed on {}, which is serving {}.",
+                best.label,
+                describe_models(&best.models)
+            ),
+        });
     }
 
     // A configured local address that is answering is left alone even if it is not the
@@ -230,6 +250,47 @@ pub fn apply_autostart_default(db: &MemoryDb) {
     }
     let _ = db.set_setting(AUTOSTART_DEFAULT_MARKER, &serde_json::Value::Bool(true));
 }
+
+/// The context window to hand a server AETHER1 starts, for a model it loads without being
+/// told one.
+///
+/// This is deliberately a floor and not the largest window the machine could hold, and the
+/// reason is worth writing down because the obvious answer is wrong.
+///
+/// `OLLAMA_CONTEXT_LENGTH` is **server-wide**: it applies to every model the server loads,
+/// and it is set before AETHER1 knows which model that will be. Context is memory -- the KV
+/// cache for a long window on a large model is gigabytes -- so one generous figure is not
+/// generous, it is a cliff. A 27B at a 2-bit quant is about 8GB of weights; on a 16GB card
+/// a 32K window on top of that does not fit, so the server quietly moves layers to the CPU
+/// and a greeting takes nearly three minutes. That is exactly what happened: PR #249 sized
+/// this from system RAM via `code_setup::context_tokens`, which returns 32768 on a 32GB
+/// machine, and the operator's 27B went from answering to "thinking... 167s".
+///
+/// RAM was the wrong question twice over. It is not what runs out -- VRAM is -- and even
+/// VRAM cannot settle it without knowing the model's size.
+///
+/// What makes a floor sufficient is that the server-wide figure is not where a large window
+/// belongs. `providers::local_context_window` already sets `num_ctx` **per request** on the
+/// native path, clamped to 16K for this very reason ("asking for it on a 16GB card to hold a
+/// chat is how a model ends up swapping to CPU"), and that is the only place the model is
+/// known. So this needs to be exactly big enough that a first question cannot overflow it,
+/// and no bigger; anything that wants more asks per request, where it can be judged.
+///
+/// The one thing this does not serve is the coding engine, which talks to the server over
+/// the OpenAI-compatible endpoint where there is no `num_ctx` field, and which genuinely
+/// wants a long window. It cannot be served by this number without putting the cliff back
+/// for everybody; it needs its own load, and until it has one the setup wizard's own
+/// context step is the honest answer for an operator who mainly codes.
+pub fn server_context_tokens() -> u32 {
+    SERVER_CONTEXT_FLOOR
+}
+
+/// Big enough that AETHER1's system prompt, a tool round and a few turns cannot overflow a
+/// first question -- the overflow was at 5242 tokens against Ollama's 4096 -- and small
+/// enough to cost nothing on any machine. The same figure as
+/// `providers::LOCAL_CTX_FLOOR`, which is the floor the per-request path uses for a model
+/// that reports no window of its own.
+const SERVER_CONTEXT_FLOOR: u32 = 8192;
 
 /// A local model server AETHER1 knows how to start, and the command that starts it.
 ///
@@ -410,6 +471,58 @@ mod tests {
             adoption.model.as_deref(),
             Some("qwen3:8b"),
             "a model the operator chose is not blanked by a server that lists none"
+        );
+    }
+
+    /// The regression this file's `server_context_tokens` comment is about. The figure must
+    /// not exceed what the per-request path itself considers safe, or the server-wide
+    /// default is the looser of two numbers deciding the same thing -- which is how a 27B
+    /// ended up offloading to CPU and taking 167 seconds on a greeting.
+    #[test]
+    fn the_server_wide_context_does_not_exceed_what_a_request_would_ask_for() {
+        let server_wide = u64::from(server_context_tokens());
+        assert!(
+            server_wide <= crate::llm::providers::local_context_window(Some(1_000_000)),
+            "the server-wide default ({server_wide}) must not be larger than the ceiling \
+             the per-request path clamps to"
+        );
+        assert!(
+            server_wide > 4096,
+            "and must still be above Ollama's 4096 default, which is what overflowed"
+        );
+    }
+
+    /// Five questions in a row in a real chat log were answered with "ollama has no model
+    /// by that name" while the server sat there listing models. Not choosing is not
+    /// deference when the alternative is five hard failures.
+    #[test]
+    fn a_configured_model_the_server_does_not_have_is_replaced() {
+        let found = [server(11434, LocalApi::Native, &["qwen3:8b"])];
+        let adoption = choose(
+            &found,
+            "ollama",
+            "http://127.0.0.1:11434",
+            "a-model-never-pulled",
+        )
+        .expect("a model that is not installed is a gap to fill");
+        assert_eq!(adoption.model.as_deref(), Some("qwen3:8b"));
+        assert_eq!(adoption.endpoint, "http://127.0.0.1:11434");
+        assert!(
+            adoption.why.contains("not installed"),
+            "the reason says which model was missing: {}",
+            adoption.why
+        );
+    }
+
+    /// The counterpart: a server that lists nothing has not contradicted anything, so the
+    /// address being right still means there is nothing to do. Switching here would blank a
+    /// deliberate choice on the strength of a server that simply has no model loaded yet.
+    #[test]
+    fn an_empty_server_at_the_configured_address_is_still_left_alone() {
+        let found = [server(11434, LocalApi::Native, &[])];
+        assert_eq!(
+            choose(&found, "ollama", "http://127.0.0.1:11434", "qwen3:8b"),
+            None
         );
     }
 

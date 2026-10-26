@@ -102,6 +102,22 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
              as it arrived: {raw}"
         );
     }
+    /* A second 400 worth paraphrasing, for the same reason: the body names the problem
+    precisely and the fix is not the one it reads like. An Anthropic key created at the
+    organisation level rather than inside a workspace is refused until the request carries
+    an `anthropic-workspace-id` header -- which AETHER1 has nowhere to put, since nothing
+    in Settings asks for a workspace. So the actionable half is the *other* half of what
+    Anthropic says: use a key that is scoped to a workspace. Without this the operator
+    reads a header name and reasonably goes looking for a header field. */
+    if lowered.contains("anthropic-workspace-id") || lowered.contains("scoped to a workspace") {
+        return format!(
+            "{named} refused this API key because it belongs to the organisation rather \
+             than to one workspace, and a key like that has to name a workspace on every \
+             request. AETHER1 has nowhere to put that, so the fix is a different key: \
+             create one inside a workspace in the Anthropic console and paste it into the \
+             {key_field}. The refusal as it arrived: {raw}"
+        );
+    }
     if lowered.contains("400") || lowered.contains("invalid_request") {
         return format!("{named}{at} rejected the request itself: {raw}");
     }
@@ -3784,6 +3800,29 @@ mod failure_tests {
         assert!(
             said.contains("5242"),
             "the server's own words still come through: {said}"
+        );
+    }
+
+    /// An organisation-level Anthropic key names a header as its fix, and AETHER1 has
+    /// nowhere to put a header. The actionable half is the other half of what Anthropic
+    /// says, so the paraphrase has to lead with the key rather than with the header name.
+    #[test]
+    fn an_organisation_scoped_anthropic_key_is_told_to_use_a_workspace_key() {
+        let said = explain_failure(
+            Provider::Anthropic,
+            "",
+            "http status: 400 -- {\"type\":\"error\",\"error\":{\"type\":\
+             \"invalid_request_error\",\"message\":\"This API key is not scoped to a \
+             workspace, so this request must include the anthropic-workspace-id header \
+             with the ID of the workspace to use.\"}}",
+        );
+        assert!(
+            said.contains("create one inside a workspace"),
+            "it says to get a different key, not to find a header field: {said}"
+        );
+        assert!(
+            said.contains("anthropic-workspace-id"),
+            "Anthropic's own words still come through: {said}"
         );
     }
 
