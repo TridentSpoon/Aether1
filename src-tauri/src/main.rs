@@ -1599,6 +1599,12 @@ fn scan_models_rust() -> model_scanner::ScanResult {
     model_scanner::scan_all()
 }
 
+/// Everywhere the companion could think from, for the chin bar's brain picker.
+#[tauri::command(async)]
+fn brains_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::brains(&engine)
+}
+
 /// The Hugging Face side of the model picker. See `commands::hf_search`.
 #[tauri::command(async)]
 fn hf_search_rust(query: Option<String>) -> serde_json::Value {
@@ -2891,6 +2897,10 @@ fn set_agent_selection_rust(
 fn build_llm_engine() -> LlmEngine {
     let engine = open_llm_engine();
     net::install(engine.db());
+    // The one-time switch-on for installs that had tools off without choosing to. Here
+    // for the same reason `net::install` is: it is the single path every entry point
+    // shares, and it has to happen before anything asks a model a question.
+    tools::apply_default_on(engine.db());
     engine
 }
 
@@ -3045,6 +3055,7 @@ fn main() {
             doctor_attend_rust,
             run_diagnostics_rust,
             setup_advice_rust,
+            brains_rust,
             hf_search_rust,
             hf_quants_rust,
             pull_model_rust,

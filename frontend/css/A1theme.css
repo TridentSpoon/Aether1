@@ -2109,6 +2109,33 @@ select,
     transition: all 0.15s ease;
 }
 
+/* The brain picker, beside STATE. Styled as part of the bar rather than as a form
+   control: it is a readout you can also change, and a full-height select with a browser
+   chrome arrow in a 22px strip reads as something that fell in from a settings page. */
+.chin-brain-select {
+    max-width: 16rem;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid rgba(0, 240, 255, 0.28);
+    border-radius: 3px;
+    background: rgba(0, 240, 255, 0.05);
+    color: var(--text-accent);
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    font-size: 10px;
+    line-height: 1.5;
+    cursor: pointer;
+    text-overflow: ellipsis;
+}
+
+.chin-brain-select:hover {
+    background: rgba(0, 240, 255, 0.16);
+    border-color: var(--neon-cyan);
+    color: var(--text-main);
+}
+
+#chin-brain-row:not(.hidden) {
+    display: inline-flex;
+}
+
 .chin-cmd:hover {
     background: rgba(0, 240, 255, 0.16);
     border-color: var(--neon-cyan);
