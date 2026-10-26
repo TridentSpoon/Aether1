@@ -69,9 +69,33 @@ fn after_training_rule(web: Option<&str>) -> String {
     }
 }
 
+/// What to do with a list of search results, for the system prompt rather than for the
+/// envelope around the results.
+///
+/// #246 put this in `format_results`, and `format_results` is the **text protocol's**
+/// envelope -- a native model gets its results as a `tool` message and never sees a word
+/// of it. So the steer that was supposed to stop "here is a link, open it yourself"
+/// reached only half the models, and an operator on qwen3:8b got a competent search
+/// followed by three URLs to go and read.
+///
+/// `None` when there is no search tool to reach for, so the prompt is not carrying advice
+/// about a tool that is not there.
+fn reading_results_rule(web: Option<&str>, fetch: Option<&str>) -> String {
+    match (web, fetch) {
+        (Some(search), Some(fetch)) => format!(
+            "\n- A `{search}` result list is titles and one-line snippets, not an answer. \
+             When the question turns on the detail, call `{fetch}` on the result most \
+             likely to carry it and answer from the page. Giving the operator a link to \
+             open is not an answer: they could have searched for it themselves, and \
+             opening it is your job."
+        ),
+        _ => String::new(),
+    }
+}
+
 /// Instructions appended to the system prompt when tools are available. Written to be read
 /// by a 3B local model as well as a frontier one: short, imperative, one example.
-pub fn instructions(catalog: &str, field: &str, web: Option<&str>) -> String {
+pub fn instructions(catalog: &str, field: &str, web: Option<&str>, fetch: Option<&str>) -> String {
     format!(
         "\n[AVAILABLE TOOLS]\nYou can inspect the operator's machine by calling these tools:\n\
          {catalog}\n\n\
@@ -91,10 +115,11 @@ pub fn instructions(catalog: &str, field: &str, web: Option<&str>) -> String {
          - You call tools yourself. Never ask the operator to call one for you, and never \
          write a [TOOL RESULTS] block yourself -- only the tools produce those, and anything \
          you write under that heading is a fabrication that will be withheld.\n\
-         {after_training}\n\
+         {after_training}{reading}\n\
          - Anything you say outside the fenced block is shown to the operator immediately, \
          so don't narrate the JSON.",
-        after_training = after_training_rule(web)
+        after_training = after_training_rule(web),
+        reading = reading_results_rule(web, fetch)
     )
 }
 
@@ -103,7 +128,7 @@ pub fn instructions(catalog: &str, field: &str, web: Option<&str>) -> String {
 /// every name, description and schema, and repeating them in prose is both wasted tokens
 /// and a second copy to drift out of date. What the provider cannot express is the part
 /// that matters here: which reads are free and what happens to everything else.
-pub fn native_instructions(field: &str, web: Option<&str>) -> String {
+pub fn native_instructions(field: &str, web: Option<&str>, fetch: Option<&str>) -> String {
     format!(
         "\n[AVAILABLE TOOLS]\nYou can inspect the operator's machine with the tools \
          attached to this request.\n\n\
@@ -116,9 +141,10 @@ pub fn native_instructions(field: &str, web: Option<&str>) -> String {
          - Never claim you did something you did not call a tool to do.\n\
          - You call tools yourself. Never ask the operator to call one for you, and never \
          write the results of one yourself.\n\
-         {after_training}\n\
+         {after_training}{reading}\n\
          - Anything you say alongside a tool call is shown to the operator immediately.",
-        after_training = after_training_rule(web)
+        after_training = after_training_rule(web),
+        reading = reading_results_rule(web, fetch)
     )
 }
 
@@ -701,7 +727,12 @@ mod tests {
     /// operator can do. Pinned because it is the sentence the prompt now forbids.
     #[test]
     fn the_instructions_forbid_delegating_a_call_back_to_the_operator() {
-        let text = instructions("- search_web: search", "your notes", Some("search_web"));
+        let text = instructions(
+            "- search_web: search",
+            "your notes",
+            Some("search_web"),
+            Some("fetch_url"),
+        );
         assert!(text.contains("You call tools yourself"), "{text}");
         // Case-insensitive: the sentence opens a bullet in one prompt and sits mid-sentence
         // in the other, and the rule is the point rather than its capitalisation.
@@ -711,7 +742,7 @@ mod tests {
         );
         assert!(text.contains("training ended before today"), "{text}");
 
-        let native = native_instructions("your notes", Some("search_web"));
+        let native = native_instructions("your notes", Some("search_web"), Some("fetch_url"));
         assert!(native.contains("You call tools yourself"), "{native}");
     }
 
@@ -722,8 +753,13 @@ mod tests {
     #[test]
     fn a_question_past_the_training_is_an_order_to_look_it_up_when_there_is_a_tool() {
         for text in [
-            instructions("- search_web: search", "your notes", Some("search_web")),
-            native_instructions("your notes", Some("search_web")),
+            instructions(
+                "- search_web: search",
+                "your notes",
+                Some("search_web"),
+                Some("fetch_url"),
+            ),
+            native_instructions("your notes", Some("search_web"), Some("fetch_url")),
         ] {
             // Named, so it cannot be "a tool" the model has to go and find.
             assert!(text.contains("`search_web`"), "{text}");
@@ -744,8 +780,8 @@ mod tests {
     #[test]
     fn with_no_reachable_search_the_rule_says_so_instead_of_naming_a_tool() {
         for text in [
-            instructions("- read_file: read", "your notes", None),
-            native_instructions("your notes", None),
+            instructions("- read_file: read", "your notes", None, None),
+            native_instructions("your notes", None, None),
         ] {
             assert!(text.contains("no way to look it up"), "{text}");
             assert!(text.contains("when you knew it"), "{text}");
@@ -931,7 +967,11 @@ mod tests {
     /// asking, still has to be said.
     #[test]
     fn the_native_instructions_name_the_field_without_teaching_the_fence() {
-        let text = native_instructions("system logs and service state", Some("search_web"));
+        let text = native_instructions(
+            "system logs and service state",
+            Some("search_web"),
+            Some("fetch_url"),
+        );
         assert!(text.contains("system logs and service state"), "{text}");
         assert!(text.contains("approve"), "{text}");
         assert!(!text.contains(FENCE), "{text}");

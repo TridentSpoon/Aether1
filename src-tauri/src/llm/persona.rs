@@ -914,9 +914,18 @@ impl Provider {
     /// it reports no capabilities to probe, and a 400 from sending a field it does not
     /// know costs more than the text protocol does.
     pub fn supports_native_tools(&self) -> bool {
+        // LM Studio was left off this list when native calling was added, on the reasoning
+        // that it is the provider most likely to be an old build that rejects a request
+        // for carrying an unknown field. That reasoning has the same shape as the comment
+        // on `openai_send`'s effort-field retry: "which is which is a list that stops
+        // being true within a month, so it is not kept here". Keeping LM Studio off was
+        // keeping exactly such a list, and it stopped being true -- the cost was that no
+        // model behind it could ever call a tool, whatever it was capable of, and nothing
+        // said so. It is asked now, and `refused_tools` remembers a no.
         matches!(
             self,
             Provider::Ollama
+                | Provider::LmStudio
                 | Provider::OpenAi
                 | Provider::Groq
                 | Provider::Gemini
@@ -946,7 +955,15 @@ impl Provider {
     pub fn label(&self) -> &'static str {
         match self {
             Provider::Ollama => "Ollama",
-            Provider::LmStudio => "LM Studio",
+            /* Not "LM Studio". This setting drives *any* server speaking the
+            OpenAI-compatible shape on this machine -- `model_scanner::LocalApi::OpenAi`
+            maps every one of them to this key, and the scanner is careful to say "Local
+            server on port 1234" rather than guess at a product. The guess was being made
+            here instead, at the last moment, in the one place the operator reads: someone
+            with no LM Studio installed was told "lmstudio rejected the request itself",
+            which sends them to look for a program they do not have. Which program it is
+            cannot be known from a probe, so this does not claim to know. */
+            Provider::LmStudio => "the local OpenAI-compatible server",
             Provider::OpenAi => "OpenAI",
             Provider::Groq => "Groq",
             Provider::Gemini => "Gemini",

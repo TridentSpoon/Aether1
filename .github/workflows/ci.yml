@@ -43,12 +43,17 @@ jobs:
   rust:
     name: Rust -- build, test, clippy, format
     runs-on: ubuntu-latest
-    # A normal run of this job is about five and a half minutes. Twice it has hung for
-    # hours instead -- not compiling, just stopped, waiting on a GitHub service that never
-    # answered. Without a limit the default is six hours, so a hung run holds a pull request
-    # open for most of a day and looks exactly like a slow one. This turns that into a
-    # failure you can see and re-run inside half an hour.
-    timeout-minutes: 30
+    # Without a limit the default is six hours, so a hung run holds a pull request open for
+    # most of a day and looks exactly like a slow one. The limit turns that into a failure
+    # you can see and re-run.
+    #
+    # It was 30 minutes, set when a normal run was about five and a half. That stopped being
+    # true: on 2026-10-26 the apt step below took 24m31s on the run that passed, leaving the
+    # whole job twenty seconds inside the limit -- and the next two runs spent the entire
+    # thirty minutes in that same step and were cancelled with nothing compiled and no test
+    # run. The step has retries and timeouts of its own now, which is the actual fix; this
+    # is the headroom so that a slow mirror costs minutes rather than the job.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,8 +153,15 @@ jobs:
           # Anything kept from a previous run goes back where apt looks first, so these are
           # installed from disk rather than downloaded again.
           sudo cp -n ~/.cache/aether1-apt/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          # A stalled mirror connection is what costs the time here, and apt's default is
+          # to wait on it: no retries, and a timeout long enough that a handful of dead
+          # sockets add up to the whole job. Fifteen seconds and three tries turns each one
+          # into a few seconds and another mirror.
+          APT_WAITS=(-o Acquire::Retries=3
+                     -o Acquire::http::Timeout=15
+                     -o Acquire::https::Timeout=15)
+          sudo apt-get "${APT_WAITS[@]}" update
+          sudo apt-get "${APT_WAITS[@]}" install -y --no-install-recommends \
             build-essential pkg-config curl wget file libssl-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libnotify-bin bubblewrap

@@ -37,6 +37,18 @@ pub type Sink<'a> = &'a mut dyn FnMut(&str);
 pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String {
     let lowered = raw.to_lowercase();
     let local = matches!(provider, Provider::Ollama | Provider::LmStudio);
+    /* What to call it in front of the operator. `Display` is the settings key, which is
+    right for a log line and wrong here: it put "lmstudio rejected the request itself" in
+    front of somebody who does not have LM Studio installed, because that key drives every
+    OpenAI-compatible local server. `label` no longer guesses at a product -- and for a
+    local server the endpoint is the only thing that actually identifies which program
+    refused, so it is said. */
+    let named = provider.label();
+    let at = if local {
+        format!(" at {endpoint}")
+    } else {
+        String::new()
+    };
 
     // Where the operator would go to fix it, named as it appears in Settings. A gateway
     // has its own key field, and sending someone to the provider one -- which they may
@@ -49,23 +61,49 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
     };
 
     if lowered.contains("401") || lowered.contains("unauthorized") {
-        return format!("{provider} rejected the API key -- check the {key_field}.");
+        return format!("{named}{at} rejected the API key -- check the {key_field}.");
     }
     if lowered.contains("403") || lowered.contains("forbidden") {
         if lowered.contains("proxy") {
             return format!(
-                "a proxy on this network refused the connection to {provider}, so the request never arrived."
+                "a proxy on this network refused the connection to {named}, so the request never arrived."
             );
         }
         return format!(
-            "{provider} refused the API key -- it may lack access to this model, or be for the wrong account."
+            "{named} refused the API key -- it may lack access to this model, or be for the wrong account."
         );
     }
     // 400 is the provider saying the request was wrong rather than the key or the network,
     // and its body says which part. That body is worth more than anything that could be
     // written here, so this passes it through instead of paraphrasing it away.
+    /* One 400 is worth paraphrasing, because its body names the problem and says nothing
+    about the fix. "request (5242 tokens) exceeds the available context size (4096
+    tokens)" on a *first* question is not a long conversation -- it is the system prompt
+    not fitting, and it will happen again on every question until the model is reloaded.
+    An OpenAI-shaped server takes the context from however the model was loaded, not from
+    the request, so there is nothing AETHER1 can set to get round it. See `num_ctx` in
+    `ollama_payload` for the provider where there is. */
+    if lowered.contains("exceeds the available context size")
+        || (lowered.contains("context") && lowered.contains("exceed"))
+    {
+        /* Which program to go and change this in cannot be known from here -- the
+        endpoint is the only honest identification -- so both common spellings of the
+        same knob are named and the operator picks the one their server has. */
+        let where_to = if local {
+            " Load the model again with a bigger context -- 8192 or more. On a llama.cpp              server that is `--ctx-size 8192`; in LM Studio it is the context length on              the model's load settings; through Ollama's OpenAI-compatible endpoint it is              the model's `num_ctx`."
+        } else {
+            ""
+        };
+        return format!(
+            "the server{at} loaded this model with a context too small for a single \
+             question: the prompt alone did not fit, so the length of the conversation had \
+             nothing to do with it. That context is fixed when the model is loaded rather \
+             than per request, so AETHER1 cannot raise it from here.{where_to} The refusal \
+             as it arrived: {raw}"
+        );
+    }
     if lowered.contains("400") || lowered.contains("invalid_request") {
-        return format!("{provider} rejected the request itself: {raw}");
+        return format!("{named}{at} rejected the request itself: {raw}");
     }
     if lowered.contains("404") || lowered.contains("not found") {
         if provider == Provider::Gateway {
@@ -1401,6 +1439,9 @@ pub fn forget_local_facts() {
     if let Ok(mut cache) = LOCAL_FACTS.lock() {
         cache.clear();
     }
+    if let Ok(mut seen) = NO_NATIVE_TOOLS.lock() {
+        seen.clear();
+    }
 }
 
 /// The context length out of an `/api/show` body.
@@ -1694,6 +1735,47 @@ fn openai_request(
 /// Deliberately narrow. The field name has to be in the body, so a 400 about anything else
 /// is left alone and reaches the operator as itself -- a blanket "retry 400s without the
 /// extras" would hide a wrong model name behind a second identical failure.
+/// Servers that answered a request carrying `tools` by rejecting the field.
+///
+/// Keyed on endpoint and model, like `LOCAL_FACTS`, and cleared by the same
+/// `forget_local_facts` -- an operator who has changed something and reopened the hub is
+/// asking for everything cached about their server to be dropped, and this is that.
+static NO_NATIVE_TOOLS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Whether this server has already said it cannot take a `tools` field for this model.
+///
+/// The question `native_tools_for` asks about an OpenAI-shaped server that has no
+/// capability endpoint to probe. Unknown means yes: a server is asked rather than assumed
+/// about, and it gets to say no once.
+pub fn refused_tools(endpoint: &str, model: &str) -> bool {
+    NO_NATIVE_TOOLS
+        .lock()
+        .map(|seen| seen.contains(&(endpoint.to_string(), model.to_string())))
+        .unwrap_or(false)
+}
+
+fn remember_tool_refusal(endpoint: &str, model: &str) {
+    if let Ok(mut seen) = NO_NATIVE_TOOLS.lock() {
+        seen.insert((endpoint.to_string(), model.to_string()));
+    }
+}
+
+/// Whether a refusal is the provider objecting to `tools` specifically.
+///
+/// As narrow as `refused_the_effort_field`, and for the same reason: the field name has to
+/// be in the body, so a 400 about a wrong model name still reaches the operator as itself.
+fn refused_the_tools_field(error: &str) -> bool {
+    let lowered = error.to_lowercase();
+    lowered.contains("tools")
+        && (lowered.contains("400")
+            || lowered.contains("unrecognized")
+            || lowered.contains("unsupported")
+            || lowered.contains("not supported")
+            || lowered.contains("invalid"))
+}
+
 fn refused_the_effort_field(error: &str) -> bool {
     let lowered = error.to_lowercase();
     lowered.contains("reasoning_effort")
@@ -1720,6 +1802,7 @@ fn refused_the_effort_field(error: &str) -> bool {
 /// changed, is how a reasoning model ends up silently never asked.
 fn openai_send(
     provider: Provider,
+    endpoint: &str,
     url: &str,
     api_key: &str,
     timeout: std::time::Duration,
@@ -1731,6 +1814,16 @@ fn openai_send(
             if payload.reasoning_effort.is_some() && refused_the_effort_field(&refusal) =>
         {
             payload.reasoning_effort = None;
+            checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
+        }
+        /* The same bargain for `tools`, and the reason LM Studio is allowed to be asked at
+        all now. The refusal is remembered so it costs one request rather than one per
+        turn, and so `native_tools_for` can put the next turn on the text protocol -- a
+        prompt that says the tools are attached to the request, sent to a server that has
+        just refused to carry them, describes a mechanism the model has no way to use. */
+        Err(refusal) if payload.tools.is_some() && refused_the_tools_field(&refusal) => {
+            remember_tool_refusal(endpoint, &payload.model);
+            payload.tools = None;
             checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
         }
         other => other,
@@ -1746,11 +1839,17 @@ pub fn call_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, false);
 
-    let response: OpenAiResponse =
-        openai_send(provider, &url, api_key, CALL_TIMEOUT, &mut payload)?
-            .into_body()
-            .read_json()
-            .map_err(|e| e.to_string())?;
+    let response: OpenAiResponse = openai_send(
+        provider,
+        endpoint,
+        &url,
+        api_key,
+        CALL_TIMEOUT,
+        &mut payload,
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     let usage = response.usage.map(TokenUsage::from);
     let choice = response
@@ -1797,7 +1896,14 @@ pub fn stream_openai_compatible(
 ) -> Result<Completion, String> {
     let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response = openai_send(provider, &url, api_key, STREAM_TIMEOUT, &mut payload)?;
+    let response = openai_send(
+        provider,
+        endpoint,
+        &url,
+        api_key,
+        STREAM_TIMEOUT,
+        &mut payload,
+    )?;
 
     let mut usage = None;
     let mut builder = OpenAiCallBuilder::default();
@@ -3641,6 +3747,93 @@ mod failure_tests {
         assert!(!refused_the_effort_field("reasoning_effort: high"));
     }
 
+    /// Trident, 2026-10-26: "Honestly I don't think I have LM Studio installed" -- after
+    /// being told "lmstudio rejected the request itself". The `lmstudio` key drives every
+    /// OpenAI-compatible local server, and the scanner is careful to call them "Local
+    /// server on port 1234"; the product guess was being made at the last moment, in the
+    /// one place he reads.
+    #[test]
+    fn a_local_openai_server_is_not_called_a_product_it_might_not_be() {
+        let said = explain_failure(
+            Provider::LmStudio,
+            "http://localhost:1234/v1",
+            "http status: 400 -- something went wrong",
+        );
+        assert!(
+            !said.to_lowercase().contains("lm studio") && !said.contains("lmstudio"),
+            "it cannot know which program this is: {said}"
+        );
+        assert!(
+            said.contains("http://localhost:1234/v1"),
+            "the endpoint is the only thing that identifies it: {said}"
+        );
+    }
+
+    /// A context too small for the system prompt is not a long conversation, and the
+    /// operator cannot fix it from inside AETHER1 -- so the message has to say both.
+    #[test]
+    fn a_context_overflow_says_it_is_the_prompt_and_where_to_raise_it() {
+        let said = explain_failure(
+            Provider::LmStudio,
+            "http://localhost:1234/v1",
+            "http status: 400 -- request (5242 tokens) exceeds the available context size \
+             (4096 tokens), try increasing it",
+        );
+        assert!(said.contains("prompt alone did not fit"), "{said}");
+        assert!(said.contains("ctx-size"), "{said}");
+        assert!(
+            said.contains("5242"),
+            "the server's own words still come through: {said}"
+        );
+    }
+
+    /// LM Studio is asked rather than assumed about now, so the refusal has to be
+    /// recognised as narrowly as the effort field's -- a 400 naming a missing model must
+    /// still reach the operator as itself rather than being swallowed as "no tools here".
+    #[test]
+    fn a_server_rejecting_the_tools_field_is_recognised() {
+        assert!(refused_the_tools_field(
+            "http status: 400 -- unrecognized request argument supplied: tools"
+        ));
+        assert!(refused_the_tools_field(
+            "http status: 400 -- tools are not supported by this model"
+        ));
+        assert!(!refused_the_tools_field(
+            "http status: 404 -- model qwythos-9b does not exist"
+        ));
+        // The word in prose, with nothing refusing anything, is not a refusal.
+        assert!(!refused_the_tools_field("the model called two tools"));
+    }
+
+    /// Unknown has to mean yes, or this is the hardcoded "LM Studio cannot" all over
+    /// again. The memo only ever turns to no, and only when a server has said so.
+    #[test]
+    fn a_server_that_has_not_refused_is_still_asked() {
+        assert!(!refused_tools(
+            "http://localhost:1234/v1",
+            "never-seen-model"
+        ));
+        remember_tool_refusal("http://localhost:1234/v1", "a-model-that-said-no");
+        assert!(refused_tools(
+            "http://localhost:1234/v1",
+            "a-model-that-said-no"
+        ));
+        // One model's no is not another's, and not another endpoint's.
+        assert!(!refused_tools(
+            "http://localhost:1234/v1",
+            "a-different-model"
+        ));
+        assert!(!refused_tools(
+            "http://elsewhere:1234/v1",
+            "a-model-that-said-no"
+        ));
+        forget_local_facts();
+        assert!(
+            !refused_tools("http://localhost:1234/v1", "a-model-that-said-no"),
+            "reopening the hub asks the server again"
+        );
+    }
+
     #[test]
     fn both_spellings_of_the_openai_reasoning_field_are_read() {
         let under_score: OpenAiStreamDelta =
@@ -3781,12 +3974,15 @@ mod failure_tests {
         );
     }
 
-    /// Ollama carries tools now; LM Studio does not. See `Provider::supports_native_tools`
-    /// for why the two local providers are split.
+    /// Both local providers carry tools now. LM Studio was excluded on the guess that it
+    /// would be an old build and reject the field; the cost of that guess was that no
+    /// model behind it could call a tool however capable it was, and nothing said so. It
+    /// is asked, and `refused_tools` remembers a no -- the same bargain the effort field
+    /// is on. Offline stays off because there is no server to ask.
     #[test]
-    fn ollama_carries_tools_and_lm_studio_does_not() {
+    fn every_provider_with_a_server_to_ask_is_asked_about_tools() {
         assert!(Provider::Ollama.supports_native_tools());
-        assert!(!Provider::LmStudio.supports_native_tools());
+        assert!(Provider::LmStudio.supports_native_tools());
         assert!(!Provider::Offline.supports_native_tools());
         for provider in [
             Provider::OpenAi,
