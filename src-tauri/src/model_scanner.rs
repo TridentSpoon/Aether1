@@ -342,40 +342,22 @@ fn describe_local(port: u16, models: &[String]) -> String {
     }
 }
 
-/// Asks one port whether it is a model server, OpenAI-compatible shape first.
+/// Asks one port whether it is a model server, native shape first.
 ///
-/// The native API is tried second and only as a fallback, because a server that speaks
-/// both is then driven through the OpenAI-compatible path -- the one every other tool
-/// here also uses.
+/// The order matters and used to be the other way round, on the reasoning that a server
+/// speaking both shapes should be driven through the OpenAI-compatible one "every other
+/// tool here also uses". Ollama speaks both -- and it answers `/v1/models` -- so that
+/// order labelled *every* Ollama a generic OpenAI server on a `/v1` endpoint. Since
+/// native tool calling arrived, that label is not a cosmetic preference: it is what
+/// decides whether the `/api/show` capability probe runs at all, whether `tools` is sent,
+/// and whether `num_ctx` can be set. An Ollama driven through `/v1` is a capable model
+/// forced onto the fenced-text protocol, reading at Ollama's 4096 default.
+///
+/// So the native API is asked first. A server that answers it *is* the native kind;
+/// anything else falls through to the OpenAI-compatible shape, which is still the right
+/// answer for LM Studio, llama.cpp's server, vLLM and the rest.
 fn probe_local_port(port: u16) -> Option<LocalServer> {
     let base = format!("http://127.0.0.1:{port}");
-
-    let openai: Option<Vec<String>> = crate::net::get(
-        &format!("{base}/v1/models"),
-        "the local server was not probed",
-    )
-    .ok()
-    .and_then(|request| {
-        request
-            .config()
-            .timeout_global(Some(PROBE_TIMEOUT))
-            .build()
-            .call()
-            .ok()
-    })
-    .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
-    .map(|data| data.data.into_iter().map(|m| m.id).collect());
-
-    if let Some(models) = openai {
-        return Some(LocalServer {
-            endpoint: format!("{base}/v1"),
-            port,
-            api: LocalApi::OpenAi,
-            provider_key: LocalApi::OpenAi.provider_key(),
-            label: describe_local(port, &models),
-            models,
-        });
-    }
 
     let native: Option<Vec<String>> = crate::net::get(
         &format!("{base}/api/tags"),
@@ -393,11 +375,38 @@ fn probe_local_port(port: u16) -> Option<LocalServer> {
     .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
     .map(|data| data.models.into_iter().map(|m| m.name).collect());
 
-    native.map(|models| LocalServer {
-        endpoint: base,
+    if let Some(models) = native {
+        return Some(LocalServer {
+            endpoint: base,
+            port,
+            api: LocalApi::Native,
+            provider_key: LocalApi::Native.provider_key(),
+            label: describe_local(port, &models),
+            models,
+        });
+    }
+
+    let openai: Option<Vec<String>> = crate::net::get(
+        &format!("{base}/v1/models"),
+        "the local server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
+    .map(|data| data.data.into_iter().map(|m| m.id).collect());
+
+    openai.map(|models| LocalServer {
+        endpoint: format!("{base}/v1"),
         port,
-        api: LocalApi::Native,
-        provider_key: LocalApi::Native.provider_key(),
+        api: LocalApi::OpenAi,
+        provider_key: LocalApi::OpenAi.provider_key(),
         label: describe_local(port, &models),
         models,
     })
@@ -416,8 +425,12 @@ fn probe_local_port(port: u16) -> Option<LocalServer> {
 pub fn models_at(endpoint: &str) -> Option<Vec<String>> {
     let base = endpoint.trim_end_matches('/');
     // An endpoint ending in /v1 is the OpenAI-compatible shape and already carries the
-    // prefix; anything else gets both shapes tried, same order and same reason as
-    // probe_local_port -- a server that speaks both is driven through the common one.
+    // prefix; anything else gets both shapes tried. The OpenAI shape goes first here, the
+    // opposite of probe_local_port, and deliberately: that function is choosing which
+    // provider will drive a server and must not mistake an Ollama for a generic one, while
+    // this one is only listing what an endpoint the operator already configured can run.
+    // Asking an explicitly-configured /v1 address in its own shape first is the right
+    // reading of that configuration, and either probe answering counts either way.
     let openai_url = if base.ends_with("/v1") {
         format!("{base}/models")
     } else {

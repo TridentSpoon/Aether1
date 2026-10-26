@@ -424,7 +424,7 @@ pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
             hud_responding: facts.hud_responding,
             managed_ollama: facts.managed_ollama,
             local_server_asleep: facts.local_server_asleep,
-            autostart_ollama: db.get_setting_bool("autostart_ollama", false),
+            autostart_ollama: db.get_setting_bool("autostart_ollama", true),
             hotkey_registered: facts.hotkey_registered,
         },
         tray: probe_tray(),

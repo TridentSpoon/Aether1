@@ -49,6 +49,7 @@ mod installs;
 mod lan;
 mod llm;
 mod local_only;
+mod local_server;
 mod model_scanner;
 mod net;
 mod paths;
@@ -3109,6 +3110,12 @@ fn build_llm_engine() -> LlmEngine {
     // Before anything reads the provider: a mislabelled Ollama is the difference between a
     // companion that can search and one that cannot. See the function for why.
     llm::adopt_ollama_behind_openai_label(engine.db());
+    // Then the broader version of the same idea: look at what is actually listening on
+    // this machine and configure AETHER1 to use it, rather than leaving the operator to
+    // assemble a provider, an address and a model by hand. Runs after the relabel above so
+    // that a server already correctly configured is not re-examined.
+    local_server::apply_autostart_default(engine.db());
+    local_server::adopt_local_server(engine.db());
     engine
 }
 
@@ -3472,7 +3479,7 @@ fn main() {
                     eprintln!("[AETHER1] Could not sync launch-at-login: {e}");
                 }
 
-                let autostart_ollama = engine.db().get_setting_bool("autostart_ollama", false);
+                let autostart_ollama = engine.db().get_setting_bool("autostart_ollama", true);
                 let game_mode = engine.db().get_setting_bool("game_mode", false);
                 if autostart_ollama && !game_mode {
                     let managed = app.state::<background_services::ManagedOllama>();
