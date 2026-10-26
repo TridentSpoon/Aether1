@@ -831,6 +831,124 @@ enum UpdateStage {
     Relaunch,
 }
 
+/// How many steps an update is made of, so the HUD can say "step 2 of 5" instead of
+/// showing a bar that moves when it feels like it.
+const UPDATE_STEPS: u8 = 5;
+
+/// Says where an update has got to, on the `update-progress` event.
+///
+/// `label` is the step in a sentence; `detail` is the line git or cargo last printed,
+/// which is the part that was missing when the whole of a two-minute rebuild was one bar
+/// and the words "Applying update". Both are sent every time, so a listener that only has
+/// room for one line can pick, and the panel can show both.
+fn emit_update_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    step: u8,
+    label: &str,
+    detail: &str,
+    percent: u8,
+) {
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({
+            "step": step,
+            "steps": UPDATE_STEPS,
+            "label": label,
+            "detail": detail,
+            "percent": percent,
+        }),
+    );
+    if detail.is_empty() {
+        println!("[AETHER1] Update ({step}/{UPDATE_STEPS}) {label}");
+    } else {
+        println!("[AETHER1] Update ({step}/{UPDATE_STEPS}) {label} -- {detail}");
+    }
+}
+
+/// Runs the rebuild with its output read rather than inherited, so the HUD can show which
+/// crate cargo is on right now, and so a failure arrives as the compiler's own last words
+/// rather than as "rebuild did not succeed" -- which was the whole of what an operator got
+/// out of the longest and most failure-prone step of an update.
+///
+/// stdout and stderr are read on threads of their own: cargo writes its progress to stderr
+/// and a pipe that nobody drains fills up and stalls the build it is watching.
+fn run_build_with_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    mut command: Command,
+) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc;
+
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("could not start the rebuild: {e}"))?;
+
+    let (tx, rx) = mpsc::channel::<String>();
+    let mut readers = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        let tx = tx.clone();
+        readers.push(std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        }));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let tx = tx.clone();
+        readers.push(std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        }));
+    }
+    drop(tx);
+
+    // The last dozen lines, kept for the failure message: cargo puts the error itself
+    // several lines above the end, so one line is never enough, and the whole log is far
+    // more than a panel can hold.
+    let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut compiled: u32 = 0;
+    for line in rx {
+        let trimmed = line.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if tail.len() == 12 {
+            tail.pop_front();
+        }
+        tail.push_back(trimmed.clone());
+        if trimmed.starts_with("Compiling") || trimmed.starts_with("Building") {
+            compiled += 1;
+        }
+        // 45% to 88%, estimated from crates compiled so far against a typical full
+        // rebuild. A rebuild's real total is not known until it is over, so this is an
+        // estimate that keeps moving rather than a percentage pretending to be exact.
+        let percent = 45 + (compiled.min(300) * 43 / 300) as u8;
+        emit_update_progress(app, 4, "Rebuilding Aether1", &trimmed, percent);
+    }
+    for reader in readers {
+        let _ = reader.join();
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("the rebuild could not be waited on: {e}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    let detail = tail.iter().cloned().collect::<Vec<_>>().join("\n");
+    Err(if detail.is_empty() {
+        match status.code() {
+            Some(code) => format!("the rebuild failed (it exited {code}, and said nothing)"),
+            None => "the rebuild was killed before it finished".to_string(),
+        }
+    } else {
+        format!("the rebuild failed, and this is what it last printed:\n{detail}")
+    })
+}
+
 /// Runs a git subcommand in `root` with its output captured, so a failure can be reported
 /// with git's own words instead of a bare exit code.
 ///
@@ -937,6 +1055,14 @@ fn perform_update_core<R: tauri::Runtime>(
     // of the network (the first three) never reach the network at all.
     let git = |args: &[&str]| run_git(&root, args).map_err(|e| (UpdateStage::Pull, e));
 
+    emit_update_progress(
+        app,
+        1,
+        "Checking the checkout",
+        &root.display().to_string(),
+        5,
+    );
+
     let inside = git(&["rev-parse", "--is-inside-work-tree"])?;
     if !inside.status.success() {
         return Err((
@@ -1003,13 +1129,39 @@ fn perform_update_core<R: tauri::Runtime>(
     }
     let upstream = String::from_utf8_lossy(&upstream.stdout).trim().to_string();
 
-    println!("[AETHER1] Update: fetching {upstream}...");
+    let before = git(&["rev-parse", "--short", "HEAD"])?;
+    let before = String::from_utf8_lossy(&before.stdout).trim().to_string();
+
+    emit_update_progress(
+        app,
+        2,
+        &format!("Fetching from {upstream}"),
+        &format!("at {before}"),
+        15,
+    );
     let fetched = git(&["fetch", "--quiet"])?;
     if !fetched.status.success() {
         return Err((UpdateStage::Pull, git_failure("git fetch", &fetched)));
     }
 
-    println!("[AETHER1] Update: fast-forwarding to {upstream}...");
+    // How far behind, said in commits. It is the one number that tells an operator
+    // whether they are about to wait on a one-line change or on a month of them.
+    let behind = git(&["rev-list", "--count", &format!("HEAD..{upstream}")])?;
+    let behind = String::from_utf8_lossy(&behind.stdout).trim().to_string();
+    let behind_note = match behind.as_str() {
+        "" => String::new(),
+        "0" => "already level with the remote".to_string(),
+        "1" => "1 commit to apply".to_string(),
+        n => format!("{n} commits to apply"),
+    };
+
+    emit_update_progress(
+        app,
+        3,
+        &format!("Fast-forwarding to {upstream}"),
+        &behind_note,
+        30,
+    );
     let merged = git(&["merge", "--ff-only", &upstream])?;
     if !merged.status.success() {
         return Err((
@@ -1017,6 +1169,20 @@ fn perform_update_core<R: tauri::Runtime>(
             git_failure("git merge --ff-only", &merged),
         ));
     }
+
+    let after = git(&["log", "-1", "--format=%h %s"])?;
+    let after = String::from_utf8_lossy(&after.stdout).trim().to_string();
+    emit_update_progress(
+        app,
+        3,
+        &format!("Fast-forwarded to {upstream}"),
+        &if after.is_empty() {
+            format!("was {before}")
+        } else {
+            format!("{before} -> {after}")
+        },
+        40,
+    );
 
     let new_binary = if cfg!(target_os = "windows") {
         let release_dir = root.join("src-tauri").join("target").join("release");
@@ -1040,31 +1206,31 @@ fn perform_update_core<R: tauri::Runtime>(
             }
         }
 
-        println!("[AETHER1] Update: rebuilding via `cargo build --release`...");
-        let build_ok = Command::new("cargo")
-            .args(["build", "--release"])
-            .current_dir(root.join("src-tauri"))
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if !build_ok {
-            return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
-        }
+        emit_update_progress(
+            app,
+            4,
+            "Rebuilding Aether1",
+            "cargo build --release (this is the long step)",
+            45,
+        );
+        let mut build = Command::new("cargo");
+        build.args(["build", "--release"]);
+        build.current_dir(root.join("src-tauri"));
+        run_build_with_progress(app, build).map_err(|e| (UpdateStage::Build, e))?;
 
         target_exe
     } else {
-        println!("[AETHER1] Update: rebuilding via scripts/install_desktop_app.sh...");
-        let build_ok = Command::new("bash")
-            .arg(root.join("scripts").join("install_desktop_app.sh"))
-            .current_dir(&root)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if !build_ok {
-            return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
-        }
+        emit_update_progress(
+            app,
+            4,
+            "Rebuilding and installing Aether1",
+            "scripts/install_desktop_app.sh (this is the long step)",
+            45,
+        );
+        let mut build = Command::new("bash");
+        build.arg(root.join("scripts").join("install_desktop_app.sh"));
+        build.current_dir(&root);
+        run_build_with_progress(app, build).map_err(|e| (UpdateStage::Build, e))?;
 
         // Relaunch the installed copy at ~/.local/bin/aether1 (see
         // scripts/install_desktop_app.sh), not the raw build artifact under
@@ -1086,7 +1252,13 @@ fn perform_update_core<R: tauri::Runtime>(
             })
     };
 
-    println!("[AETHER1] Update: relaunching {}...", new_binary.display());
+    emit_update_progress(
+        app,
+        5,
+        "Restarting Aether1",
+        &new_binary.display().to_string(),
+        95,
+    );
     match Command::new(&new_binary).current_dir(&root).spawn() {
         Ok(_child) => {
             note_expected_exit(app);
@@ -1181,7 +1353,17 @@ fn perform_update<R: tauri::Runtime>(
 /// so the frontend only ever observes this call either hang (app about to exit) or reject.
 #[tauri::command(async)]
 fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
-    perform_update_core(&app).map_err(|(_, msg)| msg)
+    perform_update_core(&app).map_err(|(stage, msg)| {
+        // Which step it died on, in front of the message. An operator reading "fatal:
+        // couldn't find remote ref" has no way of telling the fetch from the rebuild
+        // otherwise, and the two have nothing in common to try next.
+        let where_it_failed = match stage {
+            UpdateStage::Pull => "Pulling the latest changes failed",
+            UpdateStage::Build => "Rebuilding failed",
+            UpdateStage::Relaunch => "Restarting the new build failed",
+        };
+        format!("{where_it_failed}: {msg}")
+    })
 }
 
 /// Is anything AETHER1 draws actually on a screen right now?

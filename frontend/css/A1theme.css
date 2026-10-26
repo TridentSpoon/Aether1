@@ -2183,6 +2183,27 @@ select,
     display: inline-flex;
 }
 
+/* The same control in the chat input row, sized for the row it is in: a touch larger
+   than the chin bar's, and narrow enough that it never takes width from the box you
+   type in -- a long cloud model id is cut with an ellipsis and read from the title. */
+#chat-brain-row:not(.hidden) {
+    display: inline-flex;
+}
+
+.chat-brain-select {
+    max-width: 9rem;
+    padding: 0.3rem 0.4rem;
+    font-size: 11px;
+}
+
+@media (max-width: 720px) {
+    /* The box and Send come first when there is no room for all of it; the chin bar's
+       copy is still there. */
+    #chat-brain-row:not(.hidden) {
+        display: none;
+    }
+}
+
 .chin-cmd:hover {
     background: rgba(0, 240, 255, 0.16);
     border-color: var(--neon-cyan);

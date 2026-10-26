@@ -324,6 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const headerUpdateProgress = document.getElementById('header-update-progress');
     const headerUpdateProgressBar = document.getElementById('header-update-progress-bar');
     const headerUpdateProgressText = document.getElementById('header-update-progress-text');
+    const headerUpdateProgressDetail = document.getElementById('header-update-progress-detail');
     const updateSection = document.getElementById('update-section');
     const settingsVersionLabel = document.getElementById('settings-version-label');
     const updateStatusBox = document.getElementById('update-status-box');
@@ -9382,41 +9383,39 @@ document.addEventListener('DOMContentLoaded', () => {
        than no entry, which is what `llm_api_key_<provider>` is for. */
     const brainState = { current: null, loading: false };
 
-    async function refreshBrainPicker() {
-        const row = document.getElementById('chin-brain-row');
-        const select = document.getElementById('chin-brain');
-        if (!row || !select || brainState.loading) return;
-        brainState.loading = true;
-        let data;
-        try {
-            data = IS_TAURI
-                ? await tauriInvoke('brains_rust')
-                : await (await apiFetch('/api/models/brains')).json();
-        } catch (error) {
-            // Nothing to switch between that can be established, so nothing is drawn. A
-            // control that cannot say what is answering is worse than the bar it is in.
-            row.classList.add('hidden');
-            brainState.loading = false;
-            return;
-        }
-        brainState.loading = false;
+    /* Chosen instead of a model: open Settings at The Brain. The picker is also the
+       answer to "where do I set this up?", so the way out of an empty list is in the
+       list. \u0000 cannot occur in a provider key, so it cannot collide with a real one. */
+    const BRAIN_SETUP = '\u0000setup';
 
-        const local = (data.local && data.local.models) || [];
-        const online = (data.online || []).filter(entry => entry.ready);
-        if (!local.length && !online.length) {
-            row.classList.add('hidden');
-            return;
-        }
+    /* Two controls, one list. The chin bar one says what is answering at a glance, beside
+       STATE; this one is in the row where the question is typed, which is where somebody
+       about to ask it is looking. Both are filled from the same reply and both write
+       through the same save, so they cannot disagree. */
+    function brainControls() {
+        return ['chin-brain', 'chat-brain']
+            .map(id => document.getElementById(id))
+            .filter(Boolean)
+            .map(select => ({ select, row: select.parentElement }));
+    }
 
-        const value = (provider, model) => `${provider}\u001f${model || ''}`;
+    const brainValue = (provider, model) => `${provider}\u001f${model || ''}`;
+
+    /* Draws one of the two selects. Never leaves it empty and never takes it away: a
+       control that vanishes when the model server is down is indistinguishable from one
+       that was removed, which is exactly the report this started from. With nothing to
+       list it still says what is configured, and still offers the way to Settings. */
+    function fillBrainSelect(select, data) {
         select.innerHTML = '';
+        const local = (data && data.local && data.local.models) || [];
+        const online = ((data && data.online) || []).filter(entry => entry.ready);
 
         if (local.length) {
             const group = document.createElement('optgroup');
             group.label = 'On this computer';
             for (const entry of local) {
                 const option = document.createElement('option');
-                option.value = value(data.local.provider, entry.model);
+                option.value = brainValue(data.local.provider, entry.model);
                 // The one fact about a local model that decides whether the companion can
                 // look anything up, and the one the name never tells you. Absent when the
                 // server did not say, rather than guessed at.
@@ -9433,7 +9432,7 @@ document.addEventListener('DOMContentLoaded', () => {
             group.label = data.local_only ? 'Online (blocked by local-only mode)' : 'Online';
             for (const entry of online) {
                 const option = document.createElement('option');
-                option.value = value(entry.provider, entry.model);
+                option.value = brainValue(entry.provider, entry.model);
                 option.textContent = entry.model ? `${entry.label} — ${entry.model}` : entry.label;
                 // Local-only mode refuses these before the request is built, so they are
                 // shown and not selectable rather than hidden: somebody who has configured
@@ -9444,50 +9443,105 @@ document.addEventListener('DOMContentLoaded', () => {
             select.appendChild(group);
         }
 
-        const current = value(data.current.provider, data.current.model);
-        select.value = current;
-        if (select.value !== current) {
-            // What is configured is not on the list -- a cloud provider with its key in
-            // the environment, or a model that is no longer installed. Said, rather than
-            // silently showing the first option as though it were the choice.
-            const option = document.createElement('option');
-            option.value = current;
-            option.textContent = `${data.current.provider} — ${data.current.model || 'no model set'}`;
-            select.appendChild(option);
+        const current = data ? brainValue(data.current.provider, data.current.model) : '';
+        if (current) {
             select.value = current;
+            if (select.value !== current) {
+                // What is configured is not on the list -- a cloud provider with its key in
+                // the environment, a model that is no longer installed, or no model chosen
+                // at all. Said, rather than silently showing the first option as though it
+                // were the choice.
+                const option = document.createElement('option');
+                option.value = current;
+                option.textContent = `${data.current.provider} — ${data.current.model || 'no model set'}`;
+                select.appendChild(option);
+                select.value = current;
+            }
+        } else {
+            // The reply itself did not arrive. Which model is answering is then genuinely
+            // unknown, and saying so is better than showing a stale name.
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Model — could not ask';
+            select.appendChild(option);
+            select.value = '';
         }
-        brainState.current = current;
+
+        const setup = document.createElement('option');
+        setup.value = BRAIN_SETUP;
+        setup.textContent = local.length || online.length
+            ? 'Set up another…'
+            : 'Set up a model…';
+        select.appendChild(setup);
+
         select.title = 'Where this question gets answered. Changing it takes effect on the '
             + 'next message.';
-        row.classList.remove('hidden');
+    }
+
+    async function refreshBrainPicker() {
+        const controls = brainControls();
+        if (!controls.length || brainState.loading) return;
+        brainState.loading = true;
+        let data = null;
+        try {
+            data = IS_TAURI
+                ? await tauriInvoke('brains_rust')
+                : await (await apiFetch('/api/models/brains')).json();
+        } catch (error) {
+            data = null;
+        }
+        brainState.loading = false;
+
+        brainState.current = data ? brainValue(data.current.provider, data.current.model) : '';
+        for (const { select, row } of controls) {
+            fillBrainSelect(select, data);
+            row?.classList.remove('hidden');
+        }
     }
 
     function initBrainPicker() {
-        const select = document.getElementById('chin-brain');
-        if (!select) return;
-        select.addEventListener('change', async () => {
-            const [provider, model] = select.value.split('\u001f');
-            try {
-                // Through the same save path as Settings, so the one place that knows how
-                // to store a provider and its key stays the only place that does it.
-                const payload = { llm_provider: provider, llm_model: model };
-                if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
-                else {
-                    const response = await apiFetch('/api/settings', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                    });
-                    if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
+        const controls = brainControls();
+        if (!controls.length) return;
+        for (const { select } of controls) {
+            select.addEventListener('change', async () => {
+                if (select.value === BRAIN_SETUP) {
+                    // Not a model: put the control back to what is answering and take them
+                    // to the place that configures one.
+                    select.value = brainState.current;
+                    voiceEngine.playSFX('click');
+                    await loadSettings();
+                    settingsModal?.classList.remove('hidden');
+                    showSettingsSection('brain');
+                    return;
                 }
-                appendSystemNotice(`Answering with ${model || provider} from now on.`);
-            } catch (error) {
-                appendSystemNotice(`Could not switch: ${error.message || error}`);
-                select.value = brainState.current;
-                return;
-            }
-            refreshBrainPicker();
-        });
+                const [provider, model] = select.value.split('\u001f');
+                try {
+                    // Through the same save path as Settings, so the one place that knows how
+                    // to store a provider and its key stays the only place that does it. The
+                    // engine reads the provider out of settings for every request
+                    // (llm::load_config), so this is in force from the next message -- there
+                    // is nothing further to press.
+                    const payload = { llm_provider: provider, llm_model: model };
+                    if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
+                    else {
+                        const response = await apiFetch('/api/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
+                    }
+                    appendSystemNotice(`Answering with ${model || provider} from now on.`);
+                } catch (error) {
+                    appendSystemNotice(`Could not switch: ${error.message || error}`);
+                    select.value = brainState.current;
+                    return;
+                }
+                // Both of them, so the other control is not left naming the model that was
+                // answering a moment ago.
+                refreshBrainPicker();
+            });
+        }
         refreshBrainPicker();
     }
 
@@ -10220,12 +10274,31 @@ document.addEventListener('DOMContentLoaded', () => {
             : action === 'download' ? 'Download the signed Aether1 update' : 'Apply the available Aether1 update';
     }
 
-    function updateHeaderProgress(label, percent = null, indeterminate = false) {
+    /* The header has room for about thirty characters, which is how "Applying update ·
+       Aether1 will restart" came to be shown as "Applying update · Aether1 will r...".
+       The strip keeps its one short line, and everything that does not fit goes two
+       places that can hold it: the tooltip, in full, and Settings -> Updates, which the
+       strip is a button to. `detail` is the second line -- the step's own particulars,
+       which during a rebuild is the line cargo last printed. */
+    function updateHeaderProgress(label, percent = null, indeterminate = false, detail = '') {
         if (!headerUpdateProgress || !headerUpdateProgressText || !headerUpdateProgressBar) return;
         headerUpdateProgress.classList.remove('hidden');
         headerUpdateProgressText.textContent = label;
+        if (headerUpdateProgressDetail) {
+            headerUpdateProgressDetail.textContent = detail;
+            headerUpdateProgressDetail.classList.toggle('hidden', !detail);
+        }
+        headerUpdateProgress.title = [label, detail].filter(Boolean).join(' — ')
+            + '\n\nOpen Settings → Updates for the whole message.';
         headerUpdateProgressBar.classList.toggle('animate-pulse', indeterminate);
         headerUpdateProgressBar.style.width = indeterminate ? '35%' : `${Math.max(0, Math.min(100, percent || 0))}%`;
+    }
+
+    // mm:ss, for "how long has this been going?" -- the question a bar with no number
+    // against it cannot answer.
+    function elapsedSince(startedAt) {
+        const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     }
 
     /* Returns the status it drew, or null if the check could not be made at all -- the
@@ -10490,14 +10563,18 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         render('Starting the download...');
 
+        const startedAt = Date.now();
         let unlisten = null;
         try {
             if (window.__TAURI__?.event?.listen) {
                 unlisten = await window.__TAURI__.event.listen('update-download-progress', (event) => {
                     const { done = 0, total = 0 } = event.payload || {};
                     const pct = total ? Math.floor((done / total) * 100) : 0;
-                    render(`Downloading -- ${pct}% of ${(total / 1e9).toFixed(1)} GB`);
-                    updateHeaderProgress(`Downloading update · ${pct}%`, pct, false);
+                    // Megabytes and minutes as well as a percentage: on a slow line the
+                    // percentage can sit still for a while, and the other two do not.
+                    const sizes = `${(done / 1e6).toFixed(0)} MB of ${(total / 1e6).toFixed(0)} MB`;
+                    render(`Downloading -- ${pct}%, ${sizes}, ${elapsedSince(startedAt)} elapsed`);
+                    updateHeaderProgress(`Downloading update · ${pct}%`, pct, false, sizes);
                 });
             }
             updateHeaderProgress('Starting update download…', 0, true);
@@ -10528,37 +10605,138 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* Draws the update panel while an update is running: which step, how long it has
+       been going, and the last few lines the tools themselves printed.
+
+       Everything here is built as text nodes rather than interpolated into innerHTML --
+       these strings are git's and cargo's output, full of branch names, paths, remote
+       URLs and source snippets, and none of that belongs in HTML. */
+    function renderApplyProgress(box, state) {
+        if (!box) return;
+        const rows = [];
+
+        const heading = document.createElement('div');
+        heading.className = 'text-cyan-300';
+        const step = state.step ? `Step ${state.step} of ${state.steps || 5} · ` : '';
+        heading.textContent = `Updating Aether1 — ${step}${elapsedSince(state.startedAt)} elapsed`;
+        rows.push(heading);
+
+        const label = document.createElement('div');
+        label.className = 'text-cyan-200 whitespace-pre-wrap break-words';
+        label.textContent = state.label;
+        rows.push(label);
+
+        if (state.detail) {
+            const detail = document.createElement('div');
+            detail.className = 'text-[11px] text-slate-400 whitespace-pre-wrap break-words';
+            detail.textContent = state.detail;
+            rows.push(detail);
+        }
+
+        const from = document.createElement('div');
+        from.className = 'text-[11px] text-slate-500';
+        from.textContent = state.version
+            ? `Running ${state.version}; it will restart on the new build when this finishes.`
+            : 'Aether1 will restart on the new build when this finishes.';
+        rows.push(from);
+
+        if (state.log.length) {
+            const log = document.createElement('pre');
+            log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-24 overflow-auto whitespace-pre-wrap break-words select-all';
+            log.textContent = state.log.join('\n');
+            rows.push(log);
+        }
+
+        box.replaceChildren(...rows);
+    }
+
     async function handleApplyUpdate() {
         if (!confirm('Pull the latest changes, rebuild, and relaunch Aether1? The app will restart.')) return;
         voiceEngine.playSFX('click');
-        updateHeaderProgress('Applying update · Aether1 will restart', 35, true);
-        if (updateStatusBox) {
-            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Updating -- pulling latest changes and rebuilding. This can take over a minute; the app will restart automatically when it\'s done.</div>';
-        }
+
+        // The state the two views share. Both are redrawn on every event and once a
+        // second, so the elapsed time keeps moving through the rebuild -- the stretch
+        // where nothing else changes for a minute at a time, and where a frozen panel
+        // and a hung one look exactly alike.
+        const state = {
+            startedAt: Date.now(),
+            step: 0,
+            steps: 5,
+            label: 'Starting the update…',
+            detail: '',
+            percent: 0,
+            log: [],
+            version: versionBadge ? versionBadge.textContent.trim() : '',
+        };
+
+        const draw = () => {
+            const short = state.step
+                ? `${state.label} · ${state.step}/${state.steps} · ${elapsedSince(state.startedAt)}`
+                : `${state.label} · ${elapsedSince(state.startedAt)}`;
+            updateHeaderProgress(short, state.percent, state.step === 0, state.detail);
+            renderApplyProgress(updateStatusBox, state);
+        };
+        draw();
+
         if (btnApplyUpdate) btnApplyUpdate.disabled = true;
         if (btnCheckUpdate) btnCheckUpdate.disabled = true;
 
+        const ticker = setInterval(draw, 1000);
+        let unlisten = null;
         try {
+            if (window.__TAURI__?.event?.listen) {
+                unlisten = await window.__TAURI__.event.listen('update-progress', (event) => {
+                    const payload = event.payload || {};
+                    state.step = payload.step || state.step;
+                    state.steps = payload.steps || state.steps;
+                    state.label = payload.label || state.label;
+                    state.detail = payload.detail || '';
+                    state.percent = typeof payload.percent === 'number' ? payload.percent : state.percent;
+                    // The tail, not the whole build log: enough to see it moving and to
+                    // read the lines around a failure, without the panel becoming a
+                    // terminal.
+                    if (payload.detail) {
+                        state.log.push(payload.detail);
+                        if (state.log.length > 40) state.log.splice(0, state.log.length - 40);
+                    }
+                    draw();
+                });
+            }
+
             // On success the app exits and relaunches before this ever resolves --
             // reaching the catch block means it genuinely failed.
             await tauriInvoke('apply_update_rust');
         } catch (e) {
+            // The message is git's or cargo's own now, with the step it died on in front
+            // of it (see apply_update_rust), and this panel is the only place an operator
+            // will ever read it: a windowed build has no terminal to be pointed at, which
+            // is what the old "see the terminal" line amounted to on Windows. Shown
+            // whole, wrapped, and selectable. Built as nodes rather than interpolated:
+            // this string contains branch names, paths and remote URLs, and none of that
+            // belongs in innerHTML.
+            const detail = String(e && e.message ? e.message : e);
+            updateHeaderProgress(`Update failed after ${elapsedSince(state.startedAt)}`, 0, false, detail.split('\n')[0]);
             if (updateStatusBox) {
-                // The message is git's own now (see perform_update_core), and it is the
-                // only place an operator will ever read it: a windowed build has no
-                // terminal to be pointed at, which is what the old "see the terminal"
-                // line amounted to on Windows. Shown whole, wrapped, and selectable.
-                // Built as a node rather than interpolated: this string is git's stderr,
-                // which contains branch names, paths and remote URLs, and none of that
-                // belongs in innerHTML.
-                const detail = String(e && e.message ? e.message : e);
                 const line = document.createElement('div');
                 line.className = 'text-red-400 whitespace-pre-wrap break-words select-all';
-                line.textContent = `⚠ Update failed: ${detail}`;
-                updateStatusBox.replaceChildren(line);
+                line.textContent = `⚠ ${detail}`;
+                const note = document.createElement('div');
+                note.className = 'text-[11px] text-slate-500';
+                note.textContent = `It ran for ${elapsedSince(state.startedAt)} and stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. Nothing was installed; the copy you are running is untouched.`;
+                const rows = [line, note];
+                if (state.log.length) {
+                    const log = document.createElement('pre');
+                    log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words select-all';
+                    log.textContent = state.log.slice(-20).join('\n');
+                    rows.push(log);
+                }
+                updateStatusBox.replaceChildren(...rows);
             }
             if (btnApplyUpdate) btnApplyUpdate.disabled = false;
             if (btnCheckUpdate) btnCheckUpdate.disabled = false;
+        } finally {
+            clearInterval(ticker);
+            if (unlisten) unlisten();
         }
     }
 
@@ -11742,6 +11920,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // operator sees that there is still no folder: naming one here has to make
             // that line go away without reopening the panel.
             refreshCodeWorkspaceNote();
+            // And the two brain pickers. A provider chosen here, a key pasted here or an
+            // endpoint corrected here all change what they should be offering, and the
+            // one in the chat row is in view the moment this panel closes.
+            refreshBrainPicker();
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
@@ -12942,6 +13124,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (versionBadge) {
         versionBadge.addEventListener('click', () => handleCheckForUpdate());
     }
+    // The strip truncates; this is where the untruncated version lives.
+    headerUpdateProgress?.addEventListener('click', () => {
+        settingsModal?.classList.remove('hidden');
+        showSettingsSection('app');
+        document.getElementById('update-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
     headerUpdateButton?.addEventListener('click', () => {
         if (headerUpdateButton.dataset.action === 'download') handleDownloadUpdate();
         else if (headerUpdateButton.dataset.action === 'apply') handleApplyUpdate();
