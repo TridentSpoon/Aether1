@@ -9382,41 +9382,39 @@ document.addEventListener('DOMContentLoaded', () => {
        than no entry, which is what `llm_api_key_<provider>` is for. */
     const brainState = { current: null, loading: false };
 
-    async function refreshBrainPicker() {
-        const row = document.getElementById('chin-brain-row');
-        const select = document.getElementById('chin-brain');
-        if (!row || !select || brainState.loading) return;
-        brainState.loading = true;
-        let data;
-        try {
-            data = IS_TAURI
-                ? await tauriInvoke('brains_rust')
-                : await (await apiFetch('/api/models/brains')).json();
-        } catch (error) {
-            // Nothing to switch between that can be established, so nothing is drawn. A
-            // control that cannot say what is answering is worse than the bar it is in.
-            row.classList.add('hidden');
-            brainState.loading = false;
-            return;
-        }
-        brainState.loading = false;
+    /* Chosen instead of a model: open Settings at The Brain. The picker is also the
+       answer to "where do I set this up?", so the way out of an empty list is in the
+       list. \u0000 cannot occur in a provider key, so it cannot collide with a real one. */
+    const BRAIN_SETUP = '\u0000setup';
 
-        const local = (data.local && data.local.models) || [];
-        const online = (data.online || []).filter(entry => entry.ready);
-        if (!local.length && !online.length) {
-            row.classList.add('hidden');
-            return;
-        }
+    /* Two controls, one list. The chin bar one says what is answering at a glance, beside
+       STATE; this one is in the row where the question is typed, which is where somebody
+       about to ask it is looking. Both are filled from the same reply and both write
+       through the same save, so they cannot disagree. */
+    function brainControls() {
+        return ['chin-brain', 'chat-brain']
+            .map(id => document.getElementById(id))
+            .filter(Boolean)
+            .map(select => ({ select, row: select.parentElement }));
+    }
 
-        const value = (provider, model) => `${provider}\u001f${model || ''}`;
+    const brainValue = (provider, model) => `${provider}\u001f${model || ''}`;
+
+    /* Draws one of the two selects. Never leaves it empty and never takes it away: a
+       control that vanishes when the model server is down is indistinguishable from one
+       that was removed, which is exactly the report this started from. With nothing to
+       list it still says what is configured, and still offers the way to Settings. */
+    function fillBrainSelect(select, data) {
         select.innerHTML = '';
+        const local = (data && data.local && data.local.models) || [];
+        const online = ((data && data.online) || []).filter(entry => entry.ready);
 
         if (local.length) {
             const group = document.createElement('optgroup');
             group.label = 'On this computer';
             for (const entry of local) {
                 const option = document.createElement('option');
-                option.value = value(data.local.provider, entry.model);
+                option.value = brainValue(data.local.provider, entry.model);
                 // The one fact about a local model that decides whether the companion can
                 // look anything up, and the one the name never tells you. Absent when the
                 // server did not say, rather than guessed at.
@@ -9433,7 +9431,7 @@ document.addEventListener('DOMContentLoaded', () => {
             group.label = data.local_only ? 'Online (blocked by local-only mode)' : 'Online';
             for (const entry of online) {
                 const option = document.createElement('option');
-                option.value = value(entry.provider, entry.model);
+                option.value = brainValue(entry.provider, entry.model);
                 option.textContent = entry.model ? `${entry.label} — ${entry.model}` : entry.label;
                 // Local-only mode refuses these before the request is built, so they are
                 // shown and not selectable rather than hidden: somebody who has configured
@@ -9444,50 +9442,105 @@ document.addEventListener('DOMContentLoaded', () => {
             select.appendChild(group);
         }
 
-        const current = value(data.current.provider, data.current.model);
-        select.value = current;
-        if (select.value !== current) {
-            // What is configured is not on the list -- a cloud provider with its key in
-            // the environment, or a model that is no longer installed. Said, rather than
-            // silently showing the first option as though it were the choice.
-            const option = document.createElement('option');
-            option.value = current;
-            option.textContent = `${data.current.provider} — ${data.current.model || 'no model set'}`;
-            select.appendChild(option);
+        const current = data ? brainValue(data.current.provider, data.current.model) : '';
+        if (current) {
             select.value = current;
+            if (select.value !== current) {
+                // What is configured is not on the list -- a cloud provider with its key in
+                // the environment, a model that is no longer installed, or no model chosen
+                // at all. Said, rather than silently showing the first option as though it
+                // were the choice.
+                const option = document.createElement('option');
+                option.value = current;
+                option.textContent = `${data.current.provider} — ${data.current.model || 'no model set'}`;
+                select.appendChild(option);
+                select.value = current;
+            }
+        } else {
+            // The reply itself did not arrive. Which model is answering is then genuinely
+            // unknown, and saying so is better than showing a stale name.
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Model — could not ask';
+            select.appendChild(option);
+            select.value = '';
         }
-        brainState.current = current;
+
+        const setup = document.createElement('option');
+        setup.value = BRAIN_SETUP;
+        setup.textContent = local.length || online.length
+            ? 'Set up another…'
+            : 'Set up a model…';
+        select.appendChild(setup);
+
         select.title = 'Where this question gets answered. Changing it takes effect on the '
             + 'next message.';
-        row.classList.remove('hidden');
+    }
+
+    async function refreshBrainPicker() {
+        const controls = brainControls();
+        if (!controls.length || brainState.loading) return;
+        brainState.loading = true;
+        let data = null;
+        try {
+            data = IS_TAURI
+                ? await tauriInvoke('brains_rust')
+                : await (await apiFetch('/api/models/brains')).json();
+        } catch (error) {
+            data = null;
+        }
+        brainState.loading = false;
+
+        brainState.current = data ? brainValue(data.current.provider, data.current.model) : '';
+        for (const { select, row } of controls) {
+            fillBrainSelect(select, data);
+            row?.classList.remove('hidden');
+        }
     }
 
     function initBrainPicker() {
-        const select = document.getElementById('chin-brain');
-        if (!select) return;
-        select.addEventListener('change', async () => {
-            const [provider, model] = select.value.split('\u001f');
-            try {
-                // Through the same save path as Settings, so the one place that knows how
-                // to store a provider and its key stays the only place that does it.
-                const payload = { llm_provider: provider, llm_model: model };
-                if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
-                else {
-                    const response = await apiFetch('/api/settings', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                    });
-                    if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
+        const controls = brainControls();
+        if (!controls.length) return;
+        for (const { select } of controls) {
+            select.addEventListener('change', async () => {
+                if (select.value === BRAIN_SETUP) {
+                    // Not a model: put the control back to what is answering and take them
+                    // to the place that configures one.
+                    select.value = brainState.current;
+                    voiceEngine.playSFX('click');
+                    await loadSettings();
+                    settingsModal?.classList.remove('hidden');
+                    showSettingsSection('brain');
+                    return;
                 }
-                appendSystemNotice(`Answering with ${model || provider} from now on.`);
-            } catch (error) {
-                appendSystemNotice(`Could not switch: ${error.message || error}`);
-                select.value = brainState.current;
-                return;
-            }
-            refreshBrainPicker();
-        });
+                const [provider, model] = select.value.split('\u001f');
+                try {
+                    // Through the same save path as Settings, so the one place that knows how
+                    // to store a provider and its key stays the only place that does it. The
+                    // engine reads the provider out of settings for every request
+                    // (llm::load_config), so this is in force from the next message -- there
+                    // is nothing further to press.
+                    const payload = { llm_provider: provider, llm_model: model };
+                    if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
+                    else {
+                        const response = await apiFetch('/api/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
+                    }
+                    appendSystemNotice(`Answering with ${model || provider} from now on.`);
+                } catch (error) {
+                    appendSystemNotice(`Could not switch: ${error.message || error}`);
+                    select.value = brainState.current;
+                    return;
+                }
+                // Both of them, so the other control is not left naming the model that was
+                // answering a moment ago.
+                refreshBrainPicker();
+            });
+        }
         refreshBrainPicker();
     }
 
@@ -11742,6 +11795,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // operator sees that there is still no folder: naming one here has to make
             // that line go away without reopening the panel.
             refreshCodeWorkspaceNote();
+            // And the two brain pickers. A provider chosen here, a key pasted here or an
+            // endpoint corrected here all change what they should be offering, and the
+            // one in the chat row is in view the moment this panel closes.
+            refreshBrainPicker();
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
