@@ -377,13 +377,65 @@ pub fn key_setting_for(provider: Provider) -> String {
 /// naturally as providers are reconfigured.
 pub fn api_key_for(db: &MemoryDb, provider: Provider) -> String {
     if provider == Provider::Gateway {
-        return db.get_setting_string(GATEWAY_KEY_SETTING, "");
+        return crate::secrets::load(db, GATEWAY_KEY_SETTING);
     }
-    let own = db.get_setting_string(&key_setting_for(provider), "");
+    let own = crate::secrets::load(db, &key_setting_for(provider));
     if !own.trim().is_empty() {
         return own;
     }
-    db.get_setting_string("llm_api_key", "")
+    crate::secrets::load(db, SHARED_KEY_SETTING)
+}
+
+/// The slot every cloud key shared before `key_setting_for` split them up. Still read as
+/// a fallback, because an install that has not been reconfigured since has its key here
+/// and nothing should make somebody re-type a key to upgrade.
+pub const SHARED_KEY_SETTING: &str = "llm_api_key";
+
+/// The address a fresh install points at: Ollama on this machine, on its own port. The
+/// same string the settings form and `get_settings` default to, named here so the three
+/// cannot drift apart.
+pub const LOCAL_ENDPOINT_DEFAULT: &str = "http://localhost:11434";
+
+/// Where the address last used with one provider is remembered: `llm_endpoint_ollama`,
+/// `llm_endpoint_lmstudio`, and so on.
+///
+/// `llm_endpoint` is still the address in use -- that is what the engine reads, and this
+/// does not change it. This is the form's memory, and it exists for the same reason
+/// `key_setting_for` does: somebody running Ollama on this box and LM Studio on the one
+/// in the cupboard had one address box between them, so trying the other server meant
+/// typing an address in, and going back meant typing the first one in again.
+pub fn endpoint_setting_for(provider: Provider) -> String {
+    format!("llm_endpoint_{}", provider.key())
+}
+
+/// Where the model last used with one provider is remembered. Same reasoning as
+/// [`endpoint_setting_for`], and the sharper half of it in practice: a model id is
+/// provider-specific in a way an address is not, so a switch from `gpt-4o-mini` to
+/// Anthropic that carries the model name over produces a 404 about a model that was
+/// never Anthropic's.
+pub fn model_setting_for(provider: Provider) -> String {
+    format!("llm_model_{}", provider.key())
+}
+
+/// The address remembered for one provider, falling back to the one in use and then to
+/// the local default. Read by the settings form, not by the engine.
+pub fn remembered_endpoint(db: &MemoryDb, provider: Provider) -> String {
+    let own = db.get_setting_string(&endpoint_setting_for(provider), "");
+    if !own.trim().is_empty() {
+        return own;
+    }
+    db.get_setting_string("llm_endpoint", LOCAL_ENDPOINT_DEFAULT)
+}
+
+/// The model remembered for one provider, falling back to that provider's default. Empty
+/// for a provider with no sensible default -- a local server, whose models are whatever
+/// is installed, and a gateway, whose ids are whatever an administrator connected.
+pub fn remembered_model(db: &MemoryDb, provider: Provider) -> String {
+    let own = db.get_setting_string(&model_setting_for(provider), "");
+    if !own.trim().is_empty() {
+        return own;
+    }
+    default_model_for(provider).to_string()
 }
 
 struct StreamFailure {
