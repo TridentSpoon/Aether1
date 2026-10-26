@@ -508,8 +508,24 @@ pub fn start_local_server_tracked(engine: &LlmEngine) -> (Value, Option<std::pro
         );
     }
 
+    /* The context window the server will give every model it loads.
+
+    Ollama's own default is 4096, which is smaller than AETHER1's system prompt plus a
+    few turns -- an operator hit "request (5242 tokens) exceeds the available context
+    size (4096 tokens)" on a *first* question. The HUD's native path sets `num_ctx` per
+    request and is fine either way; what is not fine is everything that goes through the
+    OpenAI-compatible endpoint, which has no field for it: the coding engine, and the
+    HUD itself whenever it is pointed at `/v1`.
+
+    The setup wizard's answer to this was a systemd drop-in on `ollama.service` -- which
+    does nothing at all when AETHER1 is the one starting the server, as it is here. This
+    is the same figure, set where it actually applies. Sized from RAM by the one function
+    that already decides it, so the two cannot drift apart. */
+    let num_ctx = crate::code_setup::context_tokens(crate::llm::Telemetry::snapshot().ram_total_gb);
+
     match std::process::Command::new(&binary)
         .arg("serve")
+        .env("OLLAMA_CONTEXT_LENGTH", num_ctx.to_string())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

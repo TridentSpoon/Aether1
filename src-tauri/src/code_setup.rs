@@ -424,10 +424,18 @@ impl AgentsFound {
 fn context_step(os: Os, num_ctx: u32) -> Step {
     let shared = "This is set on the server rather than by the program talking to it, so \
                   everything using this AI gets the bigger window -- including the HUD, \
-                  which will use a little more memory for it. Restart Ollama afterwards.";
+                  which will use a little more memory for it. Restart Ollama afterwards. \
+                  Skip this if AETHER1 starts Ollama for you: it already sets the same \
+                  figure on the server it launches, and these commands only reach an \
+                  Ollama you start yourself.";
     match os {
+        /* Only reaches an Ollama running as a system service. An operator whose
+        `ollama.service` was disabled -- because AETHER1 spawns `ollama serve` itself --
+        ran this, restarted nothing that existed, and got no more context. The title says
+        which case it is for rather than leaving that to be discovered; the spawn in
+        `commands::start_local_server_tracked` covers the other. */
         Os::Linux => Step::run(
-            "Give the model room to read",
+            "Give the model room to read (if you run Ollama as a service)",
             shared,
             &format!(
                 "sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\nEnvironment=\"OLLAMA_CONTEXT_LENGTH={num_ctx}\"\\n' | sudo tee /etc/systemd/system/ollama.service.d/context.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama"

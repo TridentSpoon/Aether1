@@ -1762,8 +1762,8 @@
                                     <label for="setting-provider" class="text-xs font-mono text-cyan-300 block">WHERE THE AI RUNS</label>
                                     <select id="setting-provider" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                                         <option value="offline">Nothing yet -- canned replies only</option>
-                                        <option value="lmstudio">On this computer -- OpenAI-compatible server</option>
-                                        <option value="ollama">On this computer -- Ollama-style server</option>
+                                        <option value="ollama">On this computer -- Ollama</option>
+                                        <option value="lmstudio">On this computer -- LM Studio, or another OpenAI-compatible server</option>
                                         <option value="gemini">Google Gemini (cloud)</option>
                                         <option value="groq">Groq (cloud)</option>
                                         <option value="openai">OpenAI (cloud)</option>
@@ -1908,9 +1908,10 @@
                                     </div>
 
                                     <span class="text-[11px] font-mono text-slate-500 block">
-                                        Any local server works, not just Ollama: anything speaking the
-                                        OpenAI-compatible or Ollama-style API on a common port is found by
-                                        the scan, and anything else can be typed into the address box by hand.
+                                        Any local server works, not just Ollama: anything speaking
+                                        Ollama's own API or the OpenAI-compatible API on a common port is
+                                        found by the scan, and anything else can be typed into the address
+                                        box by hand.
                                     </span>
                                 </div>
                             </details>
