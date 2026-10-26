@@ -1434,11 +1434,35 @@ fn ollama_show(endpoint: &str, model: &str) -> Option<serde_json::Value> {
         .ok()
 }
 
+/// The model a provider answers with when the operator has named none.
+///
+/// The same defaults the payload builders already apply, named in one place so a picker can
+/// *show* what it is about to use rather than leaving the box empty and letting the
+/// builder decide out of sight. Empty for the two local providers and for a gateway, all
+/// three of which are a specific machine's business: a local server's models are whatever
+/// was pulled onto it, and a gateway's ids are whatever an administrator connected, so an
+/// invented one is a 404 with a confusing message on it.
+pub fn default_model_for(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => "gpt-4o-mini",
+        Provider::Groq => "llama-3.3-70b-versatile",
+        Provider::Gemini => "gemini-2.0-flash",
+        Provider::Anthropic => "claude-opus-5",
+        Provider::Ollama | Provider::LmStudio | Provider::Gateway | Provider::Offline => "",
+    }
+}
+
 /// The per-provider base URL and the model to use when none is configured.
 fn openai_defaults(provider: Provider, endpoint: &str) -> (&str, &str) {
     match provider {
-        Provider::OpenAi => ("https://api.openai.com/v1", "gpt-4o-mini"),
-        Provider::Groq => ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+        Provider::OpenAi => (
+            "https://api.openai.com/v1",
+            default_model_for(Provider::OpenAi),
+        ),
+        Provider::Groq => (
+            "https://api.groq.com/openai/v1",
+            default_model_for(Provider::Groq),
+        ),
         Provider::LmStudio => {
             let ep = if endpoint.is_empty() {
                 "http://localhost:1234/v1"
@@ -1938,7 +1962,7 @@ struct GeminiResponse {
 
 fn gemini_model(model: &str) -> &str {
     if model.is_empty() {
-        "gemini-2.0-flash"
+        default_model_for(Provider::Gemini)
     } else {
         model
     }
@@ -2460,7 +2484,7 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
 
     AnthropicRequest {
         model: if model.is_empty() {
-            "claude-opus-5"
+            default_model_for(Provider::Anthropic)
         } else {
             model
         }

@@ -257,6 +257,44 @@ pub fn trace_of(description: &str) -> String {
     format!("\n`⚙ {}`\n", description.replace('\n', " ").trim())
 }
 
+/// The reply with its trace lines taken out, for storing rather than for showing.
+///
+/// A trace line is machinery: `⚙ vault notes loaded: ...`, `⚙ search_web ...`. It belongs
+/// on screen beside the answer it explains, and it does not belong in the transcript the
+/// model is shown next turn -- because a model shown its own previous turn containing
+/// `⚙ vault notes loaded: INDEX.md, profile.md, machine.md` writes that line itself, as
+/// part of what an answer from it looks like. An operator then sees it twice: once from
+/// the machine, once imitated. On a small local model this starts on the second question
+/// of a session and never stops.
+///
+/// Same failure as the forged `[TOOL RESULTS]` block in `forged_results` and the same
+/// lesson: a model imitates any envelope it is shown, so an envelope the machine owns must
+/// never be fed back as the model's own words.
+///
+/// Also keeps the vault journal readable -- it is the operator's own notes, and a line
+/// about which notes were loaded is not part of the conversation they wanted kept.
+pub fn without_trace_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if is_trace_line(line) {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    // Leading blank lines are what is left where a trace line was, and a reply that starts
+    // with them renders as an empty first paragraph.
+    out.trim().to_string()
+}
+
+/// Whether one line is a trace line and nothing else. Deliberately strict: a line that
+/// merely mentions the glyph in prose -- a reply explaining what the `⚙` lines are --
+/// is the operator's answer and must survive.
+fn is_trace_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("`⚙") && trimmed.ends_with('`') && trimmed.len() > 3
+}
+
 pub fn trace_line(call: &ToolCall) -> String {
     let args = call
         .arguments
@@ -696,5 +734,30 @@ mod tests {
         assert!(text.contains("system logs and service state"), "{text}");
         assert!(text.contains("approve"), "{text}");
         assert!(!text.contains(FENCE), "{text}");
+    }
+
+    /// The bug this exists for: a model shown its own previous turn with a trace line in it
+    /// writes the trace line itself, and the operator sees it twice.
+    #[test]
+    fn a_stored_reply_carries_no_trace_lines() {
+        let shown = "`⚙ vault notes loaded: INDEX.md, profile.md`\n\nThe CPU is at 4%.\n\n                     `⚙ search_web latest f1`\nAnd the race was won by somebody.";
+        let stored = without_trace_lines(shown);
+        assert!(!stored.contains('⚙'), "{stored}");
+        assert!(stored.starts_with("The CPU is at 4%."), "{stored}");
+        assert!(stored.contains("won by somebody"), "{stored}");
+    }
+
+    /// A reply *about* the trace lines is the operator's answer and has to survive. Only a
+    /// line that is one, whole, is dropped.
+    #[test]
+    fn prose_mentioning_the_glyph_survives() {
+        let answer = "The ⚙ lines are tool calls. `⚙` on its own means nothing.";
+        assert_eq!(without_trace_lines(answer), answer);
+    }
+
+    #[test]
+    fn a_reply_that_is_only_trace_lines_becomes_empty_rather_than_blank_lines() {
+        assert_eq!(without_trace_lines("`⚙ vault notes loaded: a`"), "");
+        assert_eq!(without_trace_lines(""), "");
     }
 }

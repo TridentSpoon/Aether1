@@ -223,6 +223,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/scanner/status", get(scanner_status))
         .route("/api/llm/gateway-models", post(gateway_models))
         .route("/api/setup/advice", get(setup_advice))
+        .route("/api/models/brains", get(brains))
         .route("/api/models/huggingface", get(hf_search))
         .route("/api/models/huggingface/quants", get(hf_quants))
         .route("/api/voice/advice", get(voice_advice))
@@ -1321,6 +1322,15 @@ async fn setup_advice(State(state): State<AppState>) -> Json<serde_json::Value> 
         tokio::task::spawn_blocking(move || commands::setup_advice(&state.engine))
             .await
             .expect("setup_advice panicked"),
+    )
+}
+
+/// Everywhere the companion could think from. Probes and settings reads, so a GET.
+async fn brains(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::brains(&state.engine))
+            .await
+            .expect("brains panicked"),
     )
 }
 

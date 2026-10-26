@@ -150,6 +150,56 @@ pub struct Quant {
     /// default for the same reason every local-model guide says so: it is the smallest
     /// quantisation that does not visibly cost quality.
     pub preferred: bool,
+    /// The download, in bytes, as the repository reports it. `None` when it does not --
+    /// and then every figure below is `None` too rather than estimated from nothing.
+    pub bytes: Option<u64>,
+    /// What this needs in memory to run, in gigabytes.
+    ///
+    /// The weights have to be resident, plus room for the context and the runtime's own
+    /// working set. A fifth on top of the file, with a floor, is the rule of thumb every
+    /// local-model guide uses and it is close enough for the question being asked -- which
+    /// is "will this fit on my machine", not "how many bytes exactly".
+    pub needs_gb: Option<f64>,
+    /// Whether this machine has the memory, and whether a card here has room for the whole
+    /// thing. Both `None` when the size is unknown; `fits_on_gpu` is also `None` when there
+    /// is no discrete card to speak of -- which is not the same as "it does not fit", and
+    /// the panel says so differently.
+    pub fits: Option<bool>,
+    pub fits_on_gpu: Option<bool>,
+}
+
+/// How much room a model wants beyond its own weights: context, the runtime, and the
+/// headroom that stops a machine swapping on the first long answer.
+const RUNTIME_OVERHEAD: f64 = 1.2;
+/// A floor for it, because a fifth of a 400 MB file is not enough overhead for anything.
+const MIN_OVERHEAD_GB: f64 = 1.0;
+
+/// What one quantisation needs in memory, from the size of the file.
+pub fn memory_needed_gb(bytes: u64) -> f64 {
+    let weights = bytes as f64 / 1_000_000_000.0;
+    (weights * RUNTIME_OVERHEAD).max(weights + MIN_OVERHEAD_GB)
+}
+
+/// What this machine has to judge a model against.
+///
+/// Passed in rather than probed here so the sizing is a pure function of two numbers and
+/// can be tested without a machine. The same two fractions `setup::models_for` uses, and
+/// for the same reasons stated there: the OS and the HUD are already resident, and a card
+/// is holding the compositor's framebuffers and the HUD's own scene.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Machine {
+    pub ram_total_gb: f64,
+    pub vram_gb: Option<f64>,
+}
+
+impl Machine {
+    fn usable_ram(&self) -> f64 {
+        self.ram_total_gb * 0.7
+    }
+
+    fn usable_vram(&self) -> Option<f64> {
+        self.vram_gb.filter(|gb| *gb > 0.0).map(|gb| gb * 0.9)
+    }
 }
 
 #[derive(Deserialize)]
@@ -267,13 +317,19 @@ pub fn parameter_size(id: &str) -> Option<String> {
     None
 }
 
-/// Lists the GGUF files in one repository, with the name that pulls each.
-pub fn quants(repo_id: &str) -> Result<Vec<Quant>, String> {
+/// Lists the GGUF files in one repository, with the name that pulls each and what each
+/// one costs to download and to run.
+///
+/// `?blobs=true` is the whole reason the sizes are here: the plain repository document
+/// lists filenames and nothing else, so a picker built on it could offer twelve
+/// quantisations between 400 MB and 30 GB with no way to tell which was which. The
+/// operator asking "will this run on my machine" was being asked to guess.
+pub fn quants(repo_id: &str, machine: Machine) -> Result<Vec<Quant>, String> {
     let repo_id = repo_id.trim().trim_matches('/');
     if repo_id.is_empty() || !repo_id.contains('/') {
         return Err("a Hugging Face model is named owner/repository".to_string());
     }
-    let url = format!("{API}/{repo_id}");
+    let url = format!("{API}/{repo_id}?blobs=true");
     let body: Value = crate::net::get(&url, "the model's files were not listed")?
         .config()
         .timeout_global(Some(PROBE_TIMEOUT))
@@ -284,30 +340,44 @@ pub fn quants(repo_id: &str) -> Result<Vec<Quant>, String> {
         .read_json()
         .map_err(|e| format!("cannot read what Hugging Face sent: {e}"))?;
 
-    Ok(parse_quants(repo_id, &body))
+    Ok(parse_quants(repo_id, &body, machine))
 }
 
 /// The GGUF files out of a repository document.
-pub fn parse_quants(repo_id: &str, body: &Value) -> Vec<Quant> {
+pub fn parse_quants(repo_id: &str, body: &Value, machine: Machine) -> Vec<Quant> {
     let mut quants: Vec<Quant> = body
         .get("siblings")
         .and_then(|s| s.as_array())
         .map(|files| {
             files
                 .iter()
-                .filter_map(|file| file.get("rfilename").and_then(Value::as_str))
-                .filter(|name| name.to_lowercase().ends_with(".gguf"))
+                .filter_map(|file| {
+                    let name = file.get("rfilename").and_then(Value::as_str)?;
+                    // `size` only appears with `?blobs=true`, and an older cached document
+                    // or a repository that does not report it leaves this None rather than
+                    // producing a figure out of nothing.
+                    Some((name, file.get("size").and_then(Value::as_u64)))
+                })
+                .filter(|(name, _)| name.to_lowercase().ends_with(".gguf"))
                 // A model split across several files is listed once, under its first part:
                 // Ollama takes the whole set from the one name, and listing `-00002-of-
                 // 00009` as a thing to download would be a choice nobody should make.
-                .filter(|name| !is_later_shard(name))
-                .filter_map(|name| {
+                .filter(|(name, _)| !is_later_shard(name))
+                .filter_map(|(name, bytes)| {
                     let label = quant_label(name)?;
+                    let needs_gb = bytes.map(memory_needed_gb);
                     Some(Quant {
                         pull: pull_name(repo_id, &label),
                         preferred: label.eq_ignore_ascii_case("Q4_K_M"),
                         label,
                         file: name.to_string(),
+                        bytes,
+                        needs_gb,
+                        fits: needs_gb.map(|gb| gb <= machine.usable_ram()),
+                        // None rather than false with no card: "there is no card here" and
+                        // "it will not fit on the card" are different sentences.
+                        fits_on_gpu: needs_gb
+                            .and_then(|gb| machine.usable_vram().map(|room| gb <= room)),
                     })
                 })
                 .collect()
@@ -503,7 +573,7 @@ mod tests {
                 {"rfilename": "big-Q4_K_M-00002-of-00009.gguf"},
             ]
         });
-        let quants = parse_quants("bartowski/Qwen3-8B-GGUF", &body);
+        let quants = parse_quants("bartowski/Qwen3-8B-GGUF", &body, Machine::default());
         let labels: Vec<&str> = quants.iter().map(|q| q.label.as_str()).collect();
         assert_eq!(labels, ["Q2_K", "Q4_K_M", "Q8_0", "F16"]);
         assert_eq!(
@@ -520,13 +590,86 @@ mod tests {
     #[test]
     fn a_repository_with_no_gguf_offers_nothing_rather_than_something_broken() {
         let body = json!({"siblings": [{"rfilename": "config.json"}]});
-        assert!(parse_quants("x/y", &body).is_empty());
-        assert!(parse_quants("x/y", &json!({})).is_empty());
+        assert!(parse_quants("x/y", &body, Machine::default()).is_empty());
+        assert!(parse_quants("x/y", &json!({}), Machine::default()).is_empty());
     }
 
     #[test]
     fn a_name_that_is_not_a_repository_is_refused_without_a_request() {
-        assert!(quants("qwen3").is_err());
-        assert!(quants("").is_err());
+        assert!(quants("qwen3", Machine::default()).is_err());
+        assert!(quants("", Machine::default()).is_err());
+    }
+
+    /// The sizes are the whole point of the blobs request: a repository offers a dozen
+    /// quantisations between half a gigabyte and thirty, and without them the operator was
+    /// being asked to guess which one their machine could run.
+    #[test]
+    fn a_quantisation_says_what_it_costs_to_download_and_to_run() {
+        let body = json!({
+            "siblings": [
+                {"rfilename": "Qwen3-14B-Q4_K_M.gguf", "size": 9_000_000_000u64},
+                {"rfilename": "Qwen3-14B-Q8_0.gguf", "size": 15_700_000_000u64},
+            ]
+        });
+        // A 32 GB machine with a 16 GB card: the Q4 fits on the card, the Q8 fits in
+        // memory but not on the card, which is exactly the distinction worth drawing.
+        let machine = Machine {
+            ram_total_gb: 32.0,
+            vram_gb: Some(16.0),
+        };
+        let quants = parse_quants("x/Qwen3-14B-GGUF", &body, machine);
+        assert_eq!(quants[0].bytes, Some(9_000_000_000));
+        assert_eq!(quants[0].fits, Some(true));
+        assert_eq!(quants[0].fits_on_gpu, Some(true));
+        assert_eq!(quants[1].fits, Some(true));
+        assert_eq!(
+            quants[1].fits_on_gpu,
+            Some(false),
+            "15.7 GB of weights does not fit in 14.4 GB of usable card"
+        );
+    }
+
+    /// A repository that does not report sizes leaves every figure absent rather than
+    /// estimated from nothing -- the same rule the rest of this module follows.
+    #[test]
+    fn a_quantisation_with_no_reported_size_claims_nothing() {
+        let body = json!({"siblings": [{"rfilename": "model-Q4_K_M.gguf"}]});
+        let quants = parse_quants(
+            "x/y",
+            &body,
+            Machine {
+                ram_total_gb: 64.0,
+                vram_gb: Some(24.0),
+            },
+        );
+        assert_eq!(quants[0].bytes, None);
+        assert_eq!(quants[0].needs_gb, None);
+        assert_eq!(quants[0].fits, None);
+        assert_eq!(quants[0].fits_on_gpu, None);
+    }
+
+    /// No dedicated card is not the same answer as "it does not fit on the card".
+    #[test]
+    fn a_machine_with_no_card_says_nothing_about_the_card() {
+        let body = json!({"siblings": [{"rfilename": "m-Q4_K_M.gguf", "size": 1_000_000_000u64}]});
+        let quants = parse_quants(
+            "x/y",
+            &body,
+            Machine {
+                ram_total_gb: 16.0,
+                vram_gb: None,
+            },
+        );
+        assert_eq!(quants[0].fits, Some(true));
+        assert_eq!(quants[0].fits_on_gpu, None);
+    }
+
+    /// Overhead is a fifth on top, with a floor -- a fifth of a small file is not enough
+    /// room for a context window and a runtime.
+    #[test]
+    fn the_memory_estimate_has_a_floor_as_well_as_a_fraction() {
+        assert!((memory_needed_gb(10_000_000_000) - 12.0).abs() < 0.01);
+        // 0.4 GB of weights: a fifth is 80 MB, which is not the answer.
+        assert!((memory_needed_gb(400_000_000) - 1.4).abs() < 0.01);
     }
 }

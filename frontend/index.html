@@ -731,6 +731,22 @@
         </div>
 
         <div class="chin-line px-4 py-1 flex items-center gap-2">
+        <!-- WHICH BRAIN IS ANSWERING, and the control to change it.
+
+             Where the AI runs has always been a setting, and it is three levels down:
+             The Brain, then Connections, then a collapsed "AI Model Connection" group.
+             That is the right home for an address and a key, and the wrong one for the
+             question somebody asks several times an evening -- answer this one locally,
+             answer this one with Claude. The only thing in the chat itself was a dropdown
+             of local models for the active persona, in the desktop app alone.
+
+             So it is here, beside STATE, which is the other thing in this bar that says
+             what the companion is rather than what it did. One control, both groups in it,
+             switching on the spot. Hidden when there is nothing to switch between. -->
+        <span id="chin-brain-row" class="hidden items-center gap-1.5">
+            <span class="text-[10px] font-mono text-slate-400 tracking-wider">BRAIN</span>
+            <select id="chin-brain" class="chin-brain-select" aria-label="Which model answers"></select>
+        </span>
         <span class="text-[10px] font-mono text-slate-400 tracking-wider">STATE</span>
         <span id="status-badge" class="px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
             IDLE

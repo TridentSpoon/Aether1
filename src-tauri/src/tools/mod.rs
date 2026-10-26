@@ -496,8 +496,61 @@ fn run_now(
 
 /// Whether the operator has turned the tool layer on. Off by default: a companion that can
 /// act on the machine is a decision to make deliberately, not a default to discover.
+/// Whether the companion may use tools at all.
+///
+/// **On by default now, and the change is the point.** It defaulted to off, and with it off
+/// nothing about tools happens: no catalogue in the system prompt, no schemas on the
+/// request, and `tool_loop` is never entered. A model in that state answers "I have no
+/// access to real-time data", which is *true* -- and indistinguishable, from the operator's
+/// side, from a model that cannot call a tool, or from a tool protocol that does not work.
+/// Four rounds of work on the search path were done while the switch in front of all of it
+/// was off, on an install that never said so.
+///
+/// The switch is also labelled "Looking at this computer -- lets the AI read files, list
+/// directories and check processes", which gives nobody a reason to connect it to a web
+/// search. So even finding it did not lead anywhere.
+///
+/// What this does *not* change is who decides: `Persona::domain()` still scopes what runs
+/// without asking, `consent` still proposes everything outside that field, `fs_guard`'s
+/// deny list still holds, and `net::require_online` still refuses the internet in
+/// local-only mode. Those are the boundary. This setting was a master switch in front of
+/// the boundary, and defaulting it to off meant shipping a companion whose advertised
+/// abilities were all unavailable until an undocumented toggle was found.
 pub fn tools_enabled(db: &crate::llm::MemoryDb) -> bool {
-    db.get_setting_bool("tools_enabled", false)
+    db.get_setting_bool("tools_enabled", true)
+}
+
+/// Marker for the one-time switch-on below.
+const DEFAULT_ON_MARKER: &str = "tools_default_on_applied";
+
+/// Turns tools on once, on an install that had them off without ever choosing to.
+///
+/// Changing the default alone fixes nothing for anybody already running AETHER1: the
+/// settings pane writes every field on every Save, so a `false` is stored on any install
+/// where somebody has opened Settings once -- and a stored `false` beats a default. The
+/// operators this is for are precisely the ones who have been using the app.
+///
+/// So it flips once, and records that it has. Anyone who turns tools off after this keeps
+/// them off: the marker is written whether or not the flip was needed, so this can only
+/// ever happen on the one open that follows the upgrade.
+///
+/// Called from `build_llm_engine`, the single path the native app, `--serve` and every CLI
+/// subcommand share -- the same place `net::install` is called, and for the same reason.
+pub fn apply_default_on(db: &crate::llm::MemoryDb) {
+    if db.get_setting_bool(DEFAULT_ON_MARKER, false) {
+        return;
+    }
+    // Best-effort, both of them: a settings write that fails must not stop the app
+    // starting, and the worst case is that this is tried again on the next open.
+    if !db.get_setting_bool("tools_enabled", true) {
+        let _ = db.set_setting("tools_enabled", &serde_json::Value::Bool(true));
+        eprintln!(
+            "[AETHER1] Tools were switched off, which left the companion unable to search \
+             the web or read anything. Switched on; turn them off again in Settings if that \
+             was deliberate."
+        );
+    }
+    let _ = db.set_setting(DEFAULT_ON_MARKER, &serde_json::Value::Bool(true));
 }
 
 /// The catalog and its on/off state, for the settings UI and for anything that wants to
@@ -1132,5 +1185,55 @@ mod tests {
                 .count(),
             "a persona's catalog must list every tool, only labelled differently"
         );
+    }
+
+    /// On by default, because off by default meant shipping a companion whose tools were
+    /// all unavailable until an undocumented toggle was found.
+    #[test]
+    fn tools_are_on_by_default() {
+        let db = temp_db("tools_default");
+        assert!(tools_enabled(&db));
+    }
+
+    /// The default alone fixes nothing for anybody already running AETHER1: the settings
+    /// pane writes every field on every Save, so a stored `false` sits on any install where
+    /// Settings has been opened once, and a stored value beats a default. This is the whole
+    /// reason `apply_default_on` exists.
+    #[test]
+    fn a_stored_false_beats_the_new_default() {
+        let db = temp_db("tools_stored_false");
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        assert!(!tools_enabled(&db), "the operator's own value stands");
+    }
+
+    #[test]
+    fn the_one_time_switch_on_flips_an_install_that_had_them_off() {
+        let db = temp_db("tools_flip");
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        apply_default_on(&db);
+        assert!(tools_enabled(&db), "switched on once");
+
+        // And once only: turning them off after this is a choice, and it has to stick.
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        apply_default_on(&db);
+        assert!(
+            !tools_enabled(&db),
+            "a deliberate off after the upgrade must not be overridden on the next open"
+        );
+    }
+
+    /// An install that already had them on is not touched, and the marker is still written
+    /// so the flip cannot happen later.
+    #[test]
+    fn the_one_time_switch_on_leaves_an_install_that_had_them_on_alone() {
+        let db = temp_db("tools_already_on");
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(true))
+            .unwrap();
+        apply_default_on(&db);
+        assert!(tools_enabled(&db));
+        assert!(db.get_setting_bool(DEFAULT_ON_MARKER, false));
     }
 }

@@ -8492,6 +8492,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* A byte count as somebody reads it. Decimal gigabytes, matching what Hugging Face
+       and every download manager show, rather than binary ones -- a figure that disagrees
+       with the page the file came from is worse than either convention. */
+    function hubBytes(bytes) {
+        if (!bytes) return '';
+        if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+        return `${Math.round(bytes / 1_000_000)} MB`;
+    }
+
     function hubGb(value) {
         if (typeof value !== 'number' || value <= 0) return null;
         return Number.isInteger(value) ? `${value} GB` : `${value.toFixed(1)} GB`;
@@ -8607,16 +8616,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     download: '',
                     needs_gb: 0,
                     needs_vram_gb: 0,
-                    fits: true,
                     fits_on_gpu: false,
                     recommended: false,
                     installed: !!pull && installed.some(have => have.toLowerCase() === pull.toLowerCase()),
                     purposes: ['chat'],
+                    // Only known once a quantisation is chosen; until then the row makes no
+                    // claim about fit rather than claiming it fits.
+                    fits: hubHfFits(repo),
                     runs_aether1: repo.tools !== 'none',
                     tools: repo.tools === 'known',
                     hf: repo,
                 };
             });
+    }
+
+    /* True until a quantisation is chosen: a row cannot be greyed out for not fitting
+       before anything is known about its size, and the fit filter never applies on this
+       tab anyway. */
+    function hubHfFits(repo) {
+        const quants = hub.hfQuants[repo.id];
+        const chosen = quants && quants.find(q => q.label === hub.hfChosenQuant[repo.id]);
+        return chosen && chosen.fits === false ? false : true;
     }
 
     function hubHfBlurb(repo) {
@@ -9014,6 +9034,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tags.childElementCount) panel.appendChild(tags);
 
         const quants = hub.hfQuants[repo.id];
+        const chosen = quants && quants.find(q => q.label === hub.hfChosenQuant[repo.id]);
         const action = document.createElement('div');
         action.className = 'hub-action';
 
@@ -9023,6 +9044,11 @@ document.addEventListener('DOMContentLoaded', () => {
             size.textContent = 'Looking at the files in this repository...';
         } else if (!quants.length) {
             size.textContent = 'No GGUF file here that Ollama can pull.';
+        } else if (chosen && chosen.bytes) {
+            // The figure that decides it, in the row that spends the bandwidth, same as
+            // the Discover tab: a repository offers a dozen of these between half a
+            // gigabyte and thirty, and the name alone says nothing about which.
+            size.textContent = `Download is ${hubBytes(chosen.bytes)}`;
         } else {
             size.textContent = 'Quality and size:';
         }
@@ -9038,7 +9064,13 @@ document.addEventListener('DOMContentLoaded', () => {
             for (const quant of quants) {
                 const option = document.createElement('option');
                 option.value = quant.label;
-                option.textContent = quant.preferred ? `${quant.label} (recommended)` : quant.label;
+                // Size in the option itself, because the choice between Q4_K_M and Q8_0 is
+                // a choice about gigabytes and the labels do not say so.
+                const parts = [quant.label];
+                if (quant.bytes) parts.push(hubBytes(quant.bytes));
+                if (quant.preferred) parts.push('recommended');
+                if (quant.fits === false) parts.push('more memory than this computer has');
+                option.textContent = parts.join(' · ');
                 picker.appendChild(option);
             }
             picker.value = hub.hfChosenQuant[repo.id] || (quants.find(q => q.preferred) || quants[0]).label;
@@ -9090,6 +9122,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const facts = document.createElement('div');
         facts.className = 'hub-facts';
+        /* System requirements first, because they are what somebody is deciding on. Every
+           one of them comes from the size of the chosen file, so they appear and disappear
+           with the quantisation picker above rather than being stated for the repository
+           as a whole -- a repository does not have a memory requirement, a file does. */
+        if (chosen && chosen.needs_gb) {
+            facts.appendChild(hubFact('MEMORY IT WANTS', hubGb(Math.round(chosen.needs_gb * 10) / 10)));
+            facts.appendChild(hubFact('THIS COMPUTER', chosen.fits
+                ? '✔ Has the memory'
+                : '⚠ Not enough memory'));
+            facts.appendChild(hubFact('GRAPHICS CARD', chosen.fits_on_gpu === null || chosen.fits_on_gpu === undefined
+                ? 'No dedicated card found'
+                : chosen.fits_on_gpu
+                    ? '⚡ Whole model fits'
+                    : 'Partly on the processor'));
+        }
         facts.appendChild(hubFact('DOWNLOADS', String(repo.downloads)));
         facts.appendChild(hubFact('LIKES', String(repo.likes)));
         if (repo.updated) facts.appendChild(hubFact('LAST UPDATED', repo.updated.slice(0, 10)));
@@ -9263,6 +9310,129 @@ document.addEventListener('DOMContentLoaded', () => {
         renderHubList();
         renderHubDetail();
         hubRefreshDownloads();
+    }
+
+    /* ---------------------------------------------------------------- the brain picker
+
+       One control in the chin bar for the question somebody asks several times an evening:
+       answer this one locally, or answer it with Claude. Where the AI runs is a setting
+       three levels down in The Brain -- the right home for an address and a key, and the
+       wrong one for a choice made mid-conversation. The only thing in the chat itself was a
+       dropdown of local models for the active persona, in the desktop app alone.
+
+       Two groups in one list, because they are two different decisions: what is on this
+       computer, and which company to send the question to. An online provider appears only
+       when a key for it exists -- an entry that switches and then fails with a 401 is worse
+       than no entry, which is what `llm_api_key_<provider>` is for. */
+    const brainState = { current: null, loading: false };
+
+    async function refreshBrainPicker() {
+        const row = document.getElementById('chin-brain-row');
+        const select = document.getElementById('chin-brain');
+        if (!row || !select || brainState.loading) return;
+        brainState.loading = true;
+        let data;
+        try {
+            data = IS_TAURI
+                ? await tauriInvoke('brains_rust')
+                : await (await apiFetch('/api/models/brains')).json();
+        } catch (error) {
+            // Nothing to switch between that can be established, so nothing is drawn. A
+            // control that cannot say what is answering is worse than the bar it is in.
+            row.classList.add('hidden');
+            brainState.loading = false;
+            return;
+        }
+        brainState.loading = false;
+
+        const local = (data.local && data.local.models) || [];
+        const online = (data.online || []).filter(entry => entry.ready);
+        if (!local.length && !online.length) {
+            row.classList.add('hidden');
+            return;
+        }
+
+        const value = (provider, model) => `${provider}\u001f${model || ''}`;
+        select.innerHTML = '';
+
+        if (local.length) {
+            const group = document.createElement('optgroup');
+            group.label = 'On this computer';
+            for (const entry of local) {
+                const option = document.createElement('option');
+                option.value = value(data.local.provider, entry.model);
+                // The one fact about a local model that decides whether the companion can
+                // look anything up, and the one the name never tells you. Absent when the
+                // server did not say, rather than guessed at.
+                option.textContent = entry.tools === false
+                    ? `${entry.model} — no tools`
+                    : entry.model;
+                group.appendChild(option);
+            }
+            select.appendChild(group);
+        }
+
+        if (online.length) {
+            const group = document.createElement('optgroup');
+            group.label = data.local_only ? 'Online (blocked by local-only mode)' : 'Online';
+            for (const entry of online) {
+                const option = document.createElement('option');
+                option.value = value(entry.provider, entry.model);
+                option.textContent = entry.model ? `${entry.label} — ${entry.model}` : entry.label;
+                // Local-only mode refuses these before the request is built, so they are
+                // shown and not selectable rather than hidden: somebody who has configured
+                // Claude and cannot pick it should be able to see why.
+                option.disabled = !!data.local_only;
+                group.appendChild(option);
+            }
+            select.appendChild(group);
+        }
+
+        const current = value(data.current.provider, data.current.model);
+        select.value = current;
+        if (select.value !== current) {
+            // What is configured is not on the list -- a cloud provider with its key in
+            // the environment, or a model that is no longer installed. Said, rather than
+            // silently showing the first option as though it were the choice.
+            const option = document.createElement('option');
+            option.value = current;
+            option.textContent = `${data.current.provider} — ${data.current.model || 'no model set'}`;
+            select.appendChild(option);
+            select.value = current;
+        }
+        brainState.current = current;
+        select.title = 'Where this question gets answered. Changing it takes effect on the '
+            + 'next message.';
+        row.classList.remove('hidden');
+    }
+
+    function initBrainPicker() {
+        const select = document.getElementById('chin-brain');
+        if (!select) return;
+        select.addEventListener('change', async () => {
+            const [provider, model] = select.value.split('\u001f');
+            try {
+                // Through the same save path as Settings, so the one place that knows how
+                // to store a provider and its key stays the only place that does it.
+                const payload = { llm_provider: provider, llm_model: model };
+                if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
+                else {
+                    const response = await apiFetch('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
+                }
+                appendSystemNotice(`Answering with ${model || provider} from now on.`);
+            } catch (error) {
+                appendSystemNotice(`Could not switch: ${error.message || error}`);
+                select.value = brainState.current;
+                return;
+            }
+            refreshBrainPicker();
+        });
+        refreshBrainPicker();
     }
 
     function initModelHub() {
@@ -13450,6 +13620,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initHologramFloatingNotice();
     initAvatarTapIntroduction();
     initSpecialityModel();
+    initBrainPicker();
     initFlowMode();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();

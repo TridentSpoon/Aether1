@@ -123,14 +123,21 @@ pub fn generate_response_streamed_with_media(
     );
     let notes = crate::vault::consulted::taken();
     let agent_name = engine.agent_name();
-    engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
+    /* Stored without its trace lines, shown with them. The trace is the machine explaining
+    itself beside an answer; it is not part of the answer, and a model handed its own
+    previous turn with `⚙ vault notes loaded: ...` in it writes that line itself from then
+    on -- which an operator reads as the same line twice. Same lesson as the forged
+    [TOOL RESULTS] block: never feed the machine's own envelope back as the model's words. */
+    let stored_reply = crate::tools::protocol::without_trace_lines(&reply);
+    engine.add_message(&session_id, &agent_name.to_lowercase(), &stored_reply);
 
     // The exchange goes into the vault as well as the database, because the two are for
     // different things: the database is the transcript, and the vault is the part the
     // operator can open, edit and keep. Failure is reported here and nowhere else -- a
     // reply that was generated has been generated, and a full disk is not a reason to
     // replace it with an error.
-    if let Err(e) = crate::vault::journal_exchange(engine.db(), &agent_name, &stored_prompt, &reply)
+    if let Err(e) =
+        crate::vault::journal_exchange(engine.db(), &agent_name, &stored_prompt, &stored_reply)
     {
         if crate::vault::journal_enabled(engine.db()) {
             eprintln!("[AETHER1] Could not write the conversation to the vault: {e}");
@@ -206,6 +213,86 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
     }))
 }
 
+/// Everywhere this companion could think from, for the quick picker in the chin bar.
+///
+/// There was no such control. Where the AI runs lives in Settings, three levels down: The
+/// Brain, then Connections, then a collapsed "AI Model Connection" group -- and the only
+/// thing in the chat itself was a dropdown of *local* models for the active persona, which
+/// renders in the desktop app alone. So the one question somebody asks several times an
+/// evening -- "answer this one locally" or "answer this one with Claude" -- took four
+/// clicks and a Save, and an operator who remembered the control reasonably concluded it
+/// had been removed.
+///
+/// Two groups, because they are two different decisions and not one list:
+///
+///   * **On this computer.** Whatever the configured local server actually reports, with
+///     the tool-capability answer beside each one, since a model that cannot call a tool
+///     cannot search the web however good it is.
+///   * **Online.** The cloud providers that have a key, and only those: an entry that
+///     switches to Anthropic and then fails with a 401 is worse than no entry. Which is
+///     why `llm_api_key_<provider>` exists -- on the single shared slot this list could
+///     never have more than one ready member.
+///
+/// Read-only. Switching is `save_settings`, which already writes both halves at once.
+pub fn brains(engine: &LlmEngine) -> Value {
+    let db = engine.db();
+    let provider_key = db.get_setting_string("llm_provider", "offline");
+    let endpoint = db.get_setting_string("llm_endpoint", "http://localhost:11434");
+    let model = db.get_setting_string("llm_model", "");
+
+    // Asked of the configured endpoint rather than by scanning every port: this is the
+    // server the companion is actually pointed at, and offering models from a different
+    // one would be offering a switch that also silently moves the address.
+    let local: Vec<Value> = model_scanner::models_at(&endpoint)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|name| {
+            // `None` here means the server did not say -- an older Ollama, or LM Studio,
+            // which reports nothing of the kind. Left as null rather than guessed at.
+            let tools = llm::ollama_facts(&endpoint, &name).tools;
+            serde_json::json!({"model": name, "tools": tools})
+        })
+        .collect();
+
+    let local_provider = if provider_key == "lmstudio" {
+        "lmstudio"
+    } else {
+        "ollama"
+    };
+
+    let online: Vec<Value> = [
+        llm::Provider::Anthropic,
+        llm::Provider::OpenAi,
+        llm::Provider::Gemini,
+        llm::Provider::Groq,
+        llm::Provider::Gateway,
+    ]
+    .into_iter()
+    .map(|provider| {
+        let key = llm::api_key_for(db, provider);
+        serde_json::json!({
+            "provider": provider.key(),
+            "label": provider.label(),
+            "ready": !key.trim().is_empty(),
+            // What to put in the model box when this one is picked and nothing is stored
+            // for it. A gateway deliberately has none -- its model ids are whatever an
+            // administrator connected, and an invented one is a 404.
+            "model": llm::default_model_for(provider),
+        })
+    })
+    .collect();
+
+    serde_json::json!({
+        "current": {"provider": provider_key, "model": model},
+        "local": {"provider": local_provider, "endpoint": endpoint, "models": local},
+        "online": online,
+        // With the mode on, every online entry is refused before the request is built, so
+        // the picker greys them out rather than letting somebody pick one and read a
+        // refusal as a bug.
+        "local_only": crate::local_only::enabled(db),
+    })
+}
+
 /// What Hugging Face has, for the model picker's third tab.
 ///
 /// Two commands rather than one because the two questions cost differently: a search is one
@@ -215,6 +302,17 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
 /// Both return `{models: [...]}` or `{error: "..."}` rather than failing the call. A hub
 /// whose third tab is empty because the network is down should say that in the tab, and a
 /// refusal from local-only mode is a sentence worth reading rather than a rejected promise.
+/// What a Hugging Face model is being judged against: this machine's memory, and the
+/// memory of a dedicated card if there is one. The same two figures `setup_advice` sizes
+/// its catalogue by, read the same way, so the Hugging Face tab and the Discover tab agree
+/// about what fits.
+fn this_machine() -> crate::hf::Machine {
+    crate::hf::Machine {
+        ram_total_gb: llm::Telemetry::snapshot().ram_total_gb,
+        vram_gb: crate::gpu::dedicated(&crate::gpu::detect()).and_then(|gpu| gpu.vram_gb),
+    }
+}
+
 pub fn hf_search(query: String) -> Value {
     match crate::hf::search(&query) {
         Ok(models) => serde_json::json!({"models": models}),
@@ -223,7 +321,7 @@ pub fn hf_search(query: String) -> Value {
 }
 
 pub fn hf_quants(repo: String) -> Value {
-    match crate::hf::quants(&repo) {
+    match crate::hf::quants(&repo, this_machine()) {
         Ok(quants) => serde_json::json!({"quants": quants}),
         Err(error) => serde_json::json!({"error": error, "quants": []}),
     }
@@ -1012,6 +1110,37 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
             .db()
             .set_setting(key, value)
             .map_err(|e| format!("could not save setting {key:?}: {e}"))?;
+    }
+
+    /* A key typed into the one box in Settings is also written to the slot belonging to
+    the provider it was typed for, so that switching away and back does not lose it --
+    which is what the quick brain picker needs and what the single shared slot made
+    impossible. The shared write above is kept: an older build reading this database
+    still finds a key where it expects one.
+
+    The provider comes from this payload when it carries one, because Settings saves both
+    at once and the stored value is still the previous provider at this point. */
+    if let Some(typed) = map.get("llm_api_key").and_then(Value::as_str) {
+        let provider_key = map
+            .get("llm_provider")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| engine.db().get_setting_string("llm_provider", "offline"));
+        let provider = llm::Provider::from_key(&provider_key);
+        // Not for a gateway (its key has its own setting and its own meaning) and not for
+        // the two local providers or offline, none of which take one.
+        if matches!(
+            provider,
+            llm::Provider::OpenAi
+                | llm::Provider::Groq
+                | llm::Provider::Gemini
+                | llm::Provider::Anthropic
+        ) {
+            engine
+                .db()
+                .set_setting(&llm::key_setting_for(provider), &Value::from(typed))
+                .map_err(|e| format!("could not save the key for {provider_key}: {e}"))?;
+        }
     }
     Ok(())
 }
