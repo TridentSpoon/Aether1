@@ -965,6 +965,25 @@ impl fmt::Display for Provider {
 
 #[cfg(test)]
 mod tests {
+    /// `search_web`'s description and `websearch::render`'s header both send the model to
+    /// `fetch_url` without checking that it is reachable, which is only honest while the
+    /// two are granted together. They are -- both sit in all three tool lists -- and this
+    /// is what keeps it that way, because promising a lookup that will be refused is worse
+    /// than a snippet.
+    #[test]
+    fn every_persona_that_can_search_can_also_read_a_page() {
+        for persona in super::Persona::all() {
+            let tools = persona.domain().tools;
+            if tools.contains(&"search_web") {
+                assert!(
+                    tools.contains(&"fetch_url"),
+                    "{persona:?} can search but cannot open a result, so it can only hand \
+                     over a link or answer from a snippet"
+                );
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

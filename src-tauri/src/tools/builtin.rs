@@ -331,7 +331,7 @@ impl Tool for SearchWeb {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web for current information. Returns the top results with their titles, URLs and snippets. There is no page fetcher here, so report what the results say and give the operator the URL to open. If the search comes back empty, say so -- do not answer from memory instead."
+        "Search the web for current information. Returns the top results with their titles, URLs and snippets. A snippet is a few words, not an answer: when the question turns on the detail, call fetch_url on the result most likely to carry it and answer from the page. Handing the operator a URL to open is not an answer -- you can open it yourself. If the search comes back empty, say so -- do not answer from memory instead."
     }
 
     fn parameters(&self) -> Value {
@@ -467,6 +467,24 @@ impl Tool for FetchUrl {
 
 #[cfg(test)]
 mod tests {
+    /// `search_web` described itself as the only web tool there was -- "there is no page
+    /// fetcher here, so report what the results say and give the operator the URL to
+    /// open". `fetch_url` was added in #243 and this sentence was not revisited, so for a
+    /// release the model was told in the tool catalogue itself that the follow-up did not
+    /// exist. It obeyed.
+    #[test]
+    fn search_web_does_not_claim_there_is_no_page_fetcher() {
+        let described = super::SearchWeb.description();
+        assert!(
+            !described.contains("no page fetcher"),
+            "there is one, and it is listed beside this tool: {described}"
+        );
+        assert!(
+            described.contains("fetch_url"),
+            "the search has to name its own follow-up: {described}"
+        );
+    }
+
     use super::*;
     use crate::llm::MemoryDb;
 

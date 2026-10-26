@@ -365,8 +365,10 @@ pub fn render(query: &str, hits: &[Hit]) -> String {
 
     let mut out = format!(
         "Search results for: {query}\n\n{} result(s). These are titles and snippets, not \
-         whole pages -- quote them as what the search said, and give the operator the URL \
-         to open for anything that turns on the detail.\n\n",
+         whole pages. Quote them as what the search said; for anything that turns on the \
+         detail, call `fetch_url` on the result most likely to carry it and answer from the \
+         page. Do not hand the operator a URL instead of an answer -- you can open it \
+         yourself, and a link is what they would have got from searching themselves.\n\n",
         hits.len()
     );
     for (index, hit) in hits.iter().enumerate() {
@@ -544,5 +546,46 @@ mod tests {
         let text = readable_text("<p>kept</p><script>var a = 'not prose';");
         assert!(text.contains("kept"), "{text}");
         assert!(!text.contains("not prose"), "{text}");
+    }
+
+    /// `render`'s own header told the model to "give the operator the URL to open for
+    /// anything that turns on the detail" -- written before `fetch_url` existed, and still
+    /// being obeyed after it did. Trident's 2026-10-26 log is a search that worked followed
+    /// by a link and an offer, which is exactly what this text asked for.
+    ///
+    /// This wording is unconditional, which is safe because `search_web` and `fetch_url`
+    /// sit together in every persona's tool list -- pinned by
+    /// `persona::tests::every_persona_that_can_search_can_also_read_a_page`.
+    #[test]
+    fn rendered_results_send_the_model_to_the_page_rather_than_to_the_operator() {
+        let rendered = render(
+            "latest f1 race results",
+            &[Hit {
+                title: "F1 results".to_string(),
+                url: "https://www.formula1.com/en/results".to_string(),
+                snippet: "latest grand prix classification".to_string(),
+            }],
+        );
+        assert!(
+            rendered.contains("fetch_url"),
+            "the snippets have to point at the follow-up: {rendered}"
+        );
+        assert!(
+            !rendered.contains("give the operator the URL"),
+            "handing over a link is what the operator could already do themselves: \
+             {rendered}"
+        );
+    }
+
+    /// An empty search is the one case where there is nothing to open, so it must not be
+    /// sent chasing a page -- and must still refuse to answer from memory.
+    #[test]
+    fn an_empty_search_is_not_sent_to_fetch_a_page() {
+        let rendered = render("latest f1 race results", &[]);
+        assert!(rendered.contains("came back empty"), "{rendered}");
+        assert!(
+            !rendered.contains("fetch_url"),
+            "there is no result to read: {rendered}"
+        );
     }
 }
