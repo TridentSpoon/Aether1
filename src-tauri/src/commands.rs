@@ -23,7 +23,14 @@ pub fn generate_response(
     prompt: String,
     session_id: Option<String>,
 ) -> Result<Value, String> {
-    generate_response_streamed(engine, prompt, session_id, &mut |_| {}, &mut |_| {})
+    generate_response_streamed(
+        engine,
+        prompt,
+        session_id,
+        &mut |_| {},
+        &mut |_| {},
+        &mut |_| {},
+    )
 }
 
 /// generate_response, with each piece of the reply handed to `sink` as it arrives. The
@@ -34,9 +41,18 @@ pub fn generate_response_streamed(
     prompt: String,
     session_id: Option<String>,
     sink: llm::Sink,
+    thought: llm::Sink,
     on_handover: HandoverSink,
 ) -> Result<Value, String> {
-    generate_response_streamed_with_media(engine, prompt, session_id, &[], sink, on_handover)
+    generate_response_streamed_with_media(
+        engine,
+        prompt,
+        session_id,
+        &[],
+        sink,
+        thought,
+        on_handover,
+    )
 }
 
 pub fn generate_response_streamed_with_media(
@@ -45,6 +61,7 @@ pub fn generate_response_streamed_with_media(
     session_id: Option<String>,
     media: &[llm::providers::MediaAttachment],
     sink: llm::Sink,
+    thought: llm::Sink,
     on_handover: HandoverSink,
 ) -> Result<Value, String> {
     if prompt.trim().is_empty() && media.is_empty() {
@@ -87,7 +104,23 @@ pub fn generate_response_streamed_with_media(
     // belong to this answer and no other. Both are on this thread, which is the whole
     // reason the record can be a thread-local -- see vault::consulted.
     crate::vault::consulted::begin();
-    let reply = engine.generate_response_streamed_with_media(&prompt, &session_id, media, sink);
+    /* Tapped on the way past rather than returned separately, so the reasoning in the
+    result is by construction the same text the reasoning sink streamed. It is deliberately
+    *not* stored: `add_message` below writes the reply and nothing else, because a thought
+    is working rather than something anybody said, and a transcript carrying it would read
+    as the companion having spoken twice. */
+    let mut reasoning = String::new();
+    let mut tapped = |delta: &str| {
+        reasoning.push_str(delta);
+        thought(delta);
+    };
+    let reply = engine.generate_response_streamed_with_media(
+        &prompt,
+        &session_id,
+        media,
+        sink,
+        &mut tapped,
+    );
     let notes = crate::vault::consulted::taken();
     let agent_name = engine.agent_name();
     /* Stored without its trace lines, shown with them. The trace is the machine explaining
@@ -113,6 +146,7 @@ pub fn generate_response_streamed_with_media(
 
     Ok(serde_json::json!({
         "reply": reply,
+        "reasoning": reasoning,
         "agent_name": agent_name,
         "notes": crate::vault::consulted::to_json(&notes),
         "handover": handover.as_ref().map(handover_json),
@@ -761,7 +795,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         .db()
         .get_all_settings()
         .unwrap_or(serde_json::json!({}));
-    let defaults = serde_json::json!({
+    let mut defaults = serde_json::json!({
         "agent_name": "HALCY",
         "llm_provider": "offline",
         "llm_model": "halcy-core",
@@ -835,6 +869,18 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "code_run_network": false,
         "code_run_unconfined": false,
     });
+    /* Outside the table above rather than in it, which looks arbitrary and is not: that
+    `json!` is at the macro's recursion limit, and one more key in it fails the build with
+    an error that names the whole literal and not the line added. Anything new goes here. */
+    if let Some(defaults_obj) = defaults.as_object_mut() {
+        // Starts the control in Settings on `auto` rather than blank on an install that
+        // has never saved it -- blank would read as "off", which is the opposite of what an
+        // untouched install actually does. See llm::REASONING_SETTING.
+        defaults_obj.insert(
+            llm::REASONING_SETTING.to_string(),
+            Value::String("auto".to_string()),
+        );
+    }
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())
     {
@@ -1202,7 +1248,12 @@ pub fn approve_action(engine: &LlmEngine, id: i64) -> Result<Value, String> {
 /// Like the loop, it is transient: only the reply is stored, never the envelope, so the
 /// transcript reads as the conversation looked rather than carrying a synthetic operator
 /// turn full of search results.
-pub fn resume_after_action(engine: &LlmEngine, id: i64, sink: llm::Sink) -> Result<Value, String> {
+pub fn resume_after_action(
+    engine: &LlmEngine,
+    id: i64,
+    sink: llm::Sink,
+    thought: llm::Sink,
+) -> Result<Value, String> {
     let record = engine
         .db()
         .get_action(id)
@@ -1227,11 +1278,26 @@ pub fn resume_after_action(engine: &LlmEngine, id: i64, sink: llm::Sink) -> Resu
     let session_id = valid_session_id(Some(session_id))?;
 
     let envelope = tools::protocol::format_results(&[(record.tool, Ok(result))]);
-    let reply = engine.generate_response_streamed_with_media(&envelope, &session_id, &[], sink);
+    let mut reasoning = String::new();
+    let mut tapped = |delta: &str| {
+        reasoning.push_str(delta);
+        thought(delta);
+    };
+    let reply = engine.generate_response_streamed_with_media(
+        &envelope,
+        &session_id,
+        &[],
+        sink,
+        &mut tapped,
+    );
     let agent_name = engine.agent_name();
     engine.add_message(&session_id, &agent_name.to_lowercase(), &reply);
 
-    Ok(serde_json::json!({ "reply": reply, "agent_name": agent_name }))
+    Ok(serde_json::json!({
+        "reply": reply,
+        "reasoning": reasoning,
+        "agent_name": agent_name,
+    }))
 }
 
 /// Reverses an action that ran.
@@ -2437,8 +2503,13 @@ mod tests {
             .unwrap();
 
         let mut streamed = String::new();
-        let value =
-            resume_after_action(&engine, id, &mut |delta| streamed.push_str(delta)).unwrap();
+        let value = resume_after_action(
+            &engine,
+            id,
+            &mut |delta| streamed.push_str(delta),
+            &mut |_| {},
+        )
+        .unwrap();
 
         // No model is configured here, so the offline reply is what comes back -- enough to
         // prove the turn ran, was streamed, and was filed under the right session.
@@ -2490,7 +2561,7 @@ mod tests {
             )
             .unwrap();
 
-        let err = resume_after_action(&engine, id, &mut |_| {}).unwrap_err();
+        let err = resume_after_action(&engine, id, &mut |_| {}, &mut |_| {}).unwrap_err();
         assert!(err.contains("not proposed in a conversation"), "{err}");
     }
 
@@ -2511,9 +2582,9 @@ mod tests {
             )
             .unwrap();
 
-        let err = resume_after_action(&engine, id, &mut |_| {}).unwrap_err();
+        let err = resume_after_action(&engine, id, &mut |_| {}, &mut |_| {}).unwrap_err();
         assert!(err.contains("no output to hand back"), "{err}");
-        assert!(resume_after_action(&engine, 9999, &mut |_| {}).is_err());
+        assert!(resume_after_action(&engine, 9999, &mut |_| {}, &mut |_| {}).is_err());
     }
 
     #[test]

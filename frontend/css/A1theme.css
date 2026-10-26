@@ -806,6 +806,53 @@ select,
   background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
 }
 
+/* The model's own reasoning, above the reply it belongs to -- see reasoningPanel in app.js.
+
+   Quieter than the reply on the same principle as .msg-system: it is the model working, not
+   the model answering, and the answer is what the operator came for. Collapsed by default
+   and capped in height when open, because a high-effort thought on a reasoning model runs
+   to thousands of words and an uncapped panel would push every reply off the screen.
+
+   Theme variables throughout rather than literal colours: every colourway is generated
+   from these, and a hard-coded cyan here is a panel that stays cyan on Solar. */
+.reasoning-box {
+  margin: 0 0 0.5rem 0;
+  border: 1px dashed var(--border-neon);
+  border-radius: 3px;
+  background: var(--tint-main);
+}
+
+.reasoning-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 6px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.reasoning-summary::-webkit-details-marker { display: none; }
+
+.reasoning-summary:hover { color: var(--neon-cyan); }
+
+.reasoning-body {
+  margin: 0;
+  padding: 4px 8px 6px;
+  max-height: 16rem;
+  overflow-y: auto;
+  border-top: 1px dashed var(--border-neon);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  /* The thought arrives as plain text with its own line breaks and is rendered as plain
+     text on purpose (see reasoningPanel), so wrapping is this panel's job. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* A notice from the program rather than from the persona -- see appendSystemNotice in
    app.js. Quieter than either message bubble on purpose: it is machinery reporting itself,
    and it should not compete with the conversation it sits inside. */

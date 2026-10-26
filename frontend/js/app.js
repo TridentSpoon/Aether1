@@ -2615,6 +2615,56 @@ document.addEventListener('DOMContentLoaded', () => {
         found: { mark: '\u25cb', hint: 'Offered by search as a candidate. It may not have used it.' }
     };
 
+    /* The model's reasoning, kept beside the answer rather than in it.
+
+       Collapsed by default and created only when a thought actually arrives, which is the
+       difference between a feature and a row of empty boxes down the transcript: most
+       models never send one. It goes above the body because that is the order it happened
+       in -- the thinking came first -- and because a panel underneath would push the answer
+       up the screen every time a new line of thought landed.
+
+       Everything here is plain text, never formatMarkdown. A thought is full of half-written
+       fences, stray backticks and tag-like fragments; it is the model talking to itself, and
+       rendering it as markup would mangle it and occasionally swallow it. */
+    function reasoningPanel(msgDiv) {
+        if (msgDiv.reasoningBox) return msgDiv.reasoningBox;
+
+        const box = document.createElement('details');
+        box.className = 'reasoning-box';
+
+        const summary = document.createElement('summary');
+        summary.className = 'reasoning-summary';
+        summary.textContent = '\u{1F4AD} thinking\u2026';
+        box.appendChild(summary);
+
+        const body = document.createElement('pre');
+        body.className = 'reasoning-body';
+        box.appendChild(body);
+
+        msgDiv.insertBefore(box, msgDiv.bodyDiv);
+        msgDiv.reasoningBox = box;
+        msgDiv.reasoningBody = body;
+        return box;
+    }
+
+    /** Appends a reasoning delta, opening the panel the first time one arrives. */
+    function appendReasoning(msgDiv, delta) {
+        if (!delta) return;
+        reasoningPanel(msgDiv);
+        msgDiv.reasoningBody.textContent += delta;
+        /* Only auto-scroll the chat if the operator has opened the panel. Closed, it does
+           not grow, so there is nothing to follow. */
+        if (msgDiv.reasoningBox.open) chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    /* Relabels the panel once the answer starts, so a reply that has been sitting there for
+       a minute does not go on claiming to be thinking. */
+    function sealReasoning(msgDiv) {
+        if (!msgDiv.reasoningBox) return;
+        const summary = msgDiv.reasoningBox.querySelector('summary');
+        if (summary) summary.textContent = '\u{1F4AD} thought for a moment';
+    }
+
     function attachConsultedNotes(msgDiv, notes) {
         if (!Array.isArray(notes) || notes.length === 0) return;
 
@@ -3177,11 +3227,19 @@ document.addEventListener('DOMContentLoaded', () => {
     /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
     /// Resolves with the authoritative final reply -- the deltas are for display, the
     /// return value is what gets rendered as final text.
-    async function streamChat(text, sessionId, onDelta, onHandover, media = []) {
+    async function streamChat(text, sessionId, onDelta, onHandover, media = [], onReasoning = () => {}) {
         if (IS_TAURI) {
             const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
             const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
                 if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            /* The model's own reasoning, on its own event for the same reason the hand-off
+               has one: it is not part of the answer, and it must not be rendered into the
+               reply, spoken, or handed to the tool-trace logic below. Rust has already
+               taken it out of the text -- see providers::Relay -- so this is a second
+               channel, not a filter. */
+            const unlistenReasoning = await window.__TAURI__.event.listen('chat-reasoning', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onReasoning(event.payload.delta);
             });
             /* Flow mode. Its own event rather than a first delta, because it is a different
                speaker -- the node leaving says it, and every delta after belongs to the one
@@ -3197,6 +3255,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } finally {
                 unlisten();
                 unlistenHandover();
+                unlistenReasoning();
             }
         }
 
@@ -3213,6 +3272,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 let data;
                 try { data = JSON.parse(event.data); } catch (e) { return; }
                 if (data.type === 'delta') onDelta(data.delta);
+                else if (data.type === 'reasoning') onReasoning(data.delta);
                 else if (data.type === 'handover') onHandover(data);
                 else if (data.type === 'error') { socket.close(); reject(new Error(data.error)); }
                 else if (data.type === 'done') { socket.close(); resolve(data); }
@@ -3246,10 +3306,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
                     if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
                 });
+                const unlistenReasoning = await window.__TAURI__.event.listen('chat-reasoning', (event) => {
+                    if (event.payload && event.payload.stream_id === streamId) {
+                        appendReasoning(replyDiv, event.payload.delta);
+                    }
+                });
                 try {
                     data = await tauriInvoke('resume_after_action_rust', { id: actionId, streamId });
                 } finally {
                     unlisten();
+                    unlistenReasoning();
                 }
             } else {
                 data = await toolsApi(`/api/actions/${actionId}/resume`, { method: 'POST' });
@@ -3265,6 +3331,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const reply = (data && data.reply) || rendered;
         replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
+        if (data && data.reasoning) {
+            appendReasoning(replyDiv, data.reasoning);
+            replyDiv.reasoningBody.textContent = data.reasoning;
+        }
+        sealReasoning(replyDiv);
         if (data && data.agent_name) updateAgentNameDisplay(data.agent_name);
         chatContainer.scrollTop = chatContainer.scrollHeight;
 
@@ -3512,6 +3583,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // here the arriving text is the feedback.
                 firstDelta = false;
                 stopWaiting();
+                sealReasoning(replyDiv);
                 replyDiv.classList.add('typing-cursor');
                 setAvatarState('IDLE');
             }
@@ -3546,8 +3618,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (senderSpan) senderSpan.innerHTML = `🌐 <strong>${handover.to.toUpperCase()}</strong>`;
         };
 
+        /* Reasoning is feedback too, and better feedback than a spinner: the operator can
+           watch the model work. It deliberately does not retire the waiting state the way
+           an answer delta does -- the answer is still entirely ahead of them -- but it does
+           stop the hologram claiming to think about a question it is visibly thinking
+           about, so the wait counter is left running and the panel does the talking. */
+        const onReasoning = (delta) => appendReasoning(replyDiv, delta);
+
         try {
-            const data = await streamChat(text, currentSessionId, onDelta, onHandover, media);
+            const data = await streamChat(
+                text, currentSessionId, onDelta, onHandover, media, onReasoning
+            );
             // Something came back, so whatever loading was going to happen has happened:
             // no later question in this session gets the first-run explanation.
             hasAnsweredThisSession = true;
@@ -3559,6 +3640,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // deltas, which also repairs the display if any delta was dropped.
             replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
             replyDiv.classList.remove('typing-cursor');
+            sealReasoning(replyDiv);
+            /* Authoritative, exactly as the reply is: a dropped reasoning delta is repaired
+               from the return value. Only replaced when there is something to replace it
+               with -- an older build, or the browser transport on a provider that reports
+               nothing, sends no field at all, and blanking the panel over that would throw
+               away what did arrive. */
+            if (data.reasoning) {
+                // appendReasoning builds the panel if no delta ever arrived to build it;
+                // the assignment then puts the authoritative text in it either way.
+                appendReasoning(replyDiv, data.reasoning);
+                replyDiv.reasoningBody.textContent = data.reasoning;
+                sealReasoning(replyDiv);
+            }
             attachConsultedNotes(replyDiv, data.notes);
             voiceEngine.playSFX('incoming');
 
@@ -11275,6 +11369,9 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-gateway-url').value = s.llm_gateway_url || '';
             document.getElementById('setting-gateway-key').value = s.llm_gateway_key || '';
             toggleGatewayFields();
+            // Absent means `auto`, matching llm::REASONING_SETTING's own default -- an
+            // install that has never saved this is not an install with reasoning off.
+            document.getElementById('setting-reasoning').value = s.llm_reasoning || 'auto';
             document.getElementById('setting-persona').value = s.persona_type || 'default';
             document.getElementById('setting-custom-directive').value = s.custom_directive || '';
             toggleCustomPersonaField();
@@ -11481,6 +11578,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 llm_api_key: document.getElementById('setting-apikey').value,
                 llm_gateway_url: document.getElementById('setting-gateway-url').value.trim(),
                 llm_gateway_key: document.getElementById('setting-gateway-key').value,
+                llm_reasoning: document.getElementById('setting-reasoning').value,
                 persona_type: document.getElementById('setting-persona').value,
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,

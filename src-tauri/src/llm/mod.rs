@@ -282,6 +282,20 @@ pub const GATEWAY_URL_SETTING: &str = "llm_gateway_url";
 /// provider key with it would lose the thing and gain nothing.
 pub const GATEWAY_KEY_SETTING: &str = "llm_gateway_key";
 
+/// How much of its own reasoning the model is asked to show: `off`, `auto`, `low`,
+/// `medium` or `high`. See `providers::Reasoning`, which is where those words mean
+/// something. Absent means `auto`, which is what every install before this had in effect
+/// -- a thinking model was thinking, it just wrote the thought into the chat.
+pub const REASONING_SETTING: &str = "llm_reasoning";
+
+/// The tool a question that lands after the model's training is pointed at by name.
+///
+/// Named here rather than written into the prompt text because the prompt has to be able
+/// to ask the registry whether it actually exists: a prompt that orders a call to a tool
+/// that was never registered teaches the model to invent one, which is the fault
+/// `parse_round` exists to catch.
+const WEB_SEARCH_TOOL: &str = "search_web";
+
 /// Where one cloud provider's key lives: `llm_api_key_openai`, `llm_api_key_anthropic`,
 /// and so on.
 ///
@@ -343,7 +357,17 @@ struct Config {
     /// every decision below reads the same answer, even if the operator flips the setting
     /// while a reply is being generated.
     local_only: bool,
+    /// How much of its own reasoning the model is asked to do, and whether to show it.
+    reasoning: providers::Reasoning,
 }
+
+/// How many turns of history the deliberation pass gets to see.
+///
+/// Fewer than the answering turn's eight, and deliberately: the notes are about the
+/// question that was just asked, the pass costs a whole generation of its own, and the
+/// prompt it re-reads is the expensive half of that on a local model. Two turns is enough
+/// for "it" and "that one" to still mean something.
+const DELIBERATION_HISTORY: usize = 2;
 
 impl Config {
     /// Whether answering this turn would send the prompt off the local host or the local
@@ -366,6 +390,43 @@ impl Config {
             // see `net::require_forwarding`, which is what actually stops the request.
             Provider::Gateway => true,
         }
+    }
+
+    /// Whether this model produces reasoning of its own when it is asked for some.
+    ///
+    /// Not a guess about the model so much as a record of what was *asked* of it. The
+    /// cloud providers are asked in their own request format at an explicit level, so they
+    /// are already doing the thinking and asking twice would be paying twice. Ollama is the
+    /// one that says what a model can do, and LM Studio is the one that is never sent a
+    /// reasoning field at all -- so those two are the ones that may need the help.
+    fn thinks_unaided(&self, tools_on: bool) -> bool {
+        match self.provider {
+            Provider::Ollama => {
+                providers::ollama_facts(&self.endpoint, &self.model_name).thinking == Some(true)
+            }
+            // Never sent `reasoning_effort` (see `takes_reasoning_effort`) and will not say
+            // what it is running, so it is assumed not to -- the assumption that costs a
+            // slow reply rather than the one that costs no reasoning at all.
+            Provider::LmStudio => false,
+            // The documented hole in extended thinking, filled: with tools on the request,
+            // Anthropic cannot be asked to think natively, because its thinking blocks
+            // would have to be replayed with signatures an Exchange does not carry. Thinking
+            // on paper needs no signature.
+            Provider::Anthropic => !tools_on,
+            Provider::OpenAi | Provider::Groq | Provider::Gateway | Provider::Gemini => true,
+            // Never reaches a model at all.
+            Provider::Offline => true,
+        }
+    }
+
+    /// Whether to make this turn think on paper first.
+    ///
+    /// Only at an explicit effort level. `Auto` is the default and means "take reasoning
+    /// where it is free", and a second whole generation of every reply is the opposite of
+    /// free -- on a 4 GB card it is the difference between a pause and a wait. Asking for a
+    /// level is the operator saying they want the thinking more than they want the speed.
+    fn deliberates(&self, tools_on: bool) -> bool {
+        self.reasoning.effort().is_some() && !self.thinks_unaided(tools_on)
     }
 
     /// Why this turn cannot be sent to a gateway yet, when that is the situation.
@@ -645,6 +706,9 @@ impl LlmEngine {
             persona_key,
             custom_directive,
             local_only,
+            reasoning: providers::Reasoning::from_setting(
+                &self.db.get_setting_string(REASONING_SETTING, "auto"),
+            ),
         }
     }
 
@@ -693,9 +757,11 @@ impl LlmEngine {
              the operator may be running AETHER1 on several.\n\
              2. The Today line above is the real current date. Your training ended before it, \
              so anything you remember as \"the latest\" or \"most recent\" is out of date by \
-             however long that gap is. Date-sensitive questions -- results, releases, prices, \
-             who holds an office -- need a tool. If you have no tool result for one, say what \
-             you know and when you knew it; do not present a remembered answer as current.\n\
+             however long that gap is. A question that turns on something after your training \
+             -- results, releases, prices, who holds an office -- is one to look up, and the \
+             tool rules below say how. It is not one to answer out of memory, and not one to \
+             hand back to the operator to look up themselves. Never present a remembered \
+             answer as current.\n\
              3. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly \
              useful answer over staying in character.\n\
              4. Refer to yourself as {agent_name}.{operator_instruction}",
@@ -845,7 +911,7 @@ impl LlmEngine {
         &self,
         config: &Config,
         ctx: &ChatContext,
-        sink: providers::Sink,
+        relay: &mut providers::Relay,
     ) -> Result<providers::Completion, StreamFailure> {
         // Checked before anything is sent, because the two ways this goes wrong otherwise
         // are both bad: an empty model id gets a 400 whose body talks about a field name,
@@ -859,47 +925,37 @@ impl LlmEngine {
             });
         }
 
-        let mut partial = String::new();
-
-        let streamed = {
-            let mut collect = |delta: &str| {
-                partial.push_str(delta);
-                sink(delta);
-            };
-            match config.provider {
-                Provider::Ollama => providers::stream_ollama(
+        let streamed = match config.provider {
+            Provider::Ollama => {
+                providers::stream_ollama(&config.endpoint, &config.model_name, ctx, relay)
+            }
+            Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
+                providers::stream_openai_compatible(
+                    config.provider,
                     &config.endpoint,
-                    &config.model_name,
-                    ctx,
-                    &mut collect,
-                ),
-                Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
-                    providers::stream_openai_compatible(
-                        config.provider,
-                        &config.endpoint,
-                        &config.api_key,
-                        &config.model_name,
-                        ctx,
-                        &mut collect,
-                    )
-                }
-                Provider::Gemini => {
-                    providers::stream_gemini(&config.api_key, &config.model_name, ctx, &mut collect)
-                }
-                Provider::Anthropic => providers::stream_anthropic(
                     &config.api_key,
                     &config.model_name,
                     ctx,
-                    &mut collect,
-                ),
-                // Handled before this is ever called.
-                Provider::Offline => Ok(providers::Completion::default()),
+                    relay,
+                )
             }
+            Provider::Gemini => {
+                providers::stream_gemini(&config.api_key, &config.model_name, ctx, relay)
+            }
+            Provider::Anthropic => {
+                providers::stream_anthropic(&config.api_key, &config.model_name, ctx, relay)
+            }
+            // Handled before this is ever called.
+            Provider::Offline => Ok(providers::Completion::default()),
         };
 
         match streamed {
             Ok(completion) => Ok(completion),
-            Err(stream_error) if partial.is_empty() => {
+            // The relay is what knows whether anything reached the operator: it is the
+            // thing holding the answer, and under a thinking model a stream can have run
+            // for a minute and produced reasoning but no answer yet. Retrying then is
+            // right -- nothing is on screen to be written over twice.
+            Err(stream_error) if relay.so_far().is_empty() => {
                 let blocking = match config.provider {
                     Provider::Ollama => {
                         providers::call_ollama(&config.endpoint, &config.model_name, ctx)
@@ -923,7 +979,11 @@ impl LlmEngine {
                 };
                 match blocking {
                     Ok(completion) => {
-                        sink(&completion.text);
+                        // Already split by the provider's own relay, so it goes through
+                        // without the splitter -- and the reasoning goes to its own sink
+                        // rather than being dropped because this path is the fallback.
+                        relay.thinking(&completion.reasoning);
+                        relay.answered(&completion.text);
                         Ok(completion)
                     }
                     Err(call_error) => Err(StreamFailure {
@@ -934,7 +994,7 @@ impl LlmEngine {
             }
             Err(stream_error) => Err(StreamFailure {
                 message: stream_error,
-                partial,
+                partial: relay.so_far().to_string(),
             }),
         }
     }
@@ -979,6 +1039,9 @@ impl LlmEngine {
             // probe, not a real turn, so there is nothing native tool-calling needs to see.
             tools: &[],
             exchanges: &[],
+            // A probe wants the shortest round trip there is, and whether the model
+            // thinks says nothing about whether the address and the key work.
+            reasoning: providers::Reasoning::Off,
         };
 
         let started = Instant::now();
@@ -1016,6 +1079,147 @@ impl LlmEngine {
         format!("{}…", &text[..end])
     }
 
+    /// What to ask for on the scratchpad, by how much thinking was asked for.
+    ///
+    /// Written as instructions to someone working a problem out, not as a description of
+    /// reasoning: "consider alternatives" gets a list of alternatives, which is the shape
+    /// of thinking rather than the thing. The last two lines are the ones that matter most
+    /// -- without them a model writes the reply here instead, and then writes it again.
+    fn scratchpad_directive(level: providers::Reasoning) -> String {
+        let work = match level {
+            providers::Reasoning::High => {
+                "Work the question out carefully. Say what is actually being asked, what \
+                 you know that bears on it, and how you get from one to the other. Where \
+                 more than one answer is defensible, give each and say which you will \
+                 stand behind. Then look for what you have assumed without checking."
+            }
+            providers::Reasoning::Medium => {
+                "Work the question out. Say what is actually being asked, what you know \
+                 that bears on it, and the steps from one to the other."
+            }
+            // Low, and the two that never get here.
+            _ => {
+                "Think briefly. A few lines on what is actually being asked and what the \
+                 answer turns on."
+            }
+        };
+        // The last sentence is what stops the pass being a first draft of the reply --
+        // without it a model writes the answer here, and then writes it again.
+        format!(
+            "\n\n[SCRATCHPAD]\nBefore you answer, think on paper. {work}\n\n\
+             These are private working notes, not the reply. Do not greet or address the \
+             operator, do not call any tool, and do not write the final answer here -- you \
+             will be asked for it next, with these notes in front of you.\n\n\
+             You have no tools on this pass but you will have them on the next one. So if \
+             the answer turns on something you cannot know from memory -- anything after \
+             your training, anything about this machine -- the note to write is which tool \
+             you will call and what you will look up. \"I cannot know this\" is not a \
+             finding, and a note that stops there is one you will read back as a reason not \
+             to look."
+        )
+    }
+
+    /// How the notes are put in front of the answering turn.
+    ///
+    /// Appended to the system prompt rather than to the operator's question, which is not
+    /// a detail: notes arriving as part of what the operator said get answered as though
+    /// the operator had written them, and a model that is told "the user said all this"
+    /// summarises it back. As context, they read as what they are.
+    fn notes_block(notes: &str) -> String {
+        format!(
+            "\n\n[YOUR NOTES]\nYou already worked this question out on paper. These are \
+             your own notes:\n\n{notes}\n\nAnswer the operator now. Use the notes, \
+             correct them where they turn out to be wrong, and do not read them back -- \
+             the operator can already see them. The notes were written without tools and \
+             you have them: where they say something needs looking up, or say you cannot \
+             know it, look it up now rather than reporting the limit."
+        )
+    }
+
+    /// One extra turn, before the answering one, in which the model is asked to think on
+    /// paper -- and the whole of what it says is treated as reasoning.
+    ///
+    /// This is how a model that cannot think gets to reason: not by a trained habit of
+    /// backtracking, which no prompt supplies, but by having written the problem out once
+    /// before it has to commit to an answer. It helps on a question with steps in it and
+    /// does nothing for an ordinary one, which is why it runs only when asked for.
+    ///
+    /// Three things keep it from being a second reply rather than a thought. It is handed
+    /// no tools, so it cannot act on a question it is only considering. Every token it
+    /// produces goes to the reasoning channel, including any the model wrapped in
+    /// `<think>` -- so none of it can reach the answer, the transcript, the speech, or the
+    /// tool parser, whatever the model writes. And a pass that fails returns None, because
+    /// an unanswered question is a worse outcome than an unconsidered one.
+    fn deliberate(
+        &self,
+        config: &Config,
+        system_prompt: &str,
+        history: &[Message],
+        prompt: &str,
+        images: &[providers::MediaAttachment],
+        thought: providers::Sink,
+    ) -> Option<providers::Completion> {
+        let scratchpad = format!(
+            "{system_prompt}{}",
+            Self::scratchpad_directive(config.reasoning)
+        );
+        let recent = history
+            .len()
+            .saturating_sub(DELIBERATION_HISTORY * 2)
+            .min(history.len());
+        let ctx = ChatContext {
+            system_prompt: &scratchpad,
+            history: &history[recent..],
+            prompt,
+            images,
+            agent_name: &config.agent_name,
+            // No tools, and no rounds to replay. A model weighing up whether to search is
+            // not a model that should be searching.
+            tools: &[],
+            exchanges: &[],
+            // Passed through rather than forced: an Ollama model that cannot think is the
+            // ordinary case here and is sent nothing, but one reached through LM Studio
+            // may well think inline, and that belongs in the panel with the rest.
+            reasoning: config.reasoning,
+        };
+
+        /* Both of the relay's channels go to the same place, which is the whole point:
+        on this pass there is no answer, only thinking. Two `&mut dyn FnMut` cannot borrow
+        one sink between them, so the sink and the accumulator are shared through RefCells
+        -- single-threaded, and the alternative is collecting the pass in silence and
+        showing it when it ends, which on the model this exists for is the entire wait. */
+        let drafted = std::cell::RefCell::new(String::new());
+        let out = std::cell::RefCell::new(thought);
+        let mut as_answer = |delta: &str| {
+            drafted.borrow_mut().push_str(delta);
+            (out.borrow_mut())(delta);
+        };
+        let mut as_thought = |delta: &str| {
+            drafted.borrow_mut().push_str(delta);
+            (out.borrow_mut())(delta);
+        };
+        let mut relay = providers::Relay::new(&mut as_answer, &mut as_thought, true);
+
+        match self.call_provider(config, &ctx, &mut relay) {
+            Ok(mut completion) => {
+                drop(relay);
+                // The relay split the pass into an answer half and a thinking half; here
+                // they are both notes, so the completion carries the whole of it.
+                completion.text = drafted.into_inner().trim().to_string();
+                (!completion.text.is_empty()).then_some(completion)
+            }
+            Err(failure) => {
+                // Said rather than shown: the operator gets their answer, and the terminal
+                // says why it arrived without notes.
+                eprintln!(
+                    "[AETHER1] the scratchpad pass failed, answering without it: {}",
+                    failure.message
+                );
+                None
+            }
+        }
+    }
+
     /// Runs rounds of model call -> tool calls -> results until the model answers without
     /// asking for a tool, and returns what the operator saw.
     ///
@@ -1037,6 +1241,7 @@ impl LlmEngine {
         preamble: &str,
         session_id: &str,
         sink: providers::Sink,
+        thought: providers::Sink,
     ) -> providers::Completion {
         let registry = crate::tools::registry();
         // The session travels with the context so that a call this loop has to propose
@@ -1071,6 +1276,9 @@ impl LlmEngine {
         let done = |text: String, any_reported: bool, total: providers::TokenUsage| {
             providers::Completion {
                 text,
+                // The reasoning has already gone out on its own sink as it arrived, and
+                // the loop's own value carries only what the conversation keeps.
+                reasoning: String::new(),
                 usage: any_reported.then_some(total),
                 calls: Vec::new(),
             }
@@ -1101,6 +1309,7 @@ impl LlmEngine {
                 agent_name: &config.agent_name,
                 tools: if native { &schemas } else { &none },
                 exchanges: &exchanges,
+                reasoning: config.reasoning,
             };
 
             // Nothing to filter on the native path: the calls never appear in the text, so
@@ -1118,7 +1327,16 @@ impl LlmEngine {
                         sink(&shown);
                     }
                 };
-                self.call_provider(config, &ctx, &mut round_sink)
+                /* The order of these two is the whole reason reasoning cannot break the
+                tool protocol: the relay takes the thinking out first, and only what is
+                left reaches the fence filter and -- through `completion.text` -- the
+                parser. A thinking model reasoning about whether to call a tool writes a
+                `tool` fence inside `<think>` constantly; that is what thinking out loud
+                looks like. A fence filter fed that would swallow prose until the next
+                ``` and the parser would run a call the model was only considering. */
+                let mut relay =
+                    providers::Relay::new(&mut round_sink, &mut *thought, config.reasoning.shown());
+                self.call_provider(config, &ctx, &mut relay)
             };
             let tail = filter.finish();
             if !native && !tail.is_empty() {
@@ -1323,12 +1541,18 @@ impl LlmEngine {
 
     /// Generates a reply with request-scoped media, feeding each streamed delta to `sink`.
     /// The returned String is always the concatenation of everything the sink was given.
+    ///
+    /// `thought` is the second channel: the model's own reasoning, as it arrives, and
+    /// never any part of the returned reply. Two sinks rather than one tagged delta
+    /// because the two go to different places on screen and only one of them is ever
+    /// spoken, stored or parsed -- see `providers::Relay`.
     pub fn generate_response_streamed_with_media(
         &self,
         prompt: &str,
         session_id: &str,
         images: &[providers::MediaAttachment],
         sink: providers::Sink,
+        thought: providers::Sink,
     ) -> String {
         let config = self.load_config();
         let start = Instant::now();
@@ -1386,14 +1610,37 @@ impl LlmEngine {
             // way to use, and a prompt carrying the text catalogue to a model being sent
             // real schemas describes the tools twice in two incompatible ways. Both were
             // reachable while the decision was the provider's alone.
+            /* Which tool to tell the model to reach for when the question lands after
+            its training, or None when there is nothing to reach for. Two ways there is
+            nothing: no such tool registered, and local-only mode, where
+            `net::require_online` refuses the call -- and a prompt that orders a lookup the
+            gate is about to refuse trades a useful answer for a dead end. */
+            let web = (registry.get(WEB_SEARCH_TOOL).is_some() && !config.local_only)
+                .then_some(WEB_SEARCH_TOOL);
             system_prompt.push_str(&if native_tools_for(&config) {
-                crate::tools::protocol::native_instructions(&field)
+                crate::tools::protocol::native_instructions(&field, web)
             } else {
                 crate::tools::protocol::instructions(
                     &registry.prompt_catalog_for(Some(&config.persona)),
                     &field,
+                    web,
                 )
             });
+        }
+
+        /* Thinking on paper, before anything is said. Guarded by the same two conditions
+        as the branches below that actually reach a model: there is nothing to deliberate
+        about on a turn that is going to be refused for leaving the machine, or answered
+        from the offline persona. Its tokens are counted with the turn's at the end --
+        a second generation that reported nothing would be exactly the comfortable
+        under-count the accounting here exists to remove. */
+        let reaches_a_model = !(config.local_only && config.reaches_the_internet())
+            && config.provider != Provider::Offline;
+        let deliberation = (reaches_a_model && config.deliberates(tools_on))
+            .then(|| self.deliberate(&config, &system_prompt, &history, prompt, images, thought))
+            .flatten();
+        if let Some(notes) = &deliberation {
+            system_prompt.push_str(&Self::notes_block(&notes.text));
         }
 
         // Local-only mode refuses the cloud rather than quietly routing around it. The
@@ -1468,6 +1715,7 @@ impl LlmEngine {
                 ),
                 session_id,
                 sink,
+                thought,
             );
             reported = completion.usage;
             completion.text
@@ -1488,8 +1736,10 @@ impl LlmEngine {
                 agent_name: &config.agent_name,
                 tools: &[],
                 exchanges: &[],
+                reasoning: config.reasoning,
             };
-            let text = match self.call_provider(&config, &ctx, sink) {
+            let mut relay = providers::Relay::new(sink, thought, config.reasoning.shown());
+            let text = match self.call_provider(&config, &ctx, &mut relay) {
                 Ok(completion) => {
                     reported = completion.usage;
                     completion.text
@@ -1534,6 +1784,22 @@ impl LlmEngine {
             };
             format!("{vault_trace}{text}")
         };
+
+        // The scratchpad's tokens were spent on this answer as surely as the answering
+        // turn's were, so they are reported with them rather than quietly left off.
+        if let Some(spent) = deliberation.and_then(|pass| pass.usage) {
+            reported = Some(match reported {
+                Some(answering) => providers::TokenUsage {
+                    prompt_tokens: answering.prompt_tokens + spent.prompt_tokens,
+                    completion_tokens: answering.completion_tokens + spent.completion_tokens,
+                    eval_nanos: match (answering.eval_nanos, spent.eval_nanos) {
+                        (Some(a), Some(b)) => Some(a + b),
+                        (only, None) | (None, only) => only,
+                    },
+                },
+                None => spent,
+            });
+        }
 
         self.usage.lock().unwrap().record_usage(
             prompt,
@@ -1608,8 +1874,12 @@ impl LlmEngine {
             agent_name: "Genesis Forge",
             tools: &[],
             exchanges: &[],
+            // One short name is wanted and nobody is watching it arrive, so there is
+            // nothing to gain from making the model think about it first.
+            reasoning: providers::Reasoning::Off,
         };
-        let completion = self.call_provider(&config, &ctx, &mut |_| {}).ok()?;
+        let mut relay = providers::Relay::quiet(false);
+        let completion = self.call_provider(&config, &ctx, &mut relay).ok()?;
         normalize_mission_name(&completion.text)
     }
 
@@ -1734,7 +2004,91 @@ mod tests {
             persona_key: "default".to_string(),
             custom_directive: String::new(),
             local_only: false,
+            reasoning: providers::Reasoning::Off,
         }
+    }
+
+    /// A model with no reasoning of its own gets the scratchpad pass; one that is already
+    /// being asked to reason does not, because that would be paying for the same thinking
+    /// twice.
+    #[test]
+    fn only_a_model_that_cannot_think_is_made_to_think_on_paper() {
+        let mut lm_studio = config_for(Provider::LmStudio, "http://localhost:1234/v1", "local");
+        lm_studio.reasoning = providers::Reasoning::Medium;
+        assert!(
+            lm_studio.deliberates(false),
+            "LM Studio is never sent a reasoning field, so nothing else will do the thinking"
+        );
+
+        let mut openai = config_for(Provider::OpenAi, "", "o3-mini");
+        openai.reasoning = providers::Reasoning::Medium;
+        assert!(
+            !openai.deliberates(false),
+            "it was asked for reasoning in its own request format already"
+        );
+    }
+
+    /// The documented hole in Anthropic's extended thinking, covered. With tools on the
+    /// request it cannot be asked to think natively -- its thinking blocks would have to be
+    /// replayed with signatures an Exchange does not carry -- so the scratchpad is the only
+    /// reasoning available there, and it needs no signature.
+    #[test]
+    fn anthropic_thinks_on_paper_exactly_when_it_cannot_think_natively() {
+        let mut anthropic = config_for(Provider::Anthropic, "", "claude-opus-5");
+        anthropic.reasoning = providers::Reasoning::High;
+        assert!(
+            anthropic.deliberates(true),
+            "tools on: nothing else can reason"
+        );
+        assert!(
+            !anthropic.deliberates(false),
+            "tools off: extended thinking is asked for and will arrive"
+        );
+    }
+
+    /// The guard that keeps every reply from costing two generations. `Auto` is the default
+    /// and means "take reasoning where it is free"; a second whole pass is not free, and on
+    /// a 4 GB card the difference is a pause against a wait.
+    #[test]
+    fn automatic_and_off_never_spend_a_second_generation() {
+        for level in [providers::Reasoning::Auto, providers::Reasoning::Off] {
+            let mut config = config_for(Provider::LmStudio, "http://localhost:1234/v1", "local");
+            config.reasoning = level;
+            assert!(
+                !config.deliberates(false),
+                "{level:?} must not double the cost of a turn"
+            );
+        }
+    }
+
+    /// The scratchpad has one job that is not "answer", and the directive has to say so in
+    /// the words that actually stop a model writing the reply twice.
+    #[test]
+    fn the_scratchpad_is_told_it_is_not_the_reply() {
+        for level in [
+            providers::Reasoning::Low,
+            providers::Reasoning::Medium,
+            providers::Reasoning::High,
+        ] {
+            let said = LlmEngine::scratchpad_directive(level);
+            assert!(said.contains("not the reply"), "{level:?}: {said}");
+            assert!(said.contains("do not call any tool"), "{level:?}: {said}");
+        }
+        // And more is asked for at a higher level, or the levels mean nothing.
+        assert!(
+            LlmEngine::scratchpad_directive(providers::Reasoning::High).len()
+                > LlmEngine::scratchpad_directive(providers::Reasoning::Low).len()
+        );
+    }
+
+    /// Notes go to the model as context, not as something the operator said. A model told
+    /// its own working was part of the question summarises it back at them.
+    #[test]
+    fn the_notes_are_context_and_say_not_to_read_them_back() {
+        let block = LlmEngine::notes_block("the race was after my training");
+        assert!(block.contains("the race was after my training"));
+        assert!(block.contains("your own notes"));
+        assert!(block.contains("do not read them back"));
     }
 
     /// The decision this whole feature turns on. An Ollama endpoint on loopback does not
@@ -2048,6 +2402,7 @@ mod tests {
             "default",
             &[],
             &mut |delta| streamed.push_str(delta),
+            &mut |_| {},
         );
 
         assert!(reply.contains("local-only mode is on"), "{reply}");
@@ -2073,8 +2428,13 @@ mod tests {
             .db
             .set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true));
 
-        let reply =
-            engine.generate_response_streamed_with_media("hello", "default", &[], &mut |_| {});
+        let reply = engine.generate_response_streamed_with_media(
+            "hello",
+            "default",
+            &[],
+            &mut |_| {},
+            &mut |_| {},
+        );
         assert!(reply.contains("local-only mode is on"), "{reply}");
         assert!(reply.contains("ollama.example.com"), "{reply}");
     }
@@ -2098,8 +2458,13 @@ mod tests {
         // Nothing is listening at that address in a test run, so the turn ends in the
         // normal provider-failure path -- what matters is that it was attempted at all
         // rather than refused by the mode.
-        let reply =
-            engine.generate_response_streamed_with_media("hello", "default", &[], &mut |_| {});
+        let reply = engine.generate_response_streamed_with_media(
+            "hello",
+            "default",
+            &[],
+            &mut |_| {},
+            &mut |_| {},
+        );
         assert!(!reply.contains("local-only mode is on"), "{reply}");
     }
 
@@ -2216,6 +2581,7 @@ mod tests {
             persona_key: "default".into(),
             custom_directive: String::new(),
             local_only: false,
+            reasoning: providers::Reasoning::Off,
         };
         assert_eq!(
             LlmEngine::telemetry_mode(local.provider, &local.endpoint),
@@ -2259,10 +2625,13 @@ mod tests {
     /// are exactly the reply that was returned.
     fn generate(engine: &LlmEngine, prompt: &str, session_id: &str) -> String {
         let mut streamed = String::new();
-        let reply =
-            engine.generate_response_streamed_with_media(prompt, session_id, &[], &mut |delta| {
-                streamed.push_str(delta)
-            });
+        let reply = engine.generate_response_streamed_with_media(
+            prompt,
+            session_id,
+            &[],
+            &mut |delta| streamed.push_str(delta),
+            &mut |_| {},
+        );
         assert_eq!(
             streamed, reply,
             "the sink's deltas must reconstruct the returned reply"
@@ -2392,7 +2761,13 @@ mod tests {
         // Saying the date is half of it. The model also has to be told what its own
         // memory is worth next to it, or it reads the date and answers from 2023 anyway.
         assert!(prompt.contains("Your training ended before it"), "{prompt}");
-        assert!(prompt.contains("need a tool"), "{prompt}");
+        // And told it as an action. "needs a tool" described the model's situation and
+        // left what to do about it open, which a 7B settled by saying it had no tool.
+        assert!(prompt.contains("one to look up"), "{prompt}");
+        assert!(
+            prompt.contains("not one to hand back to the operator"),
+            "{prompt}"
+        );
     }
 
     /// The date is a sentence, not an ISO string: a bare `2026-10-21` reads as a field to

@@ -34,9 +34,44 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// The rule about questions that land after the model's training, which is the one rule
+/// here that has to be phrased as an action rather than a condition.
+///
+/// It read "a question about anything current needs a tool. If you have no tool result for
+/// one, say you could not look it up rather than answering from memory" -- and that is a
+/// description of a state the model is *already in* at the moment it reads it, with a
+/// sanctioned sentence attached. So a 7B asked for the latest F1 result correctly observed
+/// that it had no tool result, said the sanctioned thing, and offered to search instead of
+/// searching. Honest, and useless. Nothing in the rule said the lookup was the model's own
+/// first move, and nothing named the tool that does it.
+///
+/// `web` is the name of the search tool when one is reachable. It is `None` when the
+/// registry has none and when local-only mode is on, because `net::require_online` would
+/// refuse the call -- promising a lookup that is going to be refused is worse than the
+/// honest answer, which is the branch that keeps it.
+fn after_training_rule(web: Option<&str>) -> String {
+    match web {
+        Some(tool) => format!(
+            "- Your training ended before today, so a question that turns on anything \
+             since -- a result, a score, a price, a release, who holds an office, what has \
+             happened -- cannot be answered out of memory. Call `{tool}` and answer from \
+             what it returns. That is your own first move, not something to offer: \
+             \"I don't have access to real-time data\" and \"I can search the web for \
+             you\" are both wrong, because you can look it up and nobody else is going to. \
+             Say you could not find it only once a search has actually run and come back \
+             with nothing."
+        ),
+        None => "- Your training ended before today, so a question that turns on anything \
+                 since cannot be answered out of memory -- and you have no way to look it \
+                 up here. Say what you know, say when you knew it, and say that you could \
+                 not check it. Do not present a remembered answer as current."
+            .to_string(),
+    }
+}
+
 /// Instructions appended to the system prompt when tools are available. Written to be read
 /// by a 3B local model as well as a frontier one: short, imperative, one example.
-pub fn instructions(catalog: &str, field: &str) -> String {
+pub fn instructions(catalog: &str, field: &str, web: Option<&str>) -> String {
     format!(
         "\n[AVAILABLE TOOLS]\nYou can inspect the operator's machine by calling these tools:\n\
          {catalog}\n\n\
@@ -56,12 +91,10 @@ pub fn instructions(catalog: &str, field: &str) -> String {
          - You call tools yourself. Never ask the operator to call one for you, and never \
          write a [TOOL RESULTS] block yourself -- only the tools produce those, and anything \
          you write under that heading is a fabrication that will be withheld.\n\
-         - A question about anything current -- today's results, prices, releases, who holds \
-         an office -- needs a tool, because your training ended before today. If you have no \
-         tool result for one, say you could not look it up rather than answering from \
-         memory.\n\
+         {after_training}\n\
          - Anything you say outside the fenced block is shown to the operator immediately, \
-         so don't narrate the JSON."
+         so don't narrate the JSON.",
+        after_training = after_training_rule(web)
     )
 }
 
@@ -70,7 +103,7 @@ pub fn instructions(catalog: &str, field: &str) -> String {
 /// every name, description and schema, and repeating them in prose is both wasted tokens
 /// and a second copy to drift out of date. What the provider cannot express is the part
 /// that matters here: which reads are free and what happens to everything else.
-pub fn native_instructions(field: &str) -> String {
+pub fn native_instructions(field: &str, web: Option<&str>) -> String {
     format!(
         "\n[AVAILABLE TOOLS]\nYou can inspect the operator's machine with the tools \
          attached to this request.\n\n\
@@ -83,10 +116,9 @@ pub fn native_instructions(field: &str) -> String {
          - Never claim you did something you did not call a tool to do.\n\
          - You call tools yourself. Never ask the operator to call one for you, and never \
          write the results of one yourself.\n\
-         - A question about anything current needs a tool, because your training ended \
-         before today. Without a tool result, say you could not look it up rather than \
-         answering from memory.\n\
-         - Anything you say alongside a tool call is shown to the operator immediately."
+         {after_training}\n\
+         - Anything you say alongside a tool call is shown to the operator immediately.",
+        after_training = after_training_rule(web)
     )
 }
 
@@ -580,7 +612,7 @@ mod tests {
     /// operator can do. Pinned because it is the sentence the prompt now forbids.
     #[test]
     fn the_instructions_forbid_delegating_a_call_back_to_the_operator() {
-        let text = instructions("- search_web: search", "your notes");
+        let text = instructions("- search_web: search", "your notes", Some("search_web"));
         assert!(text.contains("You call tools yourself"), "{text}");
         // Case-insensitive: the sentence opens a bullet in one prompt and sits mid-sentence
         // in the other, and the rule is the point rather than its capitalisation.
@@ -590,8 +622,46 @@ mod tests {
         );
         assert!(text.contains("training ended before today"), "{text}");
 
-        let native = native_instructions("your notes");
+        let native = native_instructions("your notes", Some("search_web"));
         assert!(native.contains("You call tools yourself"), "{native}");
+    }
+
+    /// The fault Trident spotted: the rule describing a state the model is already in,
+    /// with a sanctioned sentence attached, got the sanctioned sentence rather than a
+    /// lookup. Pinned in both directions, because the honest no-tool wording is still
+    /// right when there is genuinely nothing to call and would otherwise drift back in.
+    #[test]
+    fn a_question_past_the_training_is_an_order_to_look_it_up_when_there_is_a_tool() {
+        for text in [
+            instructions("- search_web: search", "your notes", Some("search_web")),
+            native_instructions("your notes", Some("search_web")),
+        ] {
+            // Named, so it cannot be "a tool" the model has to go and find.
+            assert!(text.contains("`search_web`"), "{text}");
+            assert!(text.contains("your own first move"), "{text}");
+            // The two sentences the 7B actually produced instead of searching.
+            assert!(text.contains("real-time data"), "{text}");
+            assert!(text.contains("search the web for"), "{text}");
+            // The old escape hatch, which read as permission before anything was tried.
+            assert!(
+                !text.contains("If you have no tool result"),
+                "the pre-lookup escape hatch is back: {text}"
+            );
+        }
+    }
+
+    /// Local-only mode, or a registry without the tool: ordering a lookup that
+    /// `net::require_online` is about to refuse would be worse than saying so.
+    #[test]
+    fn with_no_reachable_search_the_rule_says_so_instead_of_naming_a_tool() {
+        for text in [
+            instructions("- read_file: read", "your notes", None),
+            native_instructions("your notes", None),
+        ] {
+            assert!(text.contains("no way to look it up"), "{text}");
+            assert!(text.contains("when you knew it"), "{text}");
+            assert!(!text.contains("search_web"), "{text}");
+        }
     }
 
     #[test]
@@ -730,7 +800,7 @@ mod tests {
     /// asking, still has to be said.
     #[test]
     fn the_native_instructions_name_the_field_without_teaching_the_fence() {
-        let text = native_instructions("system logs and service state");
+        let text = native_instructions("system logs and service state", Some("search_web"));
         assert!(text.contains("system logs and service state"), "{text}");
         assert!(text.contains("approve"), "{text}");
         assert!(!text.contains(FENCE), "{text}");

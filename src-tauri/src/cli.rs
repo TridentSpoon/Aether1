@@ -54,6 +54,8 @@ USAGE:
                                    before each one
     aether1 models                 Show which local model each speciality runs on
     aether1 models <NAME> <MODEL>  Point one speciality at a model (`clear` to unset)
+    aether1 reasoning              Show whether the model is asked to think, and how hard
+    aether1 reasoning <LEVEL>      off | auto | low | medium | high
     aether1 flow                   Show whether the avatar follows the question (STATIC or
                                    FLOW), and which line it can move within
     aether1 flow on|off            Turn that on or off
@@ -270,6 +272,11 @@ pub enum Invocation {
     Models {
         persona: Option<String>,
         model: Option<String>,
+    },
+    /// `reasoning`: how much of its own thinking the model is asked to do, and to show.
+    /// See `llm::providers::Reasoning` for what each level actually sends.
+    Reasoning {
+        level: Option<String>,
     },
     /// `flow`: STATIC keeps the avatar the operator picked on every question; FLOW lets the
     /// specialist inside that avatar's own line take the ones that are its own. See
@@ -790,6 +797,17 @@ pub fn parse(argv: &[String]) -> Invocation {
             _ => Err(
                 "models takes either nothing, or a speciality and a model -- for example \
                  `aether1 models nexus qwen2.5-coder:7b`, or `aether1 models nexus clear`"
+                    .to_string(),
+            ),
+        },
+        "reasoning" => match rest.len() {
+            0 => Ok(Invocation::Reasoning { level: None }),
+            1 => Ok(Invocation::Reasoning {
+                level: Some(rest[0].to_string()),
+            }),
+            _ => Err(
+                "reasoning takes nothing, or one of off, auto, low, medium, high -- for \
+                 example `aether1 reasoning high`"
                     .to_string(),
             ),
         },
@@ -2107,6 +2125,56 @@ fn indented(command: &str) -> String {
         .collect()
 }
 
+/// `aether1 reasoning`, both the showing and the setting.
+///
+/// A word rather than a switch because there are five answers, and because the difference
+/// between them is what gets *sent* -- see `Reasoning`. The round trip through
+/// `from_setting`/`as_key` is on purpose: it refuses a typo here instead of storing it and
+/// silently leaving reasoning on `auto` at the next turn.
+fn run_reasoning(level: Option<&str>) -> Result<String, String> {
+    use crate::llm::providers::Reasoning;
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let Some(asked) = level {
+        let wanted = Reasoning::from_setting(asked);
+        if wanted.as_key() != asked.trim().to_ascii_lowercase() {
+            return Err(format!(
+                "no reasoning level called {asked:?} -- it is one of off, auto, low, medium, high"
+            ));
+        }
+        db.set_setting(
+            crate::llm::REASONING_SETTING,
+            &serde_json::Value::String(wanted.as_key().to_string()),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let current =
+        Reasoning::from_setting(&db.get_setting_string(crate::llm::REASONING_SETTING, "auto"));
+    Ok(format!(
+        "Reasoning is {}.\n{}",
+        current.as_key(),
+        match current {
+            Reasoning::Off =>
+                "The model is told not to think where it can be told, and any \
+                               thinking it does anyway is taken out of the answer and not \
+                               shown.",
+            Reasoning::Auto =>
+                "Thinking is switched on for a local model whose server says \
+                                it can think, and reasoning is shown whenever a model \
+                                produces any. Nothing is asked of a provider that might \
+                                refuse the request for asking.",
+            Reasoning::Low | Reasoning::Medium | Reasoning::High =>
+                "Every provider that takes an effort level is asked for this one, and a \
+                 model that cannot reason is made to think on paper first -- one extra \
+                 pass per turn, shown in the reasoning panel. Cloud providers bill for \
+                 both.",
+        }
+    ))
+}
+
 /// `aether1 models`, both the showing and the setting.
 ///
 /// The showing is the important half: step 19's whole claim is that "which model for which
@@ -2936,6 +3004,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::NetRelay { .. } => Ok(String::new()),
         Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
+        Invocation::Reasoning { level } => run_reasoning(level.as_deref()),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),
         Invocation::Words {
             word,

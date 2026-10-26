@@ -152,6 +152,9 @@ pub struct ChatContext<'a> {
     /// The tool rounds already taken *this turn*. Providers replay these in their own
     /// shape so the model sees what it asked for and what came back.
     pub exchanges: &'a [Exchange],
+    /// How much reasoning to ask this model for. Each provider turns it into whatever its
+    /// own API calls that, or into nothing at all where there is no safe way to ask.
+    pub reasoning: Reasoning,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -307,6 +310,13 @@ pub struct TokenUsage {
 #[derive(Debug, Clone, Default)]
 pub struct Completion {
     pub text: String,
+    /// The model's own reasoning, kept apart from the answer rather than left in it.
+    ///
+    /// Empty when the model did not think, was not asked to, or thought where nothing can
+    /// see it -- OpenAI's reasoning models bill for thinking tokens and return none of
+    /// them. It is never stored in the conversation and never spoken: it is working, not
+    /// the reply, and a transcript that keeps it reads as something nobody said.
+    pub reasoning: String,
     pub usage: Option<TokenUsage>,
     /// Tools the model asked for through the provider's own tool-calling shape. Empty when
     /// it asked for none, and always empty for providers driven by the text protocol --
@@ -320,20 +330,361 @@ pub struct Completion {
 /// A turn that asked for a tool and said nothing else is not an empty reply, though -- it
 /// is the most ordinary shape there is -- so the emptiness check applies only when there
 /// are no calls either.
+///
+/// Nor is a turn that was only reasoning, and this is the one place that could have
+/// reported it as one: a thinking model cut off after `</think>` has said something, it
+/// just has not finished saying it. Showing the thought beats "stream ended without any
+/// content", which is what the operator used to get.
 fn finish_with(
-    accumulated: String,
+    relay: &mut Relay,
     usage: Option<TokenUsage>,
     calls: Vec<NativeCall>,
 ) -> Result<Completion, String> {
-    let trimmed = accumulated.trim().to_string();
-    if trimmed.is_empty() && calls.is_empty() {
+    let (text, reasoning) = relay.finish();
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() && calls.is_empty() && reasoning.trim().is_empty() {
         return Err("stream ended without any content".to_string());
     }
     Ok(Completion {
         text: trimmed,
+        reasoning: reasoning.trim().to_string(),
         usage,
         calls,
     })
+}
+
+// ---------------------------------------------------------------- Reasoning
+
+/// The tag pairs a model wraps its reasoning in when the server hands it back inside the
+/// answer rather than in a field of its own. qwen3, deepseek-r1 and the rest of the local
+/// thinking models all do this, and llama.cpp, LM Studio and Ollama-without-`think` all
+/// pass it straight through -- which is how `<think>` ended up on screen as if it were the
+/// reply. Longest-first is not needed here: `<think>` is not a prefix of `<thinking>`,
+/// because of the closing bracket.
+const THOUGHT_TAGS: [(&str, &str); 2] = [("<think>", "</think>"), ("<thinking>", "</thinking>")];
+
+/// How much of its own reasoning the model is asked to do, and to show.
+///
+/// `Auto` is the default and the reason this is five values rather than a checkbox. Asking
+/// for reasoning is not free and not universally safe: Ollama refuses `think` outright for
+/// a model that cannot do it, an older OpenAI-compatible server can 400 on a field it has
+/// never heard of, and Anthropic and Gemini both bill for thinking tokens. So `Auto` means
+/// "take the reasoning whenever the model offers it, and switch thinking on only where
+/// doing so cannot break or bill anything" -- which turns out to cover the case that
+/// matters on this machine, a local thinking model that was already thinking and was
+/// writing `<think>` into the chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reasoning {
+    /// Never ask. A model that thinks anyway still has its thinking taken out of the
+    /// answer -- it is simply not shown. Keeping it in would put `<think>` in the
+    /// transcript and in the tool parser's way, which is what this whole change is about.
+    Off,
+    #[default]
+    Auto,
+    Low,
+    Medium,
+    High,
+}
+
+impl Reasoning {
+    pub fn from_setting(key: &str) -> Reasoning {
+        match key.trim().to_lowercase().as_str() {
+            "off" | "none" | "false" => Reasoning::Off,
+            "low" => Reasoning::Low,
+            "medium" | "on" | "true" => Reasoning::Medium,
+            "high" | "max" => Reasoning::High,
+            // Including the empty string and anything unrecognised: a setting nobody has
+            // touched, or one written by a newer build, should leave the sensible default
+            // in place rather than silently turning reasoning off.
+            _ => Reasoning::Auto,
+        }
+    }
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Reasoning::Off => "off",
+            Reasoning::Auto => "auto",
+            Reasoning::Low => "low",
+            Reasoning::Medium => "medium",
+            Reasoning::High => "high",
+        }
+    }
+
+    /// Whether the operator wants to see reasoning at all. False only for `Off`.
+    pub fn shown(self) -> bool {
+        self != Reasoning::Off
+    }
+
+    /// The effort level, for providers that take one. None under `Auto` on purpose: the
+    /// field itself is what an older server rejects, so the safe default is to send none
+    /// and keep whatever the model does by default.
+    pub fn effort(self) -> Option<&'static str> {
+        match self {
+            Reasoning::Low => Some("low"),
+            Reasoning::Medium => Some("medium"),
+            Reasoning::High => Some("high"),
+            Reasoning::Off | Reasoning::Auto => None,
+        }
+    }
+
+    /// Anthropic's thinking budget in tokens. Its minimum is 1024, and the budget has to
+    /// leave room under `max_tokens` for the answer itself -- a budget equal to the cap is
+    /// a reply that thinks and then has nothing left to say with.
+    fn anthropic_budget(self) -> Option<u32> {
+        match self {
+            Reasoning::Low => Some(1024),
+            Reasoning::Medium => Some(4096),
+            Reasoning::High => Some(6144),
+            Reasoning::Off | Reasoning::Auto => None,
+        }
+    }
+
+    /// Gemini's `thinkingBudget`, in the same spirit.
+    fn gemini_budget(self) -> Option<i64> {
+        match self {
+            Reasoning::Low => Some(1024),
+            Reasoning::Medium => Some(8192),
+            Reasoning::High => Some(24576),
+            Reasoning::Off | Reasoning::Auto => None,
+        }
+    }
+}
+
+/// Pulls the reasoning out of an answer that has it written inline.
+///
+/// Streaming is the whole difficulty: `<think>` can arrive split across two deltas, so the
+/// same trick `FenceFilter` uses applies -- hold back anything that could still turn out to
+/// be the beginning of a tag, and release it once it cannot. Getting this wrong in the
+/// cheap way (strip the tags at the end of the turn) would put the reasoning on screen as
+/// the answer for as long as the model took to think, which on a 7B is most of the turn.
+#[derive(Default)]
+struct ThoughtSplitter {
+    holding: String,
+    /// Which pair of tags is open, as an index into `THOUGHT_TAGS`, so the closer looked
+    /// for is the one belonging to the opener that was actually seen.
+    inside: Option<usize>,
+}
+
+/// One delta, taken apart.
+#[derive(Default, PartialEq, Debug)]
+struct Split {
+    answer: String,
+    thought: String,
+}
+
+impl ThoughtSplitter {
+    fn push(&mut self, delta: &str) -> Split {
+        self.holding.push_str(delta);
+        let mut out = Split::default();
+
+        loop {
+            match self.inside {
+                Some(open) => {
+                    let close = THOUGHT_TAGS[open].1;
+                    match self.holding.find(close) {
+                        Some(end) => {
+                            out.thought.push_str(&self.holding[..end]);
+                            self.holding = self.holding[end + close.len()..].to_string();
+                            self.inside = None;
+                        }
+                        None => {
+                            let keep = partial_tag_len(&self.holding, &[close]);
+                            let release = self.holding.len() - keep;
+                            out.thought.push_str(&self.holding[..release]);
+                            self.holding = self.holding[release..].to_string();
+                            return out;
+                        }
+                    }
+                }
+                None => {
+                    let found = THOUGHT_TAGS
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, (open, _))| {
+                            self.holding.find(open).map(|at| (at, index))
+                        })
+                        .min();
+                    match found {
+                        Some((at, index)) => {
+                            out.answer.push_str(&self.holding[..at]);
+                            self.holding =
+                                self.holding[at + THOUGHT_TAGS[index].0.len()..].to_string();
+                            self.inside = Some(index);
+                        }
+                        None => {
+                            let openers: Vec<&str> =
+                                THOUGHT_TAGS.iter().map(|(open, _)| *open).collect();
+                            let keep = partial_tag_len(&self.holding, &openers);
+                            let release = self.holding.len() - keep;
+                            out.answer.push_str(&self.holding[..release]);
+                            self.holding = self.holding[release..].to_string();
+                            return out;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whatever is still held when the model stops talking.
+    ///
+    /// An unterminated block counts as reasoning rather than as answer. A thinking model
+    /// cut off mid-thought has produced no answer at all, and releasing half a thought into
+    /// the reply -- which is what dropping this on the answer side would do -- is how
+    /// `<think>` reached the screen in the first place.
+    fn finish(&mut self) -> Split {
+        let held = std::mem::take(&mut self.holding);
+        if self.inside.is_some() {
+            Split {
+                answer: String::new(),
+                thought: held,
+            }
+        } else {
+            Split {
+                answer: held,
+                thought: String::new(),
+            }
+        }
+    }
+}
+
+/// The longest proper prefix of any of `tags` that is a suffix of `text`.
+///
+/// Every tag is ASCII, so a suffix that matches one ends on a character boundary and the
+/// caller can slice at it -- the same reason `partial_fence_len` can do this.
+fn partial_tag_len(text: &str, tags: &[&str]) -> usize {
+    let bytes = text.as_bytes();
+    let longest = tags.iter().map(|tag| tag.len()).max().unwrap_or(0);
+    for len in (1..longest).rev() {
+        if bytes.len() < len {
+            continue;
+        }
+        let tail = &bytes[bytes.len() - len..];
+        if tags
+            .iter()
+            .any(|tag| tag.len() > len && tag.as_bytes()[..len] == *tail)
+        {
+            return len;
+        }
+    }
+    0
+}
+
+/// The two things a model says, on their way to two different places.
+///
+/// Every provider writes through this rather than straight to a sink, which is what makes
+/// "the reasoning is not the answer" true in one place instead of four. Text handed to
+/// `say` goes through the splitter, so a model that writes `<think>` inline is divided
+/// exactly like one whose server reports thinking in a field of its own -- and the
+/// `thinking` channel exists for the servers that do.
+///
+/// It accumulates as well as forwarding, so the completion's text is by construction the
+/// same text the sink saw. Keeping the two in step by hand is what went wrong often enough
+/// elsewhere in this file to be worth designing out.
+pub struct Relay<'a> {
+    answer: Option<Sink<'a>>,
+    thought: Option<Sink<'a>>,
+    /// Off entirely under `Reasoning::Off`: the thinking is still taken out of the answer,
+    /// it just never reaches a sink or the completion.
+    show: bool,
+    split: ThoughtSplitter,
+    text: String,
+    reasoning: String,
+}
+
+impl<'a> Relay<'a> {
+    pub fn new(answer: Sink<'a>, thought: Sink<'a>, show: bool) -> Relay<'a> {
+        Relay {
+            answer: Some(answer),
+            thought: Some(thought),
+            show,
+            split: ThoughtSplitter::default(),
+            text: String::new(),
+            reasoning: String::new(),
+        }
+    }
+
+    /// A relay with nowhere to stream to, for the blocking paths. It still splits, so a
+    /// non-streamed reply from a thinking model is taken apart the same way.
+    pub fn quiet(show: bool) -> Relay<'a> {
+        Relay {
+            answer: None,
+            thought: None,
+            show,
+            split: ThoughtSplitter::default(),
+            text: String::new(),
+            reasoning: String::new(),
+        }
+    }
+
+    /// Text from the provider's answer channel, which may have reasoning written into it.
+    pub fn say(&mut self, delta: &str) {
+        let split = self.split.push(delta);
+        self.note_thought(&split.thought);
+        if !split.answer.is_empty() {
+            self.text.push_str(&split.answer);
+            if let Some(sink) = self.answer.as_deref_mut() {
+                sink(&split.answer);
+            }
+        }
+    }
+
+    /// Text the provider has already split out of its reasoning, pushed through without
+    /// the splitter. Used on the non-streaming retry: that path's text came back from a
+    /// relay of its own, so running it through this one's half-open state would be wrong.
+    pub fn answered(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.text.push_str(text);
+        if let Some(sink) = self.answer.as_deref_mut() {
+            sink(text);
+        }
+    }
+
+    /// The answer so far, for deciding whether a failed stream can be retried.
+    pub fn so_far(&self) -> &str {
+        &self.text
+    }
+
+    /// Reasoning the provider reported in a field of its own -- Ollama's `thinking`,
+    /// OpenAI's `reasoning_content`, Anthropic's `thinking_delta`, a Gemini thought part.
+    /// It never goes through the splitter: it is already separated, and a `<think>` tag
+    /// inside it would be the model quoting one.
+    pub fn thinking(&mut self, delta: &str) {
+        self.note_thought(delta);
+    }
+
+    fn note_thought(&mut self, delta: &str) {
+        if delta.is_empty() || !self.show {
+            return;
+        }
+        self.reasoning.push_str(delta);
+        if let Some(sink) = self.thought.as_deref_mut() {
+            sink(delta);
+        }
+    }
+
+    /// Releases anything the splitter was holding and hands back both halves.
+    ///
+    /// Takes `&mut self` rather than consuming, because the providers are handed a relay by
+    /// reference -- one relay spans the retry from the streaming path to the blocking one,
+    /// so that an answer half-streamed before a failure is not counted twice.
+    fn finish(&mut self) -> (String, String) {
+        let tail = self.split.finish();
+        if !tail.answer.is_empty() {
+            self.text.push_str(&tail.answer);
+            if let Some(sink) = self.answer.as_deref_mut() {
+                sink(&tail.answer);
+            }
+        }
+        let thought = tail.thought;
+        self.note_thought(&thought);
+        (
+            std::mem::take(&mut self.text),
+            std::mem::take(&mut self.reasoning),
+        )
+    }
 }
 
 // ---------------------------------------------------------------- Ollama
@@ -391,6 +742,16 @@ struct OllamaChatRequest {
     options: OllamaOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAiToolDef>>,
+    /// Sent only when the server has told us this model can think -- see
+    /// `LocalFacts::thinking`, which comes off the same `/api/show` capabilities list the
+    /// tool support is read from. Ollama rejects the field outright for a model without
+    /// the capability ("does not support thinking"), so sending it blind would break every
+    /// existing local setup to gain a feature on some of them.
+    ///
+    /// `Some(false)` is not the same as `None` and is the real off switch: a thinking
+    /// model thinks by default, so turning reasoning off means saying so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
 }
 
 /// One message in Ollama's chat shape. Images ride on the message they belong to as bare
@@ -443,6 +804,11 @@ struct OllamaChatMessage {
     content: String,
     #[serde(default)]
     tool_calls: Option<Vec<OllamaToolCall>>,
+    /// Ollama's own channel for reasoning, filled when `think` was sent. A field beside
+    /// `content` rather than inside it, which is the one thing that makes this provider's
+    /// split trustworthy: no tag parsing is involved.
+    #[serde(default)]
+    thinking: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -474,6 +840,15 @@ impl OllamaResponse {
         self.message
             .as_ref()
             .map(|m| m.content.as_str())
+            .unwrap_or("")
+    }
+
+    /// The reasoning on this object, which is empty on every object of a stream but the
+    /// ones the model was still thinking on.
+    fn thought(&self) -> &str {
+        self.message
+            .as_ref()
+            .map(|m| m.thinking.as_str())
             .unwrap_or("")
     }
 
@@ -573,6 +948,12 @@ fn ollama_payload(
             top_p: 0.9,
             num_ctx: local_context_window(facts.context_tokens),
         },
+        // From the probe rather than from the caller: `tools` above is decided the same
+        // way, off the same cached body, so the two cannot disagree about one model.
+        think: facts
+            .thinking
+            .unwrap_or(false)
+            .then(|| ctx.reasoning.shown()),
         tools: (!ctx.tools.is_empty()).then(|| {
             ctx.tools
                 .iter()
@@ -627,8 +1008,13 @@ pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Com
     .read_json()
     .map_err(|e| e.to_string())?;
 
-    let calls = response.calls(0);
-    finish_with(response.text().to_string(), response.usage(), calls)
+    // Through a relay even with nowhere to stream to: a model that writes `<think>` into
+    // its answer does it on the blocking path too, and the two paths must not disagree
+    // about what the answer was.
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
+    relay.thinking(response.thought());
+    relay.say(response.text());
+    finish_with(&mut relay, response.usage(), response.calls(0))
 }
 
 /// Ollama streams newline-delimited JSON rather than SSE: one object per token, each with
@@ -637,7 +1023,7 @@ pub fn stream_ollama(
     endpoint: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
     let response = checked(
         crate::net::post(&ollama_url(endpoint), "the model was not asked")?
@@ -653,7 +1039,6 @@ pub fn stream_ollama(
             )),
     )?;
 
-    let mut full = String::new();
     let mut usage = None;
     let mut calls: Vec<NativeCall> = Vec::new();
     for_each_line(response, |line| {
@@ -663,11 +1048,10 @@ pub fn stream_ollama(
         }
         let chunk: OllamaResponse = serde_json::from_str(line)
             .map_err(|e| format!("unparseable chunk from Ollama: {e}"))?;
-        let delta = chunk.text();
-        if !delta.is_empty() {
-            full.push_str(delta);
-            sink(delta);
-        }
+        // Thinking first: a thinking model streams its whole thought before the first word
+        // of the answer, and both can land in one object on the boundary between them.
+        relay.thinking(chunk.thought());
+        relay.say(chunk.text());
         // Unlike OpenAI, a call is not fragmented across chunks -- it arrives whole, on
         // whichever object the model finished it on, so each one is appended as it lands.
         calls.extend(chunk.calls(calls.len()));
@@ -678,7 +1062,7 @@ pub fn stream_ollama(
         Ok(true)
     })?;
 
-    finish_with(full, usage, calls)
+    finish_with(relay, usage, calls)
 }
 
 // -------------------------------------------------- OpenAI-compatible (OpenAI, Groq, LM Studio)
@@ -710,6 +1094,13 @@ struct OpenAiRequest {
     stream_options: Option<OpenAiStreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAiToolDef>>,
+    /// OpenAI's own name for how hard to think, which Groq and most gateways have adopted.
+    /// Sent only at an explicit level and only to the providers that document it -- see
+    /// `takes_reasoning_effort`. LM Studio is deliberately never asked: it is the local
+    /// one, most likely to be an older build or a look-alike, and a 400 there costs a
+    /// working setup to gain a field whose effect we cannot see anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -814,6 +1205,14 @@ struct OpenAiChoiceMessage {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OpenAiToolCallChunk>>,
+    /// Two spellings because the shape was extended by other people: DeepSeek, vLLM, LM
+    /// Studio and llama.cpp settled on `reasoning_content`, OpenRouter on `reasoning`.
+    /// Reading both costs nothing and is the difference between a reasoning panel that
+    /// works on a given server and one that does not.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -834,6 +1233,11 @@ struct OpenAiStreamDelta {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OpenAiToolCallChunk>>,
+    /// As on `OpenAiChoiceMessage`: both spellings in use.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -926,6 +1330,11 @@ pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability>
 pub struct LocalFacts {
     pub tools: Option<bool>,
     pub context_tokens: Option<u64>,
+    /// Whether the model can reason, read off the same `capabilities` list as `tools` and
+    /// with the same three answers. Deliberately here rather than probed separately: it is
+    /// the same request to the same endpoint, and two readers of one fact are two answers
+    /// waiting to disagree.
+    pub thinking: Option<bool>,
 }
 
 /// Probes cost a round trip, and the answer is a property of the model rather than of the
@@ -964,21 +1373,26 @@ fn probe_ollama_facts(endpoint: &str, model: &str) -> Option<LocalFacts> {
     Some(LocalFacts {
         // Present and not containing "tools" is a real answer -- this model cannot. Absent
         // entirely is no answer, and stays None rather than becoming a false.
-        tools: tool_capability_of(&body),
+        tools: capability_of(&body, "tools"),
+        thinking: capability_of(&body, "thinking"),
         context_tokens: context_length_of(&body),
     })
 }
 
-/// Whether an `/api/show` body says this model can call tools.
+/// Whether an `/api/show` body says this model has one named capability -- `tools`, or
+/// `thinking`.
 ///
-/// Three answers, not two. `capabilities` present and containing `"tools"` is yes; present
+/// Three answers, not two. `capabilities` present and containing the name is yes; present
 /// and not containing it is a real no, and no amount of prompting will change it; absent
 /// altogether is an older Ollama that does not report capabilities, which is not the same
 /// as a no and must not be recorded as one.
-fn tool_capability_of(body: &serde_json::Value) -> Option<bool> {
+///
+/// For `thinking` the distinction is not only tidiness: Ollama refuses a request carrying
+/// `think` for a model without the capability, so "did not say" has to mean "do not ask".
+fn capability_of(body: &serde_json::Value, name: &str) -> Option<bool> {
     body.get("capabilities")
         .and_then(|c| c.as_array())
-        .map(|list| list.iter().any(|c| c.as_str() == Some("tools")))
+        .map(|list| list.iter().any(|c| c.as_str() == Some(name)))
 }
 
 /// Clears the cache, for a settings change that could have changed the answer -- pulling a
@@ -1164,6 +1578,9 @@ fn openai_payload(
                     })
                     .collect()
             }),
+            reasoning_effort: takes_reasoning_effort(provider)
+                .then(|| ctx.reasoning.effort())
+                .flatten(),
         },
     )
 }
@@ -1222,6 +1639,18 @@ pub fn reports_generation_time(provider: Provider) -> bool {
     matches!(provider, Provider::Ollama)
 }
 
+/// Whether this provider documents `reasoning_effort` on a chat completion.
+///
+/// Gateways are included because the field is what a gateway is for: it passes the request
+/// on to a provider that does understand it, and a gateway that does not simply ignores
+/// unknown fields. LM Studio is excluded for the reason given on the field itself.
+fn takes_reasoning_effort(provider: Provider) -> bool {
+    matches!(
+        provider,
+        Provider::OpenAi | Provider::Groq | Provider::Gateway
+    )
+}
+
 /// Whether this provider documents `stream_options.include_usage`. LM Studio is left out
 /// deliberately: it is the local one, it is the one most likely to be an older build or a
 /// look-alike server, and a rejected request there costs a working setup.
@@ -1260,6 +1689,54 @@ fn openai_request(
     Ok(request)
 }
 
+/// Whether a refusal is the provider objecting to `reasoning_effort` specifically.
+///
+/// Deliberately narrow. The field name has to be in the body, so a 400 about anything else
+/// is left alone and reaches the operator as itself -- a blanket "retry 400s without the
+/// extras" would hide a wrong model name behind a second identical failure.
+fn refused_the_effort_field(error: &str) -> bool {
+    let lowered = error.to_lowercase();
+    lowered.contains("reasoning_effort")
+        && (lowered.contains("400")
+            || lowered.contains("unrecognized")
+            || lowered.contains("unsupported")
+            || lowered.contains("not supported")
+            || lowered.contains("invalid"))
+}
+
+/// Sends an OpenAI-shaped request, and sends it once more without the effort field if that
+/// is what the provider objected to.
+///
+/// `reasoning_effort` is not a field every model behind an OpenAI-shaped API accepts: the
+/// reasoning models take it and the ordinary ones reject the whole request for carrying
+/// it. Which is which is a list that stops being true within a month, so it is not kept
+/// here -- the provider is asked, and is allowed to say no once. Somebody who picked an
+/// effort level and then a model that cannot use one should get a plainer answer, not a
+/// conversation where every turn fails.
+///
+/// The cost when it happens is one refused request per turn. A model that cannot reason
+/// also cannot be asked again later with a different answer, so remembering the refusal
+/// would be better -- but remembering it wrongly, across a model the operator has since
+/// changed, is how a reasoning model ends up silently never asked.
+fn openai_send(
+    provider: Provider,
+    url: &str,
+    api_key: &str,
+    timeout: std::time::Duration,
+    payload: &mut OpenAiRequest,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let sent = checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload));
+    match sent {
+        Err(refusal)
+            if payload.reasoning_effort.is_some() && refused_the_effort_field(&refusal) =>
+        {
+            payload.reasoning_effort = None;
+            checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
+        }
+        other => other,
+    }
+}
+
 pub fn call_openai_compatible(
     provider: Provider,
     endpoint: &str,
@@ -1267,10 +1744,10 @@ pub fn call_openai_compatible(
     model: &str,
     ctx: &ChatContext,
 ) -> Result<Completion, String> {
-    let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
+    let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, false);
 
     let response: OpenAiResponse =
-        checked(openai_request(provider, &url, api_key, CALL_TIMEOUT)?.send_json(&payload))?
+        openai_send(provider, &url, api_key, CALL_TIMEOUT, &mut payload)?
             .into_body()
             .read_json()
             .map_err(|e| e.to_string())?;
@@ -1289,12 +1766,22 @@ pub fn call_openai_compatible(
         builder.absorb(chunks);
     }
     let calls = builder.finish()?;
-    let text = choice.message.content.unwrap_or_default();
-    if text.trim().is_empty() && calls.is_empty() {
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
+    if let Some(thought) = choice
+        .message
+        .reasoning_content
+        .or(choice.message.reasoning)
+    {
+        relay.thinking(&thought);
+    }
+    relay.say(&choice.message.content.unwrap_or_default());
+    let (text, reasoning) = relay.finish();
+    if text.trim().is_empty() && calls.is_empty() && reasoning.trim().is_empty() {
         return Err("empty choices in response".to_string());
     }
     Ok(Completion {
         text: text.trim().to_string(),
+        reasoning: reasoning.trim().to_string(),
         usage,
         calls,
     })
@@ -1306,14 +1793,12 @@ pub fn stream_openai_compatible(
     api_key: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
-    let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
+    let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response =
-        checked(openai_request(provider, &url, api_key, STREAM_TIMEOUT)?.send_json(&payload))?;
+    let response = openai_send(provider, &url, api_key, STREAM_TIMEOUT, &mut payload)?;
 
-    let mut full = String::new();
     let mut usage = None;
     let mut builder = OpenAiCallBuilder::default();
     for_each_line(response, |line| {
@@ -1332,17 +1817,17 @@ pub fn stream_openai_compatible(
             if let Some(chunks) = &delta.tool_calls {
                 builder.absorb(chunks);
             }
+            if let Some(thought) = delta.reasoning_content.or(delta.reasoning) {
+                relay.thinking(&thought);
+            }
             if let Some(text) = delta.content {
-                if !text.is_empty() {
-                    full.push_str(&text);
-                    sink(&text);
-                }
+                relay.say(&text);
             }
         }
         Ok(true)
     })?;
 
-    finish_with(full, usage, builder.finish()?)
+    finish_with(relay, usage, builder.finish()?)
 }
 
 // ---------------------------------------------------------------- Gemini
@@ -1383,6 +1868,12 @@ struct GeminiRequest {
     /// entry per tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<GeminiToolBlock>>,
+    /// Carries `thinkingConfig` and nothing else, so it is absent unless reasoning was
+    /// explicitly asked for. A `thinkingConfig` sent to a model without thinking is a 400,
+    /// and the Gemini 2.5 models think by default anyway -- so under `Auto` the right move
+    /// is to send nothing and read the thought parts if any arrive.
+    #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
+    generation_config: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -1404,6 +1895,10 @@ struct GeminiRespPart {
     text: Option<String>,
     #[serde(default, rename = "functionCall")]
     function_call: Option<GeminiFunctionCall>,
+    /// Gemini marks a reasoning part rather than giving it a field of its own: same `text`,
+    /// with `thought: true` beside it. A part without the flag is the answer.
+    #[serde(default)]
+    thought: Option<bool>,
 }
 
 /// Gemini names a call rather than giving it an opaque id, and `id` is optional. The name
@@ -1554,6 +2049,9 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
     }
 
     GeminiRequest {
+        generation_config: ctx.reasoning.gemini_budget().map(
+            |budget| json!({"thinkingConfig": {"includeThoughts": true, "thinkingBudget": budget}}),
+        ),
         contents,
         tools: (!ctx.tools.is_empty()).then(|| {
             vec![GeminiToolBlock {
@@ -1596,18 +2094,23 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Comp
         .next()
         .ok_or_else(|| "empty candidates in response".to_string())?;
 
-    let mut text = String::new();
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
     let mut calls = Vec::new();
     for part in candidate.content.parts {
+        let thought = part.thought == Some(true);
         if let Some(said) = part.text {
-            text.push_str(&said);
+            if thought {
+                relay.thinking(&said);
+            } else {
+                relay.say(&said);
+            }
         }
         if let Some(call) = part.function_call {
             calls.push(NativeCall::from(call));
         }
     }
 
-    finish_with(text, usage, calls)
+    finish_with(&mut relay, usage, calls)
 }
 
 /// `alt=sse` asks for Server-Sent Events; without it streamGenerateContent returns a
@@ -1616,7 +2119,7 @@ pub fn stream_gemini(
     api_key: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={api_key}",
@@ -1632,7 +2135,6 @@ pub fn stream_gemini(
             .send_json(gemini_payload(ctx)),
     )?;
 
-    let mut full = String::new();
     let mut usage = None;
     let mut calls: Vec<NativeCall> = Vec::new();
     for_each_line(response, |line| {
@@ -1648,9 +2150,13 @@ pub fn stream_gemini(
         }
         for candidate in chunk.candidates {
             for part in candidate.content.parts {
+                let thought = part.thought == Some(true);
                 if let Some(said) = part.text.filter(|t| !t.is_empty()) {
-                    full.push_str(&said);
-                    sink(&said);
+                    if thought {
+                        relay.thinking(&said);
+                    } else {
+                        relay.say(&said);
+                    }
                 }
                 if let Some(call) = part.function_call {
                     calls.push(NativeCall::from(call));
@@ -1660,7 +2166,7 @@ pub fn stream_gemini(
         Ok(true)
     })?;
 
-    finish_with(full, usage, calls)
+    finish_with(relay, usage, calls)
 }
 
 // ---------------------------------------------------------------- Anthropic
@@ -1681,6 +2187,17 @@ struct AnthropicRequest {
     /// in it.
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicTool>>,
+    /// `{"type": "enabled", "budget_tokens": n}` when extended thinking was asked for.
+    ///
+    /// Not sent alongside tools, and that is a limitation rather than an oversight: with
+    /// thinking on, the API requires every thinking block to be replayed on the next
+    /// request *with the signature it came with*, and a tool round is exactly such a next
+    /// request. Aether1's `Exchange` carries no signature, so enabling both would turn
+    /// every tool-using turn into a 400 the operator cannot do anything about. Reasoning
+    /// on the other six providers does not have this constraint; closing it here needs the
+    /// signature captured and replayed, which is a change of its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -1704,6 +2221,10 @@ struct AnthropicContentBlock {
     block_type: String,
     #[serde(default)]
     text: Option<String>,
+    /// `thinking` blocks only -- the reasoning, in a field named after the block type
+    /// rather than sharing `text` with the answer.
+    #[serde(default)]
+    thinking: Option<String>,
     // tool_use blocks only.
     #[serde(default)]
     id: Option<String>,
@@ -1842,6 +2363,9 @@ struct AnthropicStreamEvent {
 struct AnthropicDelta {
     #[serde(default)]
     text: Option<String>,
+    /// `thinking_delta` only: one fragment of the reasoning.
+    #[serde(default)]
+    thinking: Option<String>,
     /// input_json_delta only: one fragment of the tool's arguments, as a JSON string that
     /// is not valid JSON on its own.
     #[serde(default)]
@@ -1979,6 +2503,14 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
                 })
                 .collect()
         }),
+        // Only without tools -- see the field's own note for why both at once cannot work
+        // until thinking signatures are carried on an Exchange.
+        thinking: ctx
+            .tools
+            .is_empty()
+            .then(|| ctx.reasoning.anthropic_budget())
+            .flatten()
+            .map(|budget| json!({"type": "enabled", "budget_tokens": budget})),
     }
 }
 
@@ -2014,20 +2546,24 @@ pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<C
     });
     // A reply is a list of blocks, not one block: text and tool_use arrive side by side,
     // and taking only the first would silently drop whichever came second.
-    let mut text = String::new();
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
     let mut calls = Vec::new();
     for block in &response.content {
         if let Some(call) = block.as_call() {
             calls.push(call);
+        } else if let Some(thought) = &block.thinking {
+            relay.thinking(thought);
         } else if let Some(chunk) = &block.text {
-            text.push_str(chunk);
+            relay.say(chunk);
         }
     }
-    if text.trim().is_empty() && calls.is_empty() {
+    let (text, reasoning) = relay.finish();
+    if text.trim().is_empty() && calls.is_empty() && reasoning.trim().is_empty() {
         return Err("empty content in response".to_string());
     }
     Ok(Completion {
         text: text.trim().to_string(),
+        reasoning: reasoning.trim().to_string(),
         usage,
         calls,
     })
@@ -2037,13 +2573,12 @@ pub fn stream_anthropic(
     api_key: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
     let response = checked(
         anthropic_request(api_key, STREAM_TIMEOUT)?.send_json(anthropic_payload(model, ctx, true)),
     )?;
 
-    let mut full = String::new();
     // Input arrives once at the top, output as a running total near the end, so the two
     // halves are accumulated separately and combined when the stream closes.
     let mut prompt_tokens = 0u64;
@@ -2093,11 +2628,10 @@ pub fn stream_anthropic(
                     if let Some(index) = event.index {
                         builder.fragment(index, &fragment);
                     }
+                } else if let Some(thought) = delta.thinking {
+                    relay.thinking(&thought);
                 } else if let Some(text) = delta.text {
-                    if !text.is_empty() {
-                        full.push_str(&text);
-                        sink(&text);
-                    }
+                    relay.say(&text);
                 }
                 Ok(true)
             }
@@ -2117,7 +2651,7 @@ pub fn stream_anthropic(
         completion_tokens,
         eval_nanos: None,
     });
-    finish_with(full, usage, builder.finish())
+    finish_with(relay, usage, builder.finish())
 }
 
 #[cfg(test)]
@@ -2216,6 +2750,7 @@ mod tests {
             agent_name: "R.E.D. 9000",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         let payload = anthropic_payload("claude-opus-5", &ctx, true);
 
@@ -2308,6 +2843,7 @@ mod tests {
             agent_name: "A1",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         let (_, lm) = openai_payload(
             Provider::LmStudio,
@@ -2395,15 +2931,37 @@ mod tests {
         assert!(matches!(sse_line(": keep-alive"), SseLine::Ignore));
     }
 
+    /// A relay carrying `said`, as a provider would have filled it.
+    fn relayed(said: &str) -> Relay<'static> {
+        let mut relay = Relay::quiet(true);
+        relay.say(said);
+        relay
+    }
+
     #[test]
     fn an_empty_stream_is_an_error_not_an_empty_reply() {
-        assert!(finish_with("   \n ".to_string(), None, Vec::new()).is_err());
+        assert!(finish_with(&mut relayed("   \n "), None, Vec::new()).is_err());
         assert_eq!(
-            finish_with(" hello ".to_string(), None, Vec::new())
+            finish_with(&mut relayed(" hello "), None, Vec::new())
                 .unwrap()
                 .text,
             "hello"
         );
+    }
+
+    /// The failure this sits on: a thinking model whose stream ends after `</think>` has
+    /// produced no answer, and reporting that as "no content" throws away the one thing it
+    /// did produce.
+    #[test]
+    fn a_turn_that_was_only_thinking_is_not_an_empty_stream() {
+        let completion = finish_with(
+            &mut relayed("<think>nearly there</think>"),
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(completion.text.is_empty());
+        assert_eq!(completion.reasoning, "nearly there");
     }
 
     #[test]
@@ -2417,6 +2975,7 @@ mod tests {
             agent_name: "HALCY",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         let blocking = serde_json::to_value(anthropic_payload("m", &ctx, false)).unwrap();
         let streaming = serde_json::to_value(anthropic_payload("m", &ctx, true)).unwrap();
@@ -2436,6 +2995,7 @@ mod tests {
             agent_name: "a",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         assert_eq!(
             ollama_payload("", &ctx, true, LocalFacts::default()).model,
@@ -2562,6 +3122,7 @@ mod failure_tests {
             agent_name: "R.E.D. 9000",
             tools,
             exchanges,
+            reasoning: Reasoning::Off,
         }
     }
 
@@ -2838,11 +3399,386 @@ mod failure_tests {
             tool: "get_time".to_string(),
             arguments: json!({}),
         };
-        let completion = finish_with(String::new(), None, vec![call]).unwrap();
+        let completion = finish_with(&mut Relay::quiet(true), None, vec![call]).unwrap();
         assert!(completion.text.is_empty());
         assert_eq!(completion.calls.len(), 1);
 
-        assert!(finish_with(String::new(), None, Vec::new()).is_err());
+        assert!(finish_with(&mut Relay::quiet(true), None, Vec::new()).is_err());
+    }
+
+    // ------------------------------------------------------- reasoning
+
+    /// Feeds `deltas` through a splitter one at a time, the way a stream arrives.
+    fn split_stream(deltas: &[&str]) -> (String, String) {
+        let mut splitter = ThoughtSplitter::default();
+        let mut answer = String::new();
+        let mut thought = String::new();
+        for delta in deltas {
+            let out = splitter.push(delta);
+            answer.push_str(&out.answer);
+            thought.push_str(&out.thought);
+        }
+        let tail = splitter.finish();
+        answer.push_str(&tail.answer);
+        thought.push_str(&tail.thought);
+        (answer, thought)
+    }
+
+    #[test]
+    fn an_inline_thought_is_taken_out_of_the_answer() {
+        let (answer, thought) =
+            split_stream(&["<think>the user wants F1 results</think>Lando won."]);
+        assert_eq!(answer, "Lando won.");
+        assert_eq!(thought, "the user wants F1 results");
+    }
+
+    /// The reason this cannot be done by stripping tags at the end of the turn: on a 7B the
+    /// thought is most of the turn, and a tag split across two deltas is the normal case,
+    /// not an edge one. Tokenizers break `<think>` into `<`, `think`, `>` routinely.
+    #[test]
+    fn a_tag_split_across_deltas_is_still_a_tag() {
+        let (answer, thought) = split_stream(&["<", "thi", "nk", ">", "hmm", "</", "think", ">ok"]);
+        assert_eq!(answer, "ok", "no part of the tag may reach the answer");
+        assert_eq!(thought, "hmm");
+    }
+
+    #[test]
+    fn the_longer_spelling_is_recognised_too() {
+        let (answer, thought) = split_stream(&["<thinking>so</thinking>done"]);
+        assert_eq!(answer, "done");
+        assert_eq!(thought, "so");
+    }
+
+    /// Text before a thought is answer text, and it must be released as it arrives rather
+    /// than held until the thought closes -- otherwise the operator watches a blank reply.
+    #[test]
+    fn prose_either_side_of_a_thought_is_answer() {
+        let mut splitter = ThoughtSplitter::default();
+        let first = splitter.push("One moment. <thi");
+        assert_eq!(first.answer, "One moment. ", "held only the partial tag");
+        let rest = splitter.push("nk>work</think> Done.");
+        assert_eq!(rest.answer, " Done.");
+        assert_eq!(rest.thought, "work");
+    }
+
+    /// A thought that never closes is a stream that was cut off mid-thought. Releasing it
+    /// into the answer is exactly the bug this exists to prevent.
+    #[test]
+    fn an_unclosed_thought_never_becomes_the_answer() {
+        let (answer, thought) = split_stream(&["<think>halfway through"]);
+        assert!(answer.is_empty(), "{answer:?}");
+        assert_eq!(thought, "halfway through");
+    }
+
+    /// Nothing to do, and nothing held back: the overwhelming majority of replies.
+    #[test]
+    fn an_answer_with_no_thought_in_it_passes_through_whole() {
+        let (answer, thought) = split_stream(&["Hello", " there", "."]);
+        assert_eq!(answer, "Hello there.");
+        assert!(thought.is_empty());
+    }
+
+    /// The interaction the coordinator asked to be sure of, and the reason the splitter runs
+    /// *before* the fence filter rather than after it.
+    ///
+    /// A thinking model reasons about whether to call a tool, and reasoning about a tool
+    /// call means writing one. If that reached the tool protocol, two things would break at
+    /// once: `FenceFilter` would open on the fence inside the thought and swallow the real
+    /// answer that follows, and `parse_round` would run a call the model was only weighing.
+    #[test]
+    fn a_tool_fence_inside_a_thought_reaches_neither_the_filter_nor_the_parser() {
+        let said = "<think>I could run ```tool\n{\"tool\": \"search_web\"}\n``` but I know \
+                    this one.</think>Paris.";
+
+        let (answer, thought) = split_stream(&[said]);
+        assert_eq!(answer, "Paris.", "the answer must survive intact");
+        assert!(thought.contains("search_web"), "{thought:?}");
+
+        // What the operator sees, and what the parser is handed, are both built from the
+        // answer side alone.
+        let mut filter = crate::tools::protocol::FenceFilter::new();
+        let mut shown = filter.push(&answer);
+        shown.push_str(&filter.finish());
+        assert_eq!(shown, "Paris.");
+
+        let round = crate::tools::protocol::parse_round(&answer);
+        assert!(round.calls.is_empty(), "{round:#?}");
+        assert!(round.malformed.is_empty(), "{round:#?}");
+
+        // And the same text, unsplit, is what used to happen: the call runs.
+        let unsplit = crate::tools::protocol::parse_round(said);
+        assert_eq!(
+            unsplit.calls.len(),
+            1,
+            "if this stops being true the test above proves nothing"
+        );
+    }
+
+    /// A real tool call, outside any thought, still has to work -- the splitter is not
+    /// allowed to buy safety by eating calls.
+    #[test]
+    fn a_tool_fence_outside_a_thought_still_reaches_the_parser() {
+        let (answer, _) = split_stream(&[
+            "<think>I should look.</think>Checking.\n```tool\n{\"tool\": \"get_time\"}\n```",
+        ]);
+        let round = crate::tools::protocol::parse_round(&answer);
+        assert_eq!(round.calls.len(), 1, "{round:#?}");
+        assert_eq!(round.calls[0].tool, "get_time");
+    }
+
+    #[test]
+    fn with_reasoning_off_the_thought_is_still_removed_but_not_kept() {
+        let mut relay = Relay::quiet(false);
+        relay.say("<think>working</think>Answer.");
+        let (answer, reasoning) = relay.finish();
+        assert_eq!(answer, "Answer.");
+        assert!(
+            reasoning.is_empty(),
+            "off means not shown, but never means left in the answer"
+        );
+    }
+
+    #[test]
+    fn the_setting_round_trips_and_an_unknown_word_leaves_the_default() {
+        for key in ["off", "auto", "low", "medium", "high"] {
+            assert_eq!(Reasoning::from_setting(key).as_key(), key);
+        }
+        assert_eq!(Reasoning::from_setting("OFF"), Reasoning::Off);
+        // Including the empty string: a setting nobody has saved must not read as "off".
+        assert_eq!(Reasoning::from_setting(""), Reasoning::Auto);
+        assert_eq!(Reasoning::from_setting("enthusiastically"), Reasoning::Auto);
+    }
+
+    /// The field that breaks a working local setup if it is sent carelessly: Ollama refuses
+    /// `think` outright for a model without the capability.
+    #[test]
+    fn ollama_is_only_asked_to_think_when_its_server_says_the_model_can() {
+        let base = with_tools(&[], &[]);
+        let can_think = LocalFacts {
+            thinking: Some(true),
+            ..LocalFacts::default()
+        };
+        let cannot = LocalFacts {
+            thinking: Some(false),
+            ..LocalFacts::default()
+        };
+        // An older Ollama that reports no capabilities at all. Not the same as a no, and
+        // the field still must not be sent -- it would be refused.
+        let did_not_say = LocalFacts::default();
+
+        let asked = ChatContext {
+            reasoning: Reasoning::High,
+            ..base
+        };
+        for facts in [cannot, did_not_say] {
+            assert_eq!(
+                ollama_payload("qwen3", &asked, true, facts).think,
+                None,
+                "a model not known to think must never be sent the field"
+            );
+        }
+
+        let automatic = ChatContext {
+            reasoning: Reasoning::Auto,
+            ..base
+        };
+        assert_eq!(
+            ollama_payload("qwen3", &automatic, true, can_think).think,
+            Some(true)
+        );
+
+        // And `false` rather than nothing when it is switched off: a thinking model thinks
+        // by default, so turning it off means saying so.
+        let silenced = ChatContext {
+            reasoning: Reasoning::Off,
+            ..base
+        };
+        assert_eq!(
+            ollama_payload("qwen3", &silenced, true, can_think).think,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn ollamas_own_thinking_field_is_read_as_reasoning() {
+        let chunk: OllamaResponse =
+            serde_json::from_str(r#"{"message":{"content":"Hi","thinking":"who is asking"}}"#)
+                .unwrap();
+        let mut relay = Relay::quiet(true);
+        relay.thinking(chunk.thought());
+        relay.say(chunk.text());
+        assert_eq!(
+            relay.finish(),
+            ("Hi".to_string(), "who is asking".to_string())
+        );
+    }
+
+    /// The failure this exists to stop: an operator picks an effort level, then a model
+    /// that cannot use one, and every reply fails for carrying a field they never typed.
+    #[test]
+    fn a_model_that_rejects_the_effort_field_is_asked_again_without_it() {
+        assert!(refused_the_effort_field(
+            "http status: 400 -- {\"error\":{\"message\":\"Unrecognized request argument \
+             supplied: reasoning_effort\"}}"
+        ));
+        assert!(refused_the_effort_field(
+            "http status: 400 -- reasoning_effort is not supported with this model"
+        ));
+    }
+
+    /// Narrow on purpose. A blanket "retry a 400 without the extras" would hide a wrong
+    /// model name behind a second identical failure, and the body naming the model is the
+    /// most useful thing the operator gets.
+    #[test]
+    fn any_other_refusal_is_left_to_reach_the_operator() {
+        assert!(!refused_the_effort_field(
+            "http status: 404 -- model gpt-4o-mimi does not exist"
+        ));
+        assert!(!refused_the_effort_field(
+            "http status: 400 -- invalid value for temperature"
+        ));
+        // The field named without a refusal around it is not a refusal of the field.
+        assert!(!refused_the_effort_field("reasoning_effort: high"));
+    }
+
+    #[test]
+    fn both_spellings_of_the_openai_reasoning_field_are_read() {
+        let under_score: OpenAiStreamDelta =
+            serde_json::from_str(r#"{"reasoning_content":"a"}"#).unwrap();
+        assert_eq!(under_score.reasoning_content.as_deref(), Some("a"));
+        let plain: OpenAiStreamDelta = serde_json::from_str(r#"{"reasoning":"b"}"#).unwrap();
+        assert_eq!(plain.reasoning.as_deref(), Some("b"));
+    }
+
+    /// Only the providers that document the field, and never at `Auto`: the field itself is
+    /// what an older OpenAI-compatible server rejects.
+    #[test]
+    fn reasoning_effort_goes_only_where_it_is_documented() {
+        let asked = ChatContext {
+            reasoning: Reasoning::High,
+            ..with_tools(&[], &[])
+        };
+        for provider in [Provider::OpenAi, Provider::Groq, Provider::Gateway] {
+            let (_, payload) = openai_payload(provider, "https://x/v1", "m", &asked, false);
+            assert_eq!(
+                payload.reasoning_effort,
+                Some("high"),
+                "{provider} documents reasoning_effort"
+            );
+        }
+        let (_, local) = openai_payload(Provider::LmStudio, "http://x/v1", "m", &asked, false);
+        assert_eq!(
+            local.reasoning_effort, None,
+            "LM Studio is never sent a field it might reject"
+        );
+
+        let automatic = ChatContext {
+            reasoning: Reasoning::Auto,
+            ..with_tools(&[], &[])
+        };
+        let (_, payload) = openai_payload(Provider::OpenAi, "https://x/v1", "m", &automatic, false);
+        assert_eq!(payload.reasoning_effort, None, "auto asks for nothing");
+    }
+
+    /// Anthropic cannot be asked to think and to use tools in the same request until an
+    /// Exchange carries thinking signatures -- see the field's own note. Pinned here so the
+    /// combination cannot be switched on by accident.
+    #[test]
+    fn anthropic_is_not_asked_to_think_while_tools_are_on_the_request() {
+        let tools = [a_tool()];
+        let with = ChatContext {
+            reasoning: Reasoning::Medium,
+            ..with_tools(&tools, &[])
+        };
+        assert!(anthropic_payload("claude-opus-5", &with, true)
+            .thinking
+            .is_none());
+
+        let without = ChatContext {
+            reasoning: Reasoning::Medium,
+            ..with_tools(&[], &[])
+        };
+        let thinking = anthropic_payload("claude-opus-5", &without, true)
+            .thinking
+            .expect("asked for, with no tools in the way");
+        assert_eq!(thinking["type"], "enabled");
+        let budget = thinking["budget_tokens"].as_u64().unwrap();
+        assert!(
+            budget < u64::from(ANTHROPIC_MAX_TOKENS),
+            "a budget at the cap is a reply that thinks and then cannot answer"
+        );
+        assert!(budget >= 1024, "below Anthropic's minimum is a 400");
+    }
+
+    #[test]
+    fn gemini_is_only_sent_a_thinking_config_when_one_was_asked_for() {
+        let automatic = ChatContext {
+            reasoning: Reasoning::Auto,
+            ..with_tools(&[], &[])
+        };
+        assert!(gemini_payload(&automatic).generation_config.is_none());
+
+        let asked = ChatContext {
+            reasoning: Reasoning::Low,
+            ..with_tools(&[], &[])
+        };
+        let config = gemini_payload(&asked).generation_config.unwrap();
+        assert_eq!(config["thinkingConfig"]["includeThoughts"], true);
+        assert!(config["thinkingConfig"]["thinkingBudget"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn a_gemini_thought_part_is_not_part_of_the_answer() {
+        let candidate: GeminiCandidate = serde_json::from_str(
+            r#"{"content":{"parts":[{"text":"weighing it","thought":true},{"text":"Yes."}]}}"#,
+        )
+        .unwrap();
+        let mut relay = Relay::quiet(true);
+        for part in candidate.content.parts {
+            let text = part.text.unwrap_or_default();
+            if part.thought == Some(true) {
+                relay.thinking(&text);
+            } else {
+                relay.say(&text);
+            }
+        }
+        assert_eq!(
+            relay.finish(),
+            ("Yes.".to_string(), "weighing it".to_string())
+        );
+    }
+
+    #[test]
+    fn an_anthropic_thinking_delta_is_not_part_of_the_answer() {
+        let event: AnthropicStreamEvent = serde_json::from_str(
+            r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"let me see"}}"#,
+        )
+        .unwrap();
+        let delta = event.delta.unwrap();
+        assert_eq!(delta.thinking.as_deref(), Some("let me see"));
+        assert!(delta.text.is_none(), "the two never share a field");
+    }
+
+    /// The gate on sending `think`, read off `/api/show`.
+    #[test]
+    fn the_thinking_capability_is_read_from_what_the_server_lists() {
+        let decode = |body: &str| -> Option<bool> {
+            capability_of(&serde_json::from_str(body).unwrap(), "thinking")
+        };
+        assert_eq!(
+            decode(r#"{"capabilities":["completion","tools","thinking"]}"#),
+            Some(true)
+        );
+        assert_eq!(
+            decode(r#"{"capabilities":["completion","tools"]}"#),
+            Some(false),
+            "a server that listed its capabilities and did not list thinking has said no"
+        );
+        assert_eq!(
+            decode("{}"),
+            None,
+            "an older Ollama says nothing, which is not the same as no"
+        );
     }
 
     /// Ollama carries tools now; LM Studio does not. See `Provider::supports_native_tools`
@@ -2883,9 +3819,9 @@ mod failure_tests {
         let says_yes = json!({"capabilities": ["completion", "tools", "vision"]});
         let says_no = json!({"capabilities": ["completion"]});
         let silent = json!({"details": {"parameter_size": "7B"}});
-        assert_eq!(tool_capability_of(&says_yes), Some(true));
-        assert_eq!(tool_capability_of(&says_no), Some(false));
-        assert_eq!(tool_capability_of(&silent), None);
+        assert_eq!(capability_of(&says_yes, "tools"), Some(true));
+        assert_eq!(capability_of(&says_no, "tools"), Some(false));
+        assert_eq!(capability_of(&silent, "tools"), None);
     }
 
     /// The chat payload sends real turns with real roles. The old `/api/generate` payload
@@ -2913,6 +3849,7 @@ mod failure_tests {
             agent_name: "A1",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         let payload = ollama_payload("llama3.1", &ctx, true, LocalFacts::default());
         let roles: Vec<&str> = payload.messages.iter().map(|m| m.role.as_str()).collect();
@@ -2956,6 +3893,7 @@ mod failure_tests {
             agent_name: "A1",
             tools: &schemas,
             exchanges: &exchanges,
+            reasoning: Reasoning::Off,
         };
         let payload = ollama_payload("llama3.1", &ctx, true, LocalFacts::default());
         let roles: Vec<&str> = payload.messages.iter().map(|m| m.role.as_str()).collect();

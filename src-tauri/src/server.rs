@@ -879,6 +879,7 @@ async fn chat(
                 &media,
                 &mut |_| {},
                 &mut |_| {},
+                &mut |_| {},
             )
         })
         .await
@@ -1140,7 +1141,7 @@ async fn resume_after_action(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let engine = state.engine.clone();
     tokio::task::spawn_blocking(move || {
-        commands::resume_after_action(&engine, id, &mut |_delta| {})
+        commands::resume_after_action(&engine, id, &mut |_delta| {}, &mut |_delta| {})
     })
     .await
     .map_err(internal_error)?
@@ -2221,12 +2222,16 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
     enum Chunk {
         Handover(serde_json::Value),
         Delta(String),
+        /// The model's own reasoning. A frame of its own rather than a delta, so the
+        /// browser transport says exactly what the native one does.
+        Reasoning(String),
     }
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Chunk>();
     let generation = {
         let session_id = session_id.clone();
         let handover_tx = tx.clone();
+        let thought_tx = tx.clone();
         tokio::task::spawn_blocking(move || {
             commands::generate_response_streamed_with_media(
                 &engine,
@@ -2235,6 +2240,9 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
                 &media,
                 &mut |delta| {
                     let _ = tx.send(Chunk::Delta(delta.to_string()));
+                },
+                &mut |delta| {
+                    let _ = thought_tx.send(Chunk::Reasoning(delta.to_string()));
                 },
                 &mut |handover| {
                     let _ = handover_tx.send(Chunk::Handover(commands::handover_json(handover)));
@@ -2256,6 +2264,9 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
                 frame
             }
             Chunk::Delta(delta) => serde_json::json!({"type": "delta", "delta": delta}),
+            Chunk::Reasoning(delta) => {
+                serde_json::json!({"type": "reasoning", "delta": delta})
+            }
         };
         if socket
             .send(Message::Text(frame.to_string().into()))

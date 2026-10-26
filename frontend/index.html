@@ -1004,7 +1004,7 @@
                         <span class="settings-nav-icon">🧠</span>
                         <span class="settings-nav-text">The Brain</span>
                     </button>
-                    <button type="button" id="settings-nav-connections" class="settings-nav-item" data-settings-section="connections" data-keywords="accounts sign in github openai anthropic gemini groq models api key provider connect credentials" data-hint="accounts, sign-in and AI provider connections" title="accounts, sign-in and AI provider connections">
+                    <button type="button" id="settings-nav-connections" class="settings-nav-item" data-settings-section="connections" data-keywords="accounts sign in github openai anthropic gemini groq models api key provider connect credentials reasoning thinking think thought effort" data-hint="accounts, sign-in and AI provider connections" title="accounts, sign-in and AI provider connections">
                         <span class="settings-nav-icon">🔗</span>
                         <span class="settings-nav-text">Connections &amp; Accounts</span>
                     </button>
@@ -1795,6 +1795,32 @@
                                 <span class="text-[11px] font-mono text-slate-500 block">
                                     Picking one fills in everything else for you.
                                 </span>
+                            </div>
+
+                            <div class="space-y-1">
+                                <label for="setting-reasoning" class="text-xs font-mono text-cyan-300 block">THINKING OUT LOUD</label>
+                                <select id="setting-reasoning" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                    <option value="auto">Automatic -- think where it is free, show it when it happens</option>
+                                    <option value="off">Off -- no thinking, and none shown</option>
+                                    <option value="low">Low effort -- think a little, every time</option>
+                                    <option value="medium">Medium effort</option>
+                                    <option value="high">High effort -- slowest and most careful</option>
+                                </select>
+                                <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                    Models like qwen3 and deepseek-r1 reason before they answer. The
+                                    reasoning appears above the reply in a panel you can open, and is
+                                    never part of the answer, never spoken, and never kept. Automatic
+                                    asks nothing of a provider that might refuse the request for
+                                    asking.
+                                </p>
+                                <p class="text-[10px] font-mono text-amber-300 leading-snug">
+                                    A fixed effort also makes a model that <em>cannot</em> reason do it
+                                    on paper: it is asked the question once as a scratchpad, and then
+                                    asked again with its own notes in front of it. That helps on a
+                                    question with steps in it and costs a second reply's worth of time
+                                    every turn -- and on a cloud provider, a second reply's worth of
+                                    money.
+                                </p>
                             </div>
 
                             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
