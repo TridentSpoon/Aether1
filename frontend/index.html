@@ -175,12 +175,18 @@
                     <button id="version-badge" title="Click to check for updates" class="hidden items-center text-[9px] leading-none font-mono text-slate-500 border border-slate-700 rounded px-1 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">--</button>
                     <button id="btn-header-update" type="button" class="hidden cyber-btn text-[9px] leading-none py-1 px-1.5" title="Check for Aether1 updates">↻ Update</button>
                 </div>
-                <div id="header-update-progress" class="hidden w-36 max-w-full space-y-0.5" aria-live="polite">
+<!-- Two lines rather than one: the step on top, and under it whatever git or cargo
+                     last printed, which is the part that tells an operator a two-minute rebuild
+                     is still moving. Both are truncated to fit the header and both carry the
+                     whole text as a tooltip; the button opens Settings -> Updates, where the same
+                     thing is shown in full with the last lines of output under it. -->
+                <button id="header-update-progress" type="button" class="hidden w-36 max-w-full space-y-0.5 text-left" aria-live="polite" title="Open Settings &#8594; Updates for the whole message">
                     <div id="header-update-progress-text" class="text-[8px] font-mono text-slate-500 truncate">Checking for updates…</div>
+                    <div id="header-update-progress-detail" class="hidden text-[8px] font-mono text-slate-500 truncate"></div>
                     <div class="h-1 rounded bg-slate-800 overflow-hidden" role="progressbar" aria-label="Aether1 update progress">
                         <div id="header-update-progress-bar" class="h-full w-0 bg-cyan-400 transition-all duration-200"></div>
                     </div>
-                </div>
+                </button>
             </div>
         </div>
 
