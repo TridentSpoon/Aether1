@@ -288,6 +288,14 @@ pub const GATEWAY_KEY_SETTING: &str = "llm_gateway_key";
 /// -- a thinking model was thinking, it just wrote the thought into the chat.
 pub const REASONING_SETTING: &str = "llm_reasoning";
 
+/// The tool a question that lands after the model's training is pointed at by name.
+///
+/// Named here rather than written into the prompt text because the prompt has to be able
+/// to ask the registry whether it actually exists: a prompt that orders a call to a tool
+/// that was never registered teaches the model to invent one, which is the fault
+/// `parse_round` exists to catch.
+const WEB_SEARCH_TOOL: &str = "search_web";
+
 /// Where one cloud provider's key lives: `llm_api_key_openai`, `llm_api_key_anthropic`,
 /// and so on.
 ///
@@ -749,9 +757,11 @@ impl LlmEngine {
              the operator may be running AETHER1 on several.\n\
              2. The Today line above is the real current date. Your training ended before it, \
              so anything you remember as \"the latest\" or \"most recent\" is out of date by \
-             however long that gap is. Date-sensitive questions -- results, releases, prices, \
-             who holds an office -- need a tool. If you have no tool result for one, say what \
-             you know and when you knew it; do not present a remembered answer as current.\n\
+             however long that gap is. A question that turns on something after your training \
+             -- results, releases, prices, who holds an office -- is one to look up, and the \
+             tool rules below say how. It is not one to answer out of memory, and not one to \
+             hand back to the operator to look up themselves. Never present a remembered \
+             answer as current.\n\
              3. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly \
              useful answer over staying in character.\n\
              4. Refer to yourself as {agent_name}.{operator_instruction}",
@@ -1099,7 +1109,13 @@ impl LlmEngine {
             "\n\n[SCRATCHPAD]\nBefore you answer, think on paper. {work}\n\n\
              These are private working notes, not the reply. Do not greet or address the \
              operator, do not call any tool, and do not write the final answer here -- you \
-             will be asked for it next, with these notes in front of you."
+             will be asked for it next, with these notes in front of you.\n\n\
+             You have no tools on this pass but you will have them on the next one. So if \
+             the answer turns on something you cannot know from memory -- anything after \
+             your training, anything about this machine -- the note to write is which tool \
+             you will call and what you will look up. \"I cannot know this\" is not a \
+             finding, and a note that stops there is one you will read back as a reason not \
+             to look."
         )
     }
 
@@ -1114,7 +1130,9 @@ impl LlmEngine {
             "\n\n[YOUR NOTES]\nYou already worked this question out on paper. These are \
              your own notes:\n\n{notes}\n\nAnswer the operator now. Use the notes, \
              correct them where they turn out to be wrong, and do not read them back -- \
-             the operator can already see them."
+             the operator can already see them. The notes were written without tools and \
+             you have them: where they say something needs looking up, or say you cannot \
+             know it, look it up now rather than reporting the limit."
         )
     }
 
@@ -1592,12 +1610,20 @@ impl LlmEngine {
             // way to use, and a prompt carrying the text catalogue to a model being sent
             // real schemas describes the tools twice in two incompatible ways. Both were
             // reachable while the decision was the provider's alone.
+            /* Which tool to tell the model to reach for when the question lands after
+            its training, or None when there is nothing to reach for. Two ways there is
+            nothing: no such tool registered, and local-only mode, where
+            `net::require_online` refuses the call -- and a prompt that orders a lookup the
+            gate is about to refuse trades a useful answer for a dead end. */
+            let web = (registry.get(WEB_SEARCH_TOOL).is_some() && !config.local_only)
+                .then_some(WEB_SEARCH_TOOL);
             system_prompt.push_str(&if native_tools_for(&config) {
-                crate::tools::protocol::native_instructions(&field)
+                crate::tools::protocol::native_instructions(&field, web)
             } else {
                 crate::tools::protocol::instructions(
                     &registry.prompt_catalog_for(Some(&config.persona)),
                     &field,
+                    web,
                 )
             });
         }
@@ -2735,7 +2761,13 @@ mod tests {
         // Saying the date is half of it. The model also has to be told what its own
         // memory is worth next to it, or it reads the date and answers from 2023 anyway.
         assert!(prompt.contains("Your training ended before it"), "{prompt}");
-        assert!(prompt.contains("need a tool"), "{prompt}");
+        // And told it as an action. "needs a tool" described the model's situation and
+        // left what to do about it open, which a 7B settled by saying it had no tool.
+        assert!(prompt.contains("one to look up"), "{prompt}");
+        assert!(
+            prompt.contains("not one to hand back to the operator"),
+            "{prompt}"
+        );
     }
 
     /// The date is a sentence, not an ISO string: a bare `2026-10-21` reads as a field to
