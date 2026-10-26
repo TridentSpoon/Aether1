@@ -389,6 +389,20 @@
                     <input id="chat-media-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden">
                     <button id="btn-chat-media" type="button" title="Attach images for analysis (or paste an image)" aria-label="Attach images" class="cyber-btn px-3 py-2 text-cyan-300 rounded">▧</button>
                     <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <!-- WHICH MODEL ANSWERS, in the row where the question is typed.
+
+                         There has been a picker in the chin bar since #245, beside STATE,
+                         and it was reported missing anyway: it is a 10px control at the
+                         very bottom edge of the window, two rows below the box, and it
+                         took itself away entirely whenever the model server could not be
+                         reached -- which looks exactly like not having one. So the same
+                         list is here as well, an arm's length from the caret, and neither
+                         copy hides any more (see fillBrainSelect in js/app.js). Both are
+                         filled from one reply and write through one save, so they cannot
+                         drift apart. -->
+                    <span id="chat-brain-row" class="hidden shrink-0 items-center">
+                        <select id="chat-brain" class="chin-brain-select chat-brain-select" aria-label="Which model answers"></select>
+                    </span>
                     <!-- Hush. Hidden until there is something to stop, because a dead
                          button beside the one you press every time is clutter, and because
                          its appearing is itself the sign that Escape will work. -->
