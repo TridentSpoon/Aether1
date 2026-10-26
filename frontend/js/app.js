@@ -8624,7 +8624,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     // claim about fit rather than claiming it fits.
                     fits: hubHfFits(repo),
                     runs_aether1: repo.tools !== 'none',
-                    tools: repo.tools === 'known',
+                    /* Three states, not two. `repo.tools` is 'known', 'none' or 'unknown'
+                       and the detail panel has always said all three -- but the row
+                       collapsed anything short of 'known' to false, so a repository
+                       Hugging Face says nothing about was listed as "no tools" while the
+                       panel beside it said "Tool support unknown". The list and the detail
+                       disagreed about the same repository, and the list was the one that
+                       was wrong. `null` is the third state; the row prints it as its own
+                       thing. */
+                    tools: repo.tools === 'known' ? true : repo.tools === 'none' ? false : null,
                     hf: repo,
                 };
             });
@@ -8654,8 +8662,39 @@ document.addEventListener('DOMContentLoaded', () => {
         return `Published by ${repo.owner}. ${downloads}, ${repo.likes} likes. ${tools}${gated}`;
     }
 
+    /* The size filter, for a Hugging Face repository.
+
+       The generic branch below reads a parameter count out of the model's *name* and
+       demands that the name also look quantised -- which is right for the Ollama
+       catalogue, where `qwen3:14b` and `llama3.1:8b-q4_K_M` say both things in the name.
+       It is wrong here twice over: a repository is called `Qwythos-9B-v2-GGUF`, which no
+       quantisation pattern matches, and the parameter count has already been parsed
+       server-side into `repo.params`. So the whole filter was skipped on this tab -- which
+       is why "30B+ quantised" sat there listing 9B models and hiding nothing at all.
+
+       Every repository the search returns is a GGUF, because the search asks for
+       `filter=gguf`, so "quantised" is true of all of them by construction and the only
+       question left is the size. */
+    function hubHfWithinScale(row) {
+        if (hub.scale === 'all') return true;
+        const billions = hubHfBillions(row.hf.params);
+        // No parameter count in the name is not evidence of a size, so a filter that asks
+        // for one hides it rather than guessing it in.
+        if (!billions) return false;
+        return hub.scale === 'multi-quant' ? billions >= 7 : billions >= 30;
+    }
+
+    /* `hf::parameter_size` keeps a mixture-of-experts multiplier in the figure, so this
+       sees "8X7B" as well as "9B". Reading that as 8 would put Mixtral in with the small
+       models; it is the product that is the size. */
+    function hubHfBillions(params) {
+        const parts = String(params || '').match(/^(\d+(?:\.\d+)?)(?:[xX](\d+(?:\.\d+)?))?B$/);
+        if (!parts) return 0;
+        return Number(parts[1]) * (parts[2] ? Number(parts[2]) : 1);
+    }
+
     function hubVisibleRows() {
-        if (hub.tab === 'hf') return hubHfRows();
+        if (hub.tab === 'hf') return hubHfRows().filter(hubHfWithinScale);
         let rows = hub.tab === 'device' ? hubDeviceRows() : hub.models.slice();
 
         const term = hub.search.trim().toLowerCase();
@@ -8783,6 +8822,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const mute = document.createElement('span');
             mute.style.color = 'var(--text-dim, #94a3b8)';
             mute.textContent = 'no tools';
+            meta.appendChild(mute);
+        } else if (model.tools === null) {
+            // Hugging Face does not report this, and saying nothing reads as "fine".
+            const mute = document.createElement('span');
+            mute.style.color = 'var(--text-dim, #94a3b8)';
+            mute.textContent = 'tools unknown';
             meta.appendChild(mute);
         }
         body.appendChild(meta);
@@ -9241,7 +9286,18 @@ document.addEventListener('DOMContentLoaded', () => {
         box.innerHTML = '';
         for (const download of list) box.appendChild(renderDownloadRow(download, null));
 
+        /* A failure has to replace the reassurance, not sit under it. The download row
+           went red with "Could not reach Ollama ... Connection refused" while the status
+           line below it still read "the bar below is live, and the download carries on
+           either way" -- so the panel was telling somebody their download was fine at the
+           same moment it told them it had failed. The status line is set once when the
+           pull starts and nothing ever took it back. */
+        const failed = list.filter(d => d.phase === 'failed');
         const running = list.filter(d => d.phase !== 'done' && d.phase !== 'failed');
+        if (failed.length && !running.length) {
+            const first = failed[0];
+            setHubStatus(`⚠ ${first.model} did not download. ${first.error || ''}`.trim(), 'bad');
+        }
         if (!running.length && hub.pollTimer) {
             clearInterval(hub.pollTimer);
             hub.pollTimer = null;

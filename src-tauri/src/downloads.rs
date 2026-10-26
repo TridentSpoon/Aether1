@@ -225,6 +225,27 @@ pub fn start(endpoint: &str, model: &str) -> Result<Download, String> {
         .unwrap_or(Download::new(&model)))
 }
 
+/// What to say when the pull could not be started.
+///
+/// A refused connection is not an obscure network fault: nothing is listening on the port,
+/// which on a local endpoint means the model server is not running. That has a fix the
+/// operator can carry out in one command, so the message says it. Everything else is
+/// passed through as it arrived -- the phrase somebody can search for is worth more than
+/// one this program invented.
+///
+/// Said here rather than in the panel that reported it, so the CLI, the HTTP API and the
+/// desktop app all get the same answer to the same question.
+fn unreachable(endpoint: &str, error: &str) -> String {
+    if error.to_lowercase().contains("connection refused") {
+        return format!(
+            "Could not reach Ollama at {endpoint}: nothing is listening there, so the model \
+             server is not running. Start it with `ollama serve` in a terminal, or with the \
+             button on the setup panel, then start the download again."
+        );
+    }
+    format!("Could not reach Ollama at {endpoint}: {error}")
+}
+
 /// Drives one pull to the end of its stream, writing progress into the registry as it goes.
 fn pump(endpoint: &str, model: &str) -> Result<(), String> {
     // No global timeout: this is a download of several gigabytes, and a deadline that can
@@ -234,7 +255,7 @@ fn pump(endpoint: &str, model: &str) -> Result<(), String> {
     // by the endpoint rather than by the word "Ollama" (src/net.rs).
     let response = crate::net::post(&format!("{endpoint}/api/pull"), "no model was downloaded")?
         .send_json(serde_json::json!({ "name": model, "stream": true }))
-        .map_err(|e| format!("Could not reach Ollama at {endpoint}: {e}"))?;
+        .map_err(|e| unreachable(endpoint, &e.to_string()))?;
 
     let reader = BufReader::new(response.into_body().into_reader());
     let mut tracker = Tracker::default();
@@ -292,6 +313,25 @@ pub fn forget(model: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The operator's screenshot: a refused connection reported as `io: Connection
+    /// refused`, with nothing anywhere saying that the fix is to start Ollama.
+    #[test]
+    fn a_refused_connection_says_the_server_is_not_running_and_how_to_start_it() {
+        let said = super::unreachable("http://localhost:11434", "io: Connection refused");
+        assert!(said.contains("not running"), "{said}");
+        assert!(said.contains("ollama serve"), "{said}");
+        assert!(said.contains("http://localhost:11434"), "{said}");
+    }
+
+    /// Everything else is passed through unedited: the phrase somebody can search for
+    /// beats one this program invented for them.
+    #[test]
+    fn any_other_failure_is_reported_in_its_own_words() {
+        let said = super::unreachable("http://localhost:11434", "dns error: no such host");
+        assert!(said.contains("dns error: no such host"), "{said}");
+        assert!(!said.contains("ollama serve"), "{said}");
+    }
+
     use super::*;
 
     fn line(json: &str) -> PullLine {
