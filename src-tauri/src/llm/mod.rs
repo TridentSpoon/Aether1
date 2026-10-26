@@ -68,12 +68,64 @@ fn native_tools_for(config: &Config) -> bool {
     if !config.provider.supports_native_tools() {
         return false;
     }
+    // The OpenAI-shaped local server has no capability endpoint to probe, so it is asked
+    // by being sent a request and allowed to refuse once. Until it does, unknown means
+    // yes -- the alternative is the hardcoded "LM Studio cannot" that was here before, and
+    // that was wrong for every model behind it that could.
+    if config.provider == Provider::LmStudio {
+        return !providers::refused_tools(&config.endpoint, &config.model_name);
+    }
     if config.provider != Provider::Ollama {
         return true;
     }
     providers::ollama_facts(&config.endpoint, &config.model_name)
         .tools
         .unwrap_or(true)
+}
+
+/// Routes an Ollama that was set up as an OpenAI-compatible server through the Ollama
+/// provider instead.
+///
+/// Ollama answers on `/v1` in the OpenAI shape as well as on its own API, so picking it
+/// out of the discovered-server list and saving it as the OpenAI-shaped provider works --
+/// and quietly costs the two things only the native path does:
+///
+///   1. `ollama_facts`, the `/api/show` capability probe. Without it `native_tools_for`
+///      never asks, and a model that can call tools is put on the fenced-text protocol.
+///   2. `num_ctx`. The OpenAI shape has no field for it, so Ollama uses its **4096**
+///      default however large the model's window is -- which is how a first question,
+///      with no conversation behind it at all, came back "request (5242 tokens) exceeds
+///      the available context size (4096 tokens)".
+///
+/// An operator cannot be expected to know any of that. They opened the list, saw the
+/// server that answered, and chose it.
+///
+/// Done once and recorded, like `tools::apply_default_on`: a deliberate choice to drive
+/// Ollama through its OpenAI endpoint afterwards is left alone. The probe is `/api/version`
+/// on the same host, which is Ollama's and nothing else's -- a port number would be a
+/// guess, and guessing is what put the wrong label there in the first place.
+const OLLAMA_LABEL_MARKER: &str = "ollama_behind_openai_label_checked";
+
+pub fn adopt_ollama_behind_openai_label(db: &MemoryDb) {
+    if db.get_setting_bool(OLLAMA_LABEL_MARKER, false) {
+        return;
+    }
+    let provider = db.get_setting_string("llm_provider", "");
+    let endpoint = db.get_setting_string("llm_endpoint", "");
+    if provider == Provider::LmStudio.key() && crate::model_scanner::is_ollama_behind(&endpoint) {
+        let native = crate::model_scanner::without_openai_suffix(&endpoint);
+        let _ = db.set_setting(
+            "llm_provider",
+            &serde_json::Value::String(Provider::Ollama.key().to_string()),
+        );
+        let _ = db.set_setting("llm_endpoint", &serde_json::Value::String(native.clone()));
+        eprintln!(
+            "[AETHER1] The model server at {endpoint} is Ollama, but it was set up as a \
+             generic OpenAI-compatible server -- which leaves tool calling off and the \
+             context at Ollama's 4096 default. Now talking to it at {native} as Ollama."
+        );
+    }
+    let _ = db.set_setting(OLLAMA_LABEL_MARKER, &serde_json::Value::Bool(true));
 }
 
 /* There was a SESSION_TOKEN_BUDGET here: a flat 100,000 invented in this file, which the
@@ -295,6 +347,10 @@ pub const REASONING_SETTING: &str = "llm_reasoning";
 /// that was never registered teaches the model to invent one, which is the fault
 /// `parse_round` exists to catch.
 const WEB_SEARCH_TOOL: &str = "search_web";
+/// The other half of a lookup: what the search found is a list of links until this reads
+/// one. Gated the same way, and for the same reason -- advice about a tool that is not
+/// there is worse than silence.
+const FETCH_URL_TOOL: &str = "fetch_url";
 
 /// Where one cloud provider's key lives: `llm_api_key_openai`, `llm_api_key_anthropic`,
 /// and so on.
@@ -1461,11 +1517,21 @@ impl LlmEngine {
                     continue;
                 }
 
-                let notice = "\n\n[HUD Alert: the model kept writing tool results without \
-                     calling a tool. Nothing was looked up, so nothing it wrote about the \
-                     result can be relied on, and it has been withheld.]";
-                visible.push_str(notice);
-                sink(notice);
+                /* Three rounds of invented results is not a bad turn, it is a model
+                that cannot emit a tool call -- so the alert names it and says what to do
+                instead of leaving the operator with three withheld blocks and no idea
+                why. The name is the whole of the useful part: "nothing was looked up" was
+                already there and sent somebody back to the same model to try again. */
+                let notice = format!(
+                    "\n\n[HUD Alert: {} wrote tool results three times without ever \
+                     calling a tool, so nothing was looked up and all of it has been \
+                     withheld. A model that does this cannot use tools on this server, \
+                     whatever it says -- pick one that can under The Brain, where each \
+                     model says whether it can.]",
+                    config.model_name
+                );
+                visible.push_str(&notice);
+                sink(&notice);
                 return done(visible.trim().to_string(), any_reported, total);
             }
 
@@ -1609,11 +1675,22 @@ impl LlmEngine {
             // that is about to go out on the text protocol because the model has no tool
             // template says so rather than leaving the operator to infer it from an answer
             // that reads like a refusal.
-            if !native_tools_for(&config)
-                && config.provider == Provider::Ollama
-                && providers::ollama_facts(&config.endpoint, &config.model_name).tools
-                    == Some(false)
-            {
+            // Two ways a server can have said no, and the notice used to cover only the
+            // first: Ollama's capability list, and an OpenAI-shaped server that rejected
+            // the `tools` field. An operator on LM Studio could not see this line at all,
+            // which is the state the 0.4.247 log was in -- three withheld forgeries, and
+            // nothing anywhere saying the model was never able to call anything.
+            let server_said_no = match config.provider {
+                Provider::Ollama => {
+                    providers::ollama_facts(&config.endpoint, &config.model_name).tools
+                        == Some(false)
+                }
+                Provider::LmStudio => {
+                    providers::refused_tools(&config.endpoint, &config.model_name)
+                }
+                _ => false,
+            };
+            if !native_tools_for(&config) && server_said_no {
                 cannot_call_tools = Some(crate::tools::protocol::trace_of(&format!(
                     "{} cannot call tools -- it has no tool template, so nothing can be \
                      looked up with it. The Brain suggests one that can.",
@@ -1634,13 +1711,16 @@ impl LlmEngine {
             gate is about to refuse trades a useful answer for a dead end. */
             let web = (registry.get(WEB_SEARCH_TOOL).is_some() && !config.local_only)
                 .then_some(WEB_SEARCH_TOOL);
+            let fetch = (registry.get(FETCH_URL_TOOL).is_some() && !config.local_only)
+                .then_some(FETCH_URL_TOOL);
             system_prompt.push_str(&if native_tools_for(&config) {
-                crate::tools::protocol::native_instructions(&field, web)
+                crate::tools::protocol::native_instructions(&field, web, fetch)
             } else {
                 crate::tools::protocol::instructions(
                     &registry.prompt_catalog_for(Some(&config.persona)),
                     &field,
                     web,
+                    fetch,
                 )
             });
         }
@@ -2203,6 +2283,58 @@ mod tests {
             normalize_mission_name("A name that contains far too many words"),
             Some("A name that contains".to_string())
         );
+    }
+
+    /// The migration must not touch an endpoint that is not Ollama, and must run once.
+    /// There is no Ollama in the container, so `is_ollama_behind` answers no here -- which
+    /// is exactly the case worth pinning: a no leaves every setting alone, and still
+    /// records that the question was asked so a later deliberate choice sticks.
+    #[test]
+    fn a_server_that_is_not_ollama_is_left_exactly_as_configured() {
+        let engine = temp_engine("ollama_label");
+        let db = engine.db();
+        let _ = db.set_setting(
+            "llm_provider",
+            &serde_json::Value::String("lmstudio".into()),
+        );
+        let _ = db.set_setting(
+            "llm_endpoint",
+            // Nothing is listening here, so the probe cannot say yes.
+            &serde_json::Value::String("http://127.0.0.1:1/v1".into()),
+        );
+
+        adopt_ollama_behind_openai_label(db);
+
+        assert_eq!(db.get_setting_string("llm_provider", ""), "lmstudio");
+        assert_eq!(
+            db.get_setting_string("llm_endpoint", ""),
+            "http://127.0.0.1:1/v1"
+        );
+        assert!(
+            db.get_setting_bool(OLLAMA_LABEL_MARKER, false),
+            "asked once, and not asked again"
+        );
+    }
+
+    /// Once the question has been asked, a deliberate choice to drive Ollama through its
+    /// OpenAI endpoint is the operator's and is not overturned on the next start.
+    #[test]
+    fn the_question_is_only_asked_once() {
+        let engine = temp_engine("ollama_label_once");
+        let db = engine.db();
+        let _ = db.set_setting(OLLAMA_LABEL_MARKER, &serde_json::Value::Bool(true));
+        let _ = db.set_setting(
+            "llm_provider",
+            &serde_json::Value::String("lmstudio".into()),
+        );
+        let _ = db.set_setting(
+            "llm_endpoint",
+            &serde_json::Value::String("http://127.0.0.1:11434/v1".into()),
+        );
+
+        adopt_ollama_behind_openai_label(db);
+
+        assert_eq!(db.get_setting_string("llm_provider", ""), "lmstudio");
     }
 
     fn temp_engine(name: &str) -> LlmEngine {

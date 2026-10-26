@@ -271,6 +271,53 @@ impl LocalApi {
     }
 }
 
+/// The base address of an OpenAI-compatible endpoint: the same server, without the `/v1`
+/// the OpenAI shape is served under.
+///
+/// Kept separate from the probe below so it can be tested without a server, and because
+/// the trailing slash is the sort of thing that silently turns a probe into a 404.
+pub fn without_openai_suffix(endpoint: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    trimmed
+        .strip_suffix("/v1")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Whether the server behind an OpenAI-compatible endpoint is in fact Ollama.
+///
+/// Ollama serves its own API *and* an OpenAI-compatible one at `/v1`, so pointing the
+/// OpenAI-shaped provider at `http://127.0.0.1:11434/v1` works -- and quietly costs the
+/// two things that only the native path does: the capability probe that decides whether
+/// the model can call tools, and `num_ctx`, without which Ollama uses its 4096 default
+/// whatever the model can do. An operator who got there through the server list had no
+/// way to know any of that; they picked the server that answered.
+///
+/// `/api/version` is Ollama's and nothing else's, which is what makes this an answer
+/// rather than a guess about a port number.
+pub fn is_ollama_behind(endpoint: &str) -> bool {
+    let base = without_openai_suffix(endpoint);
+    if base.is_empty() {
+        return false;
+    }
+    crate::net::get(
+        &format!("{base}/api/version"),
+        "the local server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .map(|resp| resp.status().is_success())
+    .unwrap_or(false)
+}
+
 /// A local model server that answered.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LocalServer {
@@ -945,5 +992,42 @@ mod tests {
         }
         assert!(status.models.is_empty());
         assert_eq!(status.recommended_model, "local-model");
+    }
+
+    /// Trident's settings were `llm_endpoint = "http://127.0.0.1:11434/v1"`. The probe has
+    /// to ask the server itself, on its own API, so the `/v1` has to come off cleanly --
+    /// including a trailing slash, which would otherwise turn `/api/version` into a 404
+    /// and the answer into a silent no.
+    #[test]
+    fn the_openai_suffix_comes_off_an_endpoint_however_it_was_typed() {
+        for written in [
+            "http://127.0.0.1:11434/v1",
+            "http://127.0.0.1:11434/v1/",
+            "  http://127.0.0.1:11434/v1  ",
+            "http://127.0.0.1:11434",
+            "http://127.0.0.1:11434/",
+        ] {
+            assert_eq!(
+                without_openai_suffix(written),
+                "http://127.0.0.1:11434",
+                "{written}"
+            );
+        }
+    }
+
+    /// A path that merely contains v1 is not the OpenAI suffix.
+    #[test]
+    fn only_a_trailing_v1_is_treated_as_the_openai_suffix() {
+        assert_eq!(
+            without_openai_suffix("http://box:8080/v1/proxy"),
+            "http://box:8080/v1/proxy"
+        );
+    }
+
+    /// Nothing to probe is not Ollama, and must not become a request to "/api/version".
+    #[test]
+    fn an_empty_endpoint_is_not_mistaken_for_a_server() {
+        assert!(!is_ollama_behind(""));
+        assert!(!is_ollama_behind("   "));
     }
 }

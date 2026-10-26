@@ -2924,6 +2924,9 @@ fn build_llm_engine() -> LlmEngine {
     // for the same reason `net::install` is: it is the single path every entry point
     // shares, and it has to happen before anything asks a model a question.
     tools::apply_default_on(engine.db());
+    // Before anything reads the provider: a mislabelled Ollama is the difference between a
+    // companion that can search and one that cannot. See the function for why.
+    llm::adopt_ollama_behind_openai_label(engine.db());
     engine
 }
 
