@@ -485,12 +485,15 @@ pub fn start_local_server_tracked(engine: &LlmEngine) -> (Value, Option<std::pro
         );
     }
 
-    let Ok(binary) = which::which("ollama") else {
+    // Ollama if it is installed, LM Studio's `lms` otherwise. Which one is not a
+    // preference the operator should have to express: whichever is on the machine is the
+    // one to start. See `local_server::startable`.
+    let Some(server) = crate::local_server::startable() else {
         return (
             serde_json::json!({
                 "ok": false,
-                "message": "There is no `ollama` command on this machine to start. It needs \
-                            installing first.",
+                "message": "There is no local model server on this machine to start. \
+                            Install Ollama or LM Studio first.",
             }),
             None,
         );
@@ -523,9 +526,15 @@ pub fn start_local_server_tracked(engine: &LlmEngine) -> (Value, Option<std::pro
     that already decides it, so the two cannot drift apart. */
     let num_ctx = crate::code_setup::context_tokens(crate::llm::Telemetry::snapshot().ram_total_gb);
 
-    match std::process::Command::new(&binary)
-        .arg("serve")
-        .env("OLLAMA_CONTEXT_LENGTH", num_ctx.to_string())
+    let mut command = std::process::Command::new(&server.binary);
+    command.args(server.args);
+    // Only Ollama has a variable for this. LM Studio takes a model's context from that
+    // model's own load settings, so there is nothing to set here and nothing is pretended.
+    if let Some(name) = server.context_env {
+        command.env(name, num_ctx.to_string());
+    }
+
+    match command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -534,12 +543,18 @@ pub fn start_local_server_tracked(engine: &LlmEngine) -> (Value, Option<std::pro
         // Started, not proven: it takes a moment to bind the port, and whoever called this
         // confirms by probing rather than by trusting this answer. That is the same rule
         // the rest of the setup path follows -- the machine is asked, never assumed.
+        // The handle is handed back only when it *is* the server. `ollama serve` is the
+        // server, so it can be stopped again later; `lms server start` is a client that
+        // asks the installed LM Studio to listen and then exits, so holding its handle
+        // would let Game Mode "stop" a process that had already finished while the server
+        // it started kept running. Dropping it says plainly that this one is not ours to
+        // stop -- the same rule as a server the operator started themselves.
         Ok(child) => (
             serde_json::json!({
                 "ok": true,
                 "message": "Starting the model server. Give it a few seconds.",
             }),
-            Some(child),
+            server.holds_the_server.then_some(child),
         ),
         Err(e) => (
             serde_json::json!({
@@ -870,7 +885,7 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // silently, and whether Game Mode is currently switched on (persisted so it
         // survives a restart rather than silently reverting).
         "autostart_app": false,
-        "autostart_ollama": false,
+        "autostart_ollama": true,
         // Minutes with no local reply before the model server AETHER1 started is stopped
         // again; 0 keeps it running. See background_services::IDLE_SETTING.
         "ollama_idle_minutes": crate::background_services::DEFAULT_IDLE_MINUTES,
