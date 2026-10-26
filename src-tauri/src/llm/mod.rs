@@ -1473,6 +1473,23 @@ impl LlmEngine {
                 return done(visible.trim().to_string(), any_reported, total);
             }
 
+            /* A real call and a forged result in the same round. The branch above cannot
+            catch this one, because it only looks when nothing ran -- so the invented
+            answer stayed on screen, and the genuine trace line that followed read as its
+            source. See `protocol::forged_results` for the log this comes from.
+
+            Not a retry: the call is real and its result is one round away, so the
+            fabrication is cut and the round carries on. */
+            if crate::tools::protocol::forged_results(&visible[visible_before..]) {
+                let kept =
+                    crate::tools::protocol::without_forged_results(&visible[visible_before..]);
+                visible.truncate(visible_before);
+                visible.push_str(&kept);
+                let trace = crate::tools::protocol::forged_alongside_trace();
+                visible.push_str(&trace);
+                sink(&trace);
+            }
+
             let mut results = Vec::new();
             for call in &calls {
                 // A mutating tool describes itself for an approval card, and that

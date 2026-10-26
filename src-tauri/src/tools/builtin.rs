@@ -340,7 +340,7 @@ impl Tool for SearchWeb {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search terms."
+                    "description": "What to search for, taken from what the operator actually asked. A model told off for forging a result has been seen retrying with a memorised stock query -- \"definition of artificial intelligence\" in answer to a question about a MotoGP race -- so this has to carry their subject, not an example."
                 }
             },
             "required": ["query"]

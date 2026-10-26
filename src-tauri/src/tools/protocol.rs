@@ -214,10 +214,33 @@ pub fn parse_calls(text: &str) -> Vec<ToolCall> {
 /// either a forgery or a model talking about the mechanism. Neither is an answer, and both
 /// are better retried than shown.
 ///
-/// Only consulted when no tool actually ran. A round that really called something has a
-/// real envelope coming, and its own prose about it is harmless.
+/// This used to be consulted only when no tool actually ran, on the reasoning that a round
+/// which really called something has a real envelope coming and its own prose about it is
+/// harmless. That was wrong, and an operator's 2026-10-26 log is the counterexample: one
+/// round called `search_web` *and*, in the same breath, wrote a finished answer under a
+/// `[TOOL RESULTS]` heading with `[insert winner's name]` still in it. Because a call had
+/// been parsed, the check was skipped and the fabrication went to the screen -- then the
+/// real `⚙ search_web` trace line arrived underneath it, which reads as the source for
+/// what is actually invented. A forgery with a genuine trace beneath it is worse than one
+/// without.
 pub fn forged_results(text: &str) -> bool {
     text.contains(RESULTS_HEADER)
+}
+
+/// `text` with a forged results envelope and everything after it removed.
+///
+/// For the round that *did* call a tool. Retrying is the wrong response there -- the call
+/// is real and its result is one round away -- so the fabrication is cut and the round is
+/// allowed to proceed. What survives is whatever the model said before it started
+/// inventing, which is usually a sentence about looking something up and is harmless.
+///
+/// Everything after the header goes, not just the header line: the invented answer is the
+/// part that matters, and it follows.
+pub fn without_forged_results(text: &str) -> String {
+    match text.find(RESULTS_HEADER) {
+        Some(at) => text[..at].trim_end().to_string(),
+        None => text.to_string(),
+    }
 }
 
 /// Fed back when a round forged a result instead of calling anything.
@@ -242,6 +265,17 @@ pub fn forged_notice() -> String {
 /// would have been.
 pub fn forged_trace() -> String {
     trace_of("a tool result was written without any tool running, and was withheld")
+}
+
+/// The operator's side of a forgery written alongside a real call. Distinct from
+/// `forged_trace` because the outcome is different and the difference matters to whoever
+/// is reading: nothing was withheld in place of an answer here, the real call is going
+/// ahead, and only the invented part was taken out.
+pub fn forged_alongside_trace() -> String {
+    trace_of(
+        "a made-up tool result was written alongside the real call, and was removed -- the \
+         call itself ran",
+    )
 }
 
 /// Fed back as the next round's prompt when a round asked for a tool and got the syntax
@@ -571,6 +605,47 @@ mod tests {
     /// The hole the malformed-block check could not cover, and the one that kept reaching
     /// the operator: no fence at all, so nothing is malformed, so the turn reads as the
     /// model simply chatting -- with invented results as the entire visible answer.
+    /// The operator's 2026-10-26 log: one round called `search_web` and wrote a finished
+    /// answer under a `[TOOL RESULTS]` heading in the same breath, placeholders and all.
+    /// The invented part is what has to go; the sentence before it is harmless.
+    #[test]
+    fn a_forgery_written_alongside_a_real_call_is_cut_from_the_answer() {
+        let round = "I can help you find that.\n\n[TOOL RESULTS]\n\nAh, I've got the \
+                     results! The winner was [insert winner's name].";
+        let kept = without_forged_results(round);
+        assert_eq!(kept, "I can help you find that.");
+        assert!(
+            !kept.contains("insert winner's name"),
+            "the invented answer is the part that matters: {kept}"
+        );
+    }
+
+    /// Everything after the header goes, not only the header line -- the fabrication
+    /// follows it, and a heading on its own was never the problem.
+    #[test]
+    fn stripping_a_forgery_takes_what_came_after_it_too() {
+        assert_eq!(without_forged_results("[TOOL RESULTS]\nmade up"), "");
+    }
+
+    #[test]
+    fn text_with_no_forgery_in_it_is_left_exactly_as_it_was() {
+        let clean = "Checking the results now.";
+        assert_eq!(without_forged_results(clean), clean);
+    }
+
+    /// The two outcomes read differently to whoever is watching, so they say different
+    /// things: one withheld an answer, the other removed an invention and let the real
+    /// call run.
+    #[test]
+    fn the_two_forgery_traces_do_not_say_the_same_thing() {
+        assert_ne!(forged_trace(), forged_alongside_trace());
+        assert!(
+            forged_alongside_trace().contains("the call itself ran"),
+            "{}",
+            forged_alongside_trace()
+        );
+    }
+
     #[test]
     fn a_results_block_written_as_prose_is_recognised_as_forged() {
         let forged = "[TOOL RESULTS]\nsearch_web: \"latest F1\"\n\nMax Verstappen won.";
