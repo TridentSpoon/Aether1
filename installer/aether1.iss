@@ -27,8 +27,15 @@
 #endif
 
 [Setup]
+; **The AppId and DefaultDirName below do not change with the rename, and must not.**
+; The AppId is how Windows' own uninstall registry entry is keyed, and how
+; installs.rs::windows_install finds a copy that is already here -- change it and an
+; existing install becomes invisible to both, so the next installer puts a second copy
+; beside it and neither uninstaller knows about the other. DefaultDirName is the folder
+; that install's files are already in. The display name is what an operator reads, and that
+; is what the rename moves; these two are identity, not branding.
 AppId={{9B7B6C6E-7B3E-4A9B-9C7A-8A1E8B6A6F1E}
-AppName=Aether1 Platform
+AppName=Aurora1
 AppVersion={#AppVersion}
 AppPublisher=TridentSpoon
 DefaultDirName={localappdata}\Aether1
@@ -69,11 +76,11 @@ Source: "{#StageDir}\models\{#PiperVoice}.onnx.json"; DestDir: "{%USERPROFILE}\.
 Source: "{#StageDir}\models\ggml-{#WhisperModel}.bin"; DestDir: "{%USERPROFILE}\.local\share\whisper"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Aether1 Platform"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\Aether1 Platform"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Aurora1"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Aurora1"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\aether1.exe"; Description: "Launch Aether1 now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\aether1.exe"; Description: "Launch Aurora1 now"; Flags: nowait postinstall skipifsilent
 
 [Code]
 // Appends {app}\bin to the current user's PATH so `which::which` (Rust, in the running
