@@ -705,8 +705,15 @@ impl LlmEngine {
         // Asked here and passed in, because the router may only ever narrow it: an install
         // with the tools switched off does not acquire them because a judgment said the
         // question needs a lookup.
-        let tools_available =
-            crate::tools::tools_enabled(&self.db) && !crate::tools::registry().is_empty();
+        let tools = crate::tools::tools_enabled(&self.db) && !crate::tools::registry().is_empty();
+        /* Whether a web lookup would actually happen, asked with the same two questions the
+        system prompt below asks before it names `search_web` at all. Auto's line must not
+        promise a lookup the gate is about to refuse: that line is the whole of what the
+        operator can check the router by, and one that claims a search while `search_web`
+        returns `WEB_TOOLS_OFF` costs more trust than it buys. It does not change which
+        tools go on the request -- the local ones still answer a question about this
+        machine, which is most of what `needs_fresh_facts` means here. */
+        let web = crate::tools::web_tools_enabled(&self.db) && !config.local_only;
         match auto::route(
             &self.db,
             &config.persona,
@@ -714,7 +721,7 @@ impl LlmEngine {
             &config.model_name,
             &config.endpoint,
             prompt,
-            tools_available,
+            auto::Reach { tools, web },
         ) {
             Ok(routed) => {
                 let model = (!routed.model.is_empty()).then_some(routed.model.as_str());
