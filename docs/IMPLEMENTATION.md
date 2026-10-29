@@ -4123,3 +4123,41 @@ variables and the `aether1` command. Everywhere else, each name is used without 
 
 **Still to come:** the HUD wordmark and the startup messages, the README, the package and
 binary names, the config directory's preferred spelling, and the tag scheme.
+
+## Step 65 — two names the readers pass had missed
+
+An integration review of step 63 turned up two more places where the rename would have taken
+something that is not ours to take. Both are the readers pass, so both land before any more of
+the name changes.
+
+**The vault, which is the costliest name in the program.** `vault::DEFAULT_VAULT_DIR` is
+`Aether1Vault`, and `vault_path` reaches it only when the `vault_path` setting is empty —
+which is the default, so most operators' memory bank is at `$HOME/Aether1Vault` with nothing
+in the settings table recording that. It also sits in `$HOME` rather than under the project
+policy directory, so neither `code_policy::dir_in` nor the data directory's own resolution
+reaches it. Renamed with no fallback, `vault_path` would point at a folder that is not there
+and `ensure` would make it and write INDEX.md, profile.md and machine.md into it: the operator
+opens Memories, finds three starter notes where their history was, and the real vault is still
+on disk under a name nothing looks at any more. The default now goes through
+`paths::branded_dir` over `VAULT_DIR_NAMES`, the same rule as the data directory and a
+project's own policy directory. An explicit `vault_path` still wins over both, which is what
+it is for.
+
+**The LAN subprotocol, fixed by not renaming it.** `server::WS_PROTOCOL` is `"aether1"`,
+offered as a single value and matched exactly by both ends. A build offering only `aurora1`
+would be refused by every peer already installed, so pairing between a renamed machine and an
+un-renamed one would stop working — which is the mixed-version case the rest of this work
+exists to survive. Teaching both ends to offer and accept two values would be machinery for a
+problem that only exists if the string changes, and nothing asks it to: a subprotocol is never
+shown to an operator. So it keeps its name and gains a comment saying it must keep it. It
+belongs with the `[AETHER1]` log prefix, the `AETHER1_*` environment variables and the Tauri
+identifier `com.tridentspoon.aether1` — the platform's own names, which stay Aether1 by
+design.
+
+**The line, now that there have been three goes at finding it.** A name changes if an operator
+reads it: the companion's own name, the prose in the HUD and the settings panes, the window
+title, the README, the vault folder in their home directory. A name stays if only the machinery
+reads it: log prefixes, environment variables, settings keys, database filenames, wire formats,
+the Tauri identifier, and every `Aether1*` identifier in the JavaScript. Two were almost got
+wrong in opposite directions, so the test for each is which of those two a change would break,
+not how the string looks.

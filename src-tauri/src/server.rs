@@ -460,6 +460,16 @@ fn bearer_token(request: &Request) -> Option<String> {
 /// carries no credential; it exists so that a handshake which also offered a token has
 /// something the server can echo back, since a browser closes a socket whose requested
 /// subprotocol was not selected.
+///
+/// **Do not rename this, including for the Aurora1 rename.** It is offered as a single value
+/// and matched exactly, by both ends, so the name is a wire format and not a label: a build
+/// offering only `aurora1` is refused by every peer already installed, and pairing between a
+/// renamed machine and an un-renamed one stops working — which is the mixed-version case the
+/// rest of the rename work exists to survive. Teaching both ends to offer and accept two
+/// values would be machinery for a problem that only exists if this string changes, and
+/// nothing asks it to: a subprotocol is never shown to an operator. It belongs with the
+/// `[AETHER1]` log prefix, the `AETHER1_*` environment variables and the Tauri identifier
+/// `com.tridentspoon.aether1` — the platform's own names, which stay Aether1 by design.
 pub const WS_PROTOCOL: &str = "aether1";
 
 /// The prefix of the subprotocol that carries a single-use socket ticket.
