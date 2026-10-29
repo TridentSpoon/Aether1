@@ -4208,3 +4208,40 @@ name a command that is not on the operator's PATH yet, so those move in the PR t
 the binary. `cli::invoked_as` from step 63 already prints the help text with whichever name was
 used to run it. Rust strings that reach the operator through error messages move with the same
 PR, where the whole command surface is revisited at once.
+
+## Step 67 — the app is called Aurora1 by the system too
+
+Step 66 renamed the name inside the window. This renames it where the operating system shows
+it: the bundle's product name, the entry in the application menu, and what the Windows
+installer calls itself.
+
+**Three things do not move, and the reason is the same for all three: identity is not
+branding.**
+
+- **The Inno Setup `AppId`.** It keys Windows' own uninstall registry entry and it is what
+  `installs::windows_install` reads to find a copy that is already here. Change it and an
+  existing install becomes invisible to both, so the next installer puts a second copy beside
+  it and neither uninstaller knows about the other. The `.iss` now says so in a comment, since
+  the next person to sweep brand names through this file will reach it.
+- **`DefaultDirName`.** That is the folder an existing install's files are already in.
+- **`mainBinaryName`, now pinned to `aether1`.** This is the defensive half. In Tauri 2 the
+  bundled main binary takes its name from `productName` unless `mainBinaryName` says
+  otherwise, so renaming the product silently renames the binary — and `install_desktop_app.sh`,
+  `aether1.iss`, `package_offline_linux.sh` and the self-update path all name
+  `target/release/aether1` directly. Cargo's own output is driven by the package name and was
+  never going to move, but relying on that is relying on the difference between two things
+  that look the same in the config file. Pinning it costs one line and makes the intent
+  explicit: the product is Aurora1, the binary is the platform's.
+
+**The launcher entry keeps its filename and changes its label.** `desktop/Aether1.desktop`
+stays `Aether1.desktop` with `Name=Aurora1`, which is what puts "Aurora1" in the application
+menu. Renaming the file would orphan the one already in `~/.local/share/applications`, leaving
+two entries in the menu — and `installs::DESKTOP_FILES` pairs each binary name with its
+launcher and icon, so the pair has to keep agreeing.
+
+**Still open, and waiting on a decision:** the plan gives this project two commands,
+`aurora1` for the companion and `aether1` for behind the curtain. Whether the two names should
+offer the *same* subcommands or different ones is the operator's call, not a thing to guess —
+hiding a command somebody is used to typing is cheap to build and annoying to live with. The
+mechanism either way is one binary reachable under two names, which `cli::invoked_as` from
+step 63 already handles. The tag scheme is the last piece after that.
