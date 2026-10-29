@@ -1491,6 +1491,51 @@ fn ollama_show(endpoint: &str, model: &str) -> Option<serde_json::Value> {
         .ok()
 }
 
+/// Which models the local server has in memory right now.
+///
+/// Ollama answers this on `/api/ps`, and it is the difference between a judgment that costs
+/// nothing and one that costs a model load. The first desktop log of the Auto router timed
+/// out on every message because nothing asked this question: the router picked the smallest
+/// *installed* model, which on a machine with one large model resident meant reading a
+/// second one off disk -- and, on a card with no room for both, evicting the model the
+/// reply was about to use.
+///
+/// Empty rather than an error when the server does not answer, including for LM Studio,
+/// which has no equivalent endpoint in the OpenAI-compatible surface this talks to. Empty
+/// means "nothing known to be loaded", which only ever makes a caller more cautious.
+/// Deliberately short-timeout: this runs in front of a reply, and a probe that stalls has
+/// cost more than the knowledge is worth.
+pub fn loaded_models(provider: Provider, endpoint: &str) -> Vec<String> {
+    if provider != Provider::Ollama {
+        return Vec::new();
+    }
+    let url = format!("{}/api/ps", endpoint.trim_end_matches('/'));
+    let Some(body) = crate::net::get(&url, "the server was not asked what it has loaded")
+        .ok()
+        .and_then(|request| {
+            request
+                .config()
+                .timeout_global(Some(std::time::Duration::from_millis(2500)))
+                .build()
+                .call()
+                .ok()
+        })
+        .and_then(|response| response.into_body().read_json::<Value>().ok())
+    else {
+        return Vec::new();
+    };
+    body.get("models")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The model a provider answers with when the operator has named none.
 ///
 /// The same defaults the payload builders already apply, named in one place so a picker can
@@ -2803,29 +2848,52 @@ pub fn stream_anthropic(
 // judgment is to leave the operator's own choice alone, which is the one fallback that
 // cannot surprise them.
 
-/// How long a judgment may take before the turn gives up on it and uses the stored choice.
+/// How long a judgment may take, which is a question about the model's *state* and not
+/// about the request.
 ///
-/// Much shorter than `CALL_TIMEOUT`, because the cost of waiting is paid before the reply
-/// starts: a judge that takes 45 seconds to save a few seconds of cloud call has made every
-/// message worse. A small model on a warm server answers a schema this size in well under a
-/// second; this bound is for the cold start and the server that has gone away.
-const JUDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// The first real log from a desktop said `timeout: global` on every message: a twenty
+/// second bound is ample for a model that is in memory and nowhere near enough for one that
+/// has to be read off a disk first, and the old code could not tell the two apart because
+/// it set the bound from the token budget. Each of these is a different question about who
+/// is waiting and for what.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    /// The model is already loaded. A small model answers a schema this size in well under
+    /// a second, so anything past this bound means the server has gone away rather than
+    /// that the model is slow -- and the cost of waiting is paid before the reply starts.
+    Warm,
+    /// The model has to be loaded first, and it is the model the reply was going to load
+    /// anyway. The wait belongs to the reply, not to the router: judging does not add it,
+    /// it only moves it earlier. Generous for that reason, and paid once per model.
+    Loading,
+    /// Nothing is in front of a reply: a tuning round is something somebody typed and is
+    /// watching. The bound here means "the server has gone away", nothing finer.
+    Unhurried,
+}
 
-/// The timeout for a long structured answer -- a rewritten set of instructions rather than
-/// a verdict. Nothing is waiting on it: a tuning round is a thing somebody typed and is
-/// watching, not something in front of a reply, so the bound here is "the server has gone
-/// away" rather than "this is costing the operator a pause".
-const LONG_JUDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-
-/// Which timeout one call gets. Decided from the budget rather than passed separately,
-/// because the two always move together and a caller free to pair a page-sized budget with
-/// a twenty-second bound would simply be setting itself up to fail.
-fn judge_timeout(budget: u32) -> std::time::Duration {
-    if budget > VERDICT_TOKENS {
-        LONG_JUDGE_TIMEOUT
-    } else {
-        JUDGE_TIMEOUT
+impl Pace {
+    fn timeout(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            Pace::Warm => 20,
+            Pace::Loading => 120,
+            Pace::Unhurried => 300,
+        })
     }
+}
+
+/// Everything about one judgment except where to send it.
+///
+/// A struct rather than five more arguments, and the budget and the pace sit in it together
+/// on purpose: a page-sized answer at a twenty-second bound is a call setting itself up to
+/// fail, and pairing them here is what makes that visible at the call site.
+pub struct Ask<'a> {
+    pub system_prompt: &'a str,
+    pub question: &'a str,
+    pub schema: &'a Value,
+    /// How many tokens the answer may take. Without a cap, a model that ignores the schema
+    /// runs to the timeout producing nothing usable.
+    pub budget: u32,
+    pub pace: Pace,
 }
 
 /// Asks a local model for one structured judgment, with the schema enforced by the server.
@@ -2844,19 +2912,14 @@ pub fn judge(
     provider: Provider,
     endpoint: &str,
     model: &str,
-    system_prompt: &str,
-    question: &str,
-    schema: &Value,
-    budget: u32,
+    ask: Ask<'_>,
 ) -> Result<Value, String> {
     if model.trim().is_empty() {
         return Err("no model to judge with".to_string());
     }
     let text = match provider {
-        Provider::Ollama => judge_ollama(endpoint, model, system_prompt, question, schema, budget)?,
-        Provider::LmStudio => {
-            judge_openai(endpoint, model, system_prompt, question, schema, budget)?
-        }
+        Provider::Ollama => judge_ollama(endpoint, model, &ask)?,
+        Provider::LmStudio => judge_openai(endpoint, model, &ask)?,
         other => return Err(format!("{other} cannot be used as a local judge")),
     };
     // A schema-constrained server still sometimes wraps the object in a fence or puts a
@@ -2901,44 +2964,46 @@ struct OllamaJudgeRequest<'a> {
 }
 
 /// Temperature zero, because a judgment that differs between two identical questions is a
-/// judgment nobody can check. `num_ctx` at the floor: this request is a system prompt and
-/// one sentence, and asking for a long window here would allocate a KV cache the size of
-/// the chat's for a call that lasts a moment -- see `local_context_window`.
+/// judgment nobody can check. `num_ctx` at the floor where it is sent at all: this request
+/// is a system prompt and one sentence, and asking for a long window here would allocate a
+/// KV cache the size of the chat's for a call that lasts a moment -- see
+/// `local_context_window`. Left out entirely for a model already in memory, so that the
+/// loaded instance is the one that answers; `judge_ollama` says why that matters.
 #[derive(Serialize)]
 struct OllamaJudgeOptions {
     temperature: f32,
-    num_ctx: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_ctx: Option<u64>,
     /// A verdict is a handful of tokens. Without a cap, a model that ignores the schema
     /// runs on until the timeout and spends the whole budget saying nothing usable.
     num_predict: u32,
 }
 
-fn judge_ollama(
-    endpoint: &str,
-    model: &str,
-    system_prompt: &str,
-    question: &str,
-    schema: &Value,
-    budget: u32,
-) -> Result<String, String> {
+fn judge_ollama(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, String> {
     let request = OllamaJudgeRequest {
         model,
         messages: vec![
-            OllamaMessage::plain("system", system_prompt.to_string()),
-            OllamaMessage::plain("user", question.to_string()),
+            OllamaMessage::plain("system", ask.system_prompt.to_string()),
+            OllamaMessage::plain("user", ask.question.to_string()),
         ],
         stream: false,
-        format: schema,
+        format: ask.schema,
         options: OllamaJudgeOptions {
             temperature: 0.0,
-            num_ctx: LOCAL_CTX_FLOOR,
-            num_predict: budget,
+            /* Named only when the model is being loaded for this call anyway. Ollama keys a
+            loaded instance partly on its context size, so naming a different `num_ctx` for
+            a model that is already in memory makes it load a *second* copy of the same
+            model -- which on a card with one large model on it means evicting the one the
+            reply is about to use, to decide where to send the reply. See
+            `local_context_window` and the server-wide cliff #249 walked into. */
+            num_ctx: (ask.pace != Pace::Warm).then_some(LOCAL_CTX_FLOOR),
+            num_predict: ask.budget,
         },
     };
     let response: OllamaResponse = checked(
         crate::net::post(&ollama_url(endpoint), "no judgment was asked for")?
             .config()
-            .timeout_global(Some(judge_timeout(budget)))
+            .timeout_global(Some(ask.pace.timeout()))
             .http_status_as_error(false)
             .build()
             .send_json(request),
@@ -2965,34 +3030,27 @@ struct OpenAiJudgeRequest<'a> {
     response_format: Value,
 }
 
-fn judge_openai(
-    endpoint: &str,
-    model: &str,
-    system_prompt: &str,
-    question: &str,
-    schema: &Value,
-    budget: u32,
-) -> Result<String, String> {
+fn judge_openai(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, String> {
     let (base, _) = openai_defaults(Provider::LmStudio, endpoint);
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
     let request = OpenAiJudgeRequest {
         model,
         messages: vec![
-            json!({"role": "system", "content": system_prompt}),
-            json!({"role": "user", "content": question}),
+            json!({"role": "system", "content": ask.system_prompt}),
+            json!({"role": "user", "content": ask.question}),
         ],
         stream: false,
         temperature: 0.0,
-        max_tokens: budget,
+        max_tokens: ask.budget,
         response_format: json!({
             "type": "json_schema",
-            "json_schema": {"name": "verdict", "strict": true, "schema": schema},
+            "json_schema": {"name": "verdict", "strict": true, "schema": ask.schema},
         }),
     };
     let response: Value = checked(
         crate::net::post(&url, "no judgment was asked for")?
             .config()
-            .timeout_global(Some(judge_timeout(budget)))
+            .timeout_global(Some(ask.pace.timeout()))
             .http_status_as_error(false)
             .build()
             .send_json(request),
@@ -4390,5 +4448,46 @@ mod failure_tests {
             calls[0].id, "call_0",
             "positional, because Ollama issues none"
         );
+    }
+
+    /// The judgment payload for a model that is already in memory names no context size.
+    ///
+    /// Ollama keys a loaded instance partly on its context size, so a judgment that names
+    /// its own `num_ctx` for a resident model makes the server load a second copy of that
+    /// model -- which is both the slow path this is meant to avoid and, on a card with one
+    /// large model on it, an eviction of the model the reply is about to use.
+    #[test]
+    fn a_warm_judgment_does_not_name_a_context_size_and_a_loading_one_does() {
+        let schema = json!({"type": "object"});
+        let payload = |pace| {
+            serde_json::to_value(OllamaJudgeRequest {
+                model: "qwen3:14b",
+                messages: vec![],
+                stream: false,
+                format: &schema,
+                options: OllamaJudgeOptions {
+                    temperature: 0.0,
+                    num_ctx: (pace != Pace::Warm).then_some(LOCAL_CTX_FLOOR),
+                    num_predict: VERDICT_TOKENS,
+                },
+            })
+            .expect("a request serialises")
+        };
+        assert!(
+            payload(Pace::Warm).pointer("/options/num_ctx").is_none(),
+            "the loaded instance is the one that should answer"
+        );
+        assert_eq!(
+            payload(Pace::Loading).pointer("/options/num_ctx"),
+            Some(&json!(LOCAL_CTX_FLOOR)),
+            "a model being loaded for this call is loaded at the floor, not the chat's size"
+        );
+    }
+
+    /// A pace is a claim about who is waiting, so the bounds have to be ordered that way.
+    #[test]
+    fn a_judgment_waiting_on_a_model_load_is_allowed_longer_than_one_that_is_not() {
+        assert!(Pace::Warm.timeout() < Pace::Loading.timeout());
+        assert!(Pace::Loading.timeout() < Pace::Unhurried.timeout());
     }
 }
