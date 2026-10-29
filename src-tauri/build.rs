@@ -69,13 +69,41 @@ fn main() {
 
     println!("cargo:rustc-env=AETHER1_PR_REV={pr_rev}");
 
-    // The version as a person reads it: `Ver 0.4.126`. The major and minor come from
-    // Cargo.toml (which tauri.conf.json's `version` tracks), so the printed version can no
-    // longer drift from the package's own -- it used to be hand-written as "0.3" in main.rs
-    // while the package said 0.4.0, and nothing made the two agree.
-    let major = std::env::var("CARGO_PKG_VERSION_MAJOR").unwrap_or_else(|_| "0".to_string());
-    let minor = std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_else(|_| "0".to_string());
-    println!("cargo:rustc-env=AETHER1_VERSION=Ver {major}.{minor}.{pr_rev}");
+    // The date this code was cut, as yymmdd -- the middle number of the version below.
+    //
+    // **HEAD's commit date, not today's.** A wall-clock date would change the version of a
+    // binary without a line of its code changing, which makes two people comparing notes on
+    // "which build are you on" compare two different answers to the same question; it would
+    // also mean a rebuild of an old commit claims to be newer than it is. The commit date is
+    // a fact about the code, so the same commit always produces the same version string,
+    // whoever builds it and whenever.
+    let built_on = Command::new("git")
+        .args(["log", "-1", "--format=%cd", "--date=format:%y%m%d", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or_else(|| "000000".to_string());
+
+    // The version as a person reads it: `Aurora1 rev0.261029.260`. A revision number, the
+    // date the code was cut, and the pull request it was built from.
+    //
+    // **The revision is the package's major version**, read from Cargo.toml (which
+    // tauri.conf.json's `version` tracks) rather than written out again -- the printed
+    // version used to be hand-written as "0.3" in main.rs while the package said 0.4.0, and
+    // nothing made the two agree. The package's *minor* no longer appears: it said nothing
+    // the pull request number did not already say, and the scheme has only three slots.
+    //
+    // **What orders two of these is still the pull request alone**, as it was under
+    // `Ver 0.4.126`. The date says when, not which is newer: a release cut from an older
+    // branch on a later day is not the newer build. `installs::Version` compares them that
+    // way, and compares an `Aurora1 rev…` against a `Ver …` the same way -- the rename does
+    // not reset the count. Step 63 landed that reader before this writer, which is why a copy
+    // installed before now can still tell that this one is newer.
+    let revision = std::env::var("CARGO_PKG_VERSION_MAJOR").unwrap_or_else(|_| "0".to_string());
+    println!("cargo:rustc-env=AETHER1_VERSION=Aurora1 rev{revision}.{built_on}.{pr_rev}");
 
     // Step 46's two compiled-in public values. Neither is a secret and neither can be:
     // the client ID names the GitHub App to GitHub and authorises nothing on its own, and a
