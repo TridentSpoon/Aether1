@@ -2879,6 +2879,62 @@ select,
 
 .hub-row.is-unfit .hub-row-name { color: var(--text-dim); }
 
+/* ------------------------- THE SAVED-PROVIDER ROSTER -------------------------
+   The list above the AI Model Connection form: every provider, what is kept for it,
+   and which one is answering. Styled from the theme variables rather than from
+   Tailwind's own palette for the reason check_theme_remap.sh exists -- bg-slate-900
+   is a fixed dark grey whatever theme is on, and this list is drawn from JavaScript,
+   where that guard cannot see it. Same surface and same selected state as .hub-row,
+   because it is the same kind of list; it is not .hub-row itself only because a row
+   here carries a second control (Forget) beside the part that is clickable. */
+.provider-account {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    background: var(--bg-panel);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.provider-account:hover { background: var(--bg-panel-hover); }
+
+.provider-account.is-selected {
+    border-color: var(--border-neon);
+    background: var(--tint-main);
+}
+
+.provider-account-pick {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.provider-account-name,
+.provider-account-meta {
+    font-family: 'JetBrains Mono', monospace;
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.provider-account-name { font-size: 0.72rem; color: var(--text-main); }
+.provider-account-meta { font-size: 0.6rem; color: var(--text-dim); }
+.provider-account-answering { color: var(--text-accent); }
+
+.provider-account-note {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
+
 .hub-empty {
     padding: 0.75rem 0.5rem;
     font-family: 'JetBrains Mono', monospace;

@@ -237,59 +237,62 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
 pub fn brains(engine: &LlmEngine) -> Value {
     let db = engine.db();
     let provider_key = db.get_setting_string("llm_provider", "offline");
-    let endpoint = db.get_setting_string("llm_endpoint", "http://localhost:11434");
     let model = db.get_setting_string("llm_model", "");
 
-    // Asked of the configured endpoint rather than by scanning every port: this is the
-    // server the companion is actually pointed at, and offering models from a different
-    // one would be offering a switch that also silently moves the address.
-    let local: Vec<Value> = model_scanner::models_at(&endpoint)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|name| {
-            // `None` here means the server did not say -- an older Ollama, or LM Studio,
-            // which reports nothing of the kind. Left as null rather than guessed at.
-            let tools = llm::ollama_facts(&endpoint, &name).tools;
-            serde_json::json!({"model": name, "tools": tools})
+    // Gathered by the router rather than here, so that the list somebody picks from and the
+    // list Auto chooses from are the same list. Two gatherers would let the picker show a
+    // provider the router never considers, which is a disagreement visible from neither
+    // side.
+    let available = llm::auto::candidates(db);
+
+    let local: Vec<Value> = available
+        .local
+        .iter()
+        .map(|entry| {
+            // `tools: null` means the server did not say -- an older Ollama, or LM Studio,
+            // which reports nothing of the kind. Left null rather than guessed at.
+            serde_json::json!({"model": entry.model, "tools": entry.tools})
         })
         .collect();
 
-    let local_provider = if provider_key == "lmstudio" {
-        "lmstudio"
-    } else {
-        "ollama"
-    };
-
-    let online: Vec<Value> = [
-        llm::Provider::Anthropic,
-        llm::Provider::OpenAi,
-        llm::Provider::Gemini,
-        llm::Provider::Groq,
-        llm::Provider::Gateway,
-    ]
-    .into_iter()
-    .map(|provider| {
-        let key = llm::api_key_for(db, provider);
-        serde_json::json!({
-            "provider": provider.key(),
-            "label": provider.label(),
-            "ready": !key.trim().is_empty(),
-            // What to put in the model box when this one is picked and nothing is stored
-            // for it. A gateway deliberately has none -- its model ids are whatever an
-            // administrator connected, and an invented one is a 404.
-            "model": llm::default_model_for(provider),
+    let online: Vec<Value> = available
+        .online
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "provider": entry.provider.key(),
+                "label": entry.provider.label(),
+                "ready": entry.ready,
+                // What to put in the model box when this one is picked and nothing is
+                // stored for it. A gateway deliberately has none -- its model ids are
+                // whatever an administrator connected, and an invented one is a 404.
+                "model": entry.model,
+            })
         })
-    })
-    .collect();
+        .collect();
 
     serde_json::json!({
         "current": {"provider": provider_key, "model": model},
-        "local": {"provider": local_provider, "endpoint": endpoint, "models": local},
+        "local": {
+            "provider": available.local_provider.key(),
+            "endpoint": available.endpoint,
+            "models": local,
+        },
         "online": online,
         // With the mode on, every online entry is refused before the request is built, so
         // the picker greys them out rather than letting somebody pick one and read a
         // refusal as a bug.
-        "local_only": crate::local_only::enabled(db),
+        "local_only": available.local_only,
+        // The Auto router, as one more thing that can be picked. `on` is what the control
+        // shows as selected; `ready` is whether picking it would do anything -- it judges
+        // on a model on this machine, so with nothing installed there is nothing to judge
+        // with, and an entry that silently does nothing is worse than one that says why.
+        "auto": {
+            "on": llm::auto::enabled(db),
+            "ready": !available.local.is_empty(),
+            "value": llm::auto::PICKER_VALUE,
+            "setting": llm::auto::ENABLED_SETTING,
+        },
     })
 }
 
@@ -815,6 +818,129 @@ pub fn clear_persona_voice(engine: &LlmEngine, persona: String) -> Result<Value,
     Ok(list_personas(engine))
 }
 
+/// Every provider the connection form can hold details for, in the order the dropdown
+/// lists them.
+///
+/// Offline is not here: it is the absence of a connection, and an entry for it in a list
+/// of saved accounts would be a row that can never be configured.
+pub const ACCOUNT_PROVIDERS: [llm::Provider; 7] = [
+    llm::Provider::Ollama,
+    llm::Provider::LmStudio,
+    llm::Provider::Gemini,
+    llm::Provider::Groq,
+    llm::Provider::OpenAi,
+    llm::Provider::Anthropic,
+    llm::Provider::Gateway,
+];
+
+/// What is remembered for each provider, which is what the form restores from when the
+/// dropdown changes and what the roster above it is drawn from.
+///
+/// This exists because "I set OpenAI up last week" and "OpenAI is the one selected right
+/// now" had been the same question. One address box, one key box and one model box were
+/// shared by eight providers, so picking a second one showed the first one's details,
+/// saving overwrote them, and switching back meant typing everything in again. The key
+/// half of that was split by `key_setting_for`; the engine read the per-provider slot but
+/// the form never did, so nothing an operator could see had changed.
+///
+/// No key is in here. A key goes into the system credential store (see `secrets`) and
+/// comes back out only on the request that uses it; what the page is told is whether
+/// there is one and where it is kept.
+pub fn provider_accounts(engine: &LlmEngine) -> Value {
+    let db = engine.db();
+    let current = db.get_setting_string("llm_provider", "offline");
+    let accounts: Vec<Value> = ACCOUNT_PROVIDERS
+        .into_iter()
+        .map(|provider| {
+            let needs_key = matches!(
+                provider,
+                llm::Provider::OpenAi
+                    | llm::Provider::Groq
+                    | llm::Provider::Gemini
+                    | llm::Provider::Anthropic
+                    | llm::Provider::Gateway
+            );
+            let key_setting = if provider == llm::Provider::Gateway {
+                llm::GATEWAY_KEY_SETTING.to_string()
+            } else {
+                llm::key_setting_for(provider)
+            };
+            // The shared slot counts as a key for a cloud provider, because
+            // `api_key_for` will use it: a roster saying "no key yet" for a provider
+            // that is about to answer would be describing a different program.
+            let storage = match crate::secrets::storage_of(db, &key_setting) {
+                crate::secrets::Storage::None
+                    if needs_key && provider != llm::Provider::Gateway =>
+                {
+                    crate::secrets::storage_of(db, llm::SHARED_KEY_SETTING)
+                }
+                found => found,
+            };
+            let has_key = storage != crate::secrets::Storage::None;
+            let endpoint = if provider == llm::Provider::Gateway {
+                db.get_setting_string(llm::GATEWAY_URL_SETTING, "")
+            } else {
+                llm::remembered_endpoint(db, provider)
+            };
+            let model = llm::remembered_model(db, provider);
+            serde_json::json!({
+                "provider": provider.key(),
+                "label": provider.label(),
+                "needs_key": needs_key,
+                "has_key": has_key,
+                "key_storage": storage,
+                "endpoint": endpoint,
+                "model": model,
+                "active": current == provider.key(),
+                // Whether there is anything to restore at all. A cloud provider is set
+                // up when it has a key; a local server is set up when an address has
+                // been saved for it, which is the only thing it needs.
+                "configured": if needs_key {
+                    has_key
+                } else {
+                    !db.get_setting_string(&llm::endpoint_setting_for(provider), "")
+                        .trim()
+                        .is_empty()
+                },
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "current": current,
+        "accounts": accounts,
+        // Whether this machine has a credential store at all. The pane says which of the
+        // two a key is in rather than letting the settings row pass for the keychain --
+        // the reasoning `github_auth::Storage` was written with.
+        "keychain": crate::secrets::keychain_available(),
+    })
+}
+
+/// Forgets one provider's saved details: its key out of both stores, and the address and
+/// model the form remembers for it.
+///
+/// Not the provider currently selected, as a rule -- but it is allowed, because the
+/// operator who wants a key off this machine wants it off this machine, and refusing
+/// until they first switch to something else would be a lock with the key next to it.
+/// The reply is the roster, redrawn.
+pub fn forget_provider_account(engine: &LlmEngine, provider_key: &str) -> Result<Value, String> {
+    let provider = llm::Provider::from_key(provider_key);
+    if !ACCOUNT_PROVIDERS.contains(&provider) {
+        return Err(format!(
+            "{provider_key:?} is not a provider with an account"
+        ));
+    }
+    let db = engine.db();
+    if provider == llm::Provider::Gateway {
+        crate::secrets::clear(db, llm::GATEWAY_KEY_SETTING);
+        let _ = db.delete_setting(llm::GATEWAY_URL_SETTING);
+    } else {
+        crate::secrets::clear(db, &llm::key_setting_for(provider));
+    }
+    let _ = db.delete_setting(&llm::endpoint_setting_for(provider));
+    let _ = db.delete_setting(&llm::model_setting_for(provider));
+    Ok(provider_accounts(engine))
+}
+
 pub fn get_settings(engine: &LlmEngine) -> Value {
     let mut settings = engine
         .db()
@@ -921,6 +1047,46 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
                 .or_insert_with(|| value.clone());
         }
     }
+    /* A key is not sent back to the page. It is in the system credential store now (see
+    `secrets`), the page has no business holding it, and a reply that carried it would put
+    every provider key on the wire on every LAN connection to this companion. The password
+    box gets `secrets::SAVED` instead, which looks to an operator exactly like what it
+    replaces -- a box with something in it -- and comes home on the next Save to be
+    recognised and ignored. An empty box still means empty: an operator clearing a key is
+    asking for it to go. */
+    if let Some(settings_obj) = settings.as_object_mut() {
+        let secret_names: Vec<String> = settings_obj
+            .keys()
+            .filter(|name| name.starts_with("llm_api_key"))
+            .cloned()
+            .chain(std::iter::once(llm::GATEWAY_KEY_SETTING.to_string()))
+            .collect();
+        for name in secret_names {
+            let shown = if crate::secrets::has(engine.db(), &name) {
+                crate::secrets::SAVED
+            } else {
+                ""
+            };
+            settings_obj.insert(name, Value::String(shown.to_string()));
+        }
+        // The shared slot is what the one key box on the page is bound to, and the key it
+        // should show is the selected provider's -- which after `key_setting_for` is
+        // usually not in that slot at all. Without this the box reads empty for a
+        // provider that has a key, and Save would then clear it.
+        let provider =
+            llm::Provider::from_key(&engine.db().get_setting_string("llm_provider", "offline"));
+        let shown = if provider != llm::Provider::Gateway
+            && !llm::api_key_for(engine.db(), provider).trim().is_empty()
+        {
+            crate::secrets::SAVED
+        } else {
+            ""
+        };
+        settings_obj.insert(
+            llm::SHARED_KEY_SETTING.to_string(),
+            Value::String(shown.to_string()),
+        );
+    }
     // Alongside the settings, not inside them: the operating system is not a preference,
     // it is a fact about the machine, and putting it in `settings` would make it look
     // saveable. It rides along here because the Settings page needs it for the same
@@ -957,6 +1123,10 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
     };
     serde_json::json!({
         "settings": settings,
+        // What is remembered for each provider, so the form can restore a provider's own
+        // address, model and key state the moment the dropdown changes rather than on the
+        // next page load. See provider_accounts.
+        "accounts": provider_accounts(engine),
         "os": setup::Os::current(),
         "sandbox": {
             "confines": sandbox.confines(),
@@ -1136,41 +1306,94 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
     let Some(map) = settings.as_object() else {
         return Err("settings payload must be a JSON object".to_string());
     };
+    /* Which provider this payload is about. Settings saves the provider and its details
+    in one request, so the stored value is still the *previous* provider at this point and
+    reading it here would file OpenAI's key under Anthropic. */
+    let provider_key = map
+        .get("llm_provider")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| engine.db().get_setting_string("llm_provider", "offline"));
+    let provider = llm::Provider::from_key(&provider_key);
+
     for (key, value) in map {
+        // A secret never goes in the settings table. It is handled below, through
+        // `secrets`, and a plain `set_setting` here would write the sentinel the page
+        // was given in place of the key -- storing the literal text of the dots.
+        if key.starts_with("llm_api_key") || key == llm::GATEWAY_KEY_SETTING {
+            continue;
+        }
         engine
             .db()
             .set_setting(key, value)
             .map_err(|e| format!("could not save setting {key:?}: {e}"))?;
     }
 
-    /* A key typed into the one box in Settings is also written to the slot belonging to
-    the provider it was typed for, so that switching away and back does not lose it --
-    which is what the quick brain picker needs and what the single shared slot made
-    impossible. The shared write above is kept: an older build reading this database
-    still finds a key where it expects one.
+    /* The address and model are also filed under the provider they were typed for, so
+    that trying a second server and coming back does not mean typing the first one's
+    details in again. `llm_endpoint` and `llm_model` above are still the connection in
+    use -- that is what the engine reads, and this does not change it. These are the
+    form's memory of what each provider was last set to; see llm::endpoint_setting_for. */
+    if provider != llm::Provider::Offline && provider != llm::Provider::Gateway {
+        if let Some(endpoint) = map.get("llm_endpoint").and_then(Value::as_str) {
+            if !endpoint.trim().is_empty() {
+                engine
+                    .db()
+                    .set_setting(
+                        &llm::endpoint_setting_for(provider),
+                        &Value::from(endpoint.trim()),
+                    )
+                    .map_err(|e| format!("could not save the address for {provider_key}: {e}"))?;
+            }
+        }
+    }
+    if provider != llm::Provider::Offline {
+        if let Some(model) = map.get("llm_model").and_then(Value::as_str) {
+            if !model.trim().is_empty() {
+                engine
+                    .db()
+                    .set_setting(
+                        &llm::model_setting_for(provider),
+                        &Value::from(model.trim()),
+                    )
+                    .map_err(|e| format!("could not save the model for {provider_key}: {e}"))?;
+            }
+        }
+    }
 
-    The provider comes from this payload when it carries one, because Settings saves both
-    at once and the stored value is still the previous provider at this point. */
-    if let Some(typed) = map.get("llm_api_key").and_then(Value::as_str) {
-        let provider_key = map
-            .get("llm_provider")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| engine.db().get_setting_string("llm_provider", "offline"));
-        let provider = llm::Provider::from_key(&provider_key);
-        // Not for a gateway (its key has its own setting and its own meaning) and not for
-        // the two local providers or offline, none of which take one.
-        if matches!(
-            provider,
-            llm::Provider::OpenAi
-                | llm::Provider::Groq
-                | llm::Provider::Gemini
-                | llm::Provider::Anthropic
-        ) {
-            engine
-                .db()
-                .set_setting(&llm::key_setting_for(provider), &Value::from(typed))
-                .map_err(|e| format!("could not save the key for {provider_key}: {e}"))?;
+    /* The gateway's key is its own: one gateway key stands in for every provider key
+    behind it, so writing it into a provider slot would lose the thing and gain nothing.
+    See llm::GATEWAY_KEY_SETTING. */
+    if let Some(typed) = map.get(llm::GATEWAY_KEY_SETTING).and_then(Value::as_str) {
+        if !crate::secrets::is_sentinel(typed) {
+            crate::secrets::store(engine.db(), llm::GATEWAY_KEY_SETTING, typed);
+        }
+    }
+
+    /* A key typed into the one box in Settings belongs to the provider it was typed for,
+    which is what the quick brain picker needs and what the single shared slot made
+    impossible: one box between eight providers meant switching from OpenAI to Claude
+    carried the OpenAI key to Anthropic and got a 401 about an invalid key back.
+
+    The sentinel is the page saying "the key you already have": `get_settings` sends it in
+    place of a key the page may not see, and treating it as typed text would overwrite a
+    real key with three dots and the word saved. An empty box is not the sentinel and does
+    mean empty -- clearing the box is how a key is removed. */
+    if let Some(typed) = map.get(llm::SHARED_KEY_SETTING).and_then(Value::as_str) {
+        if !crate::secrets::is_sentinel(typed)
+            && matches!(
+                provider,
+                llm::Provider::OpenAi
+                    | llm::Provider::Groq
+                    | llm::Provider::Gemini
+                    | llm::Provider::Anthropic
+            )
+        {
+            crate::secrets::store(engine.db(), &llm::key_setting_for(provider), typed);
+            // The slot every provider used to share. Emptied rather than written: it is
+            // read as a fallback by `api_key_for`, so a stale key left in it would answer
+            // for a provider that has never been given one.
+            crate::secrets::clear(engine.db(), llm::SHARED_KEY_SETTING);
         }
     }
     Ok(())
@@ -2764,5 +2987,268 @@ mod tests {
         assert_ne!(a, b, "two conversations asked for are two conversations");
         assert_eq!(valid_session_id(Some(a.clone())).unwrap(), a);
         assert!(a.starts_with('c'), "never empty, even at the epoch");
+    }
+}
+
+#[cfg(test)]
+mod provider_account_tests {
+    use super::*;
+
+    fn engine(name: &str) -> LlmEngine {
+        // Every test in here writes a key, and a key that reached a developer's own login
+        // keychain would outlive the test and the temporary database with it.
+        crate::secrets::use_settings_table_only();
+        let path =
+            std::env::temp_dir().join(format!("aether1_accounts_{name}_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        LlmEngine::new(llm::MemoryDb::open(path).unwrap())
+    }
+
+    /// What the whole change is for. The form sends one provider, one address, one model
+    /// and one key, so two providers configured one after the other used to be one
+    /// provider configured twice: the second Save overwrote the first's key, and switching
+    /// back produced a 401 about a key that had been correct an hour earlier.
+    #[test]
+    fn configuring_a_second_provider_does_not_disturb_the_first() {
+        let engine = engine("two_providers");
+        save_settings(
+            &engine,
+            serde_json::json!({
+                "llm_provider": "openai",
+                "llm_model": "gpt-4o-mini",
+                "llm_api_key": "sk-openai",
+            }),
+        )
+        .unwrap();
+        save_settings(
+            &engine,
+            serde_json::json!({
+                "llm_provider": "anthropic",
+                "llm_model": "claude-opus-5",
+                "llm_api_key": "sk-anthropic",
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            llm::api_key_for(engine.db(), llm::Provider::OpenAi),
+            "sk-openai",
+            "configuring Anthropic took OpenAI's key with it"
+        );
+        assert_eq!(
+            llm::api_key_for(engine.db(), llm::Provider::Anthropic),
+            "sk-anthropic"
+        );
+        assert_eq!(
+            llm::remembered_model(engine.db(), llm::Provider::OpenAi),
+            "gpt-4o-mini",
+            "OpenAI should still be remembered as the model it was set to"
+        );
+    }
+
+    /// The address half of the same fault: somebody with Ollama on this machine and a
+    /// server on another had one box between them.
+    #[test]
+    fn each_local_server_remembers_its_own_address() {
+        let engine = engine("addresses");
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "ollama", "llm_endpoint": "http://localhost:11434"}),
+        )
+        .unwrap();
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "lmstudio", "llm_endpoint": "http://192.168.1.9:1234/v1"}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            llm::remembered_endpoint(engine.db(), llm::Provider::Ollama),
+            "http://localhost:11434"
+        );
+        assert_eq!(
+            llm::remembered_endpoint(engine.db(), llm::Provider::LmStudio),
+            "http://192.168.1.9:1234/v1"
+        );
+    }
+
+    /// A key is not sent back to the page. It was, in plain text, on every settings read
+    /// -- including every one made over the LAN transport.
+    #[test]
+    fn the_page_is_told_a_key_exists_and_not_what_it_is() {
+        let engine = engine("redaction");
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "groq", "llm_api_key": "sk-groq-secret"}),
+        )
+        .unwrap();
+
+        let shown = get_settings(&engine);
+        let text = shown.to_string();
+        assert!(
+            !text.contains("sk-groq-secret"),
+            "the settings reply still carries the key itself: {text}"
+        );
+        assert_eq!(
+            shown["settings"][llm::SHARED_KEY_SETTING],
+            serde_json::json!(crate::secrets::SAVED),
+            "the key box should show that there is a key"
+        );
+    }
+
+    /// And the other half of that: the sentinel the page was given comes home on the next
+    /// Save, and must not be stored as if it were a key.
+    #[test]
+    fn saving_without_touching_the_key_box_keeps_the_key() {
+        let engine = engine("sentinel");
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "openai", "llm_api_key": "sk-kept"}),
+        )
+        .unwrap();
+        save_settings(
+            &engine,
+            serde_json::json!({
+                "llm_provider": "openai",
+                "llm_model": "gpt-4o",
+                "llm_api_key": crate::secrets::SAVED,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            llm::api_key_for(engine.db(), llm::Provider::OpenAi),
+            "sk-kept"
+        );
+    }
+
+    /// An empty box is not the sentinel, and does mean empty: clearing the box is how a
+    /// key is taken off the machine from the form.
+    #[test]
+    fn clearing_the_key_box_removes_the_key() {
+        let engine = engine("cleared");
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "openai", "llm_api_key": "sk-gone"}),
+        )
+        .unwrap();
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "openai", "llm_api_key": ""}),
+        )
+        .unwrap();
+
+        assert_eq!(llm::api_key_for(engine.db(), llm::Provider::OpenAi), "");
+    }
+
+    /// An install that predates the split has its key in the shared slot, and must not be
+    /// asked to type it in again. It also must not keep answering for providers that were
+    /// never given one -- so the first Save moves it and empties the slot.
+    #[test]
+    fn an_older_installs_shared_key_is_adopted_and_then_filed() {
+        let engine = engine("upgrade");
+        engine
+            .db()
+            .set_setting(
+                llm::SHARED_KEY_SETTING,
+                &serde_json::json!("sk-from-last-year"),
+            )
+            .unwrap();
+        assert_eq!(
+            llm::api_key_for(engine.db(), llm::Provider::OpenAi),
+            "sk-from-last-year",
+            "an upgrade should not lose the key that was already working"
+        );
+
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "openai", "llm_api_key": "sk-typed-today"}),
+        )
+        .unwrap();
+        assert_eq!(
+            llm::api_key_for(engine.db(), llm::Provider::Groq),
+            "",
+            "the shared slot should stop answering for a provider that has no key"
+        );
+        assert_eq!(
+            llm::api_key_for(engine.db(), llm::Provider::OpenAi),
+            "sk-typed-today"
+        );
+    }
+
+    /// The roster above the form: which providers are set up, and which one is answering.
+    #[test]
+    fn the_roster_says_what_is_saved_for_each_provider() {
+        let engine = engine("roster");
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "openai", "llm_api_key": "sk-roster", "llm_model": "gpt-4o-mini"}),
+        )
+        .unwrap();
+
+        let roster = provider_accounts(&engine);
+        let accounts = roster["accounts"].as_array().unwrap();
+        let openai = accounts
+            .iter()
+            .find(|a| a["provider"] == "openai")
+            .expect("OpenAI should be in the roster");
+        assert_eq!(openai["has_key"], serde_json::json!(true));
+        assert_eq!(openai["active"], serde_json::json!(true));
+        assert_eq!(openai["model"], serde_json::json!("gpt-4o-mini"));
+
+        let anthropic = accounts
+            .iter()
+            .find(|a| a["provider"] == "anthropic")
+            .expect("Anthropic should be in the roster");
+        assert_eq!(
+            anthropic["configured"],
+            serde_json::json!(false),
+            "a provider that has never been given a key is not set up"
+        );
+        assert!(
+            !roster.to_string().contains("sk-roster"),
+            "the roster must not carry a key"
+        );
+    }
+
+    /// Forget means forget: the key, the address and the model, not a greyed-out row.
+    #[test]
+    fn forgetting_a_provider_takes_everything_it_had() {
+        let engine = engine("forget");
+        save_settings(
+            &engine,
+            serde_json::json!({
+                "llm_provider": "gemini",
+                "llm_api_key": "sk-gemini",
+                "llm_model": "gemini-2.0-flash",
+                "llm_endpoint": "https://example.invalid",
+            }),
+        )
+        .unwrap();
+
+        let roster = forget_provider_account(&engine, "gemini").unwrap();
+        assert_eq!(llm::api_key_for(engine.db(), llm::Provider::Gemini), "");
+        let gemini = roster["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["provider"] == "gemini")
+            .unwrap()
+            .clone();
+        assert_eq!(gemini["has_key"], serde_json::json!(false));
+        assert_eq!(gemini["configured"], serde_json::json!(false));
+        assert_eq!(
+            engine.db().get_setting_string("llm_model_gemini", ""),
+            "",
+            "the model it was set to should be gone too"
+        );
+    }
+
+    /// Offline is not a provider with an account, and a request to forget one is a bug in
+    /// the caller rather than something to do quietly.
+    #[test]
+    fn there_is_no_account_to_forget_for_offline() {
+        let engine = engine("offline");
+        assert!(forget_provider_account(&engine, "offline").is_err());
     }
 }

@@ -768,6 +768,23 @@ html[data-shell="studio"] #studio-stage-bar {
   opacity: 0.75;
 }
 
+/* Lit when Auto is what is answering, the same cue a chosen model row gets. Without it
+   the popover would show Auto available and no row selected anywhere, which reads as
+   nothing being chosen at all. */
+.brain-auto-row[aria-selected="true"] {
+  color: var(--text-accent);
+}
+
+.brain-pop-auto:has(.brain-auto-row[aria-selected="true"]) {
+  border-color: var(--border-neon-bright);
+  box-shadow: var(--glow-purple);
+}
+
+.brain-auto-row[aria-selected="true"] .brain-auto-badge {
+  border-color: var(--border-neon-bright);
+  color: var(--text-accent);
+}
+
 .brain-auto-mark {
   font-size: 13px;
   color: var(--text-highlight);

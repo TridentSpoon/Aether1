@@ -2776,6 +2776,211 @@ pub fn stream_anthropic(
     finish_with(relay, usage, builder.finish())
 }
 
+// ----------------------------------------------------------- constrained judgment
+//
+// One short call to a local model whose answer is not prose but a shape: a fixed set of
+// fields, each from a fixed set of values. The router in `llm::auto` asks a small model
+// "what kind of question is this?" and needs the answer to be parseable every time,
+// because a verdict it cannot read is a turn it cannot route.
+//
+// Three deliberate differences from a chat call, and they are the reason this is a
+// function of its own rather than a flag on `ChatContext`:
+//
+//   * **The server does the constraining, not the prompt.** Ollama takes a JSON schema in
+//     `format` and LM Studio takes one in `response_format`, and in both cases the server
+//     restricts what the model is allowed to emit next. A prompt that merely *asks* for
+//     JSON gets JSON from a 7B most of the time, and "most of the time" in front of every
+//     reply is a fault report a week later.
+//   * **No history, no persona, no tools, no stream.** The judgment is about the sentence
+//     the operator just typed. Handing it the conversation makes it slower and its answer
+//     dependent on what came before; handing it tools would let a model that is only
+//     weighing up whether to search go and search.
+//   * **Local only, and a short timeout.** This runs in front of every reply, so it has to
+//     be cheap and it has to fail fast. A judge on a cloud provider would bill somebody per
+//     message to decide whether to bill them per message; see `llm::auto`.
+//
+// Failure is always `Err`, never a guessed verdict. The router's answer to a failed
+// judgment is to leave the operator's own choice alone, which is the one fallback that
+// cannot surprise them.
+
+/// How long a judgment may take before the turn gives up on it and uses the stored choice.
+///
+/// Much shorter than `CALL_TIMEOUT`, because the cost of waiting is paid before the reply
+/// starts: a judge that takes 45 seconds to save a few seconds of cloud call has made every
+/// message worse. A small model on a warm server answers a schema this size in well under a
+/// second; this bound is for the cold start and the server that has gone away.
+const JUDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Asks a local model for one structured judgment, with the schema enforced by the server.
+///
+/// `schema` is a JSON Schema object describing the whole answer. Returns the parsed object,
+/// or an error naming what went wrong -- the caller logs it and carries on unrouted.
+///
+/// Only the two local providers are accepted. The refusal for anything else is not a
+/// limitation waiting to be lifted: the router exists partly to *avoid* cloud calls, and a
+/// cloud judge would make the cheap half of the decision the expensive half.
+pub fn judge(
+    provider: Provider,
+    endpoint: &str,
+    model: &str,
+    system_prompt: &str,
+    question: &str,
+    schema: &Value,
+) -> Result<Value, String> {
+    if model.trim().is_empty() {
+        return Err("no model to judge with".to_string());
+    }
+    let text = match provider {
+        Provider::Ollama => judge_ollama(endpoint, model, system_prompt, question, schema)?,
+        Provider::LmStudio => judge_openai(endpoint, model, system_prompt, question, schema)?,
+        other => return Err(format!("{other} cannot be used as a local judge")),
+    };
+    // A schema-constrained server still sometimes wraps the object in a fence or puts a
+    // sentence in front of it, and a model with no grammar support at all ignores the
+    // field entirely. Both end up here as text that is nearly JSON, so the object is cut
+    // out rather than the whole string parsed -- and if there is no object in it, that is
+    // an error and not a verdict.
+    let body = text
+        .find('{')
+        .zip(text.rfind('}'))
+        .filter(|(start, end)| end > start)
+        .map(|(start, end)| &text[start..=end])
+        .ok_or_else(|| format!("the judgment was not JSON: {}", first_line(&text)))?;
+    let parsed: Value = serde_json::from_str(body)
+        .map_err(|e| format!("the judgment was not JSON ({e}): {}", first_line(body)))?;
+    if parsed.is_object() {
+        Ok(parsed)
+    } else {
+        Err("the judgment was JSON but not an object".to_string())
+    }
+}
+
+/// The front of a model's answer, for an error message that has to fit on a line.
+fn first_line(text: &str) -> String {
+    text.trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+/// Ollama's own grammar-constrained output: a schema in `format`, not a request for JSON.
+#[derive(Serialize)]
+struct OllamaJudgeRequest<'a> {
+    model: &'a str,
+    messages: Vec<OllamaMessage>,
+    stream: bool,
+    format: &'a Value,
+    options: OllamaJudgeOptions,
+}
+
+/// Temperature zero, because a judgment that differs between two identical questions is a
+/// judgment nobody can check. `num_ctx` at the floor: this request is a system prompt and
+/// one sentence, and asking for a long window here would allocate a KV cache the size of
+/// the chat's for a call that lasts a moment -- see `local_context_window`.
+#[derive(Serialize)]
+struct OllamaJudgeOptions {
+    temperature: f32,
+    num_ctx: u64,
+    /// A verdict is a handful of tokens. Without a cap, a model that ignores the schema
+    /// runs on until the timeout and spends the whole budget saying nothing usable.
+    num_predict: u32,
+}
+
+fn judge_ollama(
+    endpoint: &str,
+    model: &str,
+    system_prompt: &str,
+    question: &str,
+    schema: &Value,
+) -> Result<String, String> {
+    let request = OllamaJudgeRequest {
+        model,
+        messages: vec![
+            OllamaMessage::plain("system", system_prompt.to_string()),
+            OllamaMessage::plain("user", question.to_string()),
+        ],
+        stream: false,
+        format: schema,
+        options: OllamaJudgeOptions {
+            temperature: 0.0,
+            num_ctx: LOCAL_CTX_FLOOR,
+            num_predict: JUDGE_MAX_TOKENS,
+        },
+    };
+    let response: OllamaResponse = checked(
+        crate::net::post(&ollama_url(endpoint), "no judgment was asked for")?
+            .config()
+            .timeout_global(Some(JUDGE_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(request),
+    )?
+    .body_mut()
+    .read_json()
+    .map_err(|e| e.to_string())?;
+    Ok(response.text().to_string())
+}
+
+/// How many tokens a verdict may take. The schemas here are three or four short fields.
+const JUDGE_MAX_TOKENS: u32 = 120;
+
+/// The OpenAI-compatible spelling of the same thing, for LM Studio. `json_schema` rather
+/// than `json_object`: the looser mode constrains the answer to *some* object, which for a
+/// router means a verdict with the wrong field names in it.
+#[derive(Serialize)]
+struct OpenAiJudgeRequest<'a> {
+    model: &'a str,
+    messages: Vec<Value>,
+    stream: bool,
+    temperature: f32,
+    max_tokens: u32,
+    response_format: Value,
+}
+
+fn judge_openai(
+    endpoint: &str,
+    model: &str,
+    system_prompt: &str,
+    question: &str,
+    schema: &Value,
+) -> Result<String, String> {
+    let (base, _) = openai_defaults(Provider::LmStudio, endpoint);
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+    let request = OpenAiJudgeRequest {
+        model,
+        messages: vec![
+            json!({"role": "system", "content": system_prompt}),
+            json!({"role": "user", "content": question}),
+        ],
+        stream: false,
+        temperature: 0.0,
+        max_tokens: JUDGE_MAX_TOKENS,
+        response_format: json!({
+            "type": "json_schema",
+            "json_schema": {"name": "verdict", "strict": true, "schema": schema},
+        }),
+    };
+    let response: Value = checked(
+        crate::net::post(&url, "no judgment was asked for")?
+            .config()
+            .timeout_global(Some(JUDGE_TIMEOUT))
+            .http_status_as_error(false)
+            .build()
+            .send_json(request),
+    )?
+    .body_mut()
+    .read_json()
+    .map_err(|e| e.to_string())?;
+    response
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "the server answered without a message".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -224,6 +224,8 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/llm/gateway-models", post(gateway_models))
         .route("/api/setup/advice", get(setup_advice))
         .route("/api/models/brains", get(brains))
+        .route("/api/models/accounts", get(provider_accounts))
+        .route("/api/models/accounts/forget", post(forget_provider_account))
         .route("/api/models/huggingface", get(hf_search))
         .route("/api/models/huggingface/quants", get(hf_quants))
         .route("/api/voice/advice", get(voice_advice))
@@ -1332,6 +1334,33 @@ async fn brains(State(state): State<AppState>) -> Json<serde_json::Value> {
             .await
             .expect("brains panicked"),
     )
+}
+
+/// What is saved for each provider. Settings reads, no probes, so a GET.
+async fn provider_accounts(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::provider_accounts(&state.engine))
+            .await
+            .expect("provider_accounts panicked"),
+    )
+}
+
+#[derive(Deserialize)]
+struct ForgetAccountBody {
+    provider: String,
+}
+
+async fn forget_provider_account(
+    State(state): State<AppState>,
+    Json(body): Json<ForgetAccountBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let accounts = tokio::task::spawn_blocking(move || {
+        commands::forget_provider_account(&state.engine, &body.provider)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(accounts))
 }
 
 #[derive(Deserialize)]

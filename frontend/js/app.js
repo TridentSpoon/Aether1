@@ -9276,6 +9276,9 @@ document.addEventListener('DOMContentLoaded', () => {
             picker.value = model.name;
         }
         document.getElementById('settings-group-connection')?.setAttribute('open', 'open');
+        // The provider box was just set from under the roster, which tracks it.
+        providerShowing = providerBox?.value || providerShowing;
+        renderProviderAccounts();
         setHubStatus(`${model.name} is filled in below. Press Save Changes to start thinking with it.`, 'good');
     }
 
@@ -9381,12 +9384,20 @@ document.addEventListener('DOMContentLoaded', () => {
        computer, and which company to send the question to. An online provider appears only
        when a key for it exists -- an entry that switches and then fails with a 401 is worse
        than no entry, which is what `llm_api_key_<provider>` is for. */
-    const brainState = { current: null, loading: false };
+    const brainState = { current: null, loading: false, autoValue: null, autoSetting: null };
 
     /* Chosen instead of a model: open Settings at The Brain. The picker is also the
        answer to "where do I set this up?", so the way out of an empty list is in the
        list. \u0000 cannot occur in a provider key, so it cannot collide with a real one. */
     const BRAIN_SETUP = '\u0000setup';
+
+    /* Auto is not a model and not a provider: it is the router deciding, per message,
+       between what is on this computer and what is online. It sits at the top of the list
+       because it is the answer to the question the list asks, and it is written as one
+       entry rather than a switch somewhere else so that turning it off is the same gesture
+       as turning it on -- picking a model. The value is the one the backend minted
+       (`llm::auto::PICKER_VALUE`), so the two cannot drift apart. */
+    const BRAIN_AUTO = '\u0000auto';
 
     /* Two controls, one list. The chin bar one says what is answering at a glance, beside
        STATE; this one is in the row where the question is typed, which is where somebody
@@ -9409,6 +9420,24 @@ document.addEventListener('DOMContentLoaded', () => {
         select.innerHTML = '';
         const local = (data && data.local && data.local.models) || [];
         const online = ((data && data.online) || []).filter(entry => entry.ready);
+        const auto = (data && data.auto) || null;
+
+        if (auto) {
+            const option = document.createElement('option');
+            option.value = auto.value || BRAIN_AUTO;
+            // The judge runs on a model on this machine, so with nothing installed there
+            // is nothing to judge with. Shown and refused rather than hidden, for the same
+            // reason the online group is under local-only mode: an entry that is missing
+            // reads as a feature that does not exist.
+            option.textContent = auto.ready
+                ? 'Auto — decide per message'
+                : 'Auto — needs a model on this computer';
+            option.disabled = !auto.ready;
+            option.title = 'A small model on this computer reads each message and decides '
+                + 'whether to answer it here or send it online, and whether anything needs '
+                + 'looking up. Every answer says which it picked.';
+            select.appendChild(option);
+        }
 
         if (local.length) {
             const group = document.createElement('optgroup');
@@ -9441,6 +9470,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 group.appendChild(option);
             }
             select.appendChild(group);
+        }
+
+        if (auto && auto.on) {
+            select.value = auto.value || BRAIN_AUTO;
+            select.title = 'Auto is deciding where each message goes. Pick a model to '
+                + 'decide yourself.';
+            const setup = document.createElement('option');
+            setup.value = BRAIN_SETUP;
+            setup.textContent = 'Set up another…';
+            select.appendChild(setup);
+            return;
         }
 
         const current = data ? brainValue(data.current.provider, data.current.model) : '';
@@ -9494,7 +9534,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         brainState.loading = false;
 
-        brainState.current = data ? brainValue(data.current.provider, data.current.model) : '';
+        brainState.autoValue = (data && data.auto && data.auto.value) || BRAIN_AUTO;
+        brainState.autoSetting = (data && data.auto && data.auto.setting) || 'auto_router';
+        brainState.current = data && data.auto && data.auto.on
+            ? brainState.autoValue
+            : (data ? brainValue(data.current.provider, data.current.model) : '');
         // Kept, so the popover can redraw on a tab or a search keystroke without asking
         // the model server the same question again.
         brainState.data = data;
@@ -9514,16 +9558,33 @@ document.addEventListener('DOMContentLoaded', () => {
         showSettingsSection('brain');
     }
 
-    /* The one place a model is chosen, whichever control did the choosing.
+    /* The one place a model is chosen, whichever control did the choosing: either of the
+       two selects, or a row in the studio's popover. It takes the picker's own encoded
+       value rather than a provider and a model, because one of the things it can be told
+       is not a provider and a model -- it is Auto.
 
        Through the same save path as Settings, so the one place that knows how to store a
        provider and its key stays the only place that does it. The engine reads the
        provider out of settings for every request (llm::load_config), so this is in force
        from the next message -- there is nothing further to press. Returns true when the
        switch took, so a control can put itself back when it did not. */
-    async function switchBrain(provider, model) {
+    async function switchBrainTo(value) {
+        const chose_auto = value === (brainState.autoValue || BRAIN_AUTO);
+        const [provider, model] = value.split('\u001f');
         try {
-            const payload = { llm_provider: provider, llm_model: model };
+            /* Every pick writes the switch, including the ones that turn it off. Writing
+               it only when Auto is chosen would leave an install where Auto is on and a
+               model is also selected, and nothing on screen to say which of the two is in
+               force. The provider and model are left exactly as they were when Auto is
+               chosen: they are what it falls back to, and what it uses when it decides to
+               go online. */
+            const payload = chose_auto
+                ? { [brainState.autoSetting || 'auto_router']: true }
+                : {
+                    llm_provider: provider,
+                    llm_model: model,
+                    [brainState.autoSetting || 'auto_router']: false,
+                };
             if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
             else {
                 const response = await apiFetch('/api/settings', {
@@ -9533,7 +9594,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
             }
-            appendSystemNotice(`Answering with ${model || provider} from now on.`);
+            appendSystemNotice(chose_auto
+                ? 'Auto is deciding where each message goes from now on. Every answer says '
+                  + 'which model it picked.'
+                : `Answering with ${model || provider} from now on.`);
         } catch (error) {
             appendSystemNotice(`Could not switch: ${error.message || error}`);
             return false;
@@ -9555,8 +9619,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     await openBrainSetup();
                     return;
                 }
-                const [provider, model] = select.value.split('\u001f');
-                if (!await switchBrain(provider, model)) select.value = brainState.current;
+                if (!await switchBrainTo(select.value)) select.value = brainState.current;
             });
         }
         initBrainPopover();
@@ -9586,13 +9649,20 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     /* AUTO is not a model, so it is not in the list the tabs sort: it is the judgement
-       about which model, made per message by the local router. The router is being built
-       in its own branch. Until it lands this is `false` and the row says so and cannot be
-       chosen -- an Auto that silently used whatever was already selected would be a lie
-       told once a message. When the router lands, this becomes the check for it and the
-       row becomes live; nothing else here has to change. */
+       about which model, made per message by the local router #256 built. The judge runs
+       on a model on this machine, so with nothing installed there is nothing to judge
+       with -- which is what `ready` says. Shown and refused rather than hidden in that
+       case, for the same reason the online group is under local-only mode: an entry that
+       is missing reads as a feature that does not exist. */
     function brainAutoReady() {
         return !!(brainState.data && brainState.data.auto && brainState.data.auto.ready);
+    }
+
+    /* Whether Auto is the thing currently answering, as opposed to merely available. The
+       selects read this off `select.value`; the popover has no value to read, so it asks
+       the state the same refresh filled in. */
+    function brainAutoOn() {
+        return !!(brainState.data && brainState.data.auto && brainState.data.auto.on);
     }
 
     /* Which models each tab shows.
@@ -9670,6 +9740,13 @@ document.addEventListener('DOMContentLoaded', () => {
             name.textContent = 'Model — could not ask';
             return;
         }
+        if (brainAutoOn()) {
+            // What is answering is a decision, not a model, and saying the model it last
+            // fell back to would be the trigger quietly disagreeing with the row that is
+            // lit inside the popover.
+            name.textContent = 'Auto';
+            return;
+        }
         const current = data.current || {};
         name.textContent = current.model || current.provider || 'Select model';
     }
@@ -9683,7 +9760,9 @@ document.addEventListener('DOMContentLoaded', () => {
         autoRow.type = 'button';
         autoRow.className = 'brain-auto-row';
         const ready = brainAutoReady();
+        const on = brainAutoOn();
         autoRow.disabled = !ready;
+        autoRow.setAttribute('aria-selected', on ? 'true' : 'false');
         autoRow.innerHTML = '<span class="brain-auto-mark" aria-hidden="true">&#9670;</span>';
         const text = document.createElement('span');
         text.className = 'brain-auto-text';
@@ -9692,19 +9771,23 @@ document.addEventListener('DOMContentLoaded', () => {
         autoName.textContent = 'AUTO';
         const autoSub = document.createElement('span');
         autoSub.className = 'brain-auto-sub';
-        autoSub.textContent = ready
-            ? 'A small local model reads each message and picks the one to answer it.'
-            : 'Picks the model per message. The local router is being built — not yet available.';
+        // The same three states the selects say in one line of option text, with the room
+        // here to say why rather than only what.
+        autoSub.textContent = !ready
+            ? 'Needs a model on this computer — the judge runs locally, so there is nothing to judge with.'
+            : on
+                ? 'Reading each message and deciding where it goes. Every answer says which it picked.'
+                : 'A small local model reads each message and decides where it is answered, and whether anything needs looking up.';
         text.appendChild(autoName);
         text.appendChild(autoSub);
         autoRow.appendChild(text);
         const badge = document.createElement('span');
         badge.className = 'brain-auto-badge';
-        badge.textContent = ready ? 'ON' : 'SOON';
+        badge.textContent = !ready ? 'NEEDS A MODEL' : on ? 'ON' : 'OFF';
         autoRow.appendChild(badge);
         if (ready) {
             autoRow.addEventListener('click', async () => {
-                await switchBrain('auto', '');
+                await switchBrainTo(brainState.autoValue || BRAIN_AUTO);
                 closeBrainPopover();
             });
         }
@@ -9754,7 +9837,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (!row.disabled) {
                     item.addEventListener('click', async () => {
-                        await switchBrain(row.provider, row.model);
+                        await switchBrainTo(brainValue(row.provider, row.model));
                         closeBrainPopover();
                     });
                 }
@@ -10425,6 +10508,206 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------------ SAVED ACCOUNTS ------------------------------
+
+       One address box, one key box and one model box were shared by eight providers.
+       The engine had already stopped sharing them -- `llm_api_key_<provider>` has been
+       real since #245 -- but the form never had, so picking a second provider showed the
+       first one's details, Save overwrote them, and switching back meant typing
+       everything in again. Nothing on the page said a key had ever been kept.
+
+       Two halves fix that, and they are separate on purpose:
+
+         * `providerScratch` is this visit's unsaved typing, kept per provider so that
+           clicking through the dropdown to look at something does not lose what was
+           half entered.
+         * `providerAccounts` is what the companion has actually stored, from
+           commands::provider_accounts. It is what the roster is drawn from and what the
+           form falls back to for a provider this visit has not touched.
+
+       No key is ever in either. A key lives in the system credential store and the page
+       is told only that there is one -- the box shows SAVED_KEY, and a Save that sends
+       it back unchanged leaves the stored key alone. See secrets.rs. */
+
+    /// What `get_settings` puts in a key box in place of a key the page may not see.
+    /// Must match secrets::SAVED exactly: the backend recognises this string coming home
+    /// and leaves the stored key where it is.
+    const SAVED_KEY = '\u2022\u2022\u2022 saved \u2022\u2022\u2022';
+
+    let providerAccounts = { current: 'offline', accounts: [], keychain: false };
+    const providerScratch = new Map();
+    let providerShowing = null;
+
+    function accountFor(providerKey) {
+        return providerAccounts.accounts.find(a => a.provider === providerKey) || null;
+    }
+
+    /// Remembers what is in the form for the provider currently shown, so switching away
+    /// and back inside one visit to Settings does not lose it.
+    function stashProviderDetails() {
+        if (!providerShowing || providerShowing === 'offline') return;
+        providerScratch.set(providerShowing, {
+            endpoint: document.getElementById('setting-endpoint')?.value ?? '',
+            model: document.getElementById('setting-model')?.value ?? '',
+            apikey: document.getElementById('setting-apikey')?.value ?? '',
+            gatewayUrl: document.getElementById('setting-gateway-url')?.value ?? '',
+            gatewayKey: document.getElementById('setting-gateway-key')?.value ?? '',
+        });
+    }
+
+    /// Puts a provider's own details into the form: this visit's typing if there is any,
+    /// otherwise what is stored for it.
+    function restoreProviderDetails(providerKey) {
+        providerShowing = providerKey;
+        if (providerKey === 'offline') return;
+        const held = providerScratch.get(providerKey);
+        const saved = accountFor(providerKey);
+        const endpoint = document.getElementById('setting-endpoint');
+        const model = document.getElementById('setting-model');
+        const apikey = document.getElementById('setting-apikey');
+        const gatewayUrl = document.getElementById('setting-gateway-url');
+        const gatewayKey = document.getElementById('setting-gateway-key');
+        if (held) {
+            if (endpoint) endpoint.value = held.endpoint;
+            if (model) model.value = held.model;
+            if (apikey) apikey.value = held.apikey;
+            if (gatewayUrl) gatewayUrl.value = held.gatewayUrl;
+            if (gatewayKey) gatewayKey.value = held.gatewayKey;
+            return;
+        }
+        if (!saved) return;
+        if (providerKey === 'gateway') {
+            if (gatewayUrl) gatewayUrl.value = saved.endpoint || '';
+            // Dots rather than nothing, for the same reason the page is sent dots at
+            // all: a box that reads empty for a gateway that has a key says the key is
+            // gone, and the next Save would make that true.
+            if (gatewayKey) gatewayKey.value = saved.has_key ? SAVED_KEY : '';
+        } else {
+            if (endpoint) endpoint.value = saved.endpoint || '';
+            if (apikey) apikey.value = saved.has_key ? SAVED_KEY : '';
+        }
+        if (model) model.value = saved.model || '';
+    }
+
+    const KEY_STORAGE_WORDING = {
+        keychain: 'key in this computer\u2019s keychain',
+        settings: 'key saved (no keychain on this machine)',
+    };
+
+    /// The roster above the form: every provider, what is kept for it, and which one is
+    /// answering. Clicking a row loads that provider into the form.
+    function renderProviderAccounts() {
+        const box = document.getElementById('provider-accounts');
+        if (!box) return;
+        box.innerHTML = '';
+        const selected = document.getElementById('setting-provider')?.value || providerAccounts.current;
+        for (const account of providerAccounts.accounts) {
+            const row = document.createElement('div');
+            row.className = 'provider-account'
+                + (account.provider === selected ? ' is-selected' : '');
+
+            const left = document.createElement('button');
+            left.type = 'button';
+            left.className = 'provider-account-pick';
+            const name = document.createElement('span');
+            name.className = 'provider-account-name';
+            name.textContent = account.label;
+            if (account.active) {
+                const answering = document.createElement('span');
+                answering.className = 'provider-account-answering';
+                answering.textContent = '  \u2014 answering now';
+                name.appendChild(answering);
+            }
+            const detail = document.createElement('span');
+            detail.className = 'provider-account-meta';
+            const parts = [];
+            if (account.model) parts.push(account.model);
+            if (account.needs_key) {
+                parts.push(account.has_key
+                    ? (KEY_STORAGE_WORDING[account.key_storage] || 'key saved')
+                    : 'no key yet');
+            } else if (account.endpoint) {
+                parts.push(account.endpoint);
+            }
+            detail.textContent = parts.join('  \u00b7  ') || 'nothing saved yet';
+            left.appendChild(name);
+            left.appendChild(detail);
+            left.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                const select = document.getElementById('setting-provider');
+                if (!select) return;
+                stashProviderDetails();
+                select.value = account.provider;
+                restoreProviderDetails(account.provider);
+                applyDefaultModelForProvider(account.provider);
+                toggleGatewayFields();
+                renderProviderAccounts();
+            });
+            row.appendChild(left);
+
+            if (account.configured) {
+                const forget = document.createElement('button');
+                forget.type = 'button';
+                forget.className = 'cyber-btn text-[10px] py-0.5 px-2 text-slate-300';
+                forget.textContent = 'Forget';
+                forget.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    forgetProviderAccount(account);
+                });
+                row.appendChild(forget);
+            }
+            box.appendChild(row);
+        }
+
+        const note = document.getElementById('provider-accounts-note');
+        if (note) {
+            note.textContent = providerAccounts.keychain
+                ? 'Keys are kept in this computer\u2019s keychain, not in AETHER1\u2019s database. Each provider keeps its own key, address and model, so switching between them loses nothing.'
+                : 'This machine has no keychain service running, so keys are kept in AETHER1\u2019s own database instead. Each provider still keeps its own key, address and model.';
+        }
+    }
+
+    /// Takes one provider's key, address and model off this machine. Asked first, because
+    /// a key is not something the page can put back.
+    async function forgetProviderAccount(account) {
+        voiceEngine.playSFX('click');
+        const warning = account.needs_key
+            ? `Forget ${account.label}? Its key is deleted from this computer and would have to be entered again.`
+            : `Forget the address and model saved for ${account.label}?`;
+        if (!window.confirm(warning)) return;
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('forget_provider_account_rust', { provider: account.provider })
+                : await (await apiFetch('/api/models/accounts/forget', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: account.provider }),
+                })).json();
+            providerAccounts = data;
+            providerScratch.delete(account.provider);
+            // The form is showing what was just deleted, so it has to stop showing it --
+            // otherwise the next Save puts it straight back.
+            if ((document.getElementById('setting-provider')?.value) === account.provider) {
+                restoreProviderDetails(account.provider);
+            }
+            renderProviderAccounts();
+            refreshBrainPicker();
+        } catch (error) {
+            setHubStatus(`Could not forget ${account.label}: ${error}`, 'bad');
+        }
+    }
+
+    async function refreshProviderAccounts() {
+        try {
+            providerAccounts = IS_TAURI
+                ? await tauriInvoke('provider_accounts_rust')
+                : await (await apiFetch('/api/models/accounts')).json();
+        } catch (error) {
+            return;
+        }
+        renderProviderAccounts();
+    }
+
     /// Shows the gateway's own fields only when the gateway is the chosen provider.
     ///
     /// Hidden rather than disabled: the two boxes above it mean something different for a
@@ -10556,6 +10839,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!server) return;
         document.getElementById('setting-provider').value = server.provider_key;
         document.getElementById('setting-endpoint').value = server.endpoint;
+        // Same reason as in hubUseModel: the roster tracks the provider box, and this
+        // changed it without going through the dropdown's own handler.
+        providerShowing = server.provider_key;
+        renderProviderAccounts();
         populateModelPicker(server);
         const model = document.getElementById('setting-model');
         if (server.models.length && !server.models.includes(model.value)) {
@@ -12388,6 +12675,13 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-apikey').value = s.llm_api_key || '';
             document.getElementById('setting-gateway-url').value = s.llm_gateway_url || '';
             document.getElementById('setting-gateway-key').value = s.llm_gateway_key || '';
+            // What is stored for every *other* provider, so the dropdown can restore one
+            // the moment it is picked rather than on the next page load. Rides along with
+            // the settings rather than being a second request; see commands::get_settings.
+            if (data.accounts) providerAccounts = data.accounts;
+            providerShowing = s.llm_provider || 'offline';
+            providerScratch.clear();
+            renderProviderAccounts();
             toggleGatewayFields();
             // Absent means `auto`, matching llm::REASONING_SETTING's own default -- an
             // install that has never saved this is not an install with reasoning off.
@@ -12710,6 +13004,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // endpoint corrected here all change what they should be offering, and the
             // one in the chat row is in view the moment this panel closes.
             refreshBrainPicker();
+            // And the roster of saved accounts: a key just entered has to stop reading
+            // "no key yet", and the form's own copy of the key box is now a key this
+            // page may no longer see -- so it is replaced with the sentinel the next
+            // read would have given it.
+            providerScratch.clear();
+            await refreshProviderAccounts();
+            restoreProviderDetails(document.getElementById('setting-provider')?.value || 'offline');
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
@@ -13877,8 +14178,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const providerSelect = document.getElementById('setting-provider');
     if (providerSelect) {
         providerSelect.addEventListener('change', (e) => {
+            // Before anything else: the boxes still hold the provider being left, and
+            // this is the only moment they can be filed under it. See stashProviderDetails.
+            stashProviderDetails();
+            restoreProviderDetails(e.target.value);
             applyDefaultModelForProvider(e.target.value);
             toggleGatewayFields();
+            renderProviderAccounts();
         });
     }
 
@@ -13932,6 +14238,25 @@ document.addEventListener('DOMContentLoaded', () => {
         settingsModal.classList.remove('hidden');
         showSettingsSection('brain');
     });
+    /* Opens the connection form and puts it in front of the operator, wherever they
+       pressed it from. The form has always been reachable -- it was reachable by opening
+       Settings, finding Connections in the rail, and unfolding a grey summary line four
+       levels down -- which is a different thing from being findable. */
+    function openProviderSetup() {
+        voiceEngine.playSFX('click');
+        settingsModal.classList.remove('hidden');
+        showSettingsSection('connections');
+        const form = document.getElementById('settings-group-ai-connection');
+        if (form) {
+            form.open = true;
+            // After the pane is shown, or the scroll lands on a hidden element.
+            requestAnimationFrame(() => form.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+        }
+        refreshProviderAccounts();
+    }
+    document.getElementById('btn-setup-provider')?.addEventListener('click', openProviderSetup);
+    document.getElementById('brain-setup-provider')?.addEventListener('click', openProviderSetup);
+
     document.getElementById('conn-github-signout')?.addEventListener('click', () => handleSignOut());
     if (btnGithubDecline) {
         btnGithubDecline.addEventListener('click', () => handleDeclineUpdates());

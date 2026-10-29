@@ -4,6 +4,7 @@
 // SQLite file and schema as the Python backend, so either engine can serve a request
 // against the same conversation/settings state.
 
+pub mod auto;
 mod db;
 pub mod flow;
 mod genesis;
@@ -30,7 +31,7 @@ pub use genesis::{local_voice_for as persona_local_voice, voice_for as persona_v
 // is built from the enum rather than written out again in the markup.
 pub use persona::{Domain, Persona, Provider, Root};
 use providers::ChatContext;
-pub use providers::{default_model_for, forget_local_facts, ollama_facts, Sink};
+pub use providers::{default_model_for, forget_local_facts, Sink};
 pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio, transcribe};
 pub use telemetry::{Pulse, Sampler, Telemetry};
 pub use tts::{
@@ -377,13 +378,65 @@ pub fn key_setting_for(provider: Provider) -> String {
 /// naturally as providers are reconfigured.
 pub fn api_key_for(db: &MemoryDb, provider: Provider) -> String {
     if provider == Provider::Gateway {
-        return db.get_setting_string(GATEWAY_KEY_SETTING, "");
+        return crate::secrets::load(db, GATEWAY_KEY_SETTING);
     }
-    let own = db.get_setting_string(&key_setting_for(provider), "");
+    let own = crate::secrets::load(db, &key_setting_for(provider));
     if !own.trim().is_empty() {
         return own;
     }
-    db.get_setting_string("llm_api_key", "")
+    crate::secrets::load(db, SHARED_KEY_SETTING)
+}
+
+/// The slot every cloud key shared before `key_setting_for` split them up. Still read as
+/// a fallback, because an install that has not been reconfigured since has its key here
+/// and nothing should make somebody re-type a key to upgrade.
+pub const SHARED_KEY_SETTING: &str = "llm_api_key";
+
+/// The address a fresh install points at: Ollama on this machine, on its own port. The
+/// same string the settings form and `get_settings` default to, named here so the three
+/// cannot drift apart.
+pub const LOCAL_ENDPOINT_DEFAULT: &str = "http://localhost:11434";
+
+/// Where the address last used with one provider is remembered: `llm_endpoint_ollama`,
+/// `llm_endpoint_lmstudio`, and so on.
+///
+/// `llm_endpoint` is still the address in use -- that is what the engine reads, and this
+/// does not change it. This is the form's memory, and it exists for the same reason
+/// `key_setting_for` does: somebody running Ollama on this box and LM Studio on the one
+/// in the cupboard had one address box between them, so trying the other server meant
+/// typing an address in, and going back meant typing the first one in again.
+pub fn endpoint_setting_for(provider: Provider) -> String {
+    format!("llm_endpoint_{}", provider.key())
+}
+
+/// Where the model last used with one provider is remembered. Same reasoning as
+/// [`endpoint_setting_for`], and the sharper half of it in practice: a model id is
+/// provider-specific in a way an address is not, so a switch from `gpt-4o-mini` to
+/// Anthropic that carries the model name over produces a 404 about a model that was
+/// never Anthropic's.
+pub fn model_setting_for(provider: Provider) -> String {
+    format!("llm_model_{}", provider.key())
+}
+
+/// The address remembered for one provider, falling back to the one in use and then to
+/// the local default. Read by the settings form, not by the engine.
+pub fn remembered_endpoint(db: &MemoryDb, provider: Provider) -> String {
+    let own = db.get_setting_string(&endpoint_setting_for(provider), "");
+    if !own.trim().is_empty() {
+        return own;
+    }
+    db.get_setting_string("llm_endpoint", LOCAL_ENDPOINT_DEFAULT)
+}
+
+/// The model remembered for one provider, falling back to that provider's default. Empty
+/// for a provider with no sensible default -- a local server, whose models are whatever
+/// is installed, and a gateway, whose ids are whatever an administrator connected.
+pub fn remembered_model(db: &MemoryDb, provider: Provider) -> String {
+    let own = db.get_setting_string(&model_setting_for(provider), "");
+    if !own.trim().is_empty() {
+        return own;
+    }
+    default_model_for(provider).to_string()
 }
 
 struct StreamFailure {
@@ -636,6 +689,58 @@ impl LlmEngine {
         choice.model
     }
 
+    /// Asks the Auto router where this turn should go, and rebuilds the configuration for
+    /// wherever that is.
+    ///
+    /// Returns the configuration to use and what Auto decided, or the configuration it was
+    /// given and None -- which is the answer whenever Auto is off, whenever the judge
+    /// cannot be reached, and whenever there was only ever one place to send the question.
+    /// An unrouted turn is the same turn this function did not exist for, which is the
+    /// property that makes a router safe to put in front of every reply.
+    fn apply_auto_router(&self, config: Config, prompt: &str) -> (Config, Option<auto::Routed>) {
+        if !auto::enabled(&self.db) {
+            return (config, None);
+        }
+        // Asked here and passed in, because the router may only ever narrow it: an install
+        // with the tools switched off does not acquire them because a judgment said the
+        // question needs a lookup.
+        let tools_available =
+            crate::tools::tools_enabled(&self.db) && !crate::tools::registry().is_empty();
+        match auto::route(
+            &self.db,
+            &config.persona,
+            config.provider,
+            &config.endpoint,
+            prompt,
+            tools_available,
+        ) {
+            Ok(routed) => {
+                let model = (!routed.model.is_empty()).then_some(routed.model.as_str());
+                let config = self.load_config_as(Some(routed.provider), model);
+                (config, Some(routed))
+            }
+            Err(why) => {
+                // Said once per reason per session, not once per message. A judge that is
+                // not installed is the same sentence before every reply otherwise, and a
+                // notice somebody sees forty times an evening is a notice they stop
+                // reading -- the same rule the missing-model notice is held to above.
+                let first_time = self
+                    .reported_missing
+                    .lock()
+                    .unwrap()
+                    .insert(format!("auto|{why}"));
+                if first_time {
+                    *self.routing_notice.lock().unwrap() = Some(format!(
+                        "Auto could not decide where to send that one ({why}), so it went \
+                         to your own choice."
+                    ));
+                }
+                eprintln!("[AETHER1] the Auto router stood down: {why}");
+                (config, None)
+            }
+        }
+    }
+
     /// Collects the routing's pending line, if there is one, and clears it.
     pub fn take_routing_notice(&self) -> Option<String> {
         self.routing_notice.lock().unwrap().take()
@@ -680,9 +785,27 @@ impl LlmEngine {
     }
 
     fn load_config(&self) -> Config {
+        self.load_config_as(None, None)
+    }
+
+    /// The turn's configuration, optionally with somewhere else to send it.
+    ///
+    /// The overrides exist for the Auto router (`llm::auto`) and go in at the top rather
+    /// than being patched onto a finished Config, because almost everything below depends
+    /// on which provider it is: which key slot to read, whether the gateway's own address
+    /// and key replace the shared pair, and whether step 19 may route the model at all.
+    /// A router that set `provider` on the way out would have to re-derive all of that,
+    /// and a second copy of it is a second answer waiting to disagree.
+    fn load_config_as(&self, provider: Option<Provider>, model: Option<&str>) -> Config {
         let mut agent_name = self.db.get_setting_string("agent_name", "HALCY");
-        let mut provider_key = self.db.get_setting_string("llm_provider", "offline");
-        let model_name = self.db.get_setting_string("llm_model", "halcy-core");
+        let mut provider_key = match provider {
+            Some(chosen) => chosen.key().to_string(),
+            None => self.db.get_setting_string("llm_provider", "offline"),
+        };
+        let model_name = match model {
+            Some(chosen) => chosen.to_string(),
+            None => self.db.get_setting_string("llm_model", "halcy-core"),
+        };
         let endpoint = self
             .db
             .get_setting_string("llm_endpoint", "http://localhost:11434");
@@ -715,7 +838,9 @@ impl LlmEngine {
         if api_key.is_empty() && !local_only {
             if let Some((key, detected_provider)) = detect_cloud_api_key() {
                 api_key = key;
-                if provider_key == "offline" {
+                // `provider.is_none()` because a router that has just decided where this
+                // turn goes is not a half-configured install waiting to be promoted.
+                if provider_key == "offline" && provider.is_none() {
                     provider_key = detected_provider.to_string();
                 }
             }
@@ -1653,6 +1778,21 @@ impl LlmEngine {
             return reply;
         }
 
+        /* The Auto router, when the operator has asked for it: one short judgment on a
+        small local model, and then this turn's provider is whatever that judgment points
+        at rather than the stored one. Everything about it that could surprise somebody is
+        answered in `llm::auto` -- it is off by default, it says what it chose, and a
+        judgment it could not get leaves the turn exactly as it was.
+
+        Here rather than inside `load_config` because the judgment is about the prompt,
+        which `load_config` has no business knowing about, and because it must not run for
+        a turn that never reaches a model: an instant command is answered above. */
+        let (config, routed) = self.apply_auto_router(config, prompt);
+        let auto_trace = routed
+            .as_ref()
+            .map(|r| crate::tools::protocol::trace_of(&r.why))
+            .unwrap_or_default();
+
         let history = self.db.get_messages(session_id, 8).unwrap_or_default();
         let telem = Telemetry::snapshot();
         let mut system_prompt = self.system_prompt(&config, &telem);
@@ -1668,6 +1808,7 @@ impl LlmEngine {
         let mut cannot_call_tools: Option<String> = None;
         let registry = crate::tools::registry();
         let tools_on = crate::tools::tools_enabled(&self.db) && !registry.is_empty();
+        let tools_on = tools_on && routed.as_ref().map(|r| r.tools).unwrap_or(true);
         if tools_on {
             // Said to the operator, once per turn, when the model behind the provider
             // cannot emit a tool call. It is the difference between "it refused to search"
@@ -1812,7 +1953,7 @@ impl LlmEngine {
                 prompt,
                 images,
                 &format!(
-                    "{}{}",
+                    "{auto_trace}{}{}",
                     self.vault_trace(),
                     cannot_call_tools.unwrap_or_default()
                 ),
@@ -1827,7 +1968,7 @@ impl LlmEngine {
             // to a model in this branch and the tool_loop one above -- the offline/
             // local-only-refusal replies above never look at it, so tracing it there would
             // claim something that did not happen.
-            let vault_trace = self.vault_trace();
+            let vault_trace = format!("{auto_trace}{}", self.vault_trace());
             if !vault_trace.is_empty() {
                 sink(&vault_trace);
             }
@@ -2361,6 +2502,66 @@ mod tests {
             &serde_json::Value::String(vault.to_string_lossy().to_string()),
         );
         LlmEngine::new(db)
+    }
+
+    /// What the Auto router's override actually has to produce, which no amount of
+    /// watching it choose proves: the whole provider-dependent half of the configuration,
+    /// rebuilt for somewhere the operator did not store.
+    ///
+    /// The failure this pins is specific and silent. Before `load_config_as`, a router
+    /// could only have set `provider` on a finished Config -- and the key would still be
+    /// the one belonging to the provider the operator had stored, so routing from Ollama to
+    /// Anthropic would send Anthropic a 401 and nothing would say why.
+    #[test]
+    fn routing_to_a_cloud_provider_reads_that_providers_own_key() {
+        let engine = temp_engine("routed_cloud");
+        let set = |key: &str, value: &str| {
+            let _ = engine
+                .db
+                .set_setting(key, &serde_json::Value::String(value.into()));
+        };
+        set("llm_provider", "ollama");
+        set("llm_endpoint", "http://127.0.0.1:11434");
+        set("llm_model", "qwen3:8b");
+        set(
+            &key_setting_for(Provider::Anthropic),
+            "sk-ant-the-right-one",
+        );
+        set(&key_setting_for(Provider::OpenAi), "sk-the-wrong-one");
+
+        let routed = engine.load_config_as(Some(Provider::Anthropic), Some("claude-opus-5"));
+        assert_eq!(routed.provider, Provider::Anthropic);
+        assert_eq!(routed.model_name, "claude-opus-5");
+        assert_eq!(
+            routed.api_key, "sk-ant-the-right-one",
+            "the key slot follows the provider the router chose, not the stored one"
+        );
+
+        // And the unrouted call is untouched by any of it, which is what makes an
+        // unrouted turn identical to one from before this existed.
+        let plain = engine.load_config();
+        assert_eq!(plain.provider, Provider::Ollama);
+        assert!(
+            plain.api_key.is_empty(),
+            "a local provider is sent no key at all"
+        );
+    }
+
+    /// Routing to a local provider leaves the model alone, so that step 19 -- the shipped
+    /// family table, the measured speeds, and the operator's per-persona picks -- is still
+    /// the only thing choosing between installed models.
+    #[test]
+    fn routing_to_a_local_provider_does_not_name_the_model_itself() {
+        let engine = temp_engine("routed_local");
+        let _ = engine
+            .db
+            .set_setting("llm_model", &serde_json::Value::String("qwen3:8b".into()));
+        let routed = engine.load_config_as(Some(Provider::Ollama), None);
+        assert_eq!(routed.provider, Provider::Ollama);
+        assert_eq!(
+            routed.model_name, "qwen3:8b",
+            "the stored model stands; the router passed no override"
+        );
     }
 
     /// The panel is fed entirely by this one snapshot, so what it does and does not carry
