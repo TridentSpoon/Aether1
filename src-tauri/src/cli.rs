@@ -56,6 +56,12 @@ USAGE:
     aether1 models <NAME> <MODEL>  Point one speciality at a model (`clear` to unset)
     aether1 reasoning              Show whether the model is asked to think, and how hard
     aether1 reasoning <LEVEL>      off | auto | low | medium | high
+    aether1 tune                   Which of AETHER1's own prompts can be scored against
+                                   cases with known answers, and how the current wording did
+    aether1 tune <NAME>            Score the wording in force, and print the cases it fails
+    aether1 tune <NAME> run        One round: score it, ask a local model to reword it, and
+                                   keep the new wording only if it scores better
+    aether1 tune <NAME> revert     Put the wording AETHER1 shipped with back in force
     aether1 flow                   Show whether the avatar follows the question (STATIC or
                                    FLOW), and which line it can move within
     aether1 flow on|off            Turn that on or off
@@ -277,6 +283,20 @@ pub enum Invocation {
     /// See `llm::providers::Reasoning` for what each level actually sends.
     Reasoning {
         level: Option<String>,
+    },
+    /// `tune`: scores one of AETHER1's own prompts against cases with known answers, and
+    /// optionally runs a round of rewriting. See llm/tuning.rs -- and note that `run` is
+    /// dozens of local generations, which is why it is a word somebody types rather than
+    /// anything that happens on a timer.
+    Tune {
+        /// Which prompt. None lists them.
+        adapter: Option<String>,
+        /// `run` -- propose a rewrite and keep it if it scores better.
+        run: bool,
+        /// `revert` -- put the shipped wording back.
+        revert: bool,
+        /// How many rounds, for `run`. Each one is a full pass over the cases twice.
+        rounds: usize,
     },
     /// `flow`: STATIC keeps the avatar the operator picked on every question; FLOW lets the
     /// specialist inside that avatar's own line take the ones that are its own. See
@@ -797,6 +817,57 @@ pub fn parse(argv: &[String]) -> Invocation {
             _ => Err(
                 "models takes either nothing, or a speciality and a model -- for example \
                  `aether1 models nexus qwen2.5-coder:7b`, or `aether1 models nexus clear`"
+                    .to_string(),
+            ),
+        },
+        "tune" => match rest
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => Ok(Invocation::Tune {
+                adapter: None,
+                run: false,
+                revert: false,
+                rounds: 1,
+            }),
+            [name] => Ok(Invocation::Tune {
+                adapter: Some((*name).to_string()),
+                run: false,
+                revert: false,
+                rounds: 1,
+            }),
+            [name, "revert"] => Ok(Invocation::Tune {
+                adapter: Some((*name).to_string()),
+                run: false,
+                revert: true,
+                rounds: 1,
+            }),
+            [name, "run"] => Ok(Invocation::Tune {
+                adapter: Some((*name).to_string()),
+                run: true,
+                revert: false,
+                rounds: 1,
+            }),
+            // The count is parsed here rather than accepted and clamped later, so a typo is
+            // a refusal with the correct form in it instead of one silent round.
+            [name, "run", count] => match count.parse::<usize>() {
+                Ok(rounds) if (1..=20).contains(&rounds) => Ok(Invocation::Tune {
+                    adapter: Some((*name).to_string()),
+                    run: true,
+                    revert: false,
+                    rounds,
+                }),
+                _ => Err(format!(
+                    "{count:?} is not a number of rounds between 1 and 20 -- for example \
+                     `aether1 tune judge run 3`. Each round is a full pass over the cases \
+                     twice, so twenty is already a long evening."
+                )),
+            },
+            _ => Err(
+                "tune takes nothing, a prompt's name, or a name and one of run or revert -- \
+                 for example `aether1 tune judge run`"
                     .to_string(),
             ),
         },
@@ -2180,6 +2251,191 @@ fn run_reasoning(level: Option<&str>) -> Result<String, String> {
 /// The showing is the important half: step 19's whole claim is that "which model for which
 /// job" reads back as a sentence the operator can check, and a list they can see is what
 /// makes that true rather than a thing the design asserts about itself.
+/// `tune`: score one of AETHER1's own prompts, and optionally let a local model reword it.
+///
+/// Everything here happens on this machine. The judge is the small model the router already
+/// uses, the rewriter is the largest model installed -- sorting a question and rewriting a
+/// page of instructions are different jobs -- and nothing is sent anywhere.
+fn run_tune(
+    adapter: Option<&str>,
+    run: bool,
+    revert: bool,
+    rounds: usize,
+) -> Result<String, String> {
+    use crate::llm::tuning::{self, Adapter};
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    let Some(name) = adapter else {
+        let mut out =
+            String::from("Prompts that can be scored against cases with known answers:\n");
+        for adapter in Adapter::ALL {
+            let history = tuning::history(db, *adapter);
+            let (cases, _) = tuning::cases(db, *adapter);
+            let standing = match history.active_version() {
+                Some(version) => format!(
+                    "a tuned wording from {}, {}/{} on {}",
+                    version.made, version.passed, version.cases, version.model
+                ),
+                None => "the wording AETHER1 shipped with".to_string(),
+            };
+            out.push_str(&format!(
+                "\n  {:<8} {}\n           in force: {standing}\n           {} case{}, {} wording{} tried\n",
+                adapter.key(),
+                adapter.describes(),
+                cases.len(),
+                if cases.len() == 1 { "" } else { "s" },
+                history.versions.len(),
+                if history.versions.len() == 1 { "" } else { "s" },
+            ));
+        }
+        out.push_str(
+            "\nRun `aether1 tune <name>` to score what is in force, or \
+             `aether1 tune <name> run` for a round of rewriting.\n",
+        );
+        return Ok(out);
+    };
+
+    let Some(adapter) = Adapter::from_key(name) else {
+        return Err(format!(
+            "no prompt called {name:?} -- it is one of {}",
+            Adapter::ALL
+                .iter()
+                .map(|a| a.key())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+
+    if revert {
+        tuning::revert(db, adapter)?;
+        return Ok(format!(
+            "{} is back to the wording AETHER1 shipped with. The wordings that were tried \
+             are still recorded, so nothing is lost.",
+            adapter.key()
+        ));
+    }
+
+    // The two models this needs, and the refusals if they are not there. Said before any
+    // scoring starts: a round that discovers halfway through that it cannot ask for a
+    // rewrite has spent somebody's time to tell them something it knew at the beginning.
+    let available = crate::llm::auto::candidates(db);
+    if available.local.is_empty() {
+        return Err(format!(
+            "nothing answered at {}, and all of this runs on a model on this machine. Start \
+             your model server and try again.",
+            available.endpoint
+        ));
+    }
+    let judge_model = tuning::judge_model_for(db, &available)
+        .ok_or_else(|| "no model to score with".to_string())?;
+    let rewrite_model = tuning::rewriter_model_for(&available)
+        .ok_or_else(|| "no model to reword with".to_string())?;
+
+    let (cases, problem) = tuning::cases(db, adapter);
+    let mut out = String::new();
+    if let Some(problem) = problem {
+        // Printed rather than returned: the run still happens against the shipped cases,
+        // and they have to know the set they are reading about is not the one they meant.
+        out.push_str(&format!("Your own cases were not read -- {problem}\n\n"));
+    }
+    out.push_str(&format!(
+        "{} case{} -- {} scoring, {} rewording.\n",
+        cases.len(),
+        if cases.len() == 1 { "" } else { "s" },
+        judge_model,
+        rewrite_model,
+    ));
+    if let Some(path) = tuning::cases_path(db, adapter) {
+        out.push_str(&format!("Add your own cases in {}.\n", path.display()));
+    }
+    println!("{out}");
+    out.clear();
+
+    let judge = tuning::LocalJudge {
+        provider: available.local_provider,
+        endpoint: available.endpoint.clone(),
+        model: judge_model,
+        schema: crate::llm::auto::schema(),
+    };
+
+    if !run {
+        // Score only. The cases it fails are the whole output: they are what a wording
+        // would have to fix, and reading them is how somebody decides whether the cases or
+        // the prompt is the thing that is wrong.
+        let score = tuning::score(&judge, &tuning::text(db, adapter), &cases, &mut |outcome| {
+            println!("{}", tune_line(outcome));
+        });
+        out.push_str(&format!("\n{}/{} cases.\n", score.passed(), score.cases()));
+        if score.passed() < score.cases() {
+            out.push_str("Run `aether1 tune ");
+            out.push_str(adapter.key());
+            out.push_str(" run` to try a different wording against the same cases.\n");
+        }
+        return Ok(out);
+    }
+
+    let rewriter = |prompt: &str| tuning::reword_with(&available, &rewrite_model, prompt);
+    for round in 1..=rounds {
+        println!("\n--- round {round} of {rounds}");
+        let outcome = tuning::run_round(db, adapter, &judge, &rewriter, &cases, &mut |line| {
+            println!("{line}");
+        })?;
+        println!("{}", outcome.verdict);
+        if round == 1 {
+            out.push_str(&format!(
+                "Started from {}/{} cases.\n",
+                outcome.baseline.passed(),
+                outcome.baseline.cases()
+            ));
+        }
+        if outcome.kept {
+            println!("  ...so this is the wording in force from now on.");
+        }
+        if outcome.candidate.is_none() {
+            // Nothing was tried, so trying again changes nothing -- a loop that kept going
+            // here would be a loop printing the same refusal twenty times.
+            out.push_str(&format!(
+                "Stopped after round {round}: {}\n",
+                outcome.verdict
+            ));
+            return Ok(out);
+        }
+    }
+
+    let history = tuning::history(db, adapter);
+    out.push_str(&match history.active_version() {
+        Some(version) => format!(
+            "\nIn force now: a tuned wording scoring {}/{} on {}. \
+             `aether1 tune {} revert` puts the shipped one back.\n",
+            version.passed,
+            version.cases,
+            version.model,
+            adapter.key()
+        ),
+        None => format!(
+            "\nStill the wording AETHER1 shipped with -- nothing tried beat it. \
+             {} wording{} recorded.\n",
+            history.versions.len(),
+            if history.versions.len() == 1 { "" } else { "s" }
+        ),
+    });
+    Ok(out)
+}
+
+/// One case's result, for a terminal.
+fn tune_line(outcome: &crate::llm::tuning::Outcome) -> String {
+    let message: String = outcome.message.chars().take(60).collect();
+    if let Some(why) = &outcome.failed {
+        format!("  ! {message} -- no usable answer ({why})")
+    } else if outcome.wrong.is_empty() {
+        format!("  . {message}")
+    } else {
+        format!("  x {message} -- wrong: {}", outcome.wrong.join(", "))
+    }
+}
+
 fn run_models(persona: Option<String>, model: Option<String>) -> Result<String, String> {
     use crate::llm::routing;
     use crate::llm::Persona;
@@ -3005,6 +3261,12 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
         Invocation::Reasoning { level } => run_reasoning(level.as_deref()),
+        Invocation::Tune {
+            adapter,
+            run,
+            revert,
+            rounds,
+        } => run_tune(adapter.as_deref(), run, revert, rounds),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),
         Invocation::Words {
             word,

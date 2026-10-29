@@ -15,6 +15,7 @@ pub mod routing;
 mod stt;
 pub mod telemetry;
 pub mod tts;
+pub mod tuning;
 
 use std::sync::Mutex;
 use std::time::Instant;
