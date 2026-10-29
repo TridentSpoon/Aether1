@@ -237,59 +237,62 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
 pub fn brains(engine: &LlmEngine) -> Value {
     let db = engine.db();
     let provider_key = db.get_setting_string("llm_provider", "offline");
-    let endpoint = db.get_setting_string("llm_endpoint", "http://localhost:11434");
     let model = db.get_setting_string("llm_model", "");
 
-    // Asked of the configured endpoint rather than by scanning every port: this is the
-    // server the companion is actually pointed at, and offering models from a different
-    // one would be offering a switch that also silently moves the address.
-    let local: Vec<Value> = model_scanner::models_at(&endpoint)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|name| {
-            // `None` here means the server did not say -- an older Ollama, or LM Studio,
-            // which reports nothing of the kind. Left as null rather than guessed at.
-            let tools = llm::ollama_facts(&endpoint, &name).tools;
-            serde_json::json!({"model": name, "tools": tools})
+    // Gathered by the router rather than here, so that the list somebody picks from and the
+    // list Auto chooses from are the same list. Two gatherers would let the picker show a
+    // provider the router never considers, which is a disagreement visible from neither
+    // side.
+    let available = llm::auto::candidates(db);
+
+    let local: Vec<Value> = available
+        .local
+        .iter()
+        .map(|entry| {
+            // `tools: null` means the server did not say -- an older Ollama, or LM Studio,
+            // which reports nothing of the kind. Left null rather than guessed at.
+            serde_json::json!({"model": entry.model, "tools": entry.tools})
         })
         .collect();
 
-    let local_provider = if provider_key == "lmstudio" {
-        "lmstudio"
-    } else {
-        "ollama"
-    };
-
-    let online: Vec<Value> = [
-        llm::Provider::Anthropic,
-        llm::Provider::OpenAi,
-        llm::Provider::Gemini,
-        llm::Provider::Groq,
-        llm::Provider::Gateway,
-    ]
-    .into_iter()
-    .map(|provider| {
-        let key = llm::api_key_for(db, provider);
-        serde_json::json!({
-            "provider": provider.key(),
-            "label": provider.label(),
-            "ready": !key.trim().is_empty(),
-            // What to put in the model box when this one is picked and nothing is stored
-            // for it. A gateway deliberately has none -- its model ids are whatever an
-            // administrator connected, and an invented one is a 404.
-            "model": llm::default_model_for(provider),
+    let online: Vec<Value> = available
+        .online
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "provider": entry.provider.key(),
+                "label": entry.provider.label(),
+                "ready": entry.ready,
+                // What to put in the model box when this one is picked and nothing is
+                // stored for it. A gateway deliberately has none -- its model ids are
+                // whatever an administrator connected, and an invented one is a 404.
+                "model": entry.model,
+            })
         })
-    })
-    .collect();
+        .collect();
 
     serde_json::json!({
         "current": {"provider": provider_key, "model": model},
-        "local": {"provider": local_provider, "endpoint": endpoint, "models": local},
+        "local": {
+            "provider": available.local_provider.key(),
+            "endpoint": available.endpoint,
+            "models": local,
+        },
         "online": online,
         // With the mode on, every online entry is refused before the request is built, so
         // the picker greys them out rather than letting somebody pick one and read a
         // refusal as a bug.
-        "local_only": crate::local_only::enabled(db),
+        "local_only": available.local_only,
+        // The Auto router, as one more thing that can be picked. `on` is what the control
+        // shows as selected; `ready` is whether picking it would do anything -- it judges
+        // on a model on this machine, so with nothing installed there is nothing to judge
+        // with, and an entry that silently does nothing is worse than one that says why.
+        "auto": {
+            "on": llm::auto::enabled(db),
+            "ready": !available.local.is_empty(),
+            "value": llm::auto::PICKER_VALUE,
+            "setting": llm::auto::ENABLED_SETTING,
+        },
     })
 }
 
