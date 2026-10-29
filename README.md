@@ -1,11 +1,15 @@
-**The Aether1 Platform**
+**Aurora1**, on the Aether1 Platform
 
 An AI companion that lives on your own machine, with a holographic presence, built in the
 spirit of the future we saw in Sci-Fi growing up.
 
+Aurora1 is the companion — the thing you talk to, and the name on the window. The Aurora1
+Platform is what it is built on, and the name you will meet in the logs, the environment
+variables, the `aether1` command and this repository.
+
 **It runs on your hardware and your network, and that is the whole point.** The model can be
 one on this computer or one on the old box under your desk. The memory is a file on your own
-disk. There is no Aether1 server anywhere, no account to make, and nothing is uploaded for
+disk. There is no Aurora1 server anywhere, no account to make, and nothing is uploaded for
 "improving the service", because there is no service. Cloud providers are supported and are
 entirely your choice: point it at one deliberately, or never, and **Settings -> Network ->
 Local only** makes that a switch you can throw rather than a promise you have to take on
@@ -92,7 +96,7 @@ directory without it. In `cmd.exe`, plain `setup.bat` works.
 Setup builds the app and adds Start Menu and desktop shortcuts (no administrator rights
 needed). Launch it from either, or run `.\start.bat`.
 
-Aether1 lives in the **notification area** — click its icon to show or hide the HUD, and
+Aurora1 lives in the **notification area** — click its icon to show or hide the HUD, and
 closing the window leaves it running there rather than quitting.
 
 `start.bat --browser` runs the headless server and opens the HUD in a browser tab instead.
@@ -133,7 +137,7 @@ instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` ab
 The trade-off in the other direction: `aether1-slim-linux-x86_64.tar.gz` (also on
 [Releases](../../releases)) ships just the binary -- no Piper, no whisper.cpp, no models --
 and has its install script fetch speech separately into a Python environment of
-Aether1's own (`~/.local/share/aether1/pyenv` -- not the system Python, which current
+Aurora1's own (`~/.local/share/aether1/pyenv` -- not the system Python, which current
 distributions refuse to let `pip` write to at all), plus `python3`, `espeak-ng` and the
 GStreamer audio decoders via your distribution's package manager if any are missing. A fraction of the offline bundle's size, at the cost of needing a
 network for that one install step (and the first time each engine's model downloads,
@@ -148,7 +152,7 @@ cd aether1-slim-linux-x86_64
 
 ### Windows blocked it: SmartScreen and Smart App Control
 
-Aether1's builds are **not code-signed**, so Windows has no publisher to check them against.
+Aurora1's builds are **not code-signed**, so Windows has no publisher to check them against.
 Two different things can stop it, and only one of them can be clicked past.
 
 **"Windows protected your PC"** (blue dialog, SmartScreen). Click **More info** → **Run
@@ -185,9 +189,9 @@ Switching install methods does not help: the clone-and-`setup.bat` path produces
 since the browser fallback still runs that same executable. What is left is:
 
 1. **Run it where Smart App Control is not on.** Any Windows install upgraded from an earlier
-   version, or one already Off or in Evaluation, runs Aether1 normally after the SmartScreen
+   version, or one already Off or in Evaluation, runs Aurora1 normally after the SmartScreen
    prompt.
-2. **Sign the builds.** The real fix, and the only one that makes Aether1 installable by
+2. **Sign the builds.** The real fix, and the only one that makes Aurora1 installable by
    anyone else on a current Windows 11. It needs a code-signing certificate:
    [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/) is Microsoft's
    own service and the cheapest route for an individual developer (a monthly subscription
@@ -239,7 +243,7 @@ certificate expires rather than every released installer going bad on the same d
 
 ### Building from source
 
-On Linux, Aether1 links against your system's webview and GTK stack. `setup.sh` installs
+On Linux, Aurora1 links against your system's webview and GTK stack. `setup.sh` installs
 these for you on Arch, Fedora, Debian/Ubuntu and openSUSE; on anything else, install the
 equivalents by hand and re-run it. Windows needs none of them — only Rust.
 
@@ -263,7 +267,7 @@ If the build fails, the error names the missing piece: look for a package ending
 or `-devel`, install it, and re-run `./setup.sh`.
 
 The GStreamer entries are not build dependencies and they are the ones worth not skipping.
-Aether1's window is WebKitGTK, and WebKitGTK plays `<audio>` through GStreamer -- but every
+Aurora1's window is WebKitGTK, and WebKitGTK plays `<audio>` through GStreamer -- but every
 distribution above packages the plugins that do the *decoding* as optional for it. On Arch,
 `gst-plugins-good` and `gst-libav` are optdepends of `webkit2gtk-4.1`, so installing the
 webview does not install them. Without them, Piper synthesizes correctly, every status
@@ -279,7 +283,7 @@ is always something to speak with, on a machine that has done nothing but run se
 1. **[Piper](https://github.com/OHF-Voice/piper1-gpl)** -- the best-sounding local voice,
    if you install its binary (the offline installer above does this for you; otherwise
    your package manager, or the Python route under "The two Piper traps" below). The voice
-   file itself Aether1 can
+   file itself Aurora1 can
    fetch for you -- see below. **Two traps here, and between them they account for
    most "I installed it and it still doesn't talk" reports** -- see below.
 2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
@@ -300,14 +304,14 @@ because the mouse app is the one in the official repositories. Piper TTS is in t
 `yay -S piper-tts-bin`. On Debian and Ubuntu, `sudo apt install piper-tts`. On any
 distribution, the Python package works without anything your distribution has to carry --
 but not via `pip install --user`, which Arch, Debian 12+, Ubuntu 23.04+ and Fedora all
-refuse now with `error: externally-managed-environment` (PEP 668). Put it in Aether1's own
+refuse now with `error: externally-managed-environment` (PEP 668). Put it in Aurora1's own
 environment instead, which it knows to look in:
 `python3 -m venv ~/.local/share/aether1/pyenv && ~/.local/share/aether1/pyenv/bin/pip
 install piper-tts`. (The old `linux_x86_64.tar.gz` release still works too, but it
 is frozen: the original `rhasspy/piper` repository was archived in October 2025 and
 development moved to `OHF-Voice/piper1-gpl`, which ships no pre-built binaries.)
 
-Aether1 no longer takes the name at its word. It asks each candidate binary what its
+Aurora1 no longer takes the name at its word. It asks each candidate binary what its
 options are and only accepts one that knows about `--model`, so a machine with the mouse app
 and no Piper TTS now correctly reports the good voice as missing instead of ticking the box
 and going silent.
@@ -316,13 +320,13 @@ and going silent.
 [voices page](https://huggingface.co/rhasspy/piper-voices/tree/main/en), every voice is a
 large `.onnx` *and* a small `.onnx.json` beside it, with separate download buttons. Piper
 cannot load the model without the `.json`, and downloading only the big obvious one is the
-natural mistake. Aether1 now checks for the sidecar — and for a plausible file size, which
+natural mistake. Aurora1 now checks for the sidecar — and for a plausible file size, which
 catches a download that stopped halfway — before it reports a voice as installed.
 
 `en_GB-alba-medium` and `en_US-amy-medium` are good, ordinary-sounding places to start.
 
 **And you no longer have to fetch them yourself.** *Set up the voice* now has a short list
-of voices with a Download button beside each. Aether1 downloads both of the files a voice
+of voices with a Download button beside each. Aurora1 downloads both of the files a voice
 is made of, into the folder it already looks in, and shows a progress bar while it does —
 so the "two files, not one" trap above is one you can only fall into if you go and do it by
 hand anyway.
@@ -330,7 +334,7 @@ hand anyway.
 It fetches voices and never programs. A voice file is sound turned into numbers, handed to
 an engine you installed yourself; nothing downloaded here is executed, marked executable or
 put on your PATH, and Piper itself still comes from your package manager. The list is a
-fixed table built into Aether1, so nothing you or the page can type ever becomes part of a
+fixed table built into Aurora1, so nothing you or the page can type ever becomes part of a
 web address or a folder name. Bytes land in a `.part` file that is only renamed once the
 whole voice has arrived and been checked, so an interrupted download leaves nothing behind
 that looks usable. And in **local-only mode it does not run at all** — the buttons go dead
@@ -356,7 +360,7 @@ A voice that fails during a reply now says so in the chat rather than going quie
 
 ## Running with no internet at all
 
-Most of Aether1 already works with the cable out: it finds model servers by probing your
+Most of Aurora1 already works with the cable out: it finds model servers by probing your
 own machine, remembers things in a folder of files, listens through whisper.cpp, and every
 font, stylesheet and script the HUD needs is stored in this repository rather than fetched
 from anywhere.
@@ -367,7 +371,7 @@ them. With it ticked:
 - **Speech never falls back to the cloud.** Without it, a missing Piper means the text of
   everything the AI says is sent to Microsoft to be spoken. With it, Piper speaks or
   nothing does, and Settings says which.
-- **No update check.** Aether1 asks GitHub for the latest commit on every launch. That
+- **No update check.** Aurora1 asks GitHub for the latest commit on every launch. That
   stops, and so does installing an update.
 - **Cloud providers are refused.** Gemini, Groq, OpenAI and Anthropic are not contacted;
   you get a local answer and a line saying who was not called. A cloud key sitting in your
@@ -402,7 +406,7 @@ recommendation is a default and not a gate.
 
 Downloads show a real progress bar — the percentage and the byte count the model server
 itself reports, not a spinner — and up to three can run at once. If the model server is
-installed but not running, **▶ Start it for me** starts it; that is the one gap Aether1
+installed but not running, **▶ Start it for me** starts it; that is the one gap Aurora1
 can close by itself rather than describe.
 
 Until a brain is connected the wizard opens on launch, the dialogue stream carries a
@@ -416,7 +420,7 @@ installed a developer tool in their life.
 ## Choosing a model
 
 Once there is a brain, the rest of this is for changing it. Open **Settings** and
-Aether1 looks for model servers already running on this machine. Any
+Aurora1 looks for model servers already running on this machine. Any
 that answer appear under **AI SERVERS FOUND ON THIS COMPUTER**, inside the
 **🧠 The Brain** group; picking one fills in the provider, the address and the list
 of models it can run, so there is nothing to look up.
@@ -609,7 +613,7 @@ the THEME row in Settings:
 - **Highlight** -- the companion, so the main colour is not the only one on screen.
 
 Settings has a picker for each, plus eight presets. The six neon ones -- Cyan, Green, Amber,
-Magenta, Crimson and Night -- are the themes Aether1 used to ship as fixed choices; Daylight
+Magenta, Crimson and Night -- are the themes Aurora1 used to ship as fixed choices; Daylight
 and Midnight are Solar's and Eclipse's own. A preset is nothing more than a named set of those
 three colours and a mode, so anything a preset does you can do by hand -- including putting a
 Cyberpunk accent on Solar, or a colour of your own on any of them.
@@ -675,7 +679,7 @@ Aether1Vault/
 Notes link to each other with `[[wiki links]]`, which is what turns the folder into a graph —
 open it in Obsidian and the graph view *is* a picture of what your companion knows.
 
-**You can read them inside Aether1 too.** Menu → **📓 Notes**, or the **Read Them Here**
+**You can read them inside Aurora1 too.** Menu → **📓 Notes**, or the **Read Them Here**
 button beside the folder path in Settings. You get the list of notes, the note itself with
 its headings and formatting laid out properly, every `[[link]]` clickable, and — the part a
 plain editor hides — a *Linked from* line at the bottom showing which other notes point at
@@ -789,7 +793,7 @@ own, so it leaves yours alone.
 
 ### STATIC and FLOW
 
-The chin bar carries one more switch, next to the state badge. **STATIC** is what AETHER1 has
+The chin bar carries one more switch, next to the state badge. **STATIC** is what AURORA1 has
 always done: the avatar you picked answers everything. **FLOW** lets the question move to the
 specialist inside that avatar's own line -- the Umbrals, the Trace Protocols, the Singular
 Ascended Class -- and whoever is holding the conversation says so on the way out:
@@ -842,7 +846,7 @@ save it, with the reason shown, rather than being stored and failing later.
 |---|---|
 | **System Diagnosis** | System logs and service state |
 | **Security & White Hat** | Network configuration and service state |
-| **Coding** | The project directory (the folder Aether1 was started in — never your home directory, and only when it sits inside it) |
+| **Coding** | The project directory (the folder Aurora1 was started in — never your home directory, and only when it sits inside it) |
 | **Assistant & System Ops** | System logs and service state |
 | **Defence & Hardening** | Network configuration and service state |
 | **Scanning & Extraction** | Your notes and the project directory |
@@ -873,16 +877,16 @@ errors" is one call. It is in the field of **System Diagnosis** and **Security &
 so for those two it runs without asking; every other persona proposes it first.
 
 The **Security** channel is readable only by an administrator — that is Windows refusing, not
-Aether1, and the error says so.
+Aurora1, and the error says so.
 
 Two things this does *not* change. Every persona has the same tools available — the field
-decides what runs without a prompt, not what is possible. And the paths Aether1 never reads at
+decides what runs without a prompt, not what is possible. And the paths Aurora1 never reads at
 all (SSH and GPG keys, cloud credentials, `/etc/shadow`, and the rest) stay off limits inside a
 persona's own field and after an approval alike: a field can only narrow.
 
 **Settings describes your machine, not a generic one.** The help text under *Let it look at
 this computer* names `/etc`, `/proc` and `/var/log` on Linux, and the Windows event logs and
-`System32\drivers\etc` on Windows. It asks the running copy of Aether1 which it is, never the
+`System32\drivers\etc` on Windows. It asks the running copy of Aurora1 which it is, never the
 browser — so when you open the HUD on a Windows laptop pointed at a Linux desktop, you get the
 Linux wording, because the Linux machine is the one being described. The same goes for the
 setup and voice guides, and for the folders named when no Piper voice or Whisper model can be
@@ -890,7 +894,7 @@ found.
 
 ### Running programs
 
-Aether1 can run programs on your machine, and it starts able to run a few. The list is in
+Aurora1 can run programs on your machine, and it starts able to run a few. The list is in
 Settings under **Programs it may ask to run**, and on a fresh install it holds only programs
 that *look* at the machine and cannot change it:
 
@@ -922,7 +926,7 @@ format each of them documents, and ask for a tool through their own machinery. N
 the request appears in the reply text.
 
 **Ollama and LM Studio** use the original approach instead: the tools are described in the
-system prompt and the model asks for one by writing a small block of JSON, which Aether1
+system prompt and the model asks for one by writing a small block of JSON, which Aurora1
 recognises mid-stream and hides from you. This is on purpose. Ollama is driven through an
 endpoint that has no tools field at all, and LM Studio is the one most likely to be an older
 install that would reject the request outright — better the way that works everywhere than a
@@ -974,11 +978,11 @@ every command you have typed, and people type passwords and API keys into comman
 home folder is somewhere the AI may read, so until now it could have read that file. It
 can't any more: history files are on the same permanent deny list as your SSH keys, which no
 setting, persona or approval of yours can lift. That was true before there was a terminal
-here; building one made it urgent, because Aether1 would now be writing that file itself.
+here; building one made it urgent, because Aurora1 would now be writing that file itself.
 
 ## Choosing an avatar
 
-The hologram is the thing Aether1 has that nothing else does, so choosing one is its own
+The hologram is the thing Aurora1 has that nothing else does, so choosing one is its own
 section of Settings rather than a row of buttons in with the colours. **Settings -> Avatars**
 goes in three steps: the *lines* (Singular Ascended Class, Trace Protocols, The Umbrals, The
 eXcelsior Class, and the two that belong to no line), then that line's members, then one
@@ -992,13 +996,13 @@ are still missing, and nothing about which.
 ## Making your own avatar
 
 The avatar is a module of its own -- everything that draws it lives in
-`frontend/js/hologram/`, and the rest of Aether1 talks to it through five function calls.
+`frontend/js/hologram/`, and the rest of Aurora1 talks to it through five function calls.
 `frontend/js/hologram/README.md` is the guide; the short version:
 
 **Build one without writing code.** In the HUD, pick **Your own** in the avatar row and
 press **Customise** beside it -- or open **Settings -> Avatars**, choose *Unaligned* and then
 *Your own*, and press **Design your own**. Either opens the avatar workbench. Pick a core, a body and a voice equaliser, set the sizes and
-the motion, and press *Use this in Aether1*; the HUD updates as soon as you save, with no
+the motion, and press *Use this in Aurora1*; the HUD updates as soon as you save, with no
 reload. What gets saved is a *recipe*: a few lines of settings you can paste to someone
 else safely, because settings cannot run.
 
@@ -1054,7 +1058,7 @@ runs the desktop app answers from a terminal without the HUD open:
 aether1 prompt "what is eating my RAM"   # ask; the reply goes to stdout
 echo "status" | aether1 prompt           # or pipe the question in
 aether1 status                           # system diagnostic report (--json for raw)
-aether1 doctor                           # is AETHER1 itself working? every part of it, checked
+aether1 doctor                           # is AURORA1 itself working? every part of it, checked
 aether1 doctor --fix                     # and the repairs it can make, asking before each one
 aether1 say "systems nominal"            # speak, in the configured persona voice
 aether1 toggle                           # summon/dismiss the HUD of a running instance
@@ -1076,12 +1080,12 @@ aether1 verify <file>                    # check a bundle that arrived some othe
 aether1 --help
 ```
 
-`status` describes the computer; `doctor` describes AETHER1. It checks fourteen things --
+`status` describes the computer; `doctor` describes AURORA1. It checks fourteen things --
 the database, the window, the tray, the model endpoint, the configured model, both halves of
 the voice, the hotkey, disk room and the rest -- and says what is wrong in sentences rather
 than status codes. With `--fix` it offers the repairs it knows how to make and asks before
 each one; a repair needing root is never run for you, it is handed over as the command, because
-AETHER1 does not ask for your password. Settings -> 🩺 Is it working? is the same list in the
+AURORA1 does not ask for your password. Settings -> 🩺 Is it working? is the same list in the
 HUD. `aether1 doctor --report` writes the findings and what they were read from to a file you
 can check before sending it anywhere, and it sends nothing itself.
 
@@ -1120,14 +1124,14 @@ That is what the tray's **Check for Updates** does, and there is nothing to sign
 
 A copy **installed** from a bundle has no checkout and no toolchain, so its update is a new
 bundle from this project's releases. Checking for one needs no account: the releases are
-public and AETHER1 reads them anonymously.
+public and AURORA1 reads them anonymously.
 
 Signing in is still offered, and does two things. It raises GitHub's rate limit for this
 machine from sixty requests an hour to five thousand, which matters on a shared or
 office connection where sixty is spent by lunchtime. And it is what lets a copy check a
 release that is *not* public -- a fork kept private, or this project before it was opened up.
 Settings -> **The Brain** -> **Connections** -> **Sign in**, or `aether1 signin`. It shows a
-short code, you type it in at `github.com/login/device`, and that is the whole of it. AETHER1
+short code, you type it in at `github.com/login/device`, and that is the whole of it. AURORA1
 never sees a password, and the token it receives can do exactly one thing -- read the contents
 of repositories the app is installed on.
 
@@ -1146,7 +1150,7 @@ is the guarantee that matters, and it never depended on the releases being hard 
 Connections also shows whether the **GitHub CLI** (`gh`) is on this computer. This is not the
 sign-in above and does not share anything with it: `gh` is the program AETHER CODE runs
 read-only commands through (`gh pr view`, `gh run list`), and it carries its own login, made
-with `gh auth login` in a terminal. AETHER1 never reads that login -- `gh auth token` is one of
+with `gh auth login` in a terminal. AURORA1 never reads that login -- `gh auth token` is one of
 the commands the read-only classifier refuses outright, precisely so a credential cannot be
 printed into a conversation that gets stored.
 
@@ -1157,7 +1161,7 @@ from [cli.github.com](https://cli.github.com) and run `gh auth login` if you wan
 to be able to look at a repository.
 
 **Declining costs you nothing but the update notice.** Press *Not now, and stop asking* and
-AETHER1 remembers; the check stops running and nothing else changes. Signing in later is the
+AURORA1 remembers; the check stops running and nothing else changes. Signing in later is the
 only thing that undoes it.
 
 **Nothing installs itself.** The offline bundles are around half a gigabyte and they replace
@@ -1167,7 +1171,7 @@ and stops there. Running it is yours.
 Every release asset is signed with [minisign](https://jedisct1.github.io/minisign/), and the
 matching public key is compiled into the app. That is a separate question from signing in:
 being signed in proves you are allowed to download, a signature proves the file is the one this
-project built. AETHER1 refuses to hand you a bundle whose signature does not verify, wherever
+project built. AURORA1 refuses to hand you a bundle whose signature does not verify, wherever
 it came from -- including one copied onto a USB stick, which is what `aether1 verify` is for.
 
 ### Setting it up on the repository (for the owner)
@@ -1222,7 +1226,7 @@ Where this is headed, and why: [docs/GOALS.md](docs/GOALS.md).
 
 ## Licence, and what a fork owes you
 
-Aether1 is **GPL-3.0-only**. The full text is in [LICENSE](LICENSE).
+The Aether1 Platform is **GPL-3.0-only**. The full text is in [LICENSE](LICENSE).
 
 In plain terms, for the two questions people actually have:
 
@@ -1232,13 +1236,14 @@ including at work. Nothing to ask, nothing to pay, nothing to sign.
 **Can I fork it?** Yes — and three things come with that, which is the entire reason this
 licence was chosen:
 
-1. **A fork stays open.** If you distribute a modified Aether1, you distribute its source
+1. **A fork stays open.** If you distribute a modified Aurora1, you distribute its source
    under this same licence. Nobody takes this, closes it, and sells it back.
 2. **A fork says where it came from.** The copyright notices stay, and the GPL requires a
    modified version to carry prominent notices saying that you changed it and when. Someone
    handed your fork can trace it back here.
-3. **A fork is not Aether1.** The licence covers the code. It does not grant the *name* —
-   "Aether1", "AETHER1", the eXcelsior avatars and the logos are not yours to use in a way
+3. **A fork is not Aurora1.** The licence covers the code. It does not grant the *names* —
+   "Aurora1", "AURORA1", "Aurora1", "AURORA1", the eXcelsior avatars and the logos are not
+   yours to use in a way
    that suggests your version is this project or endorsed by it. Fork it and call it
    something of your own.
 

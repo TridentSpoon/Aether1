@@ -432,7 +432,14 @@ document.addEventListener('DOMContentLoaded', () => {
        the window should say -- it is the thing you are talking to. Turning over to
        AETHER1 PLATFORM every so often is how the product it runs on stays visible without
        taking a permanent second line to say so. A name that already is Aether1 has nothing
-       to alternate with, so it just sits there. */
+       to alternate with, so it just sits there.
+
+       The rename is what this was waiting for without knowing it: the companion is AURORA1
+       and the platform is the AETHER1 PLATFORM, so the two names are different and the
+       default avatar now alternates between them properly instead of sitting on one. The
+       AETHER1 guard below is kept rather than retargeted -- somebody who names their
+       companion after the platform should still see one name, and nothing says AURORA1
+       should be that somebody. */
     const PLATFORM_WORDMARK = 'AETHER1 PLATFORM';
     const WORDMARK_TURNOVER_MS = 14000;
     const elWordmark = document.getElementById('hud-wordmark');
@@ -449,7 +456,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const next = wordmarkShowingPlatform && name !== PLATFORM_WORDMARK ? PLATFORM_WORDMARK : name;
         if (elWordmark.textContent === next) return;
         elWordmark.textContent = next;
-        elWordmark.title = name === PLATFORM_WORDMARK ? 'Aether1' : `${name} — running on Aether1`;
+        elWordmark.title = name === PLATFORM_WORDMARK
+            ? 'Aether1 Platform'
+            : `${name} — running on the Aether1 Platform`;
     }
 
     setInterval(() => {
@@ -622,8 +631,8 @@ document.addEventListener('DOMContentLoaded', () => {
        saying so. It keeps whatever you had. */
     const AVATAR_PRESETS = {
         a1: {
-            name: 'AETHER1', persona: 'default', voice: 'en-GB-SoniaNeural',
-            greeting: '🅰️ **Aether1 online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
+            name: 'AURORA1', persona: 'default', voice: 'en-GB-SoniaNeural',
+            greeting: '🅰️ **Aurora1 online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
         },
         halcy: {
             name: 'HALCY', persona: 'halcy', voice: 'en-US-JennyNeural',
@@ -1702,7 +1711,7 @@ document.addEventListener('DOMContentLoaded', () => {
                        is distinguishable at all is the whole reason wearingDesktopAccent exists
                        separately from desktopAccent. */
                     lines.push(`Your desktop is set to ${setTo}, so this is ${shell}.`);
-                    lines.push(info.note || 'No accent colour came back from your desktop, so AETHER1 is keeping the accent it was designed with.');
+                    lines.push(info.note || 'No accent colour came back from your desktop, so AURORA1 is keeping the accent it was designed with.');
                 }
                 desktopNote.textContent = lines.join(' ');
             }
@@ -2381,7 +2390,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (row) row.classList.remove('hidden');
         if (!tokens.cost) {
             value.textContent = 'unpriced';
-            note.textContent = `Nobody has told Aether1 what ${tokens.model || 'this model'} charges. Add it to model_prices.json next to the database and the cost appears here.`;
+            note.textContent = `Nobody has told Aurora1 what ${tokens.model || 'this model'} charges. Add it to model_prices.json next to the database and the cost appears here.`;
             return;
         }
 
@@ -2470,7 +2479,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return escaped;
     }
 
-    /* A line from AETHER1 the program, not from the persona.
+    /* A line from AURORA1 the program, not from the persona.
        Deliberately not appendMessage: that one puts the agent's own name and avatar on
        what it renders, and attributing "your model was uninstalled" to the character is
        how an operator learns to distrust what the character says. This is plainly the
@@ -2481,7 +2490,7 @@ document.addEventListener('DOMContentLoaded', () => {
         row.className = 'my-2 px-3 py-2 text-xs font-mono leading-relaxed msg-system self-stretch';
         const label = document.createElement('span');
         label.className = 'opacity-70';
-        label.textContent = 'AETHER1 — ';
+        label.textContent = 'AURORA1 — ';
         row.appendChild(label);
         row.appendChild(document.createTextNode(text));
         chatContainer.appendChild(row);
@@ -4470,8 +4479,8 @@ document.addEventListener('DOMContentLoaded', () => {
             codeOwnModel.classList.toggle('hidden', !current);
             if (current) {
                 codeOwnModel.textContent = advice.aether1_model_too_small
-                    ? `Aether1 itself is running on ${current}, which is too small to troubleshoot or to drive an agent offline.`
-                    : `Aether1 itself is running on ${current}.`;
+                    ? `Aurora1 itself is running on ${current}, which is too small to troubleshoot or to drive an agent offline.`
+                    : `Aurora1 itself is running on ${current}.`;
                 codeOwnModel.classList.toggle('text-amber-300', !!advice.aether1_model_too_small);
                 codeOwnModel.classList.toggle('text-slate-400', !advice.aether1_model_too_small);
             }
@@ -4795,8 +4804,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const approve = document.createElement('button');
         approve.type = 'button';
         approve.className = 'cyber-btn cyber-btn-active text-[10px] py-1 px-2 whitespace-nowrap shrink-0';
-        approve.textContent = externalWrite ? 'Review remote action' : (githubCommand ? 'Review GitHub command' : 'Run with Aether1');
-        approve.title = 'Review the exact command before Aether1 runs it.';
+        approve.textContent = externalWrite ? 'Review remote action' : (githubCommand ? 'Review GitHub command' : 'Run with Aurora1');
+        approve.title = 'Review the exact command before Aurora1 runs it.';
         row.appendChild(approve);
 
         const approval = document.createElement('div');
@@ -4850,7 +4859,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (IS_TAURI) {
                 result = await tauriInvoke('code_run_approved_rust', { command, rememberSimilar });
             } else {
-                throw new Error('Run approvals are available only in the Aether1 desktop window.');
+                throw new Error('Run approvals are available only in the Aurora1 desktop window.');
             }
             output.textContent = result;
         } catch (err) {
@@ -5625,7 +5634,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (repair.kind === 'hand-over') {
             const why = document.createElement('p');
             why.className = 'text-[10px] font-mono text-amber-400 leading-snug';
-            why.textContent = 'AETHER1 will not run this one: it needs root, and AETHER1 never asks for your password. Run it yourself, then restart AETHER1.';
+            why.textContent = 'AURORA1 will not run this one: it needs root, and AURORA1 never asks for your password. Run it yourself, then restart AURORA1.';
             wrap.appendChild(why);
             if (repair.command) wrap.appendChild(doctorCommand(repair.command));
             return wrap;
@@ -5672,7 +5681,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ask.disabled = true;
             const left = (attended.remaining || []).map(r => `${r.title}: ${r.detail}`).join('\n');
             handleSendMessage(
-                'AETHER1 just repaired what it could of itself and these are still wrong. '
+                'AURORA1 just repaired what it could of itself and these are still wrong. '
                 + 'Look into them and tell me what to do:\n\n' + left,
             );
         };
@@ -5682,7 +5691,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function refreshDoctor({ quiet = false } = {}) {
         if (!doctorChecks) return;
-        if (!quiet) setDoctorStatus('Checking every part of AETHER1...', 'busy');
+        if (!quiet) setDoctorStatus('Checking every part of AURORA1...', 'busy');
         if (btnDoctorRun) btnDoctorRun.disabled = true;
         try {
             const report = await fetchDoctorReport();
@@ -5789,7 +5798,7 @@ document.addEventListener('DOMContentLoaded', () => {
            to the operator or to the companion, and neither of them said this. */
         const waiting = document.createElement('p');
         waiting.className = 'text-[11px] font-mono text-cyan-300 my-2 self-start animate-pulse';
-        waiting.textContent = 'Verifying AETHER1...';
+        waiting.textContent = 'Verifying AURORA1...';
         chatContainer.appendChild(waiting);
         chatContainer.scrollTop = chatContainer.scrollHeight;
         try {
@@ -6195,7 +6204,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const stats = report.stats || {};
         const operator = report.operator || {};
-        document.getElementById('profile-agent-name').textContent = operator.agent_name || 'AETHER1';
+        document.getElementById('profile-agent-name').textContent = operator.agent_name || 'AURORA1';
         // The short form up here — the nickname when there is one, the hostname otherwise.
         // The full phrase, with both, is under the machine card where it is being edited.
         document.getElementById('profile-machine').textContent =
@@ -6316,7 +6325,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // refuses it, and the button says so rather than offering a press that fails.
             btnLanToggle.disabled = starting || (running && !ours);
             btnLanToggle.title = running && !ours
-                ? 'Started outside AETHER1, so AETHER1 will not stop it.'
+                ? 'Started outside AURORA1, so AURORA1 will not stop it.'
                 : '';
         }
 
@@ -6326,7 +6335,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 + 'without one there is nothing for another device to type. Pair a device '
                 + 'makes one and starts the server for you.';
         } else if (running && !ours) {
-            notice = `Something is already answering on port ${report.port}. AETHER1 did not `
+            notice = `Something is already answering on port ${report.port}. AURORA1 did not `
                 + 'start it, so it will not stop it either.';
         }
         // "Nothing has paired yet" is deliberately NOT here: the device list says it, a few
@@ -6805,14 +6814,14 @@ document.addEventListener('DOMContentLoaded', () => {
         title.className = 'net-row-title';
         title.textContent = peer.is_this_machine
             ? `${peer.name} (this machine)`
-            : String(peer.name || 'an AETHER1');
+            : String(peer.name || 'an AURORA1');
         const hint = document.createElement('p');
         hint.className = 'net-row-hint';
         const addresses = Array.isArray(peer.addresses) ? peer.addresses : [];
         const where = addresses.length
             ? addresses.map(address => `${address}:${peer.port}`).join('  ')
             : `port ${peer.port}`;
-        hint.textContent = peer.version ? `${where} — AETHER1 ${peer.version}` : where;
+        hint.textContent = peer.version ? `${where} — AURORA1 ${peer.version}` : where;
         text.append(title, hint);
         row.append(text);
 
@@ -7291,7 +7300,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // works. It supersedes any reply still being spoken rather than queueing
                 // behind it, which is what you want from a button marked "test".
                 await voiceEngine.playTTSAudio(url);
-                setVoiceStatus(`It spoke, using ${report.engine}. If you heard nothing, the problem is this computer's sound rather than Aether1 -- check the volume and which output device is selected.`, 'good');
+                setVoiceStatus(`It spoke, using ${report.engine}. If you heard nothing, the problem is this computer's sound rather than Aurora1 -- check the volume and which output device is selected.`, 'good');
             } else {
                 setVoiceStatus(`Nothing could speak. ${report.why || 'No engine reported a reason.'}`, 'bad');
             }
@@ -7414,7 +7423,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (voicePickerNote) {
             voicePickerNote.textContent = downloadable
                 ? VOICE_PICKER_NOTE
-                : 'Local-only mode is on, so Aether1 will not fetch anything. Switch it off in ' +
+                : 'Local-only mode is on, so Aurora1 will not fetch anything. Switch it off in ' +
                   'Settings, or copy a voice into the folder named above by hand.';
         }
 
@@ -8583,7 +8592,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return hub.installed.map(name => known.get(name) || {
             name,
             label: name,
-            blurb: 'Downloaded on this computer, and not one of the models Aether1 suggests '
+            blurb: 'Downloaded on this computer, and not one of the models Aurora1 suggests '
                 + '-- so there is nothing here about what it needs or what it is good at.',
             download: '',
             needs_gb: 0,
@@ -8656,7 +8665,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? 'This family can call tools, so a companion running it can search the web and look at this machine.'
             : repo.tools === 'none'
                 ? 'This family cannot call tools, so it cannot search the web or look at anything — it can only talk.'
-                : 'Whether this one can call tools is not something Hugging Face reports. Aether1 asks the server once it is downloaded, and the model page under RUNS AETHER1 ITSELF will say.';
+                : 'Whether this one can call tools is not something Hugging Face reports. Aurora1 asks the server once it is downloaded, and the model page under RUNS AURORA1 ITSELF will say.';
         const gated = repo.gated
             ? ' This repository is gated: it will refuse a download until you have accepted its terms on Hugging Face and signed in.'
             : '';
@@ -9034,7 +9043,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? '⚡ Whole model fits'
             : 'Partly on the processor'));
         if (!model.unknown) {
-            facts.appendChild(hubFact('RUNS AETHER1 ITSELF', model.runs_aether1 ? 'Yes' : 'Too small'));
+            facts.appendChild(hubFact('RUNS AURORA1 ITSELF', model.runs_aether1 ? 'Yes' : 'Too small'));
             facts.appendChild(hubFact('TOOLS', model.tools
                 ? 'Can search the web'
                 : 'Talk only'));
@@ -9192,7 +9201,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // the one thing that decides whether the companion works afterwards.
         const note = document.createElement('div');
         note.className = 'text-[10px] font-mono text-slate-500 leading-snug';
-        note.textContent = 'Aether1 asks the model server what a downloaded model can '
+        note.textContent = 'Aurora1 asks the model server what a downloaded model can '
             + 'actually do, so whether it can call tools is settled after the download, not '
             + 'by this list.';
         panel.appendChild(note);
@@ -10246,7 +10255,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function paintStudioOperator() {
         const stored = studio.settings || {};
         const name = (stored.operator_name || '').trim();
-        const agent = (stored.agent_name || currentAgentName || 'AETHER1').trim();
+        const agent = (stored.agent_name || currentAgentName || 'AURORA1').trim();
         const nameEl = document.getElementById('studio-operator-name');
         const subEl = document.getElementById('studio-operator-sub');
         const markEl = document.getElementById('studio-operator-mark');
@@ -10662,8 +10671,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const note = document.getElementById('provider-accounts-note');
         if (note) {
             note.textContent = providerAccounts.keychain
-                ? 'Keys are kept in this computer\u2019s keychain, not in AETHER1\u2019s database. Each provider keeps its own key, address and model, so switching between them loses nothing.'
-                : 'This machine has no keychain service running, so keys are kept in AETHER1\u2019s own database instead. Each provider still keeps its own key, address and model.';
+                ? 'Keys are kept in this computer\u2019s keychain, not in AURORA1\u2019s database. Each provider keeps its own key, address and model, so switching between them loses nothing.'
+                : 'This machine has no keychain service running, so keys are kept in AURORA1\u2019s own database instead. Each provider still keeps its own key, address and model.';
         }
     }
 
@@ -11050,7 +11059,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const verify = document.createElement('button');
         verify.className = 'mt-2 ml-2 text-xs font-mono text-amber-200 hover:text-amber-50 '
             + 'border border-amber-500/40 px-2 py-0.5 rounded bg-amber-950/40 cursor-pointer';
-        verify.textContent = 'Verify AETHER1';
+        verify.textContent = 'Verify AURORA1';
         verify.onclick = () => {
             verify.disabled = true;
             verifyInstall();
@@ -11247,8 +11256,8 @@ document.addEventListener('DOMContentLoaded', () => {
         headerUpdateButton.textContent = text;
         headerUpdateButton.dataset.action = action;
         headerUpdateButton.title = action === 'check'
-            ? 'Check for Aether1 updates'
-            : action === 'download' ? 'Download the signed Aether1 update' : 'Apply the available Aether1 update';
+            ? 'Check for Aurora1 updates'
+            : action === 'download' ? 'Download the signed Aurora1 update' : 'Apply the available Aurora1 update';
     }
 
     /* The header has room for about thirty characters, which is how "Applying update ·
@@ -11561,7 +11570,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${escapeHtml(result.tag)} downloaded, and its signature checks out.</div>`
                     + `<div class="text-[11px] text-slate-400 select-all">${result.path}</div>`
-                    + '<div class="text-[11px] text-slate-500">Run it when you are ready -- AETHER1 does not install it for you.</div>';
+                    + '<div class="text-[11px] text-slate-500">Run it when you are ready -- AURORA1 does not install it for you.</div>';
             }
             // The folder, not the path: a location read off a panel is a location typed out by
             // hand.
@@ -11636,7 +11645,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (sub) {
             sub.textContent = `${elapsedSince(state.startedAt)} elapsed. This may take a few minutes. `
-                + 'Aether1 will restart on the new build when it finishes.';
+                + 'Aurora1 will restart on the new build when it finishes.';
         }
         if (log) {
             const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
@@ -11681,7 +11690,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const heading = document.createElement('div');
         heading.className = 'text-cyan-300';
         const step = state.step ? `Step ${state.step} of ${state.steps || 5} · ` : '';
-        heading.textContent = `Updating Aether1 — ${step}${elapsedSince(state.startedAt)} elapsed`;
+        heading.textContent = `Updating Aurora1 — ${step}${elapsedSince(state.startedAt)} elapsed`;
         rows.push(heading);
 
         const label = document.createElement('div');
@@ -11700,7 +11709,7 @@ document.addEventListener('DOMContentLoaded', () => {
         from.className = 'text-[11px] text-slate-500';
         from.textContent = state.version
             ? `Running ${state.version}; it will restart on the new build when this finishes.`
-            : 'Aether1 will restart on the new build when this finishes.';
+            : 'Aurora1 will restart on the new build when this finishes.';
         rows.push(from);
 
         if (state.log.length) {
@@ -11714,7 +11723,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function handleApplyUpdate() {
-        if (!confirm('Pull the latest changes, rebuild, and relaunch Aether1? The app will restart.')) return;
+        if (!confirm('Pull the latest changes, rebuild, and relaunch Aurora1? The app will restart.')) return;
         voiceEngine.playSFX('click');
 
         // The state the two views share. Both are redrawn on every event and once a
@@ -11945,7 +11954,7 @@ document.addEventListener('DOMContentLoaded', () => {
             off: '💤 Sleep Mode: OFF',
             on: '💤 Sleep Mode: ON',
             title: 'Sleep Mode: hand the machine back — the background services stop and the '
-                + 'window hides, and Aether1 keeps running.',
+                + 'window hides, and Aurora1 keeps running.',
         };
     }
 
@@ -12356,7 +12365,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const entry = window.Aether1Avatars?.get(currentAvatar) || null;
-            const name = (currentAgentName || '').trim() || entry?.label || 'AETHER1';
+            const name = (currentAgentName || '').trim() || entry?.label || 'AURORA1';
             const avatarLabel = entry?.label || '';
             const introduction = avatarLabel && !namesMatch(avatarLabel, name)
                 ? `I am ${name}, on the ${avatarLabel} avatar.`
@@ -14291,7 +14300,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
     });
     document.getElementById('btn-voice-audition')?.addEventListener('click', async () => {
-        const url = await synthesizeSpeechUrl('This is how the current Aether1 voice sounds.', null);
+        const url = await synthesizeSpeechUrl('This is how the current Aurora1 voice sounds.', null);
         if (url) await voiceEngine.playTTSAudio(url, {
             playbackRate: window.AETHER_VOICE_RATE || 1,
             pitchSemitones: window.AETHER_VOICE_PITCH || 0,
