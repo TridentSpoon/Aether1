@@ -372,10 +372,15 @@ impl Judge for LocalJudge {
             self.provider,
             &self.endpoint,
             &self.model,
-            prompt,
-            message,
-            &self.schema,
-            providers::VERDICT_TOKENS,
+            providers::Ask {
+                system_prompt: prompt,
+                question: message,
+                schema: &self.schema,
+                budget: providers::VERDICT_TOKENS,
+                // Nothing is in front of a reply, and the first case of a round pays the
+                // model load for all the ones after it.
+                pace: providers::Pace::Unhurried,
+            },
         )
     }
     fn model(&self) -> String {
@@ -386,7 +391,10 @@ impl Judge for LocalJudge {
 /// Which model scores the cases: the same one the router would judge with, so a wording is
 /// tuned for the model that will actually be using it.
 pub fn judge_model_for(db: &MemoryDb, available: &super::auto::Candidates) -> Option<String> {
-    available.judge_model(db)
+    // No turn model and nothing claimed to be loaded: a tuning round is not in front of a
+    // reply, so the one thing that matters here is *which* model, not what it costs to
+    // reach it. `run_round` pays a load once and scores dozens of cases on it after that.
+    available.judge_choice(db, "", &[]).map(|(model, _)| model)
 }
 
 /// Which model does the rewriting: the largest installed, by the size in its tag.
@@ -396,7 +404,7 @@ pub fn judge_model_for(db: &MemoryDb, available: &super::auto::Candidates) -> Op
 /// instructions is a writing job done once, while somebody waits on purpose, and it is the
 /// one place in this module where a slow answer is the right trade. An unlabelled name is
 /// the last resort rather than the first, for the same reason it is in
-/// `Candidates::judge_model`.
+/// `Candidates::judge_choice`.
 pub fn rewriter_model_for(available: &super::auto::Candidates) -> Option<String> {
     let labelled = available
         .local
@@ -433,16 +441,20 @@ pub fn reword_with(
         available.local_provider,
         &available.endpoint,
         model,
-        "You rewrite instructions. You reply with the rewritten instructions and nothing \
-         else: no preamble, no explanation, no markdown.",
-        prompt,
-        &json!({
-            "type": "object",
-            "properties": {"instructions": {"type": "string"}},
-            "required": ["instructions"],
-            "additionalProperties": false,
-        }),
-        REWRITE_TOKENS,
+        providers::Ask {
+            system_prompt: "You rewrite instructions. You reply with the rewritten \
+                            instructions and nothing else: no preamble, no explanation, no \
+                            markdown.",
+            question: prompt,
+            schema: &json!({
+                "type": "object",
+                "properties": {"instructions": {"type": "string"}},
+                "required": ["instructions"],
+                "additionalProperties": false,
+            }),
+            budget: REWRITE_TOKENS,
+            pace: providers::Pace::Unhurried,
+        },
     )?;
     answer
         .get("instructions")

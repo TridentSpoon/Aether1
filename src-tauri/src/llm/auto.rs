@@ -278,22 +278,72 @@ impl Candidates {
         })
     }
 
-    /// The model to judge with: the operator's pick where they made one and it is still
-    /// installed, otherwise the smallest installed model.
+    /// The model to judge with, and what the judgment is allowed to cost.
     ///
-    /// Smallest rather than fastest, and that is not the same tie-break step 19 uses. There
-    /// the question is which model should *answer*, where a measured speed is the better
-    /// guide; here the model's whole job is to emit four short fields under a grammar, and
-    /// the cost that matters is the one paid in front of every reply. `parameter_billions`
-    /// returns `u32::MAX` for a name that claims no size, so an unlabelled model is never
-    /// mistaken for a small one.
-    pub fn judge_model(&self, db: &MemoryDb) -> Option<String> {
+    /// The order is the whole fix for the first desktop log, where the judge timed out in
+    /// front of every reply. Reading it from the top:
+    ///
+    /// 1. **The operator's own pick**, where they made one and it is still installed. Their
+    ///    choice is not second-guessed, but it is still reported honestly as a load when it
+    ///    is not in memory.
+    /// 2. **A model the server already has loaded**, preferring the one this turn is going
+    ///    to use anyway. This is the ordinary path on a machine that has been chatting for
+    ///    a minute, and it costs a prompt of one sentence and nothing else.
+    /// 3. **The model the turn will use**, when it is local but not yet loaded. The wait is
+    ///    the reply's either way: judging on it moves the load earlier rather than adding
+    ///    one, and the reply then finds it warm.
+    /// 4. **The smallest installed model**, last. Smallest rather than fastest, and that is
+    ///    deliberately not step 19's tie-break: there the question is which model should
+    ///    *answer*, where a measured speed is the better guide, and here the job is four
+    ///    short fields under a grammar. `parameter_billions` returns `u32::MAX` for a name
+    ///    that claims no size, so an unlabelled model is never mistaken for a small one.
+    ///
+    /// Only 2 is `Warm`. Everything else is a model load, and saying so is what lets
+    /// `providers::Pace` give it a bound it can actually meet -- the old code gave every
+    /// judgment twenty seconds, which is generous for 2 and hopeless for the rest.
+    pub fn judge_choice(
+        &self,
+        db: &MemoryDb,
+        turn_model: &str,
+        loaded: &[String],
+    ) -> Option<(String, providers::Pace)> {
+        let installed = |name: &str| {
+            self.local
+                .iter()
+                .find(|c| c.model.eq_ignore_ascii_case(name.trim()))
+                .map(|c| c.model.clone())
+        };
+        let resident = |name: &str| {
+            loaded
+                .iter()
+                .any(|held| held.eq_ignore_ascii_case(name.trim()))
+        };
+        let paced = |model: String| {
+            let pace = if resident(&model) {
+                providers::Pace::Warm
+            } else {
+                providers::Pace::Loading
+            };
+            Some((model, pace))
+        };
+
         let stored = db.get_setting_string(JUDGE_SETTING, "");
-        let stored = stored.trim();
-        if !stored.is_empty() {
-            if let Some(found) = self.local.iter().find(|c| c.model == stored) {
-                return Some(found.model.clone());
-            }
+        if let Some(found) = installed(&stored) {
+            return paced(found);
+        }
+        if let Some(found) = installed(turn_model).filter(|model| resident(model)) {
+            return Some((found, providers::Pace::Warm));
+        }
+        if let Some(found) = self
+            .local
+            .iter()
+            .find(|c| resident(&c.model))
+            .map(|c| c.model.clone())
+        {
+            return Some((found, providers::Pace::Warm));
+        }
+        if let Some(found) = installed(turn_model) {
+            return Some((found, providers::Pace::Loading));
         }
         self.local
             .iter()
@@ -302,7 +352,7 @@ impl Candidates {
                     .cmp(&super::routing::parameter_billions(&b.model))
                     .then_with(|| a.model.cmp(&b.model))
             })
-            .map(|c| c.model.clone())
+            .map(|c| (c.model.clone(), providers::Pace::Loading))
     }
 }
 
@@ -528,9 +578,6 @@ pub fn route(
         return Err("nothing to judge".to_string());
     }
     let available = candidates(db);
-    let judge = available
-        .judge_model(db)
-        .ok_or_else(|| "no local model to judge with".to_string())?;
     // The endpoint the turn is already using, not the one in the settings, for the one case
     // where they differ: a gateway rewrites `endpoint`, and judging at a gateway's address
     // would send the question to the cloud to decide whether to send it to the cloud.
@@ -539,17 +586,31 @@ pub fn route(
     } else {
         &available.endpoint
     };
+    let loaded = providers::loaded_models(available.local_provider, endpoint);
+    let (judge, pace) = available
+        .judge_choice(db, configured_model, &loaded)
+        .ok_or_else(|| "no local model to judge with".to_string())?;
     let answer = providers::judge(
         available.local_provider,
         endpoint,
         &judge,
-        // Whatever wording is in force: the shipped one, or one that beat it on this
-        // machine's model. See `llm::tuning`.
-        &super::tuning::text(db, super::tuning::Adapter::Judge),
-        prompt,
-        &schema(),
-        providers::VERDICT_TOKENS,
-    )?;
+        providers::Ask {
+            // Whatever wording is in force: the shipped one, or one that beat it on this
+            // machine's model. See `llm::tuning`.
+            system_prompt: &super::tuning::text(db, super::tuning::Adapter::Judge),
+            question: prompt,
+            schema: &schema(),
+            budget: providers::VERDICT_TOKENS,
+            pace,
+        },
+    )
+    // Named, because the first desktop log of this said only "timeout: global" and the one
+    // thing worth knowing was which model it had gone to ask and whether that model was in
+    // memory at the time.
+    .map_err(|why| match pace {
+        providers::Pace::Warm => format!("{judge} is loaded and did not answer: {why}"),
+        _ => format!("{judge} had to be loaded first and did not answer in time: {why}"),
+    })?;
     let verdict: Verdict = serde_json::from_value(answer.clone())
         .map_err(|e| format!("the judgment was JSON but not a verdict ({e}): {answer}"))?;
     /* Whether a locally-answered turn needs a model named for it, judged by asking the
@@ -627,6 +688,14 @@ mod tests {
             ],
             local_only: false,
         }
+    }
+
+    /// The judge the old `judge_model` would have returned: nothing loaded, and a turn on
+    /// a cloud model, so neither of the two new steps applies.
+    fn chose(available: &Candidates, db: &MemoryDb) -> Option<String> {
+        available
+            .judge_choice(db, "claude-opus-5", &[])
+            .map(|(model, _)| model)
     }
 
     fn verdict(difficulty: Difficulty, fresh: bool, code: bool) -> Verdict {
@@ -847,7 +916,68 @@ mod tests {
             online: vec![],
             local_only: false,
         };
-        assert_eq!(available.judge_model(&db).as_deref(), Some("llama3.2:3b"));
+        assert_eq!(chose(&available, &db), Some("llama3.2:3b".to_string()));
+    }
+
+    #[test]
+    fn a_model_already_in_memory_is_judged_with_rather_than_a_smaller_one_on_disk() {
+        /* The fault the first desktop log showed. The smallest installed model is the
+        cheapest to *run* and the most expensive to *reach* when it is not loaded: on a
+        card with one large model resident it is a read off disk, and possibly an eviction
+        of the model the reply is about to use. Twenty seconds was not enough for that, so
+        Auto stood down on every message. */
+        let db = db_for("resident");
+        let available = Candidates {
+            local_provider: Provider::Ollama,
+            endpoint: String::new(),
+            local: vec![local_model("qwen3:14b"), local_model("llama3.2:3b")],
+            online: vec![],
+            local_only: false,
+        };
+        let loaded = vec!["qwen3:14b".to_string()];
+        assert_eq!(
+            available.judge_choice(&db, "claude-opus-5", &loaded),
+            Some(("qwen3:14b".to_string(), providers::Pace::Warm))
+        );
+    }
+
+    #[test]
+    fn the_model_this_turn_will_use_is_judged_with_when_nothing_is_loaded() {
+        // The load is the reply's either way, so judging on it moves the wait earlier
+        // instead of adding one -- which is why this is allowed to take longer.
+        let db = db_for("turn_model");
+        let available = Candidates {
+            local_provider: Provider::Ollama,
+            endpoint: String::new(),
+            local: vec![local_model("qwen3:14b"), local_model("llama3.2:3b")],
+            online: vec![],
+            local_only: false,
+        };
+        assert_eq!(
+            available.judge_choice(&db, "qwen3:14b", &[]),
+            Some(("qwen3:14b".to_string(), providers::Pace::Loading))
+        );
+    }
+
+    #[test]
+    fn an_operators_own_judge_is_still_reported_as_a_load_when_it_is_not_in_memory() {
+        // Their choice is honoured, and honoured honestly: the bound has to match what the
+        // call is really about to do, or it fails in front of every reply.
+        let db = db_for("own_judge_cold");
+        let available = Candidates {
+            local_provider: Provider::Ollama,
+            endpoint: String::new(),
+            local: vec![local_model("qwen3:14b"), local_model("llama3.2:3b")],
+            online: vec![],
+            local_only: false,
+        };
+        db.set_setting(JUDGE_SETTING, &json!("llama3.2:3b"))
+            .unwrap();
+        let loaded = vec!["qwen3:14b".to_string()];
+        assert_eq!(
+            available.judge_choice(&db, "qwen3:14b", &loaded),
+            Some(("llama3.2:3b".to_string(), providers::Pace::Loading))
+        );
     }
 
     #[test]
@@ -863,7 +993,7 @@ mod tests {
             online: vec![],
             local_only: false,
         };
-        assert_eq!(available.judge_model(&db).as_deref(), Some("qwen3:8b"));
+        assert_eq!(chose(&available, &db), Some("qwen3:8b".to_string()));
     }
 
     #[test]
@@ -877,12 +1007,12 @@ mod tests {
             local_only: false,
         };
         db.set_setting(JUDGE_SETTING, &json!("qwen3:14b")).unwrap();
-        assert_eq!(available.judge_model(&db).as_deref(), Some("qwen3:14b"));
+        assert_eq!(chose(&available, &db), Some("qwen3:14b".to_string()));
 
         // Uninstalled, and the answer falls back rather than asking a server for a model it
         // does not have -- which fails per message, in front of every reply.
         db.set_setting(JUDGE_SETTING, &json!("qwen3:32b")).unwrap();
-        assert_eq!(available.judge_model(&db).as_deref(), Some("llama3.2:3b"));
+        assert_eq!(chose(&available, &db), Some("llama3.2:3b".to_string()));
     }
 
     #[test]
