@@ -53,6 +53,22 @@ if ! cp src-tauri/target/release/aether1 "$TMP_BIN" || ! chmod +x "$TMP_BIN" || 
     exit 1
 fi
 
+# **The second command name.** `aurora1` is the companion's command and `aether1` is the one
+# behind the curtain; every subcommand works under both, and the help text names whichever one
+# you typed (see cli::invoked_as). A hard link rather than a copy: it is the same binary, so a
+# copy would double the disk for nothing and could drift from the real one after an update.
+# Through a temporary name and renamed into place for exactly the reason above -- this script
+# is what the self-update flow runs, and a running `aurora1` cannot be replaced where it sits.
+ALT_BIN="$HOME/.local/bin/aurora1"
+TMP_ALT="$ALT_BIN.new.$$"
+if ln -f "$INSTALL_BIN" "$TMP_ALT" 2>/dev/null || cp "$INSTALL_BIN" "$TMP_ALT"; then
+    chmod +x "$TMP_ALT"
+    mv -f "$TMP_ALT" "$ALT_BIN"
+else
+    rm -f "$TMP_ALT"
+    echo "⚠ Could not create the 'aurora1' command; 'aether1' works the same way."
+fi
+
 mkdir -p "$HOME/.local/share/applications"
 sed "s|__AETHER1_INSTALLED_BIN__|$INSTALL_BIN|g" desktop/Aether1.desktop > "$HOME/.local/share/applications/Aether1.desktop"
 chmod +x "$HOME/.local/share/applications/Aether1.desktop"
@@ -61,8 +77,9 @@ mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
 cp desktop/icons/icon.png "$HOME/.local/share/icons/hicolor/256x256/apps/aether1.png" 2>/dev/null || true
 
 echo "✔ Desktop app rebuilt and installed to $INSTALL_BIN; launcher entry refreshed."
-echo "  The same binary is the CLI: 'aether1 prompt \"...\"', 'aether1 status', 'aether1 say \"...\"' (aether1 --help)."
+echo "  The same binary is the CLI, under either name: 'aurora1 prompt \"...\"', 'aurora1 status', 'aurora1 say \"...\"' (aurora1 --help)."
+echo "  'aether1' runs all of the same commands -- it is the name behind the curtain."
 case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
-    *) echo "  Note: $HOME/.local/bin is not on your PATH, so 'aether1' won't resolve as a command yet." ;;
+    *) echo "  Note: $HOME/.local/bin is not on your PATH, so neither 'aurora1' nor 'aether1' will resolve as a command yet." ;;
 esac

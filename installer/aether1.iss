@@ -80,7 +80,25 @@ Name: "{group}\Aurora1"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"
 Name: "{autodesktop}\Aurora1"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
+; **The second command name.** `aurora1` is the companion's command and `aether1` is the one
+; behind the curtain; every subcommand works under both, and the help text names whichever one
+; was typed (cli::invoked_as). A hard link rather than a second copy, because it is the same
+; binary -- copying it would double a large install for nothing and let the two drift apart on
+; the next update. `mklink /H` needs no elevation on NTFS within one volume, which is what a
+; per-user install under {localappdata} always is.
+;
+; `runhidden` and no failure handling: if the link cannot be made (a volume that is not NTFS,
+; say) the install is still complete and correct, because `aether1` is there and runs
+; everything. This is the one step allowed to fail quietly, which is why it is here and not
+; in [Files].
+Filename: "{cmd}"; Parameters: "/c mklink /H ""{app}\aurora1.exe"" ""{app}\aether1.exe"""; Flags: runhidden; StatusMsg: "Adding the aurora1 command..."
+
 Filename: "{app}\aether1.exe"; Description: "Launch Aurora1 now"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; The hard link above is made after install rather than listed in [Files], so Inno does not
+; know about it and would otherwise leave behind an aurora1.exe pointing at a deleted file.
+Type: files; Name: "{app}\aurora1.exe"
 
 [Code]
 // Appends {app}\bin to the current user's PATH so `which::which` (Rust, in the running

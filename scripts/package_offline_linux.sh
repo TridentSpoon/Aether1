@@ -101,5 +101,6 @@ tar -czf "$BUNDLE" -C "$STAGE" .
 echo ""
 echo "======================================================================"
 echo "✔ Wrote $BUNDLE ($(du -h "$BUNDLE" | cut -f1))"
-echo "  On the target machine: tar -xzf $(basename "$BUNDLE") && ./install-offline.sh"
+echo "  On the target machine: mkdir aurora1-offline && tar -xzf $(basename "$BUNDLE") -C aurora1-offline"
+echo "  then:                 cd aurora1-offline && ./install-offline.sh"
 echo "======================================================================"

@@ -47,5 +47,6 @@ tar -czf "$BUNDLE" -C "$STAGE" .
 echo ""
 echo "======================================================================"
 echo "✔ Wrote $BUNDLE ($(du -h "$BUNDLE" | cut -f1))"
-echo "  On the target machine: tar -xzf $(basename "$BUNDLE") && ./install-slim-linux.sh"
+echo "  On the target machine: mkdir aurora1-slim && tar -xzf $(basename "$BUNDLE") -C aurora1-slim"
+echo "  then:                 cd aurora1-slim && ./install-slim-linux.sh"
 echo "======================================================================"
