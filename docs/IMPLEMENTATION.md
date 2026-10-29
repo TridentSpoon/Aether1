@@ -4077,3 +4077,49 @@ This has to be on the default branch before the first such tag is pushed at it.
 binary names, the config directory's preferred spelling, the README and the startup messages,
 and the tag scheme itself. Each of those is a writer, and each one now has a reader waiting
 for it.
+
+## Step 64 — the version says Aurora1, and says when
+
+Step 63 taught every reader the new spelling. This is the first writer: `AETHER1_VERSION` goes
+from `Ver 0.4.126` to **`Aurora1 rev0.261029.259`** — a revision number, the date the code was
+cut, and the pull request it was built from. `aether1 --version` prints
+`Aurora1 rev0.261029.259 (c7e87d1)`, and because everything that shows a version reads
+`APP_VERSION`, the tray, the About box, the mDNS announcement, the doctor report and
+`installs` all follow from the one line in build.rs.
+
+**The date is HEAD's commit date, not today's.** A wall-clock date would change the version of
+a binary without a line of its code changing, so two people comparing notes on which build
+they are on would get two answers to the same question; it would also let a rebuild of an old
+commit claim to be newer than it is. A commit date is a fact about the code, so the same commit
+produces the same version string whoever builds it and whenever. `rerun-if-changed` on
+`.git/HEAD` and `.git/refs/heads` already refreshes it when the checkout moves.
+
+**The revision is the package's major version**, read from Cargo.toml rather than written out
+again — the printed version used to be hand-written as "0.3" in main.rs while the package said
+0.4.0, and nothing made the two agree. The package's *minor* no longer appears: the scheme has
+three slots and the minor said nothing the pull request number did not already say.
+
+**What orders two versions is still the pull request alone.** The date says when, not which is
+newer: a release cut from an older branch on a later day is not the newer build. That also
+holds across the rename, because a pull request number on one repository only ever climbs — so
+`Ver 0.4.152` is older than `Aurora1 rev0.261029.259` and an installed copy from before the
+rename can still tell. Step 63 is what makes that true; without it this change would be the one
+that quietly stopped older copies seeing updates.
+
+**`this_build_can_read_its_own_version` is the test that matters.** `build.rs` assembles the
+string and `installs::Version` parses it, and nothing else connects the two — so without a test
+asserting that this build's own `APP_VERSION` parses as the new scheme and compares in both
+directions against a version from before it, a drift between writer and reader would be found
+by an operator noticing `installs` calling the newest copy the oldest. The direction is only
+asserted where the numbers are known: the pull request this is built from is not something a
+test can predict, so against an older version it asserts comparability, which is the invariant
+that actually matters — `None` is what a copy reports as "cannot tell", and then stops acting
+on.
+
+**The About box says both names, once.** It is the pane somebody opens to find out what they
+are running, so it is the right and only place to say that Aurora1 is the companion and the
+Aether1 Platform is the machinery under it — the name still on the logs, the environment
+variables and the `aether1` command. Everywhere else, each name is used without explanation.
+
+**Still to come:** the HUD wordmark and the startup messages, the README, the package and
+binary names, the config directory's preferred spelling, and the tag scheme.

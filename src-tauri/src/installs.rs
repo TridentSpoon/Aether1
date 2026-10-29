@@ -985,6 +985,44 @@ mod tests {
         );
     }
 
+    /// **The writer and the reader have to agree, and only a test can say they do.**
+    /// `build.rs` assembles the version string and this module parses it, and nothing else
+    /// connects the two -- so a change to either one's spelling would otherwise be found by
+    /// an operator noticing that `installs` thinks the running copy is the oldest on the
+    /// machine, which is the symptom step 63 was written to prevent.
+    #[test]
+    fn this_build_can_read_its_own_version() {
+        let parsed = Version::parse(crate::APP_VERSION).unwrap_or_else(|| {
+            panic!(
+                "this build prints {:?}, which parses as nothing",
+                crate::APP_VERSION
+            )
+        });
+        assert!(
+            matches!(parsed, Version::Dated { .. }),
+            "this build prints {:?}, which reads as {parsed:?} rather than the Aurora1 scheme",
+            crate::APP_VERSION
+        );
+        // And it is comparable against a version from before the rename, in both
+        // directions, which is what an installed copy actually does with it. Comparable, not
+        // a direction: the pull request number of whatever commit this is being built from
+        // is not something a test can know, and `Some(_)` is the invariant that matters --
+        // `None` is what a copy reports as "cannot tell", and what it then stops acting on.
+        let before = Version::build(0, 4, 1);
+        assert!(before.older_than(&parsed).is_some());
+        assert!(parsed.older_than(&before).is_some());
+        // The direction, asserted where the numbers are known: one pull request further on.
+        if let Version::Dated { rev, date, pr } = parsed {
+            let next = Version::Dated {
+                rev,
+                date,
+                pr: pr + 1,
+            };
+            assert_eq!(parsed.older_than(&next), Some(true));
+            assert_eq!(next.older_than(&parsed), Some(false));
+        }
+    }
+
     /// A rename is not a reset: the two schemes are two spellings of a position in the same
     /// repository's pull request history, so they compare. A copy that could not compare them
     /// would answer "cannot tell" for every release after the rename and quietly stop
