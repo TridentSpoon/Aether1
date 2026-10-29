@@ -111,14 +111,16 @@ or metered connection, a fresh install before Wi-Fi is configured), each platfor
 offline bundle instead, built by whoever cuts a release (see `.github/workflows/release.yml`,
 which does this for every tagged release) and requiring nothing but itself once built:
 
-- **Linux**: download `aether1-offline-linux-x86_64.tar.gz` from
+- **Linux**: download `aurora1-offline-linux-x86_64.tar.gz` from
   [Releases](../../releases), then:
   ```sh
-  tar -xzf aether1-offline-linux-x86_64.tar.gz
-  cd aether1-offline-linux-x86_64
+  mkdir aurora1-offline && tar -xzf aurora1-offline-linux-x86_64.tar.gz -C aurora1-offline
+  cd aurora1-offline
   ./install-offline.sh
   ```
-- **Windows**: download `Aether1-Setup.exe` from [Releases](../../releases) and run it --
+  (The archive has no top-level directory of its own, so give it one -- otherwise it
+  unpacks into whichever directory you are standing in.)
+- **Windows**: download `Aurora1-Setup.exe` from [Releases](../../releases) and run it --
   a normal installer, no PowerShell required. It is unsigned, so Windows will have something
   to say about it first -- see "Windows blocked it" below, and read the warning there before
   touching Smart App Control.
@@ -134,7 +136,7 @@ instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` ab
 
 ### Slim install (Linux, small download, needs a network once)
 
-The trade-off in the other direction: `aether1-slim-linux-x86_64.tar.gz` (also on
+The trade-off in the other direction: `aurora1-slim-linux-x86_64.tar.gz` (also on
 [Releases](../../releases)) ships just the binary -- no Piper, no whisper.cpp, no models --
 and has its install script fetch speech separately into a Python environment of
 Aurora1's own (`~/.local/share/aether1/pyenv` -- not the system Python, which current
@@ -145,8 +147,8 @@ which happens automatically the first time you actually speak or listen -- after
 cached and works offline like everything else here).
 
 ```sh
-tar -xzf aether1-slim-linux-x86_64.tar.gz
-cd aether1-slim-linux-x86_64
+mkdir aurora1-slim && tar -xzf aurora1-slim-linux-x86_64.tar.gz -C aurora1-slim
+cd aurora1-slim
 ./install-slim-linux.sh
 ```
 

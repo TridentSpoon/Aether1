@@ -12,7 +12,7 @@
 #
 # Usage: ./scripts/package_offline_linux.sh [output-dir]
 #
-# Output: <output-dir>/aether1-offline-linux-x86_64.tar.gz containing:
+# Output: <output-dir>/aurora1-offline-linux-x86_64.tar.gz containing:
 #   bin/aether1, bin/whisper-cli
 #   share/piper/runtime/ (piper binary + the shared libraries it needs)
 #   share/piper/voices/<voice>.onnx(.json)
@@ -95,7 +95,7 @@ chmod +x "$STAGE/install-offline.sh"
 cp THIRD_PARTY_NOTICES.md "$STAGE/THIRD_PARTY_NOTICES.md"
 
 mkdir -p "$OUT_DIR"
-BUNDLE="$OUT_DIR/aether1-offline-linux-x86_64.tar.gz"
+BUNDLE="$OUT_DIR/aurora1-offline-linux-x86_64.tar.gz"
 tar -czf "$BUNDLE" -C "$STAGE" .
 
 echo ""
