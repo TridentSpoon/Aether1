@@ -710,6 +710,7 @@ impl LlmEngine {
             &self.db,
             &config.persona,
             config.provider,
+            &config.model_name,
             &config.endpoint,
             prompt,
             tools_available,
@@ -800,7 +801,10 @@ impl LlmEngine {
         let mut agent_name = self.db.get_setting_string("agent_name", "HALCY");
         let mut provider_key = match provider {
             Some(chosen) => chosen.key().to_string(),
-            None => self.db.get_setting_string("llm_provider", "offline"),
+            // Through `auto::stored_provider` rather than straight off the setting, because
+            // `llm_provider` may hold the literal `auto` -- see its doc comment for why
+            // reading that as Offline is the one failure that cannot be allowed.
+            None => auto::stored_provider(&self.db).key().to_string(),
         };
         let model_name = match model {
             Some(chosen) => chosen.to_string(),
