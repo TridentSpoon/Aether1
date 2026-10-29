@@ -4245,3 +4245,44 @@ offer the *same* subcommands or different ones is the operator's call, not a thi
 hiding a command somebody is used to typing is cheap to build and annoying to live with. The
 mechanism either way is one binary reachable under two names, which `cli::invoked_as` from
 step 63 already handles. The tag scheme is the last piece after that.
+
+## Step 68 — the download is called Aurora1
+
+The last of the rename's writers: the files a release actually hands somebody. The Linux
+bundles become `aurora1-offline-linux-x86_64.tar.gz` and `aurora1-slim-linux-x86_64.tar.gz`,
+and the Windows installer becomes `Aurora1-Setup.exe` — a filename is the first thing an
+operator reads about this project, often before they have run anything.
+
+**Safe to flip because step 63 landed the reader and no release was ever cut.** A copy
+installed before step 63 looks for the `aether1-` prefixes only, so a renamed release would
+be one it finds and then cannot download. There is no such copy: `git ls-remote --tags` was
+empty throughout, so nothing has ever been distributed under the old names. The old prefixes
+stay in `wanted_asset_prefixes` anyway, for the operator who has an older bundle on disk and
+asks `aether1 verify` about it.
+
+**The new name is listed first, and there is a test for that.** A transitional release could
+carry both, and `pick_asset` returned whichever prefix matched first — which, with the old
+name ahead of the new one, would have quietly preferred the old. `a_release_carrying_both_names_resolves_to_the_new_one`
+asserts it both ways round, because "whichever the GitHub API happened to return first" is not
+a decision.
+
+**One pre-existing bug fixed on the way past.** Both README install snippets said:
+
+```sh
+tar -xzf aether1-offline-linux-x86_64.tar.gz
+cd aether1-offline-linux-x86_64
+```
+
+Neither packaging script creates that directory. Both end with
+`tar -czf "$BUNDLE" -C "$STAGE" .`, so the archive has no top-level directory at all and
+extracting it scatters `bin/`, `share/` and `install-offline.sh` into whatever directory the
+operator was standing in — then the `cd` fails and the instructions stop. It would have been
+wrong under either name; renaming the file is what made somebody read the line. Both snippets
+now make a directory and extract into it, and say why.
+
+**Not in this step, because it is not ours to do:** cutting the first tagged release. The tag
+shape is already handled end to end — `v0-261018-227` matches the `v*` trigger, step 63 turns
+its dashes back into dots for Inno Setup's AppVersion, and `is_newer` compares it against both
+version spellings. What is missing is the GitHub App and the minisign keypair the pipeline
+signs with, which only the repository's owner can create (see step 46). `release.yml` fails on
+half a keypair by design, so there is nothing to half-do here.

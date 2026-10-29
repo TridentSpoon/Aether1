@@ -68,8 +68,8 @@ jobs:
       # after a single run.
       - uses: actions/upload-artifact@v4
         with:
-          name: aether1-offline-linux-x86_64
-          path: dist/aether1-offline-linux-x86_64.tar.gz
+          name: aurora1-offline-linux-x86_64
+          path: dist/aurora1-offline-linux-x86_64.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -101,8 +101,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: aether1-slim-linux-x86_64
-          path: dist/aether1-slim-linux-x86_64.tar.gz
+          name: aurora1-slim-linux-x86_64
+          path: dist/aurora1-slim-linux-x86_64.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -231,7 +231,7 @@ jobs:
           endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ secrets.AZURE_SIGNING_CERT_PROFILE }}
-          files: ${{ github.workspace }}\dist\Aether1-Setup.exe
+          files: ${{ github.workspace }}\dist\Aurora1-Setup.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -246,7 +246,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = $false
-          foreach ($file in @("src-tauri\target\release\aether1.exe", "dist\Aether1-Setup.exe")) {
+          foreach ($file in @("src-tauri\target\release\aether1.exe", "dist\Aurora1-Setup.exe")) {
             $sig = Get-AuthenticodeSignature $file
             if ($sig.Status -eq 'NotSigned') {
               Write-Host "::error::$file is not signed, but signing was configured."
@@ -260,8 +260,8 @@ jobs:
       # Same one-day retention as the Linux bundle above, for the same reason.
       - uses: actions/upload-artifact@v4
         with:
-          name: aether1-offline-windows-installer
-          path: dist/Aether1-Setup.exe
+          name: aurora1-offline-windows-installer
+          path: dist/Aurora1-Setup.exe
           if-no-files-found: error
           retention-days: 1
 
@@ -331,9 +331,9 @@ jobs:
           printf '%s' "$MINISIGN_KEY" > minisign.key
           chmod 600 minisign.key
 
-          for file in dist/aether1-offline-linux-x86_64.tar.gz \
-                      dist/aether1-slim-linux-x86_64.tar.gz \
-                      dist/Aether1-Setup.exe; do
+          for file in dist/aurora1-offline-linux-x86_64.tar.gz \
+                      dist/aurora1-slim-linux-x86_64.tar.gz \
+                      dist/Aurora1-Setup.exe; do
             # -H prehashes. Not optional: the client verifies while it streams the download to
             # disk rather than reading half a gigabyte back afterwards, and a streaming verifier
             # can only check a prehashed signature.
@@ -360,8 +360,8 @@ jobs:
           # one. `dist/*.minisig` rather than three names: a release with no keypair configured
           # has none of them, and a missing glob is not an error the way a missing name is.
           files: |
-            dist/aether1-offline-linux-x86_64.tar.gz
-            dist/aether1-slim-linux-x86_64.tar.gz
-            dist/Aether1-Setup.exe
+            dist/aurora1-offline-linux-x86_64.tar.gz
+            dist/aurora1-slim-linux-x86_64.tar.gz
+            dist/Aurora1-Setup.exe
             dist/*.minisig
           generate_release_notes: true

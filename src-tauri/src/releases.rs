@@ -174,15 +174,17 @@ impl ReleaseError {
 }
 
 /// The bundle name this platform installs, as `release.yml` names it. Matched as a prefix so
-/// a future `aether1-offline-linux-aarch64.tar.gz` needs nothing here, and so the `.minisig`
+/// a future `aurora1-offline-linux-aarch64.tar.gz` needs nothing here, and so the `.minisig`
 /// beside it is never mistaken for the bundle itself.
-/// **Both brandings, on purpose.** The Aurora1 rename renames the bundles too, and the copy
-/// that has to find them is the one already installed -- whose list of prefixes was compiled
-/// into it. So this release learns the `aurora1-` names while `release.yml` still publishes
-/// the `aether1-` ones; a renamed release then has assets every copy from here on can pick
-/// out, and a copy from before here still picks out the old names for as long as they are
-/// published. Taking the old names out is a separate decision for a later release, not
-/// something to do in the one that introduces the new ones.
+/// **Both brandings, on purpose, and the new one first.** The copy that has to find a
+/// release's assets is the one already installed, whose list of prefixes was compiled into
+/// it -- so the `aurora1-` names were learned here one release before `release.yml` started
+/// publishing them, and the `aether1-` names stay readable now that it has stopped. A copy
+/// built before the rename still finds nothing in a renamed release, which is why no release
+/// was ever cut under the old names: there is no such copy anywhere. The old prefixes are
+/// kept for the operator who has an older bundle on disk and asks this to verify it.
+///
+/// The new name is listed first so that a release carrying both is read as the Aurora1 one.
 fn wanted_asset_prefixes() -> &'static [&'static str] {
     if cfg!(target_os = "windows") {
         &["Aurora1-Setup", "Aether1-Setup"]
@@ -657,6 +659,27 @@ mod tests {
         );
         // Still nothing guessed about a tag that is not a version.
         assert_eq!(is_newer("Aurora1 rev0.261018.227", "nightly"), None);
+    }
+
+    /// A release that carries both brandings resolves to the Aurora1 one, whichever order
+    /// GitHub lists the assets in. A transitional release could carry both, and "whichever
+    /// the API happened to return first" is not a decision.
+    #[test]
+    fn a_release_carrying_both_names_resolves_to_the_new_one() {
+        let old_first = vec![
+            asset("aether1-offline-linux-x86_64.tar.gz", 1),
+            asset("aurora1-offline-linux-x86_64.tar.gz", 2),
+        ];
+        let new_first = vec![
+            asset("aurora1-offline-linux-x86_64.tar.gz", 2),
+            asset("aether1-offline-linux-x86_64.tar.gz", 1),
+        ];
+        for assets in [old_first, new_first] {
+            assert_eq!(
+                pick_asset(&assets).expect("a bundle should be found").name,
+                "aurora1-offline-linux-x86_64.tar.gz"
+            );
+        }
     }
 
     /// Both brandings of the bundle names, for the same reason: the copy that has to find a

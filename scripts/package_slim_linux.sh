@@ -7,7 +7,7 @@
 #
 # Usage: ./scripts/package_slim_linux.sh [output-dir]
 #
-# Output: <output-dir>/aether1-slim-linux-x86_64.tar.gz containing:
+# Output: <output-dir>/aurora1-slim-linux-x86_64.tar.gz containing:
 #   bin/aether1
 #   share/applications/Aether1.desktop, share/icons/aether1.png
 #   install-slim-linux.sh
@@ -41,7 +41,7 @@ chmod +x "$STAGE/install-slim-linux.sh"
 # separately via pip and the system package manager, each under its own license as always.
 
 mkdir -p "$OUT_DIR"
-BUNDLE="$OUT_DIR/aether1-slim-linux-x86_64.tar.gz"
+BUNDLE="$OUT_DIR/aurora1-slim-linux-x86_64.tar.gz"
 tar -czf "$BUNDLE" -C "$STAGE" .
 
 echo ""
