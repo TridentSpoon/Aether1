@@ -9381,12 +9381,20 @@ document.addEventListener('DOMContentLoaded', () => {
        computer, and which company to send the question to. An online provider appears only
        when a key for it exists -- an entry that switches and then fails with a 401 is worse
        than no entry, which is what `llm_api_key_<provider>` is for. */
-    const brainState = { current: null, loading: false };
+    const brainState = { current: null, loading: false, autoValue: null, autoSetting: null };
 
     /* Chosen instead of a model: open Settings at The Brain. The picker is also the
        answer to "where do I set this up?", so the way out of an empty list is in the
        list. \u0000 cannot occur in a provider key, so it cannot collide with a real one. */
     const BRAIN_SETUP = '\u0000setup';
+
+    /* Auto is not a model and not a provider: it is the router deciding, per message,
+       between what is on this computer and what is online. It sits at the top of the list
+       because it is the answer to the question the list asks, and it is written as one
+       entry rather than a switch somewhere else so that turning it off is the same gesture
+       as turning it on -- picking a model. The value is the one the backend minted
+       (`llm::auto::PICKER_VALUE`), so the two cannot drift apart. */
+    const BRAIN_AUTO = '\u0000auto';
 
     /* Two controls, one list. The chin bar one says what is answering at a glance, beside
        STATE; this one is in the row where the question is typed, which is where somebody
@@ -9409,6 +9417,24 @@ document.addEventListener('DOMContentLoaded', () => {
         select.innerHTML = '';
         const local = (data && data.local && data.local.models) || [];
         const online = ((data && data.online) || []).filter(entry => entry.ready);
+        const auto = (data && data.auto) || null;
+
+        if (auto) {
+            const option = document.createElement('option');
+            option.value = auto.value || BRAIN_AUTO;
+            // The judge runs on a model on this machine, so with nothing installed there
+            // is nothing to judge with. Shown and refused rather than hidden, for the same
+            // reason the online group is under local-only mode: an entry that is missing
+            // reads as a feature that does not exist.
+            option.textContent = auto.ready
+                ? 'Auto — decide per message'
+                : 'Auto — needs a model on this computer';
+            option.disabled = !auto.ready;
+            option.title = 'A small model on this computer reads each message and decides '
+                + 'whether to answer it here or send it online, and whether anything needs '
+                + 'looking up. Every answer says which it picked.';
+            select.appendChild(option);
+        }
 
         if (local.length) {
             const group = document.createElement('optgroup');
@@ -9441,6 +9467,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 group.appendChild(option);
             }
             select.appendChild(group);
+        }
+
+        if (auto && auto.on) {
+            select.value = auto.value || BRAIN_AUTO;
+            select.title = 'Auto is deciding where each message goes. Pick a model to '
+                + 'decide yourself.';
+            const setup = document.createElement('option');
+            setup.value = BRAIN_SETUP;
+            setup.textContent = 'Set up another…';
+            select.appendChild(setup);
+            return;
         }
 
         const current = data ? brainValue(data.current.provider, data.current.model) : '';
@@ -9492,7 +9529,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         brainState.loading = false;
 
-        brainState.current = data ? brainValue(data.current.provider, data.current.model) : '';
+        brainState.autoValue = (data && data.auto && data.auto.value) || BRAIN_AUTO;
+        brainState.autoSetting = (data && data.auto && data.auto.setting) || 'auto_router';
+        brainState.current = data && data.auto && data.auto.on
+            ? brainState.autoValue
+            : (data ? brainValue(data.current.provider, data.current.model) : '');
         for (const { select, row } of controls) {
             fillBrainSelect(select, data);
             row?.classList.remove('hidden');
@@ -9514,14 +9555,28 @@ document.addEventListener('DOMContentLoaded', () => {
                     showSettingsSection('brain');
                     return;
                 }
+                const chose_auto = select.value === (brainState.autoValue || BRAIN_AUTO);
                 const [provider, model] = select.value.split('\u001f');
                 try {
+
                     // Through the same save path as Settings, so the one place that knows how
                     // to store a provider and its key stays the only place that does it. The
                     // engine reads the provider out of settings for every request
                     // (llm::load_config), so this is in force from the next message -- there
                     // is nothing further to press.
-                    const payload = { llm_provider: provider, llm_model: model };
+                    /* Every pick writes the switch, including the ones that turn it off.
+                       Writing it only when Auto is chosen would leave an install where Auto
+                       is on and a model is also selected, and nothing on screen to say
+                       which of the two is in force. The provider and model are left exactly
+                       as they were when Auto is chosen: they are what it falls back to, and
+                       what it uses when it decides to go online. */
+                    const payload = chose_auto
+                        ? { [brainState.autoSetting || 'auto_router']: true }
+                        : {
+                            llm_provider: provider,
+                            llm_model: model,
+                            [brainState.autoSetting || 'auto_router']: false,
+                        };
                     if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
                     else {
                         const response = await apiFetch('/api/settings', {
@@ -9531,7 +9586,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         });
                         if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
                     }
-                    appendSystemNotice(`Answering with ${model || provider} from now on.`);
+                    appendSystemNotice(chose_auto
+                        ? 'Auto is deciding where each message goes from now on. Every '
+                          + 'answer says which model it picked.'
+                        : `Answering with ${model || provider} from now on.`);
                 } catch (error) {
                     appendSystemNotice(`Could not switch: ${error.message || error}`);
                     select.value = brainState.current;
