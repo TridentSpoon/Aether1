@@ -220,6 +220,10 @@ fn decode_entities(text: &str) -> String {
 /// never a page that reads as something it is not. A site that needs JavaScript to say
 /// anything produces almost nothing, which is the honest answer for a client with no
 /// browser -- and better than a plausible paragraph of navigation links.
+///
+/// Table cells are the one place where dropping a tag loses something a model needs rather
+/// than something it can do without; `SEPARATES_THE_CELL` says what that cost looked like
+/// in a real answer.
 pub fn readable_text(html: &str) -> String {
     // Cut the elements whose *content* is not prose before dropping tags, because once the
     // tags are gone a stylesheet is indistinguishable from a paragraph.
@@ -246,6 +250,8 @@ pub fn readable_text(html: &str) -> String {
                 let name = name.split([' ', '\t', '\n', '/']).next().unwrap_or("");
                 if BREAKS_THE_LINE.contains(&name) {
                     text.push('\n');
+                } else if SEPARATES_THE_CELL.contains(&name) {
+                    push_cell_break(&mut text);
                 } else {
                     text.push(' ');
                 }
@@ -313,6 +319,32 @@ const BREAKS_THE_LINE: &[&str] = &[
     "dd",
     "dt",
 ];
+
+/// Tags whose boundary is a column edge rather than a space.
+///
+/// A results table flattened with spaces is a row of words: "2 16 Charles Leclerc FERRARI
+/// 56 +13.078 18" gives a model no way to tell a lap count from a gap from a points total.
+/// The first real log of the search chain shows what that costs -- asked for the last F1
+/// race, the model returned a table in which *every* finisher shared the winner's exact
+/// race time, each with a gap beside it. The page said the right thing and the flattening
+/// let one column slide into another.
+///
+/// A visible edge is not a fix for a model that invents figures, and it is not claimed as
+/// one. It is the difference between a page that says something precise and a page that
+/// only looks like it does.
+const SEPARATES_THE_CELL: &[&str] = &["td", "th"];
+
+/// One column edge, and never two in a row.
+///
+/// Both `</td>` and the `<td>` after it are boundaries, and a row starts with one, so the
+/// separator is pushed only where there is something to its left on the line.
+fn push_cell_break(text: &mut String) {
+    let tail = text.trim_end_matches(' ');
+    if tail.is_empty() || tail.ends_with('|') || tail.ends_with('\n') {
+        return;
+    }
+    text.push_str(" | ");
+}
 
 /// Runs of blank space become one space, runs of blank lines become one blank line.
 fn collapse(text: &str) -> String {
@@ -587,5 +619,53 @@ mod tests {
             !rendered.contains("fetch_url"),
             "there is no result to read: {rendered}"
         );
+    }
+
+    /// The artefact from the first real log: a results table whose columns ran together.
+    ///
+    /// Asked for the last F1 race, the model gave every finisher the winner's exact race
+    /// time with a gap beside it. With cells flattened to spaces, a row is a sentence of
+    /// numbers and that reading is available; with an edge between them it is not.
+    #[test]
+    fn a_table_row_keeps_its_column_edges() {
+        let text = super::readable_text(
+            "<table><tr><th>Pos</th><th>Driver</th><th>Time</th><th>Pts</th></tr>\
+             <tr><td>1</td><td>Kimi Antonelli</td><td>1:35:16.650</td><td>25</td></tr>\
+             <tr><td>2</td><td>Charles Leclerc</td><td>+13.078</td><td>18</td></tr></table>",
+        );
+        assert!(
+            text.contains("1 | Kimi Antonelli | 1:35:16.650 | 25"),
+            "the winner's row reads as four columns: {text}"
+        );
+        assert!(
+            text.contains("2 | Charles Leclerc | +13.078 | 18"),
+            "and the second row's gap is not a race time: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line.contains("Pos | Driver")),
+            "the header names the columns the rows then fill: {text}"
+        );
+    }
+
+    /// A separator is a boundary between two things, so it never opens a row or doubles up.
+    #[test]
+    fn a_column_edge_is_never_leading_or_doubled() {
+        let text = super::readable_text("<table><tr><td>a</td><td></td><td>b</td></tr></table>");
+        for line in text.lines() {
+            assert!(
+                !line.trim_start().starts_with('|'),
+                "leading edge in {line:?}"
+            );
+            assert!(!line.contains("| |"), "doubled edge in {line:?}");
+        }
+        assert!(text.contains("a | b"), "{text}");
+    }
+
+    /// Prose is untouched: a paragraph is not a table and must not acquire furniture.
+    #[test]
+    fn prose_gains_no_column_edges() {
+        let text =
+            super::readable_text("<p>Antonelli won in Austin.</p><p>Leclerc was second.</p>");
+        assert!(!text.contains('|'), "{text}");
     }
 }
