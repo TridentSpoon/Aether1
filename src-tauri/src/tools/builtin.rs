@@ -352,6 +352,12 @@ impl Tool for SearchWeb {
     }
 
     fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
+        // Refused here as well as left out of the prompt. A model that has seen the tool
+        // in an earlier turn of the same conversation will call it anyway, and a gate that
+        // only edits the instructions is a gate the transcript can walk around.
+        if !super::web_tools_enabled(ctx.db) {
+            return Err(super::WEB_TOOLS_OFF.to_string());
+        }
         let query = crate::websearch::query_of(args)?;
         let url = crate::websearch::url_for(&crate::websearch::endpoint(ctx.db), query);
 
@@ -419,7 +425,12 @@ impl Tool for FetchUrl {
         false
     }
 
-    fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
+        // The same switch search_web answers to. Reading a page the search could not have
+        // found is still this conversation going out to the internet.
+        if !super::web_tools_enabled(ctx.db) {
+            return Err(super::WEB_TOOLS_OFF.to_string());
+        }
         let url = args
             .get("url")
             .and_then(Value::as_str)
@@ -493,6 +504,47 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_tools_{name}_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(path).unwrap()
+    }
+
+    /* The Search chip under the chat box is a setting, not a per-message flag, and the
+    engine leaves the two web tools out of the prompt when it is off. That alone is not
+    a gate: a model that saw `search_web` in an earlier turn of the same conversation
+    will call it again from the transcript, and the instructions it is reading now never
+    mentioned it. Both tools are refused here as well, and the refusal says what to do
+    about it -- a model told only "cannot search" has been seen answering from memory
+    and presenting it as a lookup. */
+    #[test]
+    fn the_web_tools_are_refused_when_web_lookups_are_switched_off() {
+        let db = temp_db("web_off");
+        db.set_setting("web_search_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        let ctx = ToolContext::new(&db);
+
+        let searched = SearchWeb
+            .call(&json!({"query": "who won the 2026 title"}), &ctx)
+            .unwrap_err();
+        assert!(searched.contains("switched off"), "{searched}");
+        assert!(
+            searched.contains("rather than answering from memory"),
+            "the refusal has to say what to do instead: {searched}"
+        );
+
+        let fetched = FetchUrl
+            .call(&json!({"url": "https://example.com"}), &ctx)
+            .unwrap_err();
+        assert!(fetched.contains("switched off"), "{fetched}");
+    }
+
+    /// Defaults on, so an install that has never touched the chip behaves exactly as it
+    /// did before there was one. Checked through the gate rather than through the tool,
+    /// which would need the network to get any further.
+    #[test]
+    fn web_lookups_are_on_until_they_are_switched_off() {
+        let db = temp_db("web_default");
+        assert!(super::super::web_tools_enabled(&db));
+        db.set_setting("web_search_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        assert!(!super::super::web_tools_enabled(&db));
     }
 
     #[test]

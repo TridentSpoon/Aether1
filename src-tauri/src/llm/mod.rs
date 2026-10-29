@@ -1709,10 +1709,16 @@ impl LlmEngine {
             nothing: no such tool registered, and local-only mode, where
             `net::require_online` refuses the call -- and a prompt that orders a lookup the
             gate is about to refuse trades a useful answer for a dead end. */
-            let web = (registry.get(WEB_SEARCH_TOOL).is_some() && !config.local_only)
-                .then_some(WEB_SEARCH_TOOL);
-            let fetch = (registry.get(FETCH_URL_TOOL).is_some() && !config.local_only)
-                .then_some(FETCH_URL_TOOL);
+            // Three ways there is nothing to reach for, not two: no such tool registered,
+            // local-only mode, and the Search chip under the chat box being off. The third
+            // is the operator saying this conversation does not go out to the internet, and
+            // a prompt that orders a lookup it is about to be refused trades a useful
+            // answer for a dead end exactly as the other two do.
+            let web_ok = crate::tools::web_tools_enabled(&self.db) && !config.local_only;
+            let web =
+                (registry.get(WEB_SEARCH_TOOL).is_some() && web_ok).then_some(WEB_SEARCH_TOOL);
+            let fetch =
+                (registry.get(FETCH_URL_TOOL).is_some() && web_ok).then_some(FETCH_URL_TOOL);
             system_prompt.push_str(&if native_tools_for(&config) {
                 crate::tools::protocol::native_instructions(&field, web, fetch)
             } else {

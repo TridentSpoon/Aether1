@@ -9480,7 +9480,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function refreshBrainPicker() {
         const controls = brainControls();
-        if (!controls.length || brainState.loading) return;
+        // Not `!controls.length` any more: the popover is a third control over the same
+        // reply, and in the studio it is the only one on screen.
+        if (brainState.loading) return;
         brainState.loading = true;
         let data = null;
         try {
@@ -9493,56 +9495,744 @@ document.addEventListener('DOMContentLoaded', () => {
         brainState.loading = false;
 
         brainState.current = data ? brainValue(data.current.provider, data.current.model) : '';
+        // Kept, so the popover can redraw on a tab or a search keystroke without asking
+        // the model server the same question again.
+        brainState.data = data;
         for (const { select, row } of controls) {
             fillBrainSelect(select, data);
             row?.classList.remove('hidden');
         }
+        renderBrainPopover();
+    }
+
+    /* Opens Settings at The Brain. Shared by the selects and by the popover, because
+       "where do I set this up?" is the same question wherever the empty list was seen. */
+    async function openBrainSetup() {
+        voiceEngine.playSFX('click');
+        await loadSettings();
+        settingsModal?.classList.remove('hidden');
+        showSettingsSection('brain');
+    }
+
+    /* The one place a model is chosen, whichever control did the choosing.
+
+       Through the same save path as Settings, so the one place that knows how to store a
+       provider and its key stays the only place that does it. The engine reads the
+       provider out of settings for every request (llm::load_config), so this is in force
+       from the next message -- there is nothing further to press. Returns true when the
+       switch took, so a control can put itself back when it did not. */
+    async function switchBrain(provider, model) {
+        try {
+            const payload = { llm_provider: provider, llm_model: model };
+            if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
+            else {
+                const response = await apiFetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
+            }
+            appendSystemNotice(`Answering with ${model || provider} from now on.`);
+        } catch (error) {
+            appendSystemNotice(`Could not switch: ${error.message || error}`);
+            return false;
+        }
+        // Every control, so none of them is left naming the model that was answering a
+        // moment ago.
+        refreshBrainPicker();
+        return true;
     }
 
     function initBrainPicker() {
         const controls = brainControls();
-        if (!controls.length) return;
         for (const { select } of controls) {
             select.addEventListener('change', async () => {
                 if (select.value === BRAIN_SETUP) {
                     // Not a model: put the control back to what is answering and take them
                     // to the place that configures one.
                     select.value = brainState.current;
-                    voiceEngine.playSFX('click');
-                    await loadSettings();
-                    settingsModal?.classList.remove('hidden');
-                    showSettingsSection('brain');
+                    await openBrainSetup();
                     return;
                 }
                 const [provider, model] = select.value.split('\u001f');
-                try {
-                    // Through the same save path as Settings, so the one place that knows how
-                    // to store a provider and its key stays the only place that does it. The
-                    // engine reads the provider out of settings for every request
-                    // (llm::load_config), so this is in force from the next message -- there
-                    // is nothing further to press.
-                    const payload = { llm_provider: provider, llm_model: model };
-                    if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
-                    else {
-                        const response = await apiFetch('/api/settings', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload),
-                        });
-                        if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
-                    }
-                    appendSystemNotice(`Answering with ${model || provider} from now on.`);
-                } catch (error) {
-                    appendSystemNotice(`Could not switch: ${error.message || error}`);
-                    select.value = brainState.current;
-                    return;
-                }
-                // Both of them, so the other control is not left naming the model that was
-                // answering a moment ago.
-                refreshBrainPicker();
+                if (!await switchBrain(provider, model)) select.value = brainState.current;
             });
         }
+        initBrainPopover();
         refreshBrainPicker();
+    }
+
+    /* ------------------------------------------------- the model picker, as a popover
+
+       The third control over the same `brains` reply, and in the studio the only one on
+       screen. The other two are `<select>`s -- fine for the dozen entries they were
+       written for, and useless at the sixty a machine with Ollama, LM Studio and three
+       keys actually has. This one has a search box and four tabs, after the picker in
+       Trident's Unsloth screenshot.
+
+       It writes through switchBrain, the same one the selects write through, and it is
+       filled from brainState.data, the same reply they are filled from. There is one
+       question here -- which model answers -- and one answer to it in the window. */
+
+    const brainPop = {
+        open: false,
+        tab: 'recommended',
+        search: '',
+        trigger: null,
+        panel: null,
+        list: null,
+        auto: null,
+    };
+
+    /* AUTO is not a model, so it is not in the list the tabs sort: it is the judgement
+       about which model, made per message by the local router. The router is being built
+       in its own branch. Until it lands this is `false` and the row says so and cannot be
+       chosen -- an Auto that silently used whatever was already selected would be a lie
+       told once a message. When the router lands, this becomes the check for it and the
+       row becomes live; nothing else here has to change. */
+    function brainAutoReady() {
+        return !!(brainState.data && brainState.data.auto && brainState.data.auto.ready);
+    }
+
+    /* Which models each tab shows.
+
+       - On device: what is installed on this machine, from the local server.
+       - Connected: the online providers a key exists for. An entry that switches and then
+         fails with a 401 is worse than no entry.
+       - Recommended: the ones that will actually do what the chips under the box offer --
+         every ready online provider, and the local models the server did not say cannot
+         call tools. A model that cannot call a tool cannot look anything up, which is the
+         single most common way "it won't search" starts, so it is not recommended here.
+       - All: both, unfiltered. */
+    function brainPopGroups() {
+        const data = brainState.data;
+        if (!data) return [];
+        const local = (data.local && data.local.models) || [];
+        const online = (data.online || []).filter(entry => entry.ready);
+        const tab = brainPop.tab;
+
+        const localRows = local.map(entry => ({
+            provider: data.local.provider,
+            model: entry.model,
+            name: entry.model,
+            note: entry.tools === false ? 'NO TOOLS' : '',
+            disabled: false,
+            toolless: entry.tools === false,
+        }));
+        const onlineRows = online.map(entry => ({
+            provider: entry.provider,
+            model: entry.model,
+            name: entry.model ? `${entry.label} — ${entry.model}` : entry.label,
+            note: data.local_only ? 'LOCAL-ONLY' : '',
+            // Local-only mode refuses these before the request is built, so they are shown
+            // and not selectable rather than hidden: somebody who has configured Claude and
+            // cannot pick it should be able to see why.
+            disabled: !!data.local_only,
+            toolless: false,
+        }));
+
+        const groups = [];
+        const deviceLabel = `On this computer${data.local && data.local.provider ? ` — ${data.local.provider}` : ''}`;
+        const onlineLabel = data.local_only ? 'Online — blocked by local-only mode' : 'Online';
+        if (tab === 'device') {
+            groups.push({ label: deviceLabel, rows: localRows });
+        } else if (tab === 'connected') {
+            groups.push({ label: onlineLabel, rows: onlineRows });
+        } else if (tab === 'recommended') {
+            groups.push({ label: deviceLabel, rows: localRows.filter(row => !row.toolless) });
+            groups.push({ label: onlineLabel, rows: onlineRows });
+        } else {
+            groups.push({ label: deviceLabel, rows: localRows });
+            groups.push({ label: onlineLabel, rows: onlineRows });
+        }
+
+        const needle = brainPop.search.trim().toLowerCase();
+        return groups
+            .map(group => ({
+                ...group,
+                rows: needle
+                    ? group.rows.filter(row => row.name.toLowerCase().includes(needle))
+                    : group.rows,
+            }))
+            .filter(group => group.rows.length);
+    }
+
+    /* What the trigger says when it is shut: the model that is answering, not the tab it
+       came from. "Select model" only when there is genuinely nothing configured -- a
+       trigger that says "Select model" over a working Ollama is the same bug as a picker
+       that hides itself. */
+    function brainTriggerLabel() {
+        const name = document.getElementById('studio-model-name');
+        if (!name) return;
+        const data = brainState.data;
+        if (!data) {
+            name.textContent = 'Model — could not ask';
+            return;
+        }
+        const current = data.current || {};
+        name.textContent = current.model || current.provider || 'Select model';
+    }
+
+    function renderBrainPopover() {
+        brainTriggerLabel();
+        if (!brainPop.list || !brainPop.auto) return;
+
+        // ---- AUTO
+        const autoRow = document.createElement('button');
+        autoRow.type = 'button';
+        autoRow.className = 'brain-auto-row';
+        const ready = brainAutoReady();
+        autoRow.disabled = !ready;
+        autoRow.innerHTML = '<span class="brain-auto-mark" aria-hidden="true">&#9670;</span>';
+        const text = document.createElement('span');
+        text.className = 'brain-auto-text';
+        const autoName = document.createElement('span');
+        autoName.className = 'brain-auto-name';
+        autoName.textContent = 'AUTO';
+        const autoSub = document.createElement('span');
+        autoSub.className = 'brain-auto-sub';
+        autoSub.textContent = ready
+            ? 'A small local model reads each message and picks the one to answer it.'
+            : 'Picks the model per message. The local router is being built — not yet available.';
+        text.appendChild(autoName);
+        text.appendChild(autoSub);
+        autoRow.appendChild(text);
+        const badge = document.createElement('span');
+        badge.className = 'brain-auto-badge';
+        badge.textContent = ready ? 'ON' : 'SOON';
+        autoRow.appendChild(badge);
+        if (ready) {
+            autoRow.addEventListener('click', async () => {
+                await switchBrain('auto', '');
+                closeBrainPopover();
+            });
+        }
+        brainPop.auto.replaceChildren(autoRow);
+
+        // ---- the list
+        const groups = brainPopGroups();
+        if (!groups.length) {
+            const empty = document.createElement('div');
+            empty.className = 'brain-pop-empty';
+            empty.textContent = brainState.data
+                ? (brainPop.search ? `Nothing here matches “${brainPop.search}”.` : 'Nothing on this tab yet.')
+                : 'Could not ask the model server what it has.';
+            brainPop.list.replaceChildren(empty);
+            return;
+        }
+
+        const rows = [];
+        for (const group of groups) {
+            const head = document.createElement('div');
+            head.className = 'brain-pop-group';
+            const label = document.createElement('span');
+            label.textContent = group.label.toUpperCase();
+            head.appendChild(label);
+            const rule = document.createElement('span');
+            rule.className = 'brain-pop-group-rule';
+            head.appendChild(rule);
+            rows.push(head);
+
+            for (const row of group.rows) {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'brain-pop-item';
+                item.setAttribute('role', 'option');
+                const value = brainValue(row.provider, row.model);
+                item.setAttribute('aria-selected', value === brainState.current ? 'true' : 'false');
+                item.disabled = row.disabled;
+                const name = document.createElement('span');
+                name.className = 'brain-pop-item-name';
+                name.textContent = row.name;
+                item.appendChild(name);
+                if (row.note) {
+                    const note = document.createElement('span');
+                    note.className = 'brain-pop-note';
+                    note.textContent = row.note;
+                    item.appendChild(note);
+                }
+                if (!row.disabled) {
+                    item.addEventListener('click', async () => {
+                        await switchBrain(row.provider, row.model);
+                        closeBrainPopover();
+                    });
+                }
+                rows.push(item);
+            }
+        }
+        brainPop.list.replaceChildren(...rows);
+    }
+
+    function closeBrainPopover() {
+        if (!brainPop.panel) return;
+        brainPop.open = false;
+        brainPop.panel.classList.add('hidden');
+        brainPop.trigger?.setAttribute('aria-expanded', 'false');
+    }
+
+    function openBrainPopover() {
+        if (!brainPop.panel) return;
+        brainPop.open = true;
+        brainPop.panel.classList.remove('hidden');
+        brainPop.trigger?.setAttribute('aria-expanded', 'true');
+        // Asked again on every open rather than once at startup: a model pulled or a key
+        // added while the window was open is exactly the change somebody opens this to use.
+        refreshBrainPicker();
+        document.getElementById('brain-pop-search')?.focus();
+    }
+
+    function initBrainPopover() {
+        brainPop.trigger = document.getElementById('studio-model-trigger');
+        brainPop.panel = document.getElementById('brain-popover');
+        brainPop.list = document.getElementById('brain-pop-list');
+        brainPop.auto = document.getElementById('brain-pop-auto');
+        if (!brainPop.trigger || !brainPop.panel) return;
+
+        brainPop.trigger.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            if (brainPop.open) closeBrainPopover(); else openBrainPopover();
+        });
+
+        brainPop.panel.querySelectorAll('[data-brain-tab]').forEach((tab) => {
+            tab.addEventListener('click', () => {
+                brainPop.tab = tab.getAttribute('data-brain-tab');
+                brainPop.panel.querySelectorAll('[data-brain-tab]').forEach((other) => {
+                    other.setAttribute('aria-selected', other === tab ? 'true' : 'false');
+                });
+                renderBrainPopover();
+            });
+        });
+
+        // The list is already in memory, so it filters on every keystroke. Nothing here
+        // asks anything of the network.
+        document.getElementById('brain-pop-search')?.addEventListener('input', (event) => {
+            brainPop.search = event.target.value || '';
+            renderBrainPopover();
+        });
+
+        document.getElementById('brain-pop-setup')?.addEventListener('click', async () => {
+            closeBrainPopover();
+            await openBrainSetup();
+        });
+
+        // Shut on a click past it and on Escape, like every other slide-out in the HUD.
+        document.addEventListener('click', (event) => {
+            if (!brainPop.open) return;
+            if (brainPop.panel.contains(event.target) || brainPop.trigger.contains(event.target)) return;
+            closeBrainPopover();
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && brainPop.open) {
+                closeBrainPopover();
+                brainPop.trigger.focus();
+            }
+        });
+    }
+
+    /* ==================================================================== the studio
+
+       The chat-first shell: the sidebar on the left, the conversation alone in the
+       middle, the avatar behind it. css/studio.css does the drawing; this does the
+       wiring, and the wiring is deliberately thin. Every sidebar entry calls the
+       function the equivalent control in the HUD already calls -- switchChatTab for the
+       eight views, showSettingsSection for Settings, mintSession for a new conversation.
+       A sidebar entry with its own copy of what a tab does is a second Notes, a second
+       History and a second thing to fix.
+
+       Which shell is on screen lives in js/shell.js, stamped onto <html> before first
+       paint so the window never draws the panel grid and then jumps to the studio. */
+
+    const studio = { settings: null };
+
+    function shellState() {
+        return (window.A1Shell && window.A1Shell.get()) || { shell: 'hud', avatar: 'background', sidebar: 'open' };
+    }
+
+    function setShell(patch) {
+        window.A1Shell?.set(patch);
+    }
+
+    /* Settings, read once and kept, for the three chips under the box. They are each the
+       state of a real setting the engine reads rather than a per-message flag, so they
+       have to start from what is stored rather than from a default in this file. */
+    async function fetchStoredSettings() {
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('get_settings_rust')
+                : await (await apiFetch('/api/settings')).json();
+            studio.settings = data.settings || {};
+        } catch (error) {
+            studio.settings = null;
+        }
+        return studio.settings;
+    }
+
+    async function writeStoredSetting(key, value) {
+        const payload = { [key]: value };
+        if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
+        else {
+            const response = await apiFetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error((await response.text()) || 'Could not save that.');
+        }
+        if (studio.settings) studio.settings[key] = value;
+    }
+
+    /* ---- the chips under the box ---------------------------------------------- */
+
+    function paintChatChips() {
+        const stored = studio.settings || {};
+        const tools = stored.tools_enabled === true;
+        // Defaults on, matching the default in commands.rs: an install that has never
+        // touched it may search.
+        const web = stored.web_search_enabled !== false;
+        const toolsBtn = document.getElementById('btn-chat-tools');
+        const searchBtn = document.getElementById('btn-chat-search');
+        if (toolsBtn) {
+            toolsBtn.setAttribute('aria-pressed', tools ? 'true' : 'false');
+            toolsBtn.title = tools
+                ? 'It may use its tools. Turn this off and it answers from the conversation alone.'
+                : 'Its tools are off, so it cannot read a file, look anything up or check the machine.';
+        }
+        if (searchBtn) {
+            // Search cannot do anything with tools off, and a chip that reads as on while
+            // nothing can happen is the exact confusion #245 was about.
+            const live = tools && web;
+            searchBtn.setAttribute('aria-pressed', live ? 'true' : 'false');
+            searchBtn.title = !tools
+                ? 'Turn Tools on first — searching is one of them.'
+                : web
+                    ? 'It may search the web and read a page to answer.'
+                    : 'Web lookups are off. It will say it cannot look something up rather than answer from memory.';
+        }
+        const approvalText = document.querySelector('#btn-chat-approval .chat-chip-text');
+        if (approvalText) {
+            const allowed = Array.isArray(stored.tool_always_allow) ? stored.tool_always_allow : [];
+            approvalText.textContent = allowed.length
+                ? `${allowed.length} pre-approved`
+                : 'Ask for approval';
+        }
+    }
+
+    function initChatChips() {
+        const toolsBtn = document.getElementById('btn-chat-tools');
+        const searchBtn = document.getElementById('btn-chat-search');
+        const approvalBtn = document.getElementById('btn-chat-approval');
+        const approvalMenu = document.getElementById('chat-approval-menu');
+        const attachBtn = document.getElementById('btn-chat-attach');
+
+        // The + is the attach button that is already in the row above, reached from where
+        // the Unsloth layout puts it. One file input, one handler, one place it can break.
+        attachBtn?.addEventListener('click', () => document.getElementById('btn-chat-media')?.click());
+
+        toolsBtn?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            const next = !(studio.settings && studio.settings.tools_enabled === true);
+            try {
+                await writeStoredSetting('tools_enabled', next);
+                appendSystemNotice(next
+                    ? 'Tools are on. It can read files, check the machine and look things up.'
+                    : 'Tools are off. It will answer from the conversation alone.');
+            } catch (error) {
+                appendSystemNotice(`Could not change that: ${error.message || error}`);
+            }
+            const checkbox = document.getElementById('setting-tools');
+            if (checkbox) checkbox.checked = next;
+            paintChatChips();
+        });
+
+        searchBtn?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            const stored = studio.settings || {};
+            if (stored.tools_enabled !== true) {
+                appendSystemNotice('Searching is one of the tools, and tools are off. Turn Tools on first.');
+                return;
+            }
+            const next = stored.web_search_enabled === false;
+            try {
+                await writeStoredSetting('web_search_enabled', next);
+                appendSystemNotice(next
+                    ? 'It may search the web again.'
+                    : 'Web lookups are off. It will say it cannot look something up rather than answer from memory.');
+            } catch (error) {
+                appendSystemNotice(`Could not change that: ${error.message || error}`);
+            }
+            paintChatChips();
+        });
+
+        /* Approval is not a switch, so it is not one. What a mutating tool does when it
+           wants to run is decided by the pre-approved list (tools/consent.rs), and that
+           list is per tool: a chip cannot hold it. So the menu says what the state is and
+           the way to change it is the panel that owns it. */
+        approvalBtn?.addEventListener('click', () => {
+            if (!approvalMenu) return;
+            voiceEngine.playSFX('click');
+            const open = approvalMenu.classList.contains('hidden');
+            if (open) {
+                const stored = studio.settings || {};
+                const allowed = Array.isArray(stored.tool_always_allow) ? stored.tool_always_allow : [];
+                const rows = [];
+
+                const state = document.createElement('div');
+                state.className = 'chat-chip-menu-item';
+                state.setAttribute('aria-checked', 'true');
+                state.setAttribute('role', 'menuitem');
+                state.textContent = allowed.length
+                    ? `${allowed.length} tool${allowed.length === 1 ? '' : 's'} run without asking`
+                    : 'Every change is proposed and waits for you';
+                const sub = document.createElement('span');
+                sub.className = 'chat-chip-menu-sub';
+                sub.textContent = allowed.length
+                    ? allowed.join(', ')
+                    : 'Nothing that changes this machine runs as a side effect of a conversation.';
+                state.appendChild(sub);
+                rows.push(state);
+
+                const open_ = document.createElement('button');
+                open_.type = 'button';
+                open_.className = 'chat-chip-menu-item';
+                open_.setAttribute('role', 'menuitem');
+                open_.textContent = 'Change what runs without asking…';
+                open_.addEventListener('click', async () => {
+                    approvalMenu.classList.add('hidden');
+                    approvalBtn.setAttribute('aria-expanded', 'false');
+                    voiceEngine.playSFX('click');
+                    await loadSettings();
+                    settingsModal?.classList.remove('hidden');
+                    showSettingsSection('privacy');
+                });
+                rows.push(open_);
+
+                approvalMenu.replaceChildren(...rows);
+            }
+            approvalMenu.classList.toggle('hidden', !open);
+            approvalBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!approvalMenu || approvalMenu.classList.contains('hidden')) return;
+            if (approvalMenu.contains(event.target) || approvalBtn?.contains(event.target)) return;
+            approvalMenu.classList.add('hidden');
+            approvalBtn?.setAttribute('aria-expanded', 'false');
+        });
+    }
+
+    /* ---- the greeting --------------------------------------------------------- */
+
+    /* .has-messages, watched rather than set at each append. There are six places a line
+       reaches #chat-messages -- the two message renderers, the system notice, the hand-off
+       line, the history load and Clear -- and a flag set at five of them is a greeting
+       that comes back over a conversation. */
+    function initStudioGreeting() {
+        const messages = document.getElementById('chat-messages');
+        const view = document.getElementById('chat-view-conversation');
+        if (!messages || !view) return;
+
+        const paint = () => view.classList.toggle('has-messages', messages.childElementCount > 0);
+        new MutationObserver(paint).observe(messages, { childList: true });
+        paint();
+
+        const line = document.getElementById('studio-greeting-line');
+        const sub = document.getElementById('studio-greeting-sub');
+        if (sub) sub.textContent = 'Ask it something, or hold Space to talk.';
+        if (line) {
+            const hour = new Date().getHours();
+            const part = hour < 5 ? 'Still up' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Evening';
+            line.textContent = `${part}. What are we building?`;
+        }
+    }
+
+    /* ---- the sidebar ---------------------------------------------------------- */
+
+    function paintStudioNav(which) {
+        document.querySelectorAll('[data-studio-nav]').forEach((btn) => {
+            btn.setAttribute('aria-current', btn.getAttribute('data-studio-nav') === which ? 'true' : 'false');
+        });
+    }
+
+    async function paintStudioRecents() {
+        const list = document.getElementById('studio-recents-list');
+        if (!list) return;
+        let rows = [];
+        try {
+            rows = await fetchSessions();
+        } catch (error) {
+            rows = null;
+        }
+        if (!rows) {
+            const failed = document.createElement('div');
+            failed.className = 'studio-recents-empty';
+            failed.textContent = 'Could not read the conversations.';
+            list.replaceChildren(failed);
+            return;
+        }
+        if (!rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'studio-recents-empty';
+            empty.textContent = 'No conversations yet';
+            list.replaceChildren(empty);
+            return;
+        }
+        // Six, because this is a glance. The whole list, with renaming and deleting, is
+        // the HISTORY view -- the same rows from the same fetchSessions.
+        const items = rows.slice(0, 6).map((row) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'studio-recent';
+            btn.textContent = row.title || 'Untitled';
+            btn.title = `${row.title || 'Untitled'} — ${whenText(row.updated_at || row.created_at)}`;
+            if (row.id === currentSessionId) btn.setAttribute('aria-current', 'true');
+            btn.addEventListener('click', async () => {
+                voiceEngine.playSFX('click');
+                setCurrentSession(row.id);
+                switchChatTab('conversation');
+                paintStudioNav('conversation');
+                await loadChatHistory();
+                paintStudioRecents();
+            });
+            return btn;
+        });
+        list.replaceChildren(...items);
+    }
+
+    function initStudioSidebar() {
+        document.querySelectorAll('[data-studio-nav]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const which = btn.getAttribute('data-studio-nav');
+                voiceEngine.playSFX('click');
+                switchChatTab(which);
+                paintStudioNav(which);
+            });
+        });
+
+        // The terminal tab is removed in a browser (there is no route behind a shell), so
+        // its sidebar entry goes with it rather than becoming a button that does nothing.
+        if (!document.getElementById('tab-chat-terminal')) {
+            document.getElementById('studio-nav-terminal')?.remove();
+        }
+
+        document.querySelectorAll('[data-studio-open]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                voiceEngine.playSFX('click');
+                const what = btn.getAttribute('data-studio-open');
+                if (what === 'agents') {
+                    document.getElementById('btn-agent-browser')?.click();
+                    return;
+                }
+                await loadSettings();
+                settingsModal?.classList.remove('hidden');
+                showSettingsSection(what === 'avatars' ? 'avatars' : 'brain');
+            });
+        });
+
+        document.getElementById('btn-studio-new')?.addEventListener('click', () => {
+            document.getElementById('btn-session-new')?.click();
+            paintStudioNav('conversation');
+            setTimeout(paintStudioRecents, 250);
+        });
+
+        document.getElementById('btn-studio-settings')?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            await loadSettings();
+            settingsModal?.classList.remove('hidden');
+        });
+        document.getElementById('btn-studio-operator')?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            await loadSettings();
+            settingsModal?.classList.remove('hidden');
+        });
+
+        document.getElementById('btn-studio-sidebar')?.addEventListener('click', () => {
+            const next = shellState().sidebar === 'closed' ? 'open' : 'closed';
+            setShell({ sidebar: next });
+            const btn = document.getElementById('btn-studio-sidebar');
+            btn?.setAttribute('aria-expanded', next === 'open' ? 'true' : 'false');
+            btn?.setAttribute('title', next === 'open' ? 'Collapse the sidebar' : 'Expand the sidebar');
+        });
+
+        document.getElementById('btn-studio-shell')?.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            setShell({ shell: 'hud' });
+        });
+    }
+
+    function paintStudioOperator() {
+        const stored = studio.settings || {};
+        const name = (stored.operator_name || '').trim();
+        const agent = (stored.agent_name || currentAgentName || 'AETHER1').trim();
+        const nameEl = document.getElementById('studio-operator-name');
+        const subEl = document.getElementById('studio-operator-sub');
+        const markEl = document.getElementById('studio-operator-mark');
+        if (nameEl) nameEl.textContent = name || 'Operator';
+        if (subEl) subEl.textContent = agent;
+        if (markEl) markEl.textContent = (name || agent || 'A').trim().charAt(0).toUpperCase();
+    }
+
+    /* ---- where the avatar goes ------------------------------------------------- */
+
+    /* Three places and no fourth: behind the conversation, small in the corner, or not on
+       screen. It is the same hologram in all three -- the same element, the same renderer,
+       the same state the voice drives -- resized by css/studio.css. A second avatar for
+       the studio would be a second thing to keep in step with the persona. */
+    function paintAvatarPlace() {
+        const place = shellState().avatar;
+        document.querySelectorAll('[data-avatar-place]').forEach((btn) => {
+            btn.setAttribute('aria-checked', btn.getAttribute('data-avatar-place') === place ? 'true' : 'false');
+        });
+        // The hologram sizes its canvas to its viewport, and in the studio that viewport
+        // goes from the whole stage to 220px and back. Nothing else tells it so.
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+
+    function initAvatarPlace() {
+        document.querySelectorAll('[data-avatar-place]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                setShell({ avatar: btn.getAttribute('data-avatar-place') });
+                paintAvatarPlace();
+            });
+        });
+        paintAvatarPlace();
+    }
+
+    /* ---- the shell switch ------------------------------------------------------ */
+
+    function paintShell() {
+        const state = shellState();
+        document.querySelectorAll('[data-shell-choice]').forEach((btn) => {
+            btn.setAttribute('aria-checked', btn.getAttribute('data-shell-choice') === state.shell ? 'true' : 'false');
+        });
+        const sidebarBtn = document.getElementById('btn-studio-sidebar');
+        sidebarBtn?.setAttribute('aria-expanded', state.sidebar === 'open' ? 'true' : 'false');
+        // Both shells put the chat panel in a differently shaped box, and three.js and
+        // xterm both size themselves off theirs.
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+
+    async function initStudio() {
+        document.querySelectorAll('[data-shell-choice]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                setShell({ shell: btn.getAttribute('data-shell-choice') });
+            });
+        });
+        window.addEventListener('a1-shell-change', paintShell);
+
+        initStudioSidebar();
+        initStudioGreeting();
+        initChatChips();
+        initAvatarPlace();
+        paintStudioNav('conversation');
+        paintShell();
+
+        await fetchStoredSettings();
+        paintChatChips();
+        paintStudioOperator();
+        paintStudioRecents();
     }
 
     function initModelHub() {
@@ -10605,6 +11295,92 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------------------------------------- the update screen
+
+       Over everything, for the one thing happening. The update that rebuilds the app
+       takes minutes and for most of them nothing on screen changes; what said so before
+       was a 36-character strip in the header and a box three levels down in Settings,
+       which between them answered "is it still going?" only if you knew where the second
+       one was.
+
+       One spinner, one line saying which step, one line of reassurance, and the build log
+       behind a toggle that is shut by default -- cargo's output answers "what broke?" and
+       not "how long?". Driven by the same state object as the header strip and the
+       Settings box, so the three cannot disagree about which step is running.
+
+       The log is a text node, like renderApplyProgress's: it is git's and cargo's output,
+       full of branch names, paths, remote URLs and source snippets. */
+    function showUpdateOverlay(on) {
+        const overlay = document.getElementById('update-overlay');
+        if (!overlay) return;
+        overlay.classList.toggle('hidden', !on);
+        if (on) document.getElementById('btn-update-dismiss')?.classList.add('hidden');
+    }
+
+    function renderUpdateOverlay(state, failure = null) {
+        const overlay = document.getElementById('update-overlay');
+        if (!overlay || overlay.classList.contains('hidden')) return;
+        const step = document.getElementById('update-overlay-step');
+        const sub = document.getElementById('update-overlay-sub');
+        const log = document.getElementById('update-overlay-log');
+        const spinner = overlay.querySelector('.update-overlay-spinner');
+
+        if (failure) {
+            if (step) step.textContent = `Update failed after ${elapsedSince(state.startedAt)}`;
+            if (sub) {
+                sub.textContent = `It stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. `
+                    + 'Nothing was installed; the copy you are running is untouched.';
+            }
+            if (spinner) spinner.style.display = 'none';
+            document.getElementById('btn-update-dismiss')?.classList.remove('hidden');
+            // The failure first, then the tail of the log: the line that explains it is the
+            // one somebody is looking for, and it is not the last one printed.
+            if (log) log.textContent = [failure, '', ...state.log.slice(-20)].join('\n');
+            // Opened on a failure whatever the toggle said, because at this point the
+            // details *are* the message.
+            toggleUpdateDetails(true);
+            return;
+        }
+
+        if (step) {
+            step.textContent = state.step
+                ? `${state.label} — step ${state.step} of ${state.steps}`
+                : state.label;
+        }
+        if (sub) {
+            sub.textContent = `${elapsedSince(state.startedAt)} elapsed. This may take a few minutes. `
+                + 'Aether1 will restart on the new build when it finishes.';
+        }
+        if (log) {
+            const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+            log.textContent = state.log.slice(-60).join('\n');
+            if (atBottom) log.scrollTop = log.scrollHeight;
+        }
+    }
+
+    function toggleUpdateDetails(open) {
+        const log = document.getElementById('update-overlay-log');
+        const btn = document.getElementById('btn-update-details');
+        const label = document.getElementById('update-details-label');
+        if (!log || !btn) return;
+        log.classList.toggle('hidden', !open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (label) label.textContent = open ? 'Hide update details' : 'Show update details';
+    }
+
+    function initUpdateOverlay() {
+        const btn = document.getElementById('btn-update-details');
+        btn?.addEventListener('click', () => {
+            toggleUpdateDetails(btn.getAttribute('aria-expanded') !== 'true');
+        });
+        // Only ever reachable once the update has failed: while it is running there is
+        // nothing safe to press, and a Close that abandons a half-applied rebuild is worse
+        // than no Close at all.
+        document.getElementById('btn-update-dismiss')?.addEventListener('click', () => {
+            showUpdateOverlay(false);
+        });
+    }
+
     /* Draws the update panel while an update is running: which step, how long it has
        been going, and the last few lines the tools themselves printed.
 
@@ -10675,7 +11451,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 : `${state.label} · ${elapsedSince(state.startedAt)}`;
             updateHeaderProgress(short, state.percent, state.step === 0, state.detail);
             renderApplyProgress(updateStatusBox, state);
+            renderUpdateOverlay(state);
         };
+        showUpdateOverlay(true);
         draw();
 
         if (btnApplyUpdate) btnApplyUpdate.disabled = true;
@@ -10716,6 +11494,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // belongs in innerHTML.
             const detail = String(e && e.message ? e.message : e);
             updateHeaderProgress(`Update failed after ${elapsedSince(state.startedAt)}`, 0, false, detail.split('\n')[0]);
+            renderUpdateOverlay(state, detail);
             if (updateStatusBox) {
                 const line = document.createElement('div');
                 line.className = 'text-red-400 whitespace-pre-wrap break-words select-all';
@@ -11436,7 +12215,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             chatContainer.innerHTML = '';
             if (msgs.length === 0) {
-                appendMessage(currentAgentName, `Greetings Operator. **${currentAgentName}** online and ready for deployment.`);
+                /* The studio draws its own line over an empty conversation (see
+                   #studio-greeting), and a greeting from the companion underneath it is
+                   the same hello twice -- and worse, it is a message, so the screen that
+                   is meant to look like an invitation looks like a transcript of one
+                   exchange instead. The HUD has no such line, so it keeps this one. */
+                if (shellState().shell !== 'studio') {
+                    appendMessage(currentAgentName, `Greetings Operator. **${currentAgentName}** online and ready for deployment.`);
+                }
             } else {
                 msgs.forEach(m => appendMessage(m.sender, m.text));
             }
@@ -13854,6 +14640,7 @@ document.addEventListener('DOMContentLoaded', () => {
     connectTelemetry();
     initWindowChrome();
     initVersionAndUpdates();
+    initUpdateOverlay();
     initModelHub();
     initSpriteMode();
     initStartupPerformance();
@@ -13865,6 +14652,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initAvatarTapIntroduction();
     initSpecialityModel();
     initBrainPicker();
+    initStudio();
     initFlowMode();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();
