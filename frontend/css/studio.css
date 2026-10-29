@@ -332,7 +332,12 @@ html[data-shell="studio"][data-studio-sidebar="closed"] #btn-studio-sidebar {
 html[data-shell="studio"] #hud-layout {
   display: block;
   position: relative;
-  padding: 0;
+  /* The top gutter is the model picker's. It is absolutely positioned at the top left of
+     the stage, which is empty in a conversation and is the task row in AETHER CODE -- so
+     without this the trigger sat on top of "TASK ..." and the two words ran together.
+     Reserved for every view rather than only the wide ones: the picker is in the same
+     place whatever is on screen, so the room for it should be too. */
+  padding: 44px 0 0;
   overflow: hidden;
 }
 
@@ -406,13 +411,35 @@ html[data-shell="studio"] #hud-layout > [data-panel="chat"] {
   z-index: 2;
   grid-column: auto;
   grid-row: auto;
-  width: min(820px, 100%);
+  /* The whole stage. The reading column is the conversation's, below -- a terminal, a
+     task board and a performance table are not prose and do not want a prose measure,
+     and giving the panel the column left the wide views sitting in the middle with the
+     stage empty either side of them. */
+  width: 100%;
   height: 100%;
-  margin: 0 auto;
   border: 0;
   background: transparent;
   box-shadow: none;
   overflow: hidden;
+}
+
+/* The corner brackets every .hud-panel draws (A1theme.css, ::before and ::after). They
+   are the mark of a panel in the grid, and in the studio there is no panel -- so they
+   were four small L-shapes floating in open space, one of them at the top of an empty
+   column. The border and the shadow were already off; these are drawn separately. */
+html[data-shell="studio"] #hud-layout > [data-panel="chat"]::before,
+html[data-shell="studio"] #hud-layout > [data-panel="chat"]::after,
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"]::before,
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"]::after {
+  display: none;
+}
+
+/* The conversation, and only the conversation, is held to a line length somebody can
+   read. Centred in whatever the stage leaves, which is the whole stage with the avatar
+   behind the chat and the stage minus the mini-tar's gutter without it. */
+html[data-shell="studio"] #chat-view-conversation {
+  width: min(820px, 100%);
+  margin: 0 auto;
 }
 
 /* The panel's own title row and tab strip. Both say what the sidebar already says, and
@@ -615,7 +642,7 @@ html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-gre
 html[data-shell="studio"] #studio-stage-bar {
   display: block;
   position: absolute;
-  top: 10px;
+  top: 6px;
   left: 14px;
   z-index: 30;
 }
@@ -1155,10 +1182,29 @@ html[data-shell="studio"] #studio-stage-bar {
 
 /* ---- what the HUD puts on the stage that the studio does not ---------------------- */
 
-/* The snap rail layout.js draws down the left edge for dropping a panel into a column.
-   There is one panel on this stage and nowhere to snap it to. */
-html[data-shell="studio"] .panel-snap-rail {
+/* The two drag handles layout.js draws for the grid: the snap rail down the left edge for
+   dropping a panel into a column, and the seams between columns.
+
+   The seam is the one that showed. It is a full-height button with a lit mark down the
+   middle of it, positioned from the grid's own column geometry -- so in the studio, where
+   the grid is one panel filling the stage, it was a bright vertical line standing in the
+   middle of an empty conversation with nothing on either side of it to resize. It moved
+   with the window width, which is why it landed in a different place on every screen.
+
+   Hidden rather than not drawn: layout.js owns the grid and keeps working as it always
+   has, and switching back to the HUD brings both straight back. */
+html[data-shell="studio"] .panel-snap-rail,
+html[data-shell="studio"] .panel-seam {
   display: none !important;
+}
+
+/* The projection bay carries `min-h-[300px]` so the avatar has room in the HUD's tall
+   panel. In a 220px mini-tar that minimum wins, and the bay -- and the canvas the
+   ResizeObserver sizes from it -- is 300px tall in a 220px box: the avatar is drawn
+   larger than its frame and cropped top and bottom. The minimum is a fact about the HUD's
+   panel, not about this one. */
+html[data-shell="studio"] #hologram-viewport {
+  min-height: 0;
 }
 
 /* The chin bar keeps its telemetry -- it is a line of live numbers along the bottom and
@@ -1191,14 +1237,16 @@ html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-gre
 }
 
 /* The mini-tar sits in the bottom-right corner, which is where the input card's right
-   edge is once the column is centred -- the avatar landed on the Send button. The stage
-   gives it its own gutter instead, and the column centres in what is left, so neither is
-   over the other at any width wide enough for both. Below that width the media query
-   above shrinks the avatar and the column keeps the stage. */
+   edge would be once the column is centred -- the avatar landed on the Send button. The
+   gutter goes on the stage rather than on the panel: padding inside the panel pushed its
+   contents left of the window's centre while the panel itself stayed centred, so the
+   conversation sat visibly off to one side with the gutter empty beside it. Taking it off
+   the stage means everything inside centres in what is left, which is what a margin is
+   for. Below 1100px the media query above shrinks the avatar and the stage keeps its
+   width. */
 @media (min-width: 1100px) {
-  html[data-shell="studio"][data-studio-avatar="minitar"] #hud-layout > [data-panel="chat"] {
+  html[data-shell="studio"][data-studio-avatar="minitar"] #hud-layout {
     padding-right: 256px;
-    width: min(1076px, 100%);
   }
 }
 
