@@ -959,7 +959,14 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "voice_name": llm::DEFAULT_VOICE,
         "enable_sfx": true,
         "auto_speak": true,
-        "tools_enabled": false,
+        /* True, because that is what `tools::tools_enabled` answers when nothing is
+        stored, and the two cannot be allowed to differ. This block is what the Settings
+        pane renders from and the pane writes every field back on Save, so a `false` here
+        on an install that has never chosen drew the switch off while the engine was
+        running with tools on -- and the first Save of anything at all turned them off for
+        real. `tools::apply_default_on` cannot rescue that: its marker is already written
+        by then. The same reading feeds the studio's Tools chip. */
+        "tools_enabled": true,
         "command_allowlist": [],
         "tts_engine": "auto",
         "tts_local_voice": "",
@@ -2842,6 +2849,28 @@ mod tests {
             llm::auto::stored_provider(db),
             llm::Provider::LmStudio,
             "and the local server's shape survived, so its models are not read as Ollama's"
+        );
+    }
+
+    /* What the Settings pane renders a switch from has to be what the engine would do
+    with nothing stored, or the pane shows the opposite of what is running and then makes
+    it true the first time anything is saved. `tools_enabled` was the one that got away:
+    declared false here, defaulted true in `tools::tools_enabled`, so a fresh install drew
+    the Tools switch off while the companion was happily reading files, and one Save of an
+    unrelated field switched them off in earnest. Pinned rather than commented, because the
+    two live in different files and nothing else would notice them drifting apart. */
+    #[test]
+    fn the_settings_pane_is_shown_the_same_tool_switch_the_engine_is_running_with() {
+        let engine = resume_engine("tool_switch_default");
+        assert!(
+            crate::tools::tools_enabled(engine.db()),
+            "the engine's default is the thing being matched; if this moved, move the \
+             declared default with it"
+        );
+        assert_eq!(
+            get_settings(&engine)["settings"]["tools_enabled"],
+            serde_json::Value::Bool(true),
+            "the pane would draw the switch off and write that off on the next Save"
         );
     }
 
