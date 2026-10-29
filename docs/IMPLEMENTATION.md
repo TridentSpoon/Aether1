@@ -4161,3 +4161,50 @@ reads it: log prefixes, environment variables, settings keys, database filenames
 the Tauri identifier, and every `Aether1*` identifier in the JavaScript. Two were almost got
 wrong in opposite directions, so the test for each is which of those two a change would break,
 not how the string looks.
+
+## Step 66 — the companion is Aurora1, on screen and in the README
+
+Steps 63 to 65 made the rename safe; step 64 renamed the version. This is the name itself,
+everywhere an operator reads it.
+
+**The HUD wordmark turned out to have been built for this.** `refreshWordmark` already showed
+the *companion's* own name and turned over to `PLATFORM_WORDMARK = 'AETHER1 PLATFORM'` every
+fourteen seconds, with a `name !== 'AETHER1'` guard so that a companion named after the
+platform did not alternate with itself. The default companion was AETHER1, so that guard fired
+and the wordmark simply sat on AETHER1 PLATFORM. Rename the default to AURORA1 and the two
+names are different, so the top-left now reads AURORA1, turns over to AETHER1 PLATFORM, and
+comes back — which is exactly the two-name design, with not one line of the rotation changed.
+The guard is kept rather than retargeted: somebody who names their companion after the
+platform should still see one name, and nothing says AURORA1 has to be that somebody.
+
+**What changed, and how it was chosen.** 34 rendering strings in `frontend/index.html`, 45 in
+`frontend/js/app.js`, two in other panes, and 43 mentions in the README. The pass was done by
+machine against the line step 65 states, not by replacing the string everywhere:
+
+- In the markup, only text outside HTML comments.
+- In the JavaScript, only text inside string and template literals — found with a small
+  lexer, because `Aether1Theme` and a `//` comment are both code and the platform's, while
+  `'Checking every part of AETHER1...'` is on screen.
+- Protected by name throughout: the `[AETHER1]` console prefix, `AETHER1_*` variables,
+  `aether1_model` and `runs_aether1` payload keys, `Aether1 Platform`, `AETHER1 PLATFORM`,
+  `Aether1Vault`, the `aether1` command, the repository and `Aether1-Setup.exe`.
+
+**One bug the second pass caught, worth naming.** The first README pass skipped any mention
+followed by `.`, `-`, `/` or `_`, meaning to protect `aether1.iss` and `Aether1-Setup.exe` —
+and silently skipped every mention that ended a sentence. The fix is to require a letter or
+digit after the punctuation, which is what makes it an extension rather than a full stop. A
+blanket exclusion is a quiet way to miss things; it was found by listing what survived rather
+than trusting the count of what changed.
+
+**The README is re-headed "Aurora1, on the Aether1 Platform"**, with one paragraph saying
+which name is which — the only place that is spelled out, as in the About box. Two parts were
+edited by hand rather than swept: the licence line, because GPL-3.0-only covers the platform's
+code, and the trademark clause, which now withholds all four spellings instead of two. The
+clone paths keep the repository's name, which is not being renamed.
+
+**Not changed, deliberately:** every `aether1 <subcommand>` in copy. The plan splits the
+commands — `aurora1` for the companion, `aether1` for behind the curtain — and copy must never
+name a command that is not on the operator's PATH yet, so those move in the PR that renames
+the binary. `cli::invoked_as` from step 63 already prints the help text with whichever name was
+used to run it. Rust strings that reach the operator through error messages move with the same
+PR, where the whole command surface is revisited at once.

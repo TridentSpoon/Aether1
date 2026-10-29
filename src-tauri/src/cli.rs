@@ -34,7 +34,7 @@ const PLAYERS: &[(&str, &[&str])] = &[
 const USAGE_COMMAND: &str = "aether1";
 
 const USAGE: &str = "\
-AETHER1 -- cybernetic AI companion
+AURORA1 -- cybernetic AI companion
 
 USAGE:
     aether1                        Launch the desktop app (tray + HUD)
@@ -2126,7 +2126,7 @@ fn run_code(conventions: bool, ask: Option<String>, task: Option<String>) -> Str
     let advice = commands::code_advice(&engine);
 
     let mut out = format!(
-        "AETHER1 -- writing code on this machine\n\n{}\n",
+        "AURORA1 -- writing code on this machine\n\n{}\n",
         advice.headline
     );
 
@@ -2625,7 +2625,7 @@ fn run_doctor(
         // which is a fair part of why it exists.
         let attended = doctor::attend(&engine, &doctor::Facts::default(), None);
         return Ok(format!(
-            "AETHER1 -- fixing what it can\n\n{}",
+            "AURORA1 -- fixing what it can\n\n{}",
             attended.as_report()
         ));
     }
@@ -2647,7 +2647,7 @@ fn run_doctor(
 fn render_health(health: &crate::doctor::Health) -> String {
     use crate::doctor::Verdict;
 
-    let mut out = format!("AETHER1 -- is it working?\n\n{}\n", health.headline);
+    let mut out = format!("AURORA1 -- is it working?\n\n{}\n", health.headline);
 
     for check in health.checks.iter().filter(|c| c.verdict != Verdict::Ok) {
         out.push_str(&format!(

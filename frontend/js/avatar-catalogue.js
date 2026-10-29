@@ -271,7 +271,7 @@
         {
             id: 'a1', label: 'A1', emoji: '🅰️', group: 'unaligned',
             structure: 'MONOGRAM WORDMARK', persona: 'default',
-            form: "Aether1's own name-mark as scattered light -- a dense 'A' beside a sparser "
+            form: "Aurora1's own name-mark as scattered light -- a dense 'A' beside a sparser "
                 + "'1'. No eyes, no face.",
             who: 'The blank slate you start on, before a persona has been picked. It reads '
                 + 'this machine and says what is wrong with it.',
