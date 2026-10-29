@@ -4011,3 +4011,69 @@ anyway.
 builds two throwaway projects with the real CLI, tracks both, and asserts the primed prompt
 carries nodes from each and names both projects. It is `#[ignore]`d because it needs `graft` on
 PATH, and it was run: two projects asked, both labelled, 2.0 seconds including both builds.
+
+## Step 63 — the readers learn the new name before anything writes it
+
+Aether1 becomes **Aurora1** to the operator, and stays the **Aether1 Platform** behind the
+curtain. The rename is a handful of string edits and a long tail of places where one of those
+strings is a key to somebody's data. This step is only the long tail: nothing visible changes,
+nothing is renamed, and the point of merging it on its own is that every reader has learned
+the new spelling *before* the first thing writes it.
+
+**Why that order is the whole design.** The code that has to cope with a renamed install is
+the code already installed. Its parser, its list of bundle names and its keychain service name
+were compiled into it, so a rename shipped in one release is a release the previous one cannot
+read. Four concrete failures, each silent:
+
+- **The version.** `Aurora1 rev0.261018.227` went through the old parser's `rev` branch, which
+  takes the digits straight after the word -- and got pull request *0*. `installs remove old`
+  then reads the newest copy on the machine as the oldest one. `v0-261018-227` was worse: it
+  is not three dot-separated numbers, so it fell through to the opaque branch and compared
+  against nothing, which is how a copy stops offering updates without ever saying so.
+- **The bundle.** `pick_asset` matches `aether1-offline-linux` as a prefix. A release whose
+  assets are named `aurora1-…` has nothing an installed copy recognises, so the update check
+  finds a new version and then cannot download it.
+- **The data directory.** `~/.local/share/aether1` holds the memory vault, the conversation
+  database, the settings and the audio cache. Writing a new name into the source moves none of
+  it: the companion launches with no memory and nothing says where it went.
+- **The keychain, and the project policy file.** A keychain entry is filed under its service
+  name and a policy file under its directory name. Rename either and the value is still there,
+  just never found again -- every provider key gone from the form, every project asking its
+  trust question for a second time.
+
+**So every one of those reads both spellings, and writes to one.** `Version` grows a `Dated`
+variant and compares it to a `Build` on the pull request number, because the two schemes are
+two spellings of a position in the same repository's history and a rename does not reset it.
+`wanted_asset_prefixes` lists both brandings. `paths::branded_dir` joins whichever of the two
+directory names is already there, which is what makes the flip find the existing directory
+instead of starting a new one beside it; `code_policy::dir_in` does the same for a project's
+`.aether` or `.aurora`. `secrets` and `github_auth` read both service names and delete from
+both, and write only to the one this build prefers -- so the release that flips the preference
+finds the old entry and carries it across the next time it is saved.
+
+**One directional choice, worth stating.** The scanner in `installs` reads both names
+everywhere, including in `data_roots`, which is the guard that stops a removal taking the
+vault with it. That list names both directories whether or not they exist: a guard that knows
+one name is no guard at all on the machine that has the other, and a directory that is not
+there costs nothing to protect.
+
+**The Tauri identifier does not move.** `com.tridentspoon.aether1` is what the single-instance
+plugin keys on and what Tauri derives its own app directories from, and it is behind the
+curtain by the same reasoning that keeps the platform called Aether1. Renaming it would buy
+nothing and orphan whatever Tauri has already put there.
+
+**The help text stops naming one command.** The rename gives this project two: `aurora1`, the
+companion, and `aether1`, the one behind the curtain. Both are the same binary, so `USAGE` is
+printed with the name in argv[0] -- only ever one of the two the project ships, falling back
+to the written-out name for a binary run out of `target/release`. A copy invoked as `aurora1`
+no longer tells its operator to go and type a command that may not be on their PATH.
+
+**And the workflow copes with the dashed tag.** `v0-261018-227` reads better as a git tag than
+`v0.261018.227` does, and Inno Setup's `AppVersion` is shown to whoever runs the installer,
+where `0-261018-227` reads as nothing. The dashes come back out as dots in the version step.
+This has to be on the default branch before the first such tag is pushed at it.
+
+**What is still to do, in order:** the printed version and the About box, the package and
+binary names, the config directory's preferred spelling, the README and the startup messages,
+and the tag scheme itself. Each of those is a writer, and each one now has a reader waiting
+for it.

@@ -154,9 +154,7 @@ fn project_root() -> PathBuf {
     if baked_in.join("frontend").is_dir() {
         return baked_in;
     }
-    paths::home_dir()
-        .map(|home| home.join(".local").join("share").join("aether1"))
-        .unwrap_or(baked_in)
+    paths::share_dir().unwrap_or(baked_in)
 }
 
 #[derive(Deserialize)]

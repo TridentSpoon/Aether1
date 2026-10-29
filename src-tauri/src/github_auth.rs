@@ -56,6 +56,15 @@ pub const CLIENT_ID: &str = match option_env!("AETHER1_GITHUB_CLIENT_ID") {
 const KEYCHAIN_SERVICE: &str = "aether1-github-updates";
 const KEYCHAIN_ACCOUNT: &str = "update-token";
 
+/// The same entry's service name under the other branding, read when `KEYCHAIN_SERVICE` has
+/// nothing in it.
+///
+/// Renaming the service does not move the entry, it only stops finding it -- and this one is
+/// a GitHub sign-in, so losing sight of it means an operator being asked to approve a device
+/// code again for a token they already granted. Read both, write to the one this build
+/// prefers; see the matching note in secrets.rs.
+const ALT_KEYCHAIN_SERVICE: &str = "aurora1-github-updates";
+
 /// The settings key remembering that the sign-in was offered and turned down. A decision the
 /// next launch has forgotten is a prompt that never goes away -- the same reasoning as
 /// `installs::NOTICE_SETTING`, and it is why this is stored rather than inferred from "no
@@ -286,6 +295,17 @@ fn entry() -> Option<keyring::Entry> {
     keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).ok()
 }
 
+/// The entry under the other branding. Reads and deletes only -- nothing writes to the name
+/// this build is not using.
+fn alt_entry() -> Option<keyring::Entry> {
+    keyring::Entry::new(ALT_KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).ok()
+}
+
+/// Every service name this token could be filed under, this build's preference first.
+fn entries() -> Vec<keyring::Entry> {
+    [entry(), alt_entry()].into_iter().flatten().collect()
+}
+
 pub fn store_token(token: &str) -> Result<Storage, String> {
     if let Some(entry) = entry() {
         if entry.set_password(token).is_ok() {
@@ -310,7 +330,7 @@ pub fn store_token(token: &str) -> Result<Storage, String> {
 }
 
 pub fn load_token() -> Option<String> {
-    if let Some(entry) = entry() {
+    for entry in entries() {
         if let Ok(token) = entry.get_password() {
             if !token.trim().is_empty() {
                 return Some(token);
@@ -327,10 +347,8 @@ pub fn load_token() -> Option<String> {
 }
 
 pub fn storage_kind() -> Storage {
-    if let Some(entry) = entry() {
-        if entry.get_password().is_ok() {
-            return Storage::Keychain;
-        }
+    if entries().iter().any(|e| e.get_password().is_ok()) {
+        return Storage::Keychain;
     }
     if fallback_path().exists() {
         Storage::File
@@ -343,7 +361,7 @@ pub fn storage_kind() -> Storage {
 /// gone from whichever store was asked about first.
 pub fn clear_token() -> bool {
     let mut removed = false;
-    if let Some(entry) = entry() {
+    for entry in entries() {
         if entry.delete_credential().is_ok() {
             removed = true;
         }

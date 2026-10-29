@@ -131,10 +131,18 @@ jobs:
       # Strips the leading "v" (v1.2.3 -> 1.2.3) for Inno Setup's AppVersion, which the
       # tag itself isn't in the right shape for. Falls back to the .iss's own "0.0.0-dev"
       # default on a workflow_dispatch run with no tag.
+      #
+      # The Aurora1 tag is dashed -- v0-261018-227, because a git tag reads better that way
+      # than v0.261018.227 -- and Inno Setup's AppVersion is shown to whoever runs the
+      # installer, where "0-261018-227" reads as nothing at all. So the dashes come back out
+      # as dots here. This runs before any such tag is ever pushed, deliberately: the
+      # workflow that has to cope with the new shape is the one already on the default
+      # branch when the first renamed tag lands on it.
       - name: Compute the version
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ($version -match '^\d+-\d+-\d+$') { $version = $version -replace '-', '.' }
           if ("${{ github.ref_type }}" -ne "tag") { $version = "" }
           echo "AETHER1_VERSION=$version" >> $env:GITHUB_ENV
 

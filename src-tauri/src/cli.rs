@@ -27,6 +27,12 @@ const PLAYERS: &[(&str, &[&str])] = &[
     ("afplay", &[]),
 ];
 
+/// The command name the help text is written with. Printed as whatever name this copy was
+/// actually invoked by, so a copy installed as `aurora1` tells its operator to type
+/// `aurora1` -- see `invoked_as`. Written out as one name here so that the sixty lines below
+/// stay readable.
+const USAGE_COMMAND: &str = "aether1";
+
 const USAGE: &str = "\
 AETHER1 -- cybernetic AI companion
 
@@ -145,6 +151,40 @@ The HUD toggle is also bound to a global hotkey (Super+Shift+A by default, chang
 Settings). On Wayland, where an application can't grab keys system-wide, bind your
 compositor's keybinding to `aether1 toggle` instead.
 ";
+
+/// The name this copy of the app was launched by, for the help text and error messages.
+///
+/// **The rename gives this project two command names**: `aurora1`, the companion the operator
+/// talks to, and `aether1`, the one behind the curtain. Both are this same binary, so a help
+/// text with one of them written into it is wrong half the time -- it tells somebody who typed
+/// `aurora1 --help` to go and run a command that may not be on their PATH at all. Reading
+/// argv[0] instead costs nothing and is right whichever name is in use, before either of them
+/// moves.
+///
+/// Only the names this project ships are accepted. A binary the operator renamed to something
+/// of their own, or run straight out of `target/release`, falls back to the written-out name
+/// rather than printing a usage block full of whatever they called the file.
+fn invoked_as() -> &'static str {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            let stem = exe.file_stem()?.to_string_lossy().to_ascii_lowercase();
+            crate::installs::BINARY_NAMES
+                .into_iter()
+                .find(|name| *name == stem)
+        })
+        .unwrap_or(USAGE_COMMAND)
+}
+
+/// The help text, with the command name it was invoked by.
+fn usage() -> String {
+    let name = invoked_as();
+    let text = USAGE.trim_end();
+    if name == USAGE_COMMAND {
+        return text.to_string();
+    }
+    text.replace(USAGE_COMMAND, name)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Invocation {
@@ -2963,7 +3003,7 @@ pub fn run(invocation: Invocation) -> i32 {
         | Invocation::Serve { .. }
         | Invocation::Window { .. }
         | Invocation::Face => Ok(String::new()),
-        Invocation::Help => Ok(USAGE.trim_end().to_string()),
+        Invocation::Help => Ok(usage()),
         Invocation::Version => Ok(format!(
             "{} ({})",
             crate::APP_VERSION,
@@ -3023,7 +3063,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Devices => run_devices(),
         Invocation::Revoke { id } => run_revoke(&id),
         Invocation::Invalid(message) => {
-            eprintln!("aether1: {message}\n\n{}", USAGE.trim_end());
+            eprintln!("{}: {message}\n\n{}", invoked_as(), usage());
             return 2;
         }
     };
