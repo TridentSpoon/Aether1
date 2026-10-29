@@ -9276,6 +9276,9 @@ document.addEventListener('DOMContentLoaded', () => {
             picker.value = model.name;
         }
         document.getElementById('settings-group-connection')?.setAttribute('open', 'open');
+        // The provider box was just set from under the roster, which tracks it.
+        providerShowing = providerBox?.value || providerShowing;
+        renderProviderAccounts();
         setHubStatus(`${model.name} is filled in below. Press Save Changes to start thinking with it.`, 'good');
     }
 
@@ -9735,6 +9738,206 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------------ SAVED ACCOUNTS ------------------------------
+
+       One address box, one key box and one model box were shared by eight providers.
+       The engine had already stopped sharing them -- `llm_api_key_<provider>` has been
+       real since #245 -- but the form never had, so picking a second provider showed the
+       first one's details, Save overwrote them, and switching back meant typing
+       everything in again. Nothing on the page said a key had ever been kept.
+
+       Two halves fix that, and they are separate on purpose:
+
+         * `providerScratch` is this visit's unsaved typing, kept per provider so that
+           clicking through the dropdown to look at something does not lose what was
+           half entered.
+         * `providerAccounts` is what the companion has actually stored, from
+           commands::provider_accounts. It is what the roster is drawn from and what the
+           form falls back to for a provider this visit has not touched.
+
+       No key is ever in either. A key lives in the system credential store and the page
+       is told only that there is one -- the box shows SAVED_KEY, and a Save that sends
+       it back unchanged leaves the stored key alone. See secrets.rs. */
+
+    /// What `get_settings` puts in a key box in place of a key the page may not see.
+    /// Must match secrets::SAVED exactly: the backend recognises this string coming home
+    /// and leaves the stored key where it is.
+    const SAVED_KEY = '\u2022\u2022\u2022 saved \u2022\u2022\u2022';
+
+    let providerAccounts = { current: 'offline', accounts: [], keychain: false };
+    const providerScratch = new Map();
+    let providerShowing = null;
+
+    function accountFor(providerKey) {
+        return providerAccounts.accounts.find(a => a.provider === providerKey) || null;
+    }
+
+    /// Remembers what is in the form for the provider currently shown, so switching away
+    /// and back inside one visit to Settings does not lose it.
+    function stashProviderDetails() {
+        if (!providerShowing || providerShowing === 'offline') return;
+        providerScratch.set(providerShowing, {
+            endpoint: document.getElementById('setting-endpoint')?.value ?? '',
+            model: document.getElementById('setting-model')?.value ?? '',
+            apikey: document.getElementById('setting-apikey')?.value ?? '',
+            gatewayUrl: document.getElementById('setting-gateway-url')?.value ?? '',
+            gatewayKey: document.getElementById('setting-gateway-key')?.value ?? '',
+        });
+    }
+
+    /// Puts a provider's own details into the form: this visit's typing if there is any,
+    /// otherwise what is stored for it.
+    function restoreProviderDetails(providerKey) {
+        providerShowing = providerKey;
+        if (providerKey === 'offline') return;
+        const held = providerScratch.get(providerKey);
+        const saved = accountFor(providerKey);
+        const endpoint = document.getElementById('setting-endpoint');
+        const model = document.getElementById('setting-model');
+        const apikey = document.getElementById('setting-apikey');
+        const gatewayUrl = document.getElementById('setting-gateway-url');
+        const gatewayKey = document.getElementById('setting-gateway-key');
+        if (held) {
+            if (endpoint) endpoint.value = held.endpoint;
+            if (model) model.value = held.model;
+            if (apikey) apikey.value = held.apikey;
+            if (gatewayUrl) gatewayUrl.value = held.gatewayUrl;
+            if (gatewayKey) gatewayKey.value = held.gatewayKey;
+            return;
+        }
+        if (!saved) return;
+        if (providerKey === 'gateway') {
+            if (gatewayUrl) gatewayUrl.value = saved.endpoint || '';
+            // Dots rather than nothing, for the same reason the page is sent dots at
+            // all: a box that reads empty for a gateway that has a key says the key is
+            // gone, and the next Save would make that true.
+            if (gatewayKey) gatewayKey.value = saved.has_key ? SAVED_KEY : '';
+        } else {
+            if (endpoint) endpoint.value = saved.endpoint || '';
+            if (apikey) apikey.value = saved.has_key ? SAVED_KEY : '';
+        }
+        if (model) model.value = saved.model || '';
+    }
+
+    const KEY_STORAGE_WORDING = {
+        keychain: 'key in this computer\u2019s keychain',
+        settings: 'key saved (no keychain on this machine)',
+    };
+
+    /// The roster above the form: every provider, what is kept for it, and which one is
+    /// answering. Clicking a row loads that provider into the form.
+    function renderProviderAccounts() {
+        const box = document.getElementById('provider-accounts');
+        if (!box) return;
+        box.innerHTML = '';
+        const selected = document.getElementById('setting-provider')?.value || providerAccounts.current;
+        for (const account of providerAccounts.accounts) {
+            const row = document.createElement('div');
+            row.className = 'provider-account'
+                + (account.provider === selected ? ' is-selected' : '');
+
+            const left = document.createElement('button');
+            left.type = 'button';
+            left.className = 'provider-account-pick';
+            const name = document.createElement('span');
+            name.className = 'provider-account-name';
+            name.textContent = account.label;
+            if (account.active) {
+                const answering = document.createElement('span');
+                answering.className = 'provider-account-answering';
+                answering.textContent = '  \u2014 answering now';
+                name.appendChild(answering);
+            }
+            const detail = document.createElement('span');
+            detail.className = 'provider-account-meta';
+            const parts = [];
+            if (account.model) parts.push(account.model);
+            if (account.needs_key) {
+                parts.push(account.has_key
+                    ? (KEY_STORAGE_WORDING[account.key_storage] || 'key saved')
+                    : 'no key yet');
+            } else if (account.endpoint) {
+                parts.push(account.endpoint);
+            }
+            detail.textContent = parts.join('  \u00b7  ') || 'nothing saved yet';
+            left.appendChild(name);
+            left.appendChild(detail);
+            left.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                const select = document.getElementById('setting-provider');
+                if (!select) return;
+                stashProviderDetails();
+                select.value = account.provider;
+                restoreProviderDetails(account.provider);
+                applyDefaultModelForProvider(account.provider);
+                toggleGatewayFields();
+                renderProviderAccounts();
+            });
+            row.appendChild(left);
+
+            if (account.configured) {
+                const forget = document.createElement('button');
+                forget.type = 'button';
+                forget.className = 'cyber-btn text-[10px] py-0.5 px-2 text-slate-300';
+                forget.textContent = 'Forget';
+                forget.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    forgetProviderAccount(account);
+                });
+                row.appendChild(forget);
+            }
+            box.appendChild(row);
+        }
+
+        const note = document.getElementById('provider-accounts-note');
+        if (note) {
+            note.textContent = providerAccounts.keychain
+                ? 'Keys are kept in this computer\u2019s keychain, not in AETHER1\u2019s database. Each provider keeps its own key, address and model, so switching between them loses nothing.'
+                : 'This machine has no keychain service running, so keys are kept in AETHER1\u2019s own database instead. Each provider still keeps its own key, address and model.';
+        }
+    }
+
+    /// Takes one provider's key, address and model off this machine. Asked first, because
+    /// a key is not something the page can put back.
+    async function forgetProviderAccount(account) {
+        voiceEngine.playSFX('click');
+        const warning = account.needs_key
+            ? `Forget ${account.label}? Its key is deleted from this computer and would have to be entered again.`
+            : `Forget the address and model saved for ${account.label}?`;
+        if (!window.confirm(warning)) return;
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('forget_provider_account_rust', { provider: account.provider })
+                : await (await apiFetch('/api/models/accounts/forget', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: account.provider }),
+                })).json();
+            providerAccounts = data;
+            providerScratch.delete(account.provider);
+            // The form is showing what was just deleted, so it has to stop showing it --
+            // otherwise the next Save puts it straight back.
+            if ((document.getElementById('setting-provider')?.value) === account.provider) {
+                restoreProviderDetails(account.provider);
+            }
+            renderProviderAccounts();
+            refreshBrainPicker();
+        } catch (error) {
+            setHubStatus(`Could not forget ${account.label}: ${error}`, 'bad');
+        }
+    }
+
+    async function refreshProviderAccounts() {
+        try {
+            providerAccounts = IS_TAURI
+                ? await tauriInvoke('provider_accounts_rust')
+                : await (await apiFetch('/api/models/accounts')).json();
+        } catch (error) {
+            return;
+        }
+        renderProviderAccounts();
+    }
+
     /// Shows the gateway's own fields only when the gateway is the chosen provider.
     ///
     /// Hidden rather than disabled: the two boxes above it mean something different for a
@@ -9866,6 +10069,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!server) return;
         document.getElementById('setting-provider').value = server.provider_key;
         document.getElementById('setting-endpoint').value = server.endpoint;
+        // Same reason as in hubUseModel: the roster tracks the provider box, and this
+        // changed it without going through the dropdown's own handler.
+        providerShowing = server.provider_key;
+        renderProviderAccounts();
         populateModelPicker(server);
         const model = document.getElementById('setting-model');
         if (server.models.length && !server.models.includes(model.value)) {
@@ -11602,6 +11809,13 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-apikey').value = s.llm_api_key || '';
             document.getElementById('setting-gateway-url').value = s.llm_gateway_url || '';
             document.getElementById('setting-gateway-key').value = s.llm_gateway_key || '';
+            // What is stored for every *other* provider, so the dropdown can restore one
+            // the moment it is picked rather than on the next page load. Rides along with
+            // the settings rather than being a second request; see commands::get_settings.
+            if (data.accounts) providerAccounts = data.accounts;
+            providerShowing = s.llm_provider || 'offline';
+            providerScratch.clear();
+            renderProviderAccounts();
             toggleGatewayFields();
             // Absent means `auto`, matching llm::REASONING_SETTING's own default -- an
             // install that has never saved this is not an install with reasoning off.
@@ -11924,6 +12138,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // endpoint corrected here all change what they should be offering, and the
             // one in the chat row is in view the moment this panel closes.
             refreshBrainPicker();
+            // And the roster of saved accounts: a key just entered has to stop reading
+            // "no key yet", and the form's own copy of the key box is now a key this
+            // page may no longer see -- so it is replaced with the sentinel the next
+            // read would have given it.
+            providerScratch.clear();
+            await refreshProviderAccounts();
+            restoreProviderDetails(document.getElementById('setting-provider')?.value || 'offline');
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
@@ -13091,8 +13312,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const providerSelect = document.getElementById('setting-provider');
     if (providerSelect) {
         providerSelect.addEventListener('change', (e) => {
+            // Before anything else: the boxes still hold the provider being left, and
+            // this is the only moment they can be filed under it. See stashProviderDetails.
+            stashProviderDetails();
+            restoreProviderDetails(e.target.value);
             applyDefaultModelForProvider(e.target.value);
             toggleGatewayFields();
+            renderProviderAccounts();
         });
     }
 
@@ -13146,6 +13372,25 @@ document.addEventListener('DOMContentLoaded', () => {
         settingsModal.classList.remove('hidden');
         showSettingsSection('brain');
     });
+    /* Opens the connection form and puts it in front of the operator, wherever they
+       pressed it from. The form has always been reachable -- it was reachable by opening
+       Settings, finding Connections in the rail, and unfolding a grey summary line four
+       levels down -- which is a different thing from being findable. */
+    function openProviderSetup() {
+        voiceEngine.playSFX('click');
+        settingsModal.classList.remove('hidden');
+        showSettingsSection('connections');
+        const form = document.getElementById('settings-group-ai-connection');
+        if (form) {
+            form.open = true;
+            // After the pane is shown, or the scroll lands on a hidden element.
+            requestAnimationFrame(() => form.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+        }
+        refreshProviderAccounts();
+    }
+    document.getElementById('btn-setup-provider')?.addEventListener('click', openProviderSetup);
+    document.getElementById('brain-setup-provider')?.addEventListener('click', openProviderSetup);
+
     document.getElementById('conn-github-signout')?.addEventListener('click', () => handleSignOut());
     if (btnGithubDecline) {
         btnGithubDecline.addEventListener('click', () => handleDeclineUpdates());

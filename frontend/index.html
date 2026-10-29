@@ -1020,11 +1020,11 @@
                         <span class="settings-nav-icon">🧱</span>
                         <span class="settings-nav-text">Display</span>
                     </button>
-                    <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key server ollama openai cloud local provider connections github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
+                    <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key apikey server ollama lm studio lmstudio openai anthropic gemini groq gateway cloud local provider connection connections credentials github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
                         <span class="settings-nav-icon">🧠</span>
                         <span class="settings-nav-text">The Brain</span>
                     </button>
-                    <button type="button" id="settings-nav-connections" class="settings-nav-item" data-settings-section="connections" data-keywords="accounts sign in github openai anthropic gemini groq models api key provider connect credentials reasoning thinking think thought effort" data-hint="accounts, sign-in and AI provider connections" title="accounts, sign-in and AI provider connections">
+                    <button type="button" id="settings-nav-connections" class="settings-nav-item" data-settings-section="connections" data-keywords="accounts sign in github openai anthropic gemini groq ollama lm studio lmstudio gateway models api key apikey token secret keychain provider connect connection credentials endpoint address server model reasoning thinking think thought effort" data-hint="accounts, sign-in and AI provider connections" title="accounts, sign-in and AI provider connections">
                         <span class="settings-nav-icon">🔗</span>
                         <span class="settings-nav-text">Connections &amp; Accounts</span>
                     </button>
@@ -1674,6 +1674,23 @@
                         <button id="btn-open-setup-settings" type="button" class="cyber-btn cyber-btn-active text-xs py-2 px-3 whitespace-nowrap">🧠 Set it up for me</button>
                     </div>
 
+                    <!-- The hub answers "which model", and the form that answers "where
+                         does it run and what key does it need" is a pane away under
+                         Connections. Somebody with an OpenAI key lands here, finds a
+                         catalogue of things to download, and has no way of knowing the
+                         six lines they actually want are somewhere else. This is that
+                         way. See openProviderSetup in app.js. -->
+                    <div class="bg-slate-900/60 border border-cyan-500/20 p-3 rounded-md flex items-center justify-between gap-3 flex-wrap">
+                        <div class="min-w-0">
+                            <div class="text-xs font-mono text-cyan-200">Already have an API key, or a server of your own?</div>
+                            <div class="text-[11px] font-mono text-slate-400 leading-snug">
+                                OpenAI, Anthropic, Gemini, Groq, a gateway, or an address on your
+                                network. Each one keeps its own key, address and model.
+                            </div>
+                        </div>
+                        <button id="brain-setup-provider" type="button" class="cyber-btn text-xs py-2 px-3 whitespace-nowrap">🔑 Set up a provider</button>
+                    </div>
+
                     <div id="brain-status" class="text-[11px] font-mono p-2 rounded border border-slate-600/40 bg-slate-900/60 text-slate-400">
                         Checking what is connected...
                     </div>
@@ -1774,9 +1791,26 @@
                         <div class="settings-group-body space-y-2">
 
                     <!-- AI MODEL CONNECTION -->
-                    <details class="border border-cyan-500/20 rounded p-3">
-                        <summary class="text-xs font-mono text-slate-300 cursor-pointer">🧠 AI Model Connection</summary>
+                    <!-- Open, and first in the group. It was a shut <details> four levels
+                         down a pane reached from a rail, with a one-line summary in the
+                         same grey as the two below it: the one control a cloud user has to
+                         find in order to have a companion at all, folded away like an
+                         advanced option. Nothing about it is advanced. -->
+                    <details id="settings-group-ai-connection" class="border border-cyan-400/40 rounded p-3 bg-slate-900/60" open>
+                        <summary class="text-xs font-mono text-cyan-200 cursor-pointer">🧠 AI Model Connection <span class="text-slate-400">— providers, API keys and which model answers</span></summary>
                         <div class="space-y-2 mt-2">
+
+                            <!-- The roster of what is actually saved. See the SAVED ACCOUNTS
+                                 block in app.js for why it exists: the form below has one
+                                 address box, one key box and one model box, and until now
+                                 nothing on the page said that each provider keeps its own
+                                 set of all three. Drawn by renderProviderAccounts. -->
+                            <div class="space-y-1">
+                                <span class="text-xs font-mono text-cyan-300 block">YOUR PROVIDERS</span>
+                                <div id="provider-accounts" class="space-y-1"></div>
+                                <p id="provider-accounts-note" class="provider-account-note"></p>
+                            </div>
+
                             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div class="space-y-1">
                                     <label for="setting-provider" class="text-xs font-mono text-cyan-300 block">WHERE THE AI RUNS</label>
@@ -2044,6 +2078,10 @@
                     <div class="hub-detail-name">Accounts and providers</div>
                     <p class="hub-blurb">Connect OpenAI, Anthropic, Google Gemini, Groq, local Ollama or OpenAI-compatible servers, and sign in to GitHub. The model browser remains in The Brain; its catalog shows supported downloads and models detected on your connected server.</p>
                     <div class="hub-action"><span class="hub-action-size">Connected models are selected in The Brain.</span><button id="btn-open-model-hub" type="button" class="cyber-btn text-[10px] py-1 px-2">🧠 Open model hub</button></div>
+                    <!-- The one thing this pane exists for, as a button rather than as
+                         something to go looking for. It opens the connection form below
+                         and scrolls to it; see btn-setup-provider in app.js. -->
+                    <div class="hub-action"><span class="hub-action-size">Add a provider, paste an API key, or point at a server.</span><button id="btn-setup-provider" type="button" class="cyber-btn text-[10px] py-1 px-2">🔑 Set up a provider</button></div>
                 </div>
                 <div id="settings-connections-host"></div>
             </section>

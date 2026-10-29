@@ -57,6 +57,7 @@ mod peers;
 mod persona_voice;
 mod profile;
 mod releases;
+mod secrets;
 mod serve_auth;
 mod serve_tls;
 mod server;
@@ -1799,6 +1800,21 @@ fn brains_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::brains(&engine)
 }
 
+/// What is saved for each provider, for the roster above the connection form.
+#[tauri::command(async)]
+fn provider_accounts_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::provider_accounts(&engine)
+}
+
+/// Takes one provider's key, address and model off this machine.
+#[tauri::command(async)]
+fn forget_provider_account_rust(
+    engine: tauri::State<LlmEngine>,
+    provider: String,
+) -> Result<serde_json::Value, String> {
+    commands::forget_provider_account(&engine, &provider)
+}
+
 /// The Hugging Face side of the model picker. See `commands::hf_search`.
 #[tauri::command(async)]
 fn hf_search_rust(query: Option<String>) -> serde_json::Value {
@@ -3144,6 +3160,11 @@ fn open_llm_engine() -> LlmEngine {
             // different answer -- build and test tools, confined to one project folder,
             // and inert until the operator turns the `run` permission on.
             code_workspace::seed_starter_allowlist(&db);
+            // Any provider key still sitting in the settings table as plain text moves
+            // into the system credential store here, once, rather than on the day its
+            // owner happens to press Save in Settings again -- which for a key typed in
+            // a year ago is never. See secrets::migrate.
+            secrets::migrate(&db);
             LlmEngine::new(db)
         }
         Err(e) => {
@@ -3271,6 +3292,8 @@ fn main() {
             run_diagnostics_rust,
             setup_advice_rust,
             brains_rust,
+            provider_accounts_rust,
+            forget_provider_account_rust,
             hf_search_rust,
             hf_quants_rust,
             pull_model_rust,
