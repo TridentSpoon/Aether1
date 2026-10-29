@@ -2811,10 +2811,31 @@ pub fn stream_anthropic(
 /// second; this bound is for the cold start and the server that has gone away.
 const JUDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// The timeout for a long structured answer -- a rewritten set of instructions rather than
+/// a verdict. Nothing is waiting on it: a tuning round is a thing somebody typed and is
+/// watching, not something in front of a reply, so the bound here is "the server has gone
+/// away" rather than "this is costing the operator a pause".
+const LONG_JUDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Which timeout one call gets. Decided from the budget rather than passed separately,
+/// because the two always move together and a caller free to pair a page-sized budget with
+/// a twenty-second bound would simply be setting itself up to fail.
+fn judge_timeout(budget: u32) -> std::time::Duration {
+    if budget > VERDICT_TOKENS {
+        LONG_JUDGE_TIMEOUT
+    } else {
+        JUDGE_TIMEOUT
+    }
+}
+
 /// Asks a local model for one structured judgment, with the schema enforced by the server.
 ///
-/// `schema` is a JSON Schema object describing the whole answer. Returns the parsed object,
-/// or an error naming what went wrong -- the caller logs it and carries on unrouted.
+/// `schema` is a JSON Schema object describing the whole answer. `budget` is how many tokens
+/// the answer may take -- an explicit argument rather than one constant, because the two
+/// callers are far apart: a router's verdict is four short fields (`VERDICT_TOKENS`), and a
+/// rewritten page of instructions is a page. Without a cap at all, a model that ignores the
+/// schema runs to the timeout producing nothing usable. Returns the parsed object, or an
+/// error naming what went wrong -- the caller logs it and carries on unrouted.
 ///
 /// Only the two local providers are accepted. The refusal for anything else is not a
 /// limitation waiting to be lifted: the router exists partly to *avoid* cloud calls, and a
@@ -2826,13 +2847,16 @@ pub fn judge(
     system_prompt: &str,
     question: &str,
     schema: &Value,
+    budget: u32,
 ) -> Result<Value, String> {
     if model.trim().is_empty() {
         return Err("no model to judge with".to_string());
     }
     let text = match provider {
-        Provider::Ollama => judge_ollama(endpoint, model, system_prompt, question, schema)?,
-        Provider::LmStudio => judge_openai(endpoint, model, system_prompt, question, schema)?,
+        Provider::Ollama => judge_ollama(endpoint, model, system_prompt, question, schema, budget)?,
+        Provider::LmStudio => {
+            judge_openai(endpoint, model, system_prompt, question, schema, budget)?
+        }
         other => return Err(format!("{other} cannot be used as a local judge")),
     };
     // A schema-constrained server still sometimes wraps the object in a fence or puts a
@@ -2895,6 +2919,7 @@ fn judge_ollama(
     system_prompt: &str,
     question: &str,
     schema: &Value,
+    budget: u32,
 ) -> Result<String, String> {
     let request = OllamaJudgeRequest {
         model,
@@ -2907,13 +2932,13 @@ fn judge_ollama(
         options: OllamaJudgeOptions {
             temperature: 0.0,
             num_ctx: LOCAL_CTX_FLOOR,
-            num_predict: JUDGE_MAX_TOKENS,
+            num_predict: budget,
         },
     };
     let response: OllamaResponse = checked(
         crate::net::post(&ollama_url(endpoint), "no judgment was asked for")?
             .config()
-            .timeout_global(Some(JUDGE_TIMEOUT))
+            .timeout_global(Some(judge_timeout(budget)))
             .http_status_as_error(false)
             .build()
             .send_json(request),
@@ -2924,8 +2949,8 @@ fn judge_ollama(
     Ok(response.text().to_string())
 }
 
-/// How many tokens a verdict may take. The schemas here are three or four short fields.
-const JUDGE_MAX_TOKENS: u32 = 120;
+/// How many tokens a router's verdict may take. Three or four short fields.
+pub const VERDICT_TOKENS: u32 = 120;
 
 /// The OpenAI-compatible spelling of the same thing, for LM Studio. `json_schema` rather
 /// than `json_object`: the looser mode constrains the answer to *some* object, which for a
@@ -2946,6 +2971,7 @@ fn judge_openai(
     system_prompt: &str,
     question: &str,
     schema: &Value,
+    budget: u32,
 ) -> Result<String, String> {
     let (base, _) = openai_defaults(Provider::LmStudio, endpoint);
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
@@ -2957,7 +2983,7 @@ fn judge_openai(
         ],
         stream: false,
         temperature: 0.0,
-        max_tokens: JUDGE_MAX_TOKENS,
+        max_tokens: budget,
         response_format: json!({
             "type": "json_schema",
             "json_schema": {"name": "verdict", "strict": true, "schema": schema},
@@ -2966,7 +2992,7 @@ fn judge_openai(
     let response: Value = checked(
         crate::net::post(&url, "no judgment was asked for")?
             .config()
-            .timeout_global(Some(JUDGE_TIMEOUT))
+            .timeout_global(Some(judge_timeout(budget)))
             .http_status_as_error(false)
             .build()
             .send_json(request),

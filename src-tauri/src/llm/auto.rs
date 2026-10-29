@@ -287,7 +287,7 @@ impl Candidates {
     /// the cost that matters is the one paid in front of every reply. `parameter_billions`
     /// returns `u32::MAX` for a name that claims no size, so an unlabelled model is never
     /// mistaken for a small one.
-    fn judge_model(&self, db: &MemoryDb) -> Option<String> {
+    pub fn judge_model(&self, db: &MemoryDb) -> Option<String> {
         let stored = db.get_setting_string(JUDGE_SETTING, "");
         let stored = stored.trim();
         if !stored.is_empty() {
@@ -333,10 +333,14 @@ pub struct Verdict {
     pub is_code: bool,
 }
 
-/// The schema the server is told to constrain the answer to. Three fields, all required,
+/// The schema the server is told to constrain the answer to.
+///
+/// Public because the tuning harness scores wordings of the judge prompt through the same
+/// schema the router uses -- a wording scored under a different schema is scored against
+/// something else. Three fields, all required,
 /// `difficulty` restricted to the two words -- so "medium" cannot come back and be read as
 /// neither.
-fn schema() -> Value {
+pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
@@ -349,13 +353,18 @@ fn schema() -> Value {
     })
 }
 
-/// What the judge is told it is doing.
+/// What the judge is told it is doing, as shipped.
+///
+/// The baseline rather than necessarily what runs: `llm::tuning` can score a different
+/// wording against cases with known answers and put that in force instead, and `route`
+/// below reads whichever is. This stays the thing every tuned wording is measured against,
+/// and the thing an install that has never tuned uses.
 ///
 /// Written for a small model: short, no persona, no politeness, and each field explained by
 /// the question it answers rather than by its name. It says *do not answer the question*
 /// twice, because the single most likely failure of a small model here is helpfulness --
 /// answering the operator instead of classifying them.
-fn judge_prompt() -> String {
+pub fn built_in_judge_prompt() -> String {
     "You sort questions. You do not answer them.\n\n\
      You will be given one message that somebody typed to an AI assistant. Decide three \
      things about it and reply with those three fields only.\n\n\
@@ -500,9 +509,12 @@ pub fn route(
         available.local_provider,
         endpoint,
         &judge,
-        &judge_prompt(),
+        // Whatever wording is in force: the shipped one, or one that beat it on this
+        // machine's model. See `llm::tuning`.
+        &super::tuning::text(db, super::tuning::Adapter::Judge),
         prompt,
         &schema(),
+        providers::VERDICT_TOKENS,
     )?;
     let verdict: Verdict = serde_json::from_value(answer.clone())
         .map_err(|e| format!("the judgment was JSON but not a verdict ({e}): {answer}"))?;
@@ -947,7 +959,7 @@ mod tests {
 
     #[test]
     fn the_judge_is_told_not_to_answer() {
-        let prompt = judge_prompt();
+        let prompt = built_in_judge_prompt();
         assert!(prompt.contains("do not answer") || prompt.contains("Do not answer"));
         assert!(
             prompt.contains("difficulty")
