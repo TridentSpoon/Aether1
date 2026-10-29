@@ -176,14 +176,26 @@ impl ReleaseError {
 /// The bundle name this platform installs, as `release.yml` names it. Matched as a prefix so
 /// a future `aether1-offline-linux-aarch64.tar.gz` needs nothing here, and so the `.minisig`
 /// beside it is never mistaken for the bundle itself.
+/// **Both brandings, on purpose.** The Aurora1 rename renames the bundles too, and the copy
+/// that has to find them is the one already installed -- whose list of prefixes was compiled
+/// into it. So this release learns the `aurora1-` names while `release.yml` still publishes
+/// the `aether1-` ones; a renamed release then has assets every copy from here on can pick
+/// out, and a copy from before here still picks out the old names for as long as they are
+/// published. Taking the old names out is a separate decision for a later release, not
+/// something to do in the one that introduces the new ones.
 fn wanted_asset_prefixes() -> &'static [&'static str] {
     if cfg!(target_os = "windows") {
-        &["Aether1-Setup"]
+        &["Aurora1-Setup", "Aether1-Setup"]
     } else {
         // The offline bundle first: it is the one that needs no network on the target
         // machine, which is the point of having it. The slim one is the fallback for a
         // release that only carries that.
-        &["aether1-offline-linux", "aether1-slim-linux"]
+        &[
+            "aurora1-offline-linux",
+            "aether1-offline-linux",
+            "aurora1-slim-linux",
+            "aether1-slim-linux",
+        ]
     }
 }
 
@@ -308,6 +320,12 @@ pub fn is_newer(running: &str, latest_tag: &str) -> Option<bool> {
     // `Version::parse` reads three dot-separated numbers, and `v0` is not one, so the whole tag
     // falls through to its opaque branch and compares against nothing. The symptom is an
     // installed copy that can never tell whether it is behind.
+    //
+    // The same stripping is what makes the Aurora1 tag, `v0-261018-227`, readable here, and
+    // this release has to be able to read it *before* one is ever pushed -- an installed copy
+    // compares with the parser it was built with, so a copy that has never seen the dashed
+    // spelling answers "cannot tell" for every release after the rename and silently stops
+    // offering updates. `Version::parse` handles both spellings; see installs::Version.
     let latest = Version::parse(latest_tag.trim().trim_start_matches(['v', 'V']))?;
     let running = Version::parse(running)?;
     running.older_than(&latest)
@@ -619,6 +637,41 @@ mod tests {
         assert_eq!(is_newer("Ver 0.4.152", "nightly"), None);
         // Without the `v` too, in case a tag is ever cut without one.
         assert_eq!(is_newer("Ver 0.4.140", "0.4.152"), Some(true));
+    }
+
+    /// The Aurora1 tag, read by a build that still publishes the old one. An installed copy
+    /// compares with the parser it was compiled with, so the dashed spelling has to be
+    /// readable one release before a tag ever carries it -- otherwise every release after
+    /// the rename comes back as "cannot tell" and the copy silently stops offering updates.
+    #[test]
+    fn the_aurora1_tag_compares_against_a_version_from_before_the_rename() {
+        assert_eq!(is_newer("Ver 0.4.140", "v0-261018-227"), Some(true));
+        assert_eq!(is_newer("Ver 0.4.300", "v0-261018-227"), Some(false));
+        // And the other way round: a renamed copy against the tags published before it.
+        assert_eq!(is_newer("Aurora1 rev0.261018.227", "v0.4.300"), Some(true));
+        assert_eq!(is_newer("Aurora1 rev0.261018.227", "v0.4.140"), Some(false));
+        // Two renamed releases.
+        assert_eq!(
+            is_newer("Aurora1 rev0.261018.227", "v0-261101-240"),
+            Some(true)
+        );
+        // Still nothing guessed about a tag that is not a version.
+        assert_eq!(is_newer("Aurora1 rev0.261018.227", "nightly"), None);
+    }
+
+    /// Both brandings of the bundle names, for the same reason: the copy that has to find a
+    /// renamed release's assets is the one already installed.
+    #[test]
+    fn either_brandings_bundle_is_picked_up() {
+        for name in [
+            "aether1-offline-linux-x86_64.tar.gz",
+            "aurora1-offline-linux-x86_64.tar.gz",
+        ] {
+            let assets = vec![asset(name, 1), asset(&format!("{name}.minisig"), 2)];
+            let picked = pick_asset(&assets).expect("the bundle should be found");
+            assert_eq!(picked.name, name);
+            assert_eq!(picked.signature_id, Some(2));
+        }
     }
 
     /// The two refusals GitHub cannot tell apart have to be told apart here, because the

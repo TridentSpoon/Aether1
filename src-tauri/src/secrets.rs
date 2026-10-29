@@ -27,6 +27,17 @@ use crate::llm::MemoryDb;
 /// `github_auth` uses; the account distinguishes them.
 const SERVICE: &str = "AETHER1";
 
+/// The service name under the other branding, read when `SERVICE` has nothing.
+///
+/// **A keychain entry is not ours to lose.** The service name is half of the key an entry is
+/// filed under, so renaming it does not move anything: every provider key the operator
+/// pasted in simply stops being found, with no error and no way for them to tell that the
+/// value is still sitting there under the old name. So both names are read, newest first,
+/// and `store` writes to whichever name this build prefers -- which means the release that
+/// flips `SERVICE` to the Aurora1 spelling still finds every key, and writes it across the
+/// first time it is saved again.
+const ALT_SERVICE: &str = "AURORA1";
+
 /// What the page is given in place of a key it may not see. A password box full of dots
 /// either way, so an operator sees exactly what they saw before: a key is set.
 ///
@@ -84,18 +95,35 @@ fn entry(name: &str) -> Option<keyring::Entry> {
     keyring::Entry::new(SERVICE, name).ok()
 }
 
+/// The same entry under the other branding. Reads only -- nothing writes to the name this
+/// build is not using.
+fn alt_entry(name: &str) -> Option<keyring::Entry> {
+    if keychain_off() {
+        return None;
+    }
+    keyring::Entry::new(ALT_SERVICE, name).ok()
+}
+
+/// A non-empty secret from either service name, this build's preference first.
+fn from_keychain(name: &str) -> Option<String> {
+    for entry in [entry(name), alt_entry(name)].into_iter().flatten() {
+        if let Ok(secret) = entry.get_password() {
+            if !secret.trim().is_empty() {
+                return Some(secret);
+            }
+        }
+    }
+    None
+}
+
 /// Reads one secret: keychain first, settings row second.
 ///
 /// The settings row is a fallback rather than dead weight. An install that has never run
 /// this version has its key there, and a machine with no credential store keeps it there
 /// for good.
 pub fn load(db: &MemoryDb, name: &str) -> String {
-    if let Some(entry) = entry(name) {
-        if let Ok(secret) = entry.get_password() {
-            if !secret.trim().is_empty() {
-                return secret;
-            }
-        }
+    if let Some(secret) = from_keychain(name) {
+        return secret;
     }
     db.get_setting_string(name, "")
 }
@@ -123,7 +151,9 @@ pub fn store(db: &MemoryDb, name: &str, secret: &str) -> Storage {
 /// Forgets one secret, in both stores. Both, rather than whichever answered, because the
 /// point of a Forget button is that nothing is left.
 pub fn clear(db: &MemoryDb, name: &str) {
-    if let Some(entry) = entry(name) {
+    // Both service names as well as both stores, for the same reason: a Forget button that
+    // leaves the value readable under the other branding has not forgotten it.
+    for entry in [entry(name), alt_entry(name)].into_iter().flatten() {
         let _ = entry.delete_credential();
     }
     let _ = db.delete_setting(name);
@@ -131,10 +161,8 @@ pub fn clear(db: &MemoryDb, name: &str) {
 
 /// Where this secret is kept, or that there is none.
 pub fn storage_of(db: &MemoryDb, name: &str) -> Storage {
-    if let Some(entry) = entry(name) {
-        if entry.get_password().is_ok_and(|s| !s.trim().is_empty()) {
-            return Storage::Keychain;
-        }
+    if from_keychain(name).is_some() {
+        return Storage::Keychain;
     }
     if db.get_setting_string(name, "").trim().is_empty() {
         Storage::None
