@@ -14,12 +14,16 @@
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
     <link rel="stylesheet" href="css/agent-browser.css?v=2">
+    <link rel="stylesheet" href="css/studio.css?v=2">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
          HUD first. See the [data-solo-panel] rules in css/layout.css and the script further
          down that adds .solo-target to the matching panel once it exists in the DOM. -->
     <script src="js/solo-panel.js?v=1"></script>
+    <!-- Which shell the window wears, in the head for the same reason the theme is:
+         read any later and the panel grid paints before the studio replaces it. -->
+    <script src="js/shell.js?v=1"></script>
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
@@ -247,7 +251,117 @@
     </div>
 
     <!-- MAIN DASHBOARD CONTENT (FREE-FORM PANEL GRID) -->
+    <!-- THE SHELL ROW: the sidebar, and everything that was already here.
+         ================================================================================
+         AETHER1 has one screen in two shells. HUD is the free-form panel grid, unchanged
+         and still the default. STUDIO is the chat-first one: this sidebar on the left, the
+         conversation alone in the middle, the avatar behind it. Nothing moves in the DOM
+         between the two -- the studio is a set of rules in css/studio.css keyed off
+         <html data-shell>, so the chat panel in the studio is the same element, with the
+         same ids and the same listeners, as the chat panel in the HUD. A second copy of
+         the conversation is a second place for it to go wrong.
+
+         The nav is the chat panel's own tabs, in a column. They are the same eight views
+         (see .chat-tabs below) driven through the same switchChatTab, because a sidebar
+         entry that opened a different Notes from the tab's Notes would be two Notes. -->
+    <div id="shell-row" class="flex-1 flex min-h-0">
+    <aside id="studio-sidebar" aria-label="Aether1 navigation">
+        <div class="studio-brand">
+            <span class="studio-brand-mark" aria-hidden="true"></span>
+            <span class="studio-brand-name font-orbitron">AETHER1</span>
+            <span class="studio-brand-tag">STUDIO</span>
+            <button id="btn-studio-sidebar" type="button" class="studio-icon-btn ml-auto"
+                    title="Collapse the sidebar" aria-label="Collapse the sidebar" aria-expanded="true">&#x276E;</button>
+        </div>
+
+        <button id="btn-studio-new" type="button" class="studio-nav studio-nav-primary">
+            <span class="studio-nav-icon" aria-hidden="true">&#9998;</span><span class="studio-nav-label">New chat</span>
+        </button>
+
+        <nav class="studio-nav-list" aria-label="Views">
+            <button type="button" class="studio-nav" data-studio-nav="conversation"><span class="studio-nav-icon" aria-hidden="true">&#128172;</span><span class="studio-nav-label">Conversation</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="code"><span class="studio-nav-icon" aria-hidden="true">&#60;&#47;&#62;</span><span class="studio-nav-label">Aether Code</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="terminal" id="studio-nav-terminal"><span class="studio-nav-icon" aria-hidden="true">&#9646;</span><span class="studio-nav-label">Terminal</span></button>
+            <div class="studio-nav-rule" aria-hidden="true"></div>
+            <button type="button" class="studio-nav" data-studio-nav="memories"><span class="studio-nav-icon" aria-hidden="true">&#9673;</span><span class="studio-nav-label">Memories</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="history"><span class="studio-nav-icon" aria-hidden="true">&#8634;</span><span class="studio-nav-label">History</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="notes"><span class="studio-nav-icon" aria-hidden="true">&#9998;</span><span class="studio-nav-label">Notes</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="activity"><span class="studio-nav-icon" aria-hidden="true">&#9889;</span><span class="studio-nav-label">Activity</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="performance"><span class="studio-nav-icon" aria-hidden="true">&#128202;</span><span class="studio-nav-label">Performance</span></button>
+            <div class="studio-nav-rule" aria-hidden="true"></div>
+            <!-- Not views: these open what already exists elsewhere, so the sidebar is a
+                 way to everything rather than a way to eight things and a dead end. -->
+            <button type="button" class="studio-nav" data-studio-open="brain"><span class="studio-nav-icon" aria-hidden="true">&#129504;</span><span class="studio-nav-label">Model hub</span></button>
+            <button type="button" class="studio-nav" data-studio-open="avatars"><span class="studio-nav-icon" aria-hidden="true">&#9728;</span><span class="studio-nav-label">Avatars</span></button>
+            <button type="button" class="studio-nav" data-studio-open="agents"><span class="studio-nav-icon" aria-hidden="true">&#129302;</span><span class="studio-nav-label">Agent browser</span></button>
+        </nav>
+
+        <!-- The last few conversations, read from the same store the HISTORY tab reads, so
+             the two cannot disagree about what was said. Clicking one opens it in HISTORY
+             rather than loading it into the live chat: this is a way to look, and loading
+             a session over the one on screen is a way to lose the one on screen. -->
+        <div class="studio-recents">
+            <div class="studio-recents-head">RECENTS</div>
+            <div id="studio-recents-list" class="studio-recents-list">
+                <div class="studio-recents-empty">No conversations yet</div>
+            </div>
+        </div>
+
+        <div class="studio-foot">
+            <button id="btn-studio-operator" type="button" class="studio-operator" title="Settings">
+                <span id="studio-operator-mark" class="studio-operator-mark" aria-hidden="true">A</span>
+                <span class="studio-operator-text">
+                    <span id="studio-operator-name" class="studio-operator-name">Operator</span>
+                    <span id="studio-operator-sub" class="studio-operator-sub">Aether1</span>
+                </span>
+            </button>
+            <button id="btn-studio-shell" type="button" class="studio-icon-btn" title="Back to the HUD panel grid" aria-label="Back to the HUD panel grid">&#9638;</button>
+            <button id="btn-studio-settings" type="button" class="studio-icon-btn" title="Settings" aria-label="Settings">&#9881;</button>
+        </div>
+    </aside>
+
     <main id="hud-layout" class="flex-1 p-4 overflow-auto z-10">
+        <!-- THE MODEL PICKER, where the Unsloth layout puts it: top left of the stage, one
+             press from the caret. There has been a picker in the chin bar since #245 and a
+             second in the chat row since #251, and both are a `<select>` -- fine for a dozen
+             entries and useless at sixty, which is what a machine with Ollama, LM Studio and
+             three keys actually has. This one is a popover with a search box and four tabs,
+             and it is filled from the same `brains` reply and writes through the same save as
+             the other two, so all three always name the same model (fillBrainSelect /
+             renderBrainPopover in js/app.js).
+
+             AUTO sits above the tabs rather than in them because it is not a model: it is the
+             judgement call about which model, made per message by the local router. The router
+             is being built in its own branch; until it lands this row says so and cannot be
+             chosen, which is the honest state -- an Auto that silently picked whatever was
+             already selected would be a lie told every message. -->
+        <div id="studio-stage-bar" class="studio-stage-bar">
+            <button id="studio-model-trigger" type="button" class="studio-model-trigger"
+                    aria-haspopup="dialog" aria-expanded="false" aria-controls="brain-popover">
+                <span id="studio-model-name" class="studio-model-name">Select model</span>
+                <span class="studio-model-caret" aria-hidden="true">&#9662;</span>
+            </button>
+
+            <div id="brain-popover" class="brain-popover hidden" role="dialog" aria-label="Choose the model that answers">
+                <div class="brain-pop-search">
+                    <span class="brain-pop-search-icon" aria-hidden="true">&#9906;</span>
+                    <input id="brain-pop-search" type="search" class="brain-pop-search-input"
+                           placeholder="Search models" aria-label="Search models" autocomplete="off">
+                </div>
+                <div class="brain-pop-tabs" role="tablist" aria-label="Which models to show">
+                    <button type="button" class="brain-pop-tab" data-brain-tab="recommended" role="tab" aria-selected="true"><span aria-hidden="true">&#9733;</span> Recommended</button>
+                    <button type="button" class="brain-pop-tab" data-brain-tab="device" role="tab" aria-selected="false"><span aria-hidden="true">&#8681;</span> On device</button>
+                    <button type="button" class="brain-pop-tab" data-brain-tab="connected" role="tab" aria-selected="false"><span aria-hidden="true">&#9729;</span> Connected</button>
+                    <button type="button" class="brain-pop-tab" data-brain-tab="all" role="tab" aria-selected="false">All</button>
+                </div>
+                <div id="brain-pop-auto" class="brain-pop-auto"></div>
+                <div id="brain-pop-list" class="brain-pop-list" role="listbox" aria-label="Models"></div>
+                <div class="brain-pop-foot">
+                    <button type="button" id="brain-pop-setup" class="brain-pop-setup">Set up another model&hellip;</button>
+                </div>
+            </div>
+        </div>
+
 
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
         <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-panel-name="The avatar" data-grid-col="1" data-grid-row="1" data-grid-w="12" data-grid-h="37">
@@ -384,6 +498,14 @@
             </div>
 
             <div id="chat-view-conversation" class="flex-1 min-h-0 flex flex-col" data-chat-view="conversation">
+            <!-- The line over an empty conversation. Shown only while #chat-messages is
+                 empty and only in the studio, where there is room for it; the HUD's chat
+                 column is 380px and a greeting there is 380px of the thing you came to
+                 read. js/app.js toggles .has-messages on the view. -->
+            <div id="studio-greeting" class="studio-greeting" aria-hidden="true">
+                <div id="studio-greeting-line" class="studio-greeting-line font-orbitron">What are we building?</div>
+                <div id="studio-greeting-sub" class="studio-greeting-sub"></div>
+            </div>
             <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
 
             <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
@@ -417,6 +539,30 @@
                     </button>
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
+                    </button>
+                </div>
+
+                <!-- WHAT THIS MESSAGE IS ALLOWED TO DO, under the box it is typed in.
+                     Three switches that were three different places: whether it may look
+                     anything up at all (Settings -> tools), whether looking up includes
+                     the web, and what happens when it wants to change something. Each one
+                     writes the real setting the engine reads -- there is no per-message
+                     copy of any of them -- so the row is the state of the machine, not a
+                     decoration over it.
+
+                     Studio only. The HUD's chat column is 380px wide and this row in it is
+                     either three chips on four lines or three chips nobody can read. -->
+                <div id="chat-actions" class="chat-actions" aria-label="What this message may do">
+                    <button id="btn-chat-attach" type="button" class="chat-chip chat-chip-icon" title="Attach images for analysis" aria-label="Attach images">+</button>
+                    <button id="btn-chat-approval" type="button" class="chat-chip" aria-haspopup="true" aria-expanded="false" aria-controls="chat-approval-menu">
+                        <span aria-hidden="true">&#9816;</span><span class="chat-chip-text">Ask for approval</span><span class="chat-chip-caret" aria-hidden="true">&#9662;</span>
+                    </button>
+                    <div id="chat-approval-menu" class="chat-chip-menu hidden" role="menu" aria-labelledby="btn-chat-approval"></div>
+                    <button id="btn-chat-search" type="button" class="chat-chip" aria-pressed="false" title="Let it search the web for things it cannot know">
+                        <span aria-hidden="true">&#9901;</span><span class="chat-chip-text">Search</span>
+                    </button>
+                    <button id="btn-chat-tools" type="button" class="chat-chip" aria-pressed="false" title="Let it use its tools at all">
+                        <span aria-hidden="true">&#60;&#47;&#62;</span><span class="chat-chip-text">Tools</span>
                     </button>
                 </div>
             </div>
@@ -685,6 +831,7 @@
         </div>
 
     </main>
+    </div><!-- /#shell-row -->
 
     <!-- Solo-panel corner control: only shown in a window opened by open_panel_window_rust
          (see the inline bootstrap script in <head> and initSoloPanel() in app.js). A
@@ -1573,6 +1720,41 @@
                 <div class="settings-pane-head">
                     <h3 class="settings-pane-title">🧱 Display</h3>
                     <p class="settings-pane-hint">where the avatar lives, and where the panels sit</p>
+                </div>
+
+                <!-- WHICH SHELL. The first question this section asks, because it decides
+                     what the rest of it is about: in the studio there are no panels to
+                     arrange. Screen-local like the panel grid below it and for the same
+                     reason -- it is a property of this display, not of the companion -- so
+                     it lives in localStorage (js/shell.js) and is not saved with the
+                     settings. Two screens can wear two different shells. -->
+                <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2 mb-3">
+                    <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#128421; SHELL</span>
+                    <div class="shell-choices" role="radiogroup" aria-label="Which shell">
+                        <button type="button" class="shell-choice" data-shell-choice="hud" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">HUD</span>
+                            <span class="shell-choice-sub">The panel grid. Everything on screen at once, draggable and resizable.</span>
+                        </button>
+                        <button type="button" class="shell-choice" data-shell-choice="studio" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">STUDIO</span>
+                            <span class="shell-choice-sub">Chat first. A sidebar, one centred column, the avatar behind it.</span>
+                        </button>
+                    </div>
+                    <span class="text-[11px] font-mono text-slate-400 block pt-1">In the studio, where the avatar goes:</span>
+                    <div class="shell-choices" role="radiogroup" aria-label="Where the avatar goes in the studio">
+                        <button type="button" class="shell-choice shell-choice-sm" data-avatar-place="background" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">BEHIND THE CHAT</span>
+                            <span class="shell-choice-sub">Full size, dimmed, behind the conversation.</span>
+                        </button>
+                        <button type="button" class="shell-choice shell-choice-sm" data-avatar-place="minitar" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">MINI-TAR</span>
+                            <span class="shell-choice-sub">Small, in the bottom corner, still live.</span>
+                        </button>
+                        <button type="button" class="shell-choice shell-choice-sm" data-avatar-place="off" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">OFF</span>
+                            <span class="shell-choice-sub">A clean ground. The avatar stops drawing.</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2 mb-3">
@@ -3315,6 +3497,46 @@
         </div>
     </div>
 
+    <!-- THE UPDATE SCREEN.
+         ================================================================================
+         An update that rebuilds the app takes minutes, and for most of them nothing on
+         screen changes. What was there before was a 36-wide strip in the header reading
+         "Applying update · Aether1 will r..." and a box three levels down in Settings;
+         between them they answered "is it still going?" only if you knew where the second
+         one was.
+
+         So: one screen, over everything, for the one thing happening. One spinner, one
+         line saying which step, one line of reassurance, and the build log behind a
+         toggle -- shut by default, because cargo's output is the answer to "what broke?"
+         and not to "how long?". The log is written as a text node (see
+         renderApplyProgress): it is git's and cargo's output, full of paths and source
+         snippets, and none of that belongs in HTML.
+
+         It is driven by the same `update-progress` events and the same state object as
+         the header strip and the Settings box, so the three cannot disagree about which
+         step is running. -->
+    <div id="update-overlay" class="update-overlay hidden" role="dialog" aria-modal="true"
+         aria-labelledby="update-overlay-step" aria-live="polite">
+        <div class="update-overlay-brand">
+            <span class="update-overlay-mark" aria-hidden="true"></span>
+            <span class="update-overlay-name font-orbitron">AETHER1</span>
+        </div>
+        <div class="update-overlay-body">
+            <div class="update-overlay-spinner" aria-hidden="true"></div>
+            <div id="update-overlay-step" class="update-overlay-step">Updating Aether1&hellip;</div>
+            <div id="update-overlay-sub" class="update-overlay-sub">This may take a few minutes. Do not close the app.</div>
+            <button id="btn-update-details" type="button" class="update-overlay-toggle" aria-expanded="false" aria-controls="update-overlay-log">
+                <span id="update-details-label">Show update details</span>
+                <span class="update-overlay-toggle-caret" aria-hidden="true">&#9662;</span>
+            </button>
+            <pre id="update-overlay-log" class="update-overlay-log hidden" tabindex="0"></pre>
+            <!-- Only ever shown once the update has failed: while it is running there is
+                 nothing safe to press, and a Close that abandons a half-applied rebuild is
+                 worse than no Close at all. -->
+            <button id="btn-update-dismiss" type="button" class="update-overlay-dismiss hidden">Close</button>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
@@ -3337,7 +3559,7 @@
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=3"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=68"></script>
+    <script src="js/app.js?v=70"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

@@ -520,6 +520,29 @@ pub fn tools_enabled(db: &crate::llm::MemoryDb) -> bool {
     db.get_setting_bool("tools_enabled", true)
 }
 
+/// Whether the two tools that leave this machine -- `search_web` and `fetch_url` -- may be
+/// used at all.
+///
+/// A narrower switch than `tools_enabled`, and a different question. Tools off means the
+/// companion cannot read a file, check the telemetry or write a note either; this one
+/// leaves all of that alone and says only that this conversation is not going out to the
+/// internet to answer. It is the Search chip under the chat box, and it is the setting the
+/// engine reads rather than a per-message flag, because a per-message flag that the next
+/// message silently forgets is the kind of privacy control that is worse than none.
+///
+/// Defaults on, so nothing changes for an install that has never touched it.
+pub fn web_tools_enabled(db: &crate::llm::MemoryDb) -> bool {
+    db.get_setting_bool("web_search_enabled", true)
+}
+
+/// What the two web tools say when they are refused by the switch above. Shown to the
+/// model, so it says what to do about it rather than only that it failed: a model told
+/// "cannot search" with no reason has been seen answering from memory and presenting it
+/// as a lookup.
+pub const WEB_TOOLS_OFF: &str =
+    "Web lookups are switched off for this conversation (the Search chip under the chat \
+     box, or Settings). Say that you cannot look it up rather than answering from memory.";
+
 /// Marker for the one-time switch-on below.
 const DEFAULT_ON_MARKER: &str = "tools_default_on_applied";
 

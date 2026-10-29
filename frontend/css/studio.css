@@ -1,0 +1,1225 @@
+/* THE STUDIO SHELL
+ * =====================================================================================
+ * One screen, two shells. The HUD -- the free-form panel grid in layout.css -- is still
+ * the default and still what AETHER1 looks like. This is the other one: a left sidebar,
+ * the conversation alone in the middle, the avatar behind it. It is for the evenings the
+ * app is a conversation rather than a console.
+ *
+ * Everything here is a rule keyed off `html[data-shell="studio"]`, set in js/shell.js
+ * before first paint. Nothing moves in the DOM between the two shells: the chat panel in
+ * the studio is the same element, with the same ids and the same listeners, as the chat
+ * panel in the HUD. That is the whole design. A second copy of the conversation -- a
+ * studio chat beside a HUD chat -- would be two places for a message to land, two pickers
+ * to keep in step and two bugs for every one.
+ *
+ * It takes the theme as it finds it. The colours below are all var()s off A1theme.css, so
+ * the studio is cyberpunk on Cyberpunk and legible on Daylight without a second palette
+ * to keep in step with the first.
+ */
+
+/* ---------------------------------------------------------------- off in the HUD ---- */
+
+#studio-sidebar,
+#studio-stage-bar,
+#chat-actions,
+#studio-greeting {
+  display: none;
+}
+
+#shell-row {
+  /* In the HUD this is a flex row with one child, which is what #hud-layout already was.
+     Stated rather than left implicit because #hud-layout's own `flex-1` is measured
+     against this box now, not against <body>. */
+  min-width: 0;
+}
+
+/* ================================================================== THE STUDIO ======= */
+
+html[data-shell="studio"] #studio-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 248px;
+  flex: 0 0 248px;
+  min-height: 0;
+  padding: 10px 10px 8px;
+  gap: 8px;
+  background: var(--bg-panel-solid);
+  border-right: 1px solid var(--border-neon);
+  overflow: hidden;
+}
+
+html[data-shell="studio"][data-studio-sidebar="closed"] #studio-sidebar {
+  width: 56px;
+  flex-basis: 56px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+/* Collapsed, the sidebar is its icons. The labels go rather than shrink: a 56px column of
+   truncated words is a column of words nobody can read taking the space the icons need. */
+html[data-shell="studio"][data-studio-sidebar="closed"] .studio-nav-label,
+html[data-shell="studio"][data-studio-sidebar="closed"] .studio-brand-name,
+html[data-shell="studio"][data-studio-sidebar="closed"] .studio-brand-tag,
+html[data-shell="studio"][data-studio-sidebar="closed"] .studio-recents,
+html[data-shell="studio"][data-studio-sidebar="closed"] .studio-operator-text {
+  display: none;
+}
+
+html[data-shell="studio"][data-studio-sidebar="closed"] #btn-studio-sidebar {
+  transform: scaleX(-1);
+}
+
+/* ---- the brand ------------------------------------------------------------------- */
+
+.studio-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 8px;
+  border-bottom: 1px solid var(--border-neon);
+}
+
+.studio-brand-mark {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--neon-cyan), transparent 62%),
+              radial-gradient(circle at 70% 75%, var(--neon-purple), transparent 60%);
+  box-shadow: var(--glow-cyan);
+}
+
+.studio-brand-name {
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  color: var(--text-accent);
+}
+
+.studio-brand-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  color: var(--text-dim);
+  border: 1px solid var(--border-neon);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
+/* ---- the nav --------------------------------------------------------------------- */
+
+.studio-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.studio-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.studio-nav:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-main);
+}
+
+.studio-nav[aria-current="true"] {
+  background: var(--tint-main);
+  border-color: var(--border-neon);
+  color: var(--text-accent);
+}
+
+/* The accent rail on the chosen entry -- the cue that reads at a glance, before the
+   colour does, and the one that survives a theme where the tint is nearly the panel. */
+.studio-nav[aria-current="true"] .studio-nav-icon {
+  text-shadow: var(--glow-cyan);
+}
+
+.studio-nav-icon {
+  width: 16px;
+  flex: 0 0 16px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.studio-nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-nav-primary {
+  border-color: var(--border-neon);
+  color: var(--text-accent);
+  background: var(--tint-main);
+}
+
+.studio-nav-primary:hover {
+  border-color: var(--border-neon-bright);
+  box-shadow: var(--glow-cyan);
+}
+
+.studio-nav-rule {
+  height: 1px;
+  margin: 6px 6px;
+  background: var(--border-neon);
+  opacity: 0.6;
+}
+
+/* ---- recents --------------------------------------------------------------------- */
+
+.studio-recents {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-neon);
+}
+
+.studio-recents-head {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--text-dim);
+  padding: 0 6px 4px;
+}
+
+.studio-recents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  max-height: 160px;
+  min-height: 0;
+}
+
+.studio-recent {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.studio-recent:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-main);
+}
+
+.studio-recents-empty {
+  padding: 5px 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+/* ---- the foot -------------------------------------------------------------------- */
+
+.studio-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-neon);
+}
+
+.studio-operator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.studio-operator:hover {
+  background: var(--bg-panel-hover);
+}
+
+.studio-operator-mark {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tint-main);
+  border: 1px solid var(--border-neon);
+  color: var(--text-accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.studio-operator-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.studio-operator-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-operator-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-icon-btn {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.studio-icon-btn:hover {
+  border-color: var(--border-neon);
+  color: var(--text-accent);
+  background: var(--bg-panel-hover);
+}
+
+/* ================================================================== THE STAGE ======== */
+
+html[data-shell="studio"] #hud-layout {
+  display: block;
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Everything the studio is not. The panels are left in the DOM, with their listeners and
+   their state, so switching back to the HUD is a change of one attribute rather than a
+   rebuild of the window. */
+html[data-shell="studio"] #hud-layout > [data-panel]:not([data-panel="chat"]):not([data-panel="hologram"]) {
+  display: none !important;
+}
+
+/* The panel chrome belongs to the grid: there is nothing to drag a panel into here, and a
+   resize handle on a panel that fills the stage resizes nothing. */
+html[data-shell="studio"] #hud-layout > [data-panel] > .panel-grip,
+html[data-shell="studio"] #hud-layout > [data-panel] > .panel-resize {
+  display: none;
+}
+
+/* ---- the avatar, behind the conversation ----------------------------------------- */
+
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"] {
+  position: absolute;
+  inset: 0;
+  grid-column: auto;
+  grid-row: auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+/* Behind the chat and out of its way: a click aimed at a message must not land on the
+   hologram's orbit drag. The viewport keeps its own pointer events in mini-tar mode,
+   where it is a thing you can turn again. */
+html[data-shell="studio"][data-studio-avatar="background"] #hud-layout > [data-panel="hologram"] {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"] .hologram-chin,
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"] .viewport-label,
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"] .panel-undock,
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"] .panel-fullscreen,
+html[data-shell="studio"] #hud-layout > [data-panel="hologram"] .hologram-waveform {
+  display: none;
+}
+
+/* The corner alternative, for somebody who wants the conversation on a clean ground and
+   the avatar still in the room. Same element, same renderer -- a box 220px across instead
+   of the whole stage. */
+html[data-shell="studio"][data-studio-avatar="minitar"] #hud-layout > [data-panel="hologram"] {
+  inset: auto 18px 18px auto;
+  width: 220px;
+  height: 220px;
+  opacity: 1;
+  border: 1px solid var(--border-neon);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(6px);
+  z-index: 3;
+}
+
+html[data-shell="studio"][data-studio-avatar="off"] #hud-layout > [data-panel="hologram"] {
+  display: none !important;
+}
+
+/* ---- the conversation column ------------------------------------------------------ */
+
+html[data-shell="studio"] #hud-layout > [data-panel="chat"] {
+  position: relative;
+  z-index: 2;
+  grid-column: auto;
+  grid-row: auto;
+  width: min(820px, 100%);
+  height: 100%;
+  margin: 0 auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+/* The panel's own title row and tab strip. Both say what the sidebar already says, and
+   the studio is the layout that buys its calm by saying each thing once. */
+html[data-shell="studio"] #hud-layout > [data-panel="chat"] > div:first-of-type,
+html[data-shell="studio"] .chat-tabs {
+  display: none;
+}
+
+html[data-shell="studio"] #chat-messages {
+  padding: 24px 8px 8px;
+  scrollbar-width: thin;
+}
+
+/* The input block, floating rather than docked: in the studio it is a card in the middle
+   of the stage, which is what makes the empty screen read as an invitation rather than as
+   a panel waiting for data. */
+html[data-shell="studio"] #chat-view-conversation > div:last-child {
+  padding: 0 0 22px;
+  background: transparent;
+  border: 0;
+}
+
+html[data-shell="studio"] #chat-view-conversation > div:last-child > .flex {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 10px 8px;
+  border: 1px solid var(--border-neon);
+  border-radius: 16px 16px 0 0;
+  border-bottom: 0;
+  background: var(--bg-panel-solid);
+  backdrop-filter: blur(10px);
+}
+
+html[data-shell="studio"] #chat-input {
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  padding: 8px 4px;
+  min-width: 160px;
+}
+
+html[data-shell="studio"] #chat-input:focus {
+  border: 0;
+  outline: none;
+}
+
+/* The two selects that are a popover's worth of list in a 10px control. In the studio the
+   popover at the top of the stage is the picker, and these would be a third copy of the
+   same question in the same window. They keep working in the HUD, untouched. */
+html[data-shell="studio"] #chat-brain-row {
+  display: none !important;
+}
+
+/* ---- the chips under the box ----------------------------------------------------- */
+
+html[data-shell="studio"] #chat-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  position: relative;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--border-neon);
+  border-top: 0;
+  border-radius: 0 0 16px 16px;
+  background: var(--bg-panel-solid);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 50px -24px var(--viewport-glow);
+}
+
+.chat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid var(--border-neon);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.chat-chip:hover {
+  color: var(--text-main);
+  border-color: var(--border-neon-bright);
+}
+
+/* Lit means on, and on means the engine will actually do it -- these write the settings
+   llm::load_config reads, so the lit state is the machine's state and not a mood. */
+.chat-chip[aria-pressed="true"] {
+  color: var(--text-accent);
+  border-color: var(--border-neon-bright);
+  background: var(--tint-main);
+  box-shadow: var(--glow-cyan);
+}
+
+.chat-chip-icon {
+  padding: 5px 10px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.chat-chip-caret {
+  font-size: 8px;
+  opacity: 0.8;
+}
+
+.chat-chip-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 12px;
+  z-index: 40;
+  min-width: 260px;
+  padding: 5px;
+  border: 1px solid var(--border-neon);
+  border-radius: 10px;
+  background: var(--bg-panel-solid);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--glow-cyan);
+}
+
+.chat-chip-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-chip-menu-item:hover {
+  background: var(--bg-panel-hover);
+}
+
+.chat-chip-menu-item[aria-checked="true"] {
+  color: var(--text-accent);
+}
+
+.chat-chip-menu-sub {
+  display: block;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  white-space: normal;
+}
+
+/* ---- the greeting ---------------------------------------------------------------- */
+
+html[data-shell="studio"] #studio-greeting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 16px 26px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Gone the moment there is a conversation to read. A greeting over a transcript is a
+   banner, and the screen it was drawn for is the empty one. */
+html[data-shell="studio"] #chat-view-conversation.has-messages #studio-greeting {
+  display: none;
+}
+
+html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #chat-messages {
+  flex: 0 0 auto;
+}
+
+html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-greeting {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.studio-greeting-line {
+  font-size: clamp(20px, 3.4vw, 34px);
+  color: var(--text-main);
+  text-shadow: 0 0 26px var(--viewport-glow);
+  letter-spacing: 0.02em;
+}
+
+.studio-greeting-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ================================================================== MODEL PICKER ===== */
+
+html[data-shell="studio"] #studio-stage-bar {
+  display: block;
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  z-index: 30;
+}
+
+/* It is a child of #hud-layout so that `absolute` lands on the stage and not on the
+   window -- anchored to the window it sat over the header's own chips, and a press aimed
+   at the model picker landed on the theme menu. It is not a [data-panel], so the grid in
+   layout.js does not see it, and it is display:none in the HUD, so it takes no cell. */
+
+.studio-model-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.studio-model-trigger:hover,
+.studio-model-trigger[aria-expanded="true"] {
+  border-color: var(--border-neon);
+  background: var(--bg-panel-solid);
+  color: var(--text-accent);
+}
+
+.studio-model-name {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-model-caret {
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+.brain-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  width: min(680px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-neon);
+  border-radius: 14px;
+  background: var(--bg-panel-solid);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 30px 80px -30px #000, var(--glow-cyan);
+}
+
+.brain-popover.hidden {
+  display: none;
+}
+
+.brain-pop-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-neon);
+  border-radius: 999px;
+  background: var(--bg-panel);
+}
+
+.brain-pop-search-icon {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.brain-pop-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  outline: none;
+}
+
+.brain-pop-search-input::placeholder {
+  color: var(--text-dim);
+}
+
+.brain-pop-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.brain-pop-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.brain-pop-tab:hover {
+  color: var(--text-main);
+}
+
+.brain-pop-tab[aria-selected="true"] {
+  background: var(--tint-main);
+  border-color: var(--border-neon);
+  color: var(--text-accent);
+}
+
+/* AUTO, above the tabs and outside the list, because it is not one of the things the
+   tabs sort: it is the decision about which of them to use, made per message. */
+.brain-pop-auto {
+  border: 1px solid var(--border-neon);
+  border-radius: 10px;
+  background: linear-gradient(100deg, var(--bg-wash-main), transparent 70%);
+}
+
+.brain-auto-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.brain-auto-row[disabled] {
+  cursor: default;
+  opacity: 0.75;
+}
+
+/* Lit when Auto is what is answering, the same cue a chosen model row gets. Without it
+   the popover would show Auto available and no row selected anywhere, which reads as
+   nothing being chosen at all. */
+.brain-auto-row[aria-selected="true"] {
+  color: var(--text-accent);
+}
+
+.brain-pop-auto:has(.brain-auto-row[aria-selected="true"]) {
+  border-color: var(--border-neon-bright);
+  box-shadow: var(--glow-purple);
+}
+
+.brain-auto-row[aria-selected="true"] .brain-auto-badge {
+  border-color: var(--border-neon-bright);
+  color: var(--text-accent);
+}
+
+.brain-auto-mark {
+  font-size: 13px;
+  color: var(--text-highlight);
+}
+
+.brain-auto-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.brain-auto-name {
+  color: var(--text-accent);
+  letter-spacing: 0.08em;
+}
+
+.brain-auto-sub {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.brain-auto-badge {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border-neon);
+  border-radius: 999px;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+}
+
+.brain-pop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(46vh, 380px);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.brain-pop-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 10px 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
+}
+
+.brain-pop-group-rule {
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border-neon);
+  opacity: 0.5;
+}
+
+.brain-pop-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.brain-pop-item:hover {
+  background: var(--bg-panel-hover);
+}
+
+.brain-pop-item[aria-selected="true"] {
+  border-color: var(--border-neon);
+  background: var(--tint-main);
+  color: var(--text-accent);
+}
+
+.brain-pop-item[disabled] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.brain-pop-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The one fact about a model the name never tells you, and the one that decides whether
+   it can look anything up. Said where the choice is made, not afterwards in the answer. */
+.brain-pop-note {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--neon-amber);
+}
+
+.brain-pop-empty {
+  padding: 18px 10px;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.brain-pop-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+  border-top: 1px solid var(--border-neon);
+}
+
+.brain-pop-setup {
+  padding: 6px 12px;
+  border: 1px solid var(--border-neon);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.brain-pop-setup:hover {
+  box-shadow: var(--glow-cyan);
+}
+
+/* ================================================================== NARROW ========== */
+
+/* Under 900px the sidebar is the stage. It goes to its icons rather than overlapping the
+   conversation, which at this width would leave neither readable. */
+@media (max-width: 900px) {
+  html[data-shell="studio"] #studio-sidebar {
+    width: 56px;
+    flex-basis: 56px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  html[data-shell="studio"] .studio-nav-label,
+  html[data-shell="studio"] .studio-brand-name,
+  html[data-shell="studio"] .studio-brand-tag,
+  html[data-shell="studio"] .studio-recents,
+  html[data-shell="studio"] .studio-operator-text {
+    display: none;
+  }
+
+  html[data-shell="studio"][data-studio-avatar="minitar"] #hud-layout > [data-panel="hologram"] {
+    width: 130px;
+    height: 130px;
+  }
+}
+
+/* ================================================================== UPDATE SCREEN ==== */
+
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
+  padding: 32px 20px;
+  background: var(--bg-core);
+}
+
+.update-overlay.hidden {
+  display: none;
+}
+
+.update-overlay-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.update-overlay-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--neon-cyan), transparent 62%),
+              radial-gradient(circle at 70% 75%, var(--neon-purple), transparent 60%);
+  box-shadow: var(--glow-cyan);
+}
+
+.update-overlay-name {
+  font-size: 30px;
+  letter-spacing: 0.22em;
+  color: var(--text-main);
+}
+
+.update-overlay-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(560px, 100%);
+}
+
+/* One spinner, and it is the only thing moving on the screen. The bar it replaces could
+   sit at 35% for four minutes of a rebuild and told nobody whether anything was happening;
+   a ring that never stops turning at least cannot claim progress it has not made. */
+.update-overlay-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid var(--border-neon);
+  border-top-color: var(--neon-cyan);
+  animation: update-spin 0.9s linear infinite;
+}
+
+@keyframes update-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-overlay-spinner {
+    animation-duration: 3s;
+  }
+}
+
+.update-overlay-step {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+  text-align: center;
+}
+
+.update-overlay-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.update-overlay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.update-overlay-toggle:hover {
+  color: var(--text-accent);
+}
+
+.update-overlay-toggle[aria-expanded="true"] .update-overlay-toggle-caret {
+  transform: rotate(180deg);
+}
+
+.update-overlay-toggle-caret {
+  font-size: 9px;
+  display: inline-block;
+}
+
+.update-overlay-log {
+  width: 100%;
+  max-height: 190px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-neon);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.update-overlay-log.hidden {
+  display: none;
+}
+
+.update-overlay-dismiss {
+  margin-top: 8px;
+  padding: 7px 18px;
+  border: 1px solid var(--border-neon);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.update-overlay-dismiss.hidden {
+  display: none;
+}
+
+/* ================================================================== SETTINGS ======== */
+
+/* The shell and the avatar's place, in Settings -> Display. Cards rather than a
+   <select>: both choices are about what the window looks like, and a dropdown describes
+   neither of them. */
+.shell-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shell-choice {
+  flex: 1 1 180px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-neon);
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shell-choice:hover {
+  background: var(--bg-panel-hover);
+}
+
+.shell-choice[aria-checked="true"] {
+  border-color: var(--border-neon-bright);
+  background: var(--tint-main);
+  box-shadow: var(--glow-cyan);
+}
+
+.shell-choice-sm {
+  flex-basis: 140px;
+}
+
+.shell-choice-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--text-accent);
+}
+
+.shell-choice-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  white-space: normal;
+}
+
+
+/* ---- what the HUD puts on the stage that the studio does not ---------------------- */
+
+/* The snap rail layout.js draws down the left edge for dropping a panel into a column.
+   There is one panel on this stage and nowhere to snap it to. */
+html[data-shell="studio"] .panel-snap-rail {
+  display: none !important;
+}
+
+/* The chin bar keeps its telemetry -- it is a line of live numbers along the bottom and
+   it is half of why this app looks like this. What goes is the row of quick commands and
+   the third copy of the model picker: the sidebar is the commands now, and the picker is
+   at the top of the stage. */
+html[data-shell="studio"] #chin-commands,
+html[data-shell="studio"] #chin-brain-row {
+  display: none !important;
+}
+
+/* ---- the empty conversation ------------------------------------------------------- */
+
+/* With nothing said yet the column is the greeting and the box, together, near the
+   middle -- the shape that reads as an invitation. Once there is a transcript the box
+   goes back to the foot of it, where a transcript needs it. */
+html[data-shell="studio"] #chat-view-conversation:not(.has-messages) {
+  justify-content: center;
+  padding-bottom: 8vh;
+}
+
+html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #chat-messages {
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-greeting {
+  flex: 0 0 auto;
+  padding-bottom: 22px;
+}
+
+/* The mini-tar sits in the bottom-right corner, which is where the input card's right
+   edge is once the column is centred -- the avatar landed on the Send button. The stage
+   gives it its own gutter instead, and the column centres in what is left, so neither is
+   over the other at any width wide enough for both. Below that width the media query
+   above shrinks the avatar and the column keeps the stage. */
+@media (min-width: 1100px) {
+  html[data-shell="studio"][data-studio-avatar="minitar"] #hud-layout > [data-panel="chat"] {
+    padding-right: 256px;
+    width: min(1076px, 100%);
+  }
+}
+
+/* Collapsed, the foot is three buttons in 56px, which is two buttons and a clipped one.
+   They stack instead -- the operator chip keeps its initial, and nothing falls off. */
+html[data-shell="studio"][data-studio-sidebar="closed"] .studio-foot {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+html[data-shell="studio"][data-studio-sidebar="closed"] .studio-operator {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 900px) {
+  html[data-shell="studio"] .studio-foot {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  html[data-shell="studio"] .studio-operator {
+    flex: 0 0 auto;
+  }
+}

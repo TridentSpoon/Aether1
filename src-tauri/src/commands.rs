@@ -1031,6 +1031,12 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
             llm::REASONING_SETTING.to_string(),
             Value::String("auto".to_string()),
         );
+        // The narrower of the two tool switches: whether the conversation may go out to
+        // the internet at all (search_web, fetch_url). It is the Search chip under the
+        // chat box. Defaults on, so an install that has never touched it behaves exactly
+        // as it did -- unlike tools_enabled, which is the switch #245 found off by default
+        // with nothing saying so.
+        defaults_obj.insert("web_search_enabled".to_string(), Value::Bool(true));
     }
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())
