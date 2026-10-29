@@ -4123,3 +4123,88 @@ variables and the `aether1` command. Everywhere else, each name is used without 
 
 **Still to come:** the HUD wordmark and the startup messages, the README, the package and
 binary names, the config directory's preferred spelling, and the tag scheme.
+
+## Step 65 — two names the readers pass had missed
+
+An integration review of step 63 turned up two more places where the rename would have taken
+something that is not ours to take. Both are the readers pass, so both land before any more of
+the name changes.
+
+**The vault, which is the costliest name in the program.** `vault::DEFAULT_VAULT_DIR` is
+`Aether1Vault`, and `vault_path` reaches it only when the `vault_path` setting is empty —
+which is the default, so most operators' memory bank is at `$HOME/Aether1Vault` with nothing
+in the settings table recording that. It also sits in `$HOME` rather than under the project
+policy directory, so neither `code_policy::dir_in` nor the data directory's own resolution
+reaches it. Renamed with no fallback, `vault_path` would point at a folder that is not there
+and `ensure` would make it and write INDEX.md, profile.md and machine.md into it: the operator
+opens Memories, finds three starter notes where their history was, and the real vault is still
+on disk under a name nothing looks at any more. The default now goes through
+`paths::branded_dir` over `VAULT_DIR_NAMES`, the same rule as the data directory and a
+project's own policy directory. An explicit `vault_path` still wins over both, which is what
+it is for.
+
+**The LAN subprotocol, fixed by not renaming it.** `server::WS_PROTOCOL` is `"aether1"`,
+offered as a single value and matched exactly by both ends. A build offering only `aurora1`
+would be refused by every peer already installed, so pairing between a renamed machine and an
+un-renamed one would stop working — which is the mixed-version case the rest of this work
+exists to survive. Teaching both ends to offer and accept two values would be machinery for a
+problem that only exists if the string changes, and nothing asks it to: a subprotocol is never
+shown to an operator. So it keeps its name and gains a comment saying it must keep it. It
+belongs with the `[AETHER1]` log prefix, the `AETHER1_*` environment variables and the Tauri
+identifier `com.tridentspoon.aether1` — the platform's own names, which stay Aether1 by
+design.
+
+**The line, now that there have been three goes at finding it.** A name changes if an operator
+reads it: the companion's own name, the prose in the HUD and the settings panes, the window
+title, the README, the vault folder in their home directory. A name stays if only the machinery
+reads it: log prefixes, environment variables, settings keys, database filenames, wire formats,
+the Tauri identifier, and every `Aether1*` identifier in the JavaScript. Two were almost got
+wrong in opposite directions, so the test for each is which of those two a change would break,
+not how the string looks.
+
+## Step 66 — the companion is Aurora1, on screen and in the README
+
+Steps 63 to 65 made the rename safe; step 64 renamed the version. This is the name itself,
+everywhere an operator reads it.
+
+**The HUD wordmark turned out to have been built for this.** `refreshWordmark` already showed
+the *companion's* own name and turned over to `PLATFORM_WORDMARK = 'AETHER1 PLATFORM'` every
+fourteen seconds, with a `name !== 'AETHER1'` guard so that a companion named after the
+platform did not alternate with itself. The default companion was AETHER1, so that guard fired
+and the wordmark simply sat on AETHER1 PLATFORM. Rename the default to AURORA1 and the two
+names are different, so the top-left now reads AURORA1, turns over to AETHER1 PLATFORM, and
+comes back — which is exactly the two-name design, with not one line of the rotation changed.
+The guard is kept rather than retargeted: somebody who names their companion after the
+platform should still see one name, and nothing says AURORA1 has to be that somebody.
+
+**What changed, and how it was chosen.** 34 rendering strings in `frontend/index.html`, 45 in
+`frontend/js/app.js`, two in other panes, and 43 mentions in the README. The pass was done by
+machine against the line step 65 states, not by replacing the string everywhere:
+
+- In the markup, only text outside HTML comments.
+- In the JavaScript, only text inside string and template literals — found with a small
+  lexer, because `Aether1Theme` and a `//` comment are both code and the platform's, while
+  `'Checking every part of AETHER1...'` is on screen.
+- Protected by name throughout: the `[AETHER1]` console prefix, `AETHER1_*` variables,
+  `aether1_model` and `runs_aether1` payload keys, `Aether1 Platform`, `AETHER1 PLATFORM`,
+  `Aether1Vault`, the `aether1` command, the repository and `Aether1-Setup.exe`.
+
+**One bug the second pass caught, worth naming.** The first README pass skipped any mention
+followed by `.`, `-`, `/` or `_`, meaning to protect `aether1.iss` and `Aether1-Setup.exe` —
+and silently skipped every mention that ended a sentence. The fix is to require a letter or
+digit after the punctuation, which is what makes it an extension rather than a full stop. A
+blanket exclusion is a quiet way to miss things; it was found by listing what survived rather
+than trusting the count of what changed.
+
+**The README is re-headed "Aurora1, on the Aether1 Platform"**, with one paragraph saying
+which name is which — the only place that is spelled out, as in the About box. Two parts were
+edited by hand rather than swept: the licence line, because GPL-3.0-only covers the platform's
+code, and the trademark clause, which now withholds all four spellings instead of two. The
+clone paths keep the repository's name, which is not being renamed.
+
+**Not changed, deliberately:** every `aether1 <subcommand>` in copy. The plan splits the
+commands — `aurora1` for the companion, `aether1` for behind the curtain — and copy must never
+name a command that is not on the operator's PATH yet, so those move in the PR that renames
+the binary. `cli::invoked_as` from step 63 already prints the help text with whichever name was
+used to run it. Rust strings that reach the operator through error messages move with the same
+PR, where the whole command surface is revisited at once.

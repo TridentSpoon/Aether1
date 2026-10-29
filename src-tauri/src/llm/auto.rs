@@ -398,6 +398,22 @@ pub struct Routed {
     pub why: String,
 }
 
+/// What the operator's switches leave reachable this turn.
+///
+/// The two are a pair because they are read as a pair, and because two booleans of the same
+/// type sitting next to each other in an argument list are a transposition waiting to
+/// happen -- named at the call site, they cannot be swapped silently.
+#[derive(Debug, Clone, Copy)]
+pub struct Reach {
+    /// Whether there is anything to switch on: the operator's tools setting and a non-empty
+    /// catalogue, resolved by the caller. Auto narrows this; it never widens it, so an
+    /// install with tools off never acquires them because a router said so.
+    pub tools: bool,
+    /// Whether the two web tools would actually run: the Search chip and local-only mode.
+    /// It changes only what the operator is told, never which tools go on the request.
+    pub web: bool,
+}
+
 /// The whole of the decision, as a pure function of the verdict and what is available.
 ///
 /// Separated from the call that produces the verdict so that every branch below is testable
@@ -407,15 +423,25 @@ pub fn decide(
     verdict: Verdict,
     available: &Candidates,
     configured: Provider,
-    tools_available: bool,
+    reach: Reach,
     local_base: Option<&str>,
 ) -> Option<Routed> {
-    // Tools first, because it is decided the same way wherever the question ends up: a
-    // question that needs a fact nobody can know from training needs something that can go
-    // and get it. The other direction matters more than it looks: an ordinary chat turn
-    // sent without the tool catalogue is a shorter prompt and a faster reply on a 7B, which
-    // is most of what Auto can do for somebody on a laptop.
-    let tools = tools_available && verdict.needs_fresh_facts;
+    /* Tools first, because it is decided the same way wherever the question ends up: a
+    question that needs a fact nobody can know from training needs something that can go
+    and get it. The other direction matters more than it looks: an ordinary chat turn sent
+    without the tool catalogue is a shorter prompt and a faster reply on a 7B, which is most
+    of what Auto can do for somebody on a laptop.
+
+    `reach.web` deliberately does *not* appear here, and the distinction is the whole
+    reason it is a separate field. "Needs a fact nobody can know from training" is not the
+    same question as "needs the internet": how much disk space is left, what is in a file,
+    what is running -- all of those need a tool and none of them needs the web, and they are
+    exactly the machine-facing questions a local-first companion exists for. The Search chip
+    and local-only mode gate the two web tools (`tools::web_tools_enabled`,
+    `net::require_online`) and nothing else, so withholding the whole catalogue when they
+    are off would break a question that works today. What `reach.web` changes is what
+    the operator is *told*: see the `why` below. */
+    let tools = reach.tools && verdict.needs_fresh_facts;
 
     // The cloud is for the two cases where a frontier model is visibly better and a 7B
     // visibly struggles. Everything else stays on this machine, which is the default this
@@ -467,20 +493,28 @@ pub fn decide(
         provider: available.local_provider,
         model: local_base.unwrap_or_default().to_string(),
         tools,
-        why: if tools {
-            "Auto answered this on your machine, with tools -- it needs something looked up."
-                .to_string()
-        } else {
-            "Auto answered this on your machine.".to_string()
+        why: match (tools, reach.web) {
+            (true, true) => "Auto answered this on your machine, with tools -- it needs something \
+                 looked up."
+                .to_string(),
+            /* The lookup was wanted and the web half of it cannot happen. Said outright,
+            for the same reason the hard-question branch above says it would have used a
+            larger model: the one line Auto prints is the whole of what the operator can
+            check it by, and a line promising a lookup while `search_web` is being refused
+            at the gate is worse than no line at all. Dropping silently to "Auto answered
+            this on your machine" would hide exactly the thing they need to know. */
+            (true, false) => "Auto answered this on your machine, with the tools on it -- \
+                              it needs something looked up, but web lookups are switched \
+                              off, so only what is on this machine is reachable."
+                .to_string(),
+            _ => "Auto answered this on your machine.".to_string(),
         },
     })
 }
 
 /// Asks the judge, then decides. None means the turn goes out exactly as it would have.
 ///
-/// `tools_available` is whether there is anything to switch on -- the operator's tools
-/// setting and a non-empty catalogue, resolved by the caller. Auto narrows that; it never
-/// widens it, so an install with tools off never acquires them because a router said so.
+/// What the two halves of `reach` mean, and why they are not one flag, is on `Reach`.
 pub fn route(
     db: &MemoryDb,
     persona: &Persona,
@@ -488,7 +522,7 @@ pub fn route(
     configured_model: &str,
     endpoint_in_use: &str,
     prompt: &str,
-    tools_available: bool,
+    reach: Reach,
 ) -> Result<Routed, String> {
     if prompt.trim().is_empty() {
         return Err("nothing to judge".to_string());
@@ -541,7 +575,7 @@ pub fn route(
         verdict,
         &available,
         configured,
-        tools_available,
+        reach,
         local_base.as_deref(),
     )
     .ok_or_else(|| "there was only one place to send it".to_string())
@@ -609,7 +643,10 @@ mod tests {
             verdict(Difficulty::Simple, false, false),
             &both(),
             Provider::Anthropic,
-            true,
+            Reach {
+                tools: true,
+                web: true,
+            },
             None,
         )
         .expect("something to route to");
@@ -625,7 +662,10 @@ mod tests {
             verdict(Difficulty::Hard, false, true),
             &both(),
             Provider::OpenAi,
-            true,
+            Reach {
+                tools: true,
+                web: true,
+            },
             None,
         )
         .expect("something to route to");
@@ -648,7 +688,10 @@ mod tests {
             verdict(Difficulty::Hard, false, false),
             &available,
             Provider::Anthropic,
-            true,
+            Reach {
+                tools: true,
+                web: true,
+            },
             None,
         )
         .expect("something to route to");
@@ -666,7 +709,10 @@ mod tests {
             verdict(Difficulty::Hard, false, false),
             &available,
             Provider::Anthropic,
-            true,
+            Reach {
+                tools: true,
+                web: true,
+            },
             None,
         )
         .expect("something to route to");
@@ -686,7 +732,10 @@ mod tests {
             verdict(Difficulty::Hard, false, false),
             &available,
             Provider::Anthropic,
-            true,
+            Reach {
+                tools: true,
+                web: true,
+            },
             None,
         )
         .expect("something to route to");
@@ -700,12 +749,40 @@ mod tests {
             verdict(Difficulty::Simple, true, false),
             &both(),
             Provider::Anthropic,
-            true,
+            Reach {
+                tools: true,
+                web: true,
+            },
             None,
         )
         .expect("something to route to");
         assert!(routed.tools);
         assert!(routed.why.contains("looked up"));
+    }
+
+    #[test]
+    fn with_web_lookups_off_the_notice_says_only_this_machine_is_reachable() {
+        /* The tools still go, because `needs_fresh_facts` covers questions about this
+        machine -- the disk, the clock, the project folder -- and those tools are not
+        gated by the web switch. What changes is what the operator is told, so the one
+        `⚙` line cannot promise a lookup that the gate will refuse. */
+        let routed = decide(
+            verdict(Difficulty::Simple, true, false),
+            &both(),
+            Provider::Anthropic,
+            Reach {
+                tools: true,
+                web: false,
+            },
+            None,
+        )
+        .expect("something to route to");
+        assert!(routed.tools, "the local tools are still worth sending");
+        assert!(
+            routed.why.contains("web lookups are switched off"),
+            "{}",
+            routed.why
+        );
     }
 
     #[test]
@@ -715,7 +792,10 @@ mod tests {
                 verdict(difficulty, true, false),
                 &both(),
                 Provider::Anthropic,
-                false,
+                Reach {
+                    tools: false,
+                    web: true,
+                },
                 None,
             )
             .expect("something to route to");
@@ -741,7 +821,10 @@ mod tests {
                     verdict(difficulty, false, false),
                     &available,
                     Provider::Anthropic,
-                    true,
+                    Reach {
+                        tools: true,
+                        web: true
+                    },
                     None,
                 )
                 .is_none(),

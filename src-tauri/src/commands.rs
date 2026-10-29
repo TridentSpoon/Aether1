@@ -959,6 +959,14 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         "voice_name": llm::DEFAULT_VOICE,
         "enable_sfx": true,
         "auto_speak": true,
+        /* True, because that is what `tools::tools_enabled` answers when nothing is
+        stored, and the two cannot be allowed to differ. This block is what the Settings
+        pane renders from and the pane writes every field back on Save, so a `false` here
+        on an install that has never chosen drew the switch off while the engine was
+        running with tools on -- and the first Save of anything at all turned them off for
+        real. `tools::apply_default_on` cannot rescue that: its marker is already written
+        by then. The same reading feeds the studio's Tools chip. */
+        "tools_enabled": true,
         "command_allowlist": [],
         "tts_engine": "auto",
         "tts_local_voice": "",
@@ -1033,30 +1041,9 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // The narrower of the two tool switches: whether the conversation may go out to
         // the internet at all (search_web, fetch_url). It is the Search chip under the
         // chat box. Defaults on, so an install that has never touched it behaves exactly
-        // as it did.
+        // as it did -- unlike tools_enabled, which is the switch #245 found off by default
+        // with nothing saying so.
         defaults_obj.insert("web_search_enabled".to_string(), Value::Bool(true));
-
-        /* Asked of the gate rather than written down here, and this is the whole point of
-        it being in this block.
-
-        It was a literal `false` in the table above, left from before #245 changed the
-        default -- `tools::tools_enabled` has answered `true` for an install with nothing
-        stored ever since, and nothing moved this. So on a fresh install the engine had
-        tools on and every control that reads this said they were off: the Settings
-        switch, and now the Tools chip under the chat box, which is drawn as the state of
-        the machine rather than a preference about it. The exact inverse of the fault #245
-        was about, and the same cost -- somebody turning on a thing that was already on,
-        or not asking a question they could have asked.
-
-        Only an install with nothing stored ever reaches this: a stored value wins over
-        every entry in this map, and the settings pane writes all of them on every Save.
-        So this changes no behaviour anywhere. It makes the panel say what the engine is
-        already doing, and it makes the one function that decides it the only place that
-        decides it. */
-        defaults_obj.insert(
-            "tools_enabled".to_string(),
-            Value::Bool(crate::tools::tools_enabled(engine.db())),
-        );
     }
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())
@@ -2865,6 +2852,28 @@ mod tests {
         );
     }
 
+    /* What the Settings pane renders a switch from has to be what the engine would do
+    with nothing stored, or the pane shows the opposite of what is running and then makes
+    it true the first time anything is saved. `tools_enabled` was the one that got away:
+    declared false here, defaulted true in `tools::tools_enabled`, so a fresh install drew
+    the Tools switch off while the companion was happily reading files, and one Save of an
+    unrelated field switched them off in earnest. Pinned rather than commented, because the
+    two live in different files and nothing else would notice them drifting apart. */
+    #[test]
+    fn the_settings_pane_is_shown_the_same_tool_switch_the_engine_is_running_with() {
+        let engine = resume_engine("tool_switch_default");
+        assert!(
+            crate::tools::tools_enabled(engine.db()),
+            "the engine's default is the thing being matched; if this moved, move the \
+             declared default with it"
+        );
+        assert_eq!(
+            get_settings(&engine)["settings"]["tools_enabled"],
+            serde_json::Value::Bool(true),
+            "the pane would draw the switch off and write that off on the next Save"
+        );
+    }
+
     /// The whole point of the change. An approved action's output has to come back as a
     /// model turn stored in the conversation that asked -- before this it went to the
     /// frontend's approval card and nowhere else, so the model answered from memory while
@@ -3023,53 +3032,6 @@ mod tests {
     /// it. See applyOsWording() in frontend/js/app.js. Losing the field here does not break
     /// the page, it makes it quietly vague, which is the kind of regression nothing else
     /// would catch.
-    /* The Settings panel and the engine have to answer "may it use its tools?" the same
-    way, and for a year they did not: `tools::tools_enabled` has defaulted to true since
-    #245, while this response declared `false` in its own defaults table. Nobody sees a
-    default directly -- what they see is the Settings switch, and now the Tools chip
-    under the chat box, both of which read this. On a fresh install both said the
-    companion could not use its tools while it was using them.
-
-    The divergence was invisible because each half is right on its own. Only asking both
-    in one test catches it, which is what this does. */
-    #[test]
-    fn the_panel_and_the_engine_agree_about_tools_on_a_fresh_install() {
-        let path =
-            std::env::temp_dir().join(format!("aether1_fresh_tools_{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let db = llm::MemoryDb::open(&path).expect("temp db should open");
-        // Exactly what the native app, `--serve` and every CLI subcommand do on start-up.
-        crate::tools::apply_default_on(&db);
-        let engine_says = crate::tools::tools_enabled(&db);
-        let engine = LlmEngine::new(db);
-
-        assert_eq!(
-            get_settings(&engine)["settings"]["tools_enabled"],
-            serde_json::Value::Bool(engine_says),
-            "the panel would tell somebody their tools are {} while the engine has them {}",
-            if engine_says { "off" } else { "on" },
-            if engine_says { "on" } else { "off" },
-        );
-    }
-
-    /// And the stored value still wins, in both directions -- the point of the switch is
-    /// that somebody who turns tools off keeps them off.
-    #[test]
-    fn a_stored_tools_choice_beats_the_derived_default() {
-        let path =
-            std::env::temp_dir().join(format!("aether1_stored_tools_{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let db = llm::MemoryDb::open(&path).expect("temp db should open");
-        db.set_setting("tools_enabled", &serde_json::Value::Bool(false))
-            .unwrap();
-        let engine = LlmEngine::new(db);
-
-        assert_eq!(
-            get_settings(&engine)["settings"]["tools_enabled"],
-            serde_json::Value::Bool(false)
-        );
-    }
-
     #[test]
     fn the_settings_response_says_which_machine_this_is() {
         let path = std::env::temp_dir().join(format!(

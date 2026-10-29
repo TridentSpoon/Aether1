@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aether1 Platform // CYBERNETIC AI HUD</title>
+    <title>Aurora1 // CYBERNETIC AI HUD</title>
     <!-- Everything the HUD needs to draw itself is on disk. It used to fetch Tailwind,
          three.js and the fonts from three CDNs on every launch, which meant an offline
          machine (or a blocked network, or a bad afternoon at Cloudflare) got an unstyled
@@ -171,13 +171,13 @@
                 <!-- The wordmark carries the agent's own name once one is set, and turns over
                      to AETHER1 PLATFORM every so often so what it is running on is never a
                      mystery. See refreshWordmark in app.js. -->
-                <h1 id="hud-wordmark" class="font-orbitron font-bold text-base leading-none text-cyan-400 tracking-wider glow-cyan">AETHER1</h1>
+                <h1 id="hud-wordmark" class="font-orbitron font-bold text-base leading-none text-cyan-400 tracking-wider glow-cyan">AURORA1</h1>
                 <!-- Starts hidden and is revealed by initVersionAndUpdates, which only runs
                      in the desktop app: the browser has no version to report, and an empty
                      badge reading "--" under the wordmark forever is worse than no badge. -->
                 <div class="flex items-center gap-1">
                     <button id="version-badge" title="Click to check for updates" class="hidden items-center text-[9px] leading-none font-mono text-slate-500 border border-slate-700 rounded px-1 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">--</button>
-                    <button id="btn-header-update" type="button" class="hidden cyber-btn text-[9px] leading-none py-1 px-1.5" title="Check for Aether1 updates">↻ Update</button>
+                    <button id="btn-header-update" type="button" class="hidden cyber-btn text-[9px] leading-none py-1 px-1.5" title="Check for Aurora1 updates">↻ Update</button>
                 </div>
 <!-- Two lines rather than one: the step on top, and under it whatever git or cargo
                      last printed, which is the part that tells an operator a two-minute rebuild
@@ -187,7 +187,7 @@
                 <button id="header-update-progress" type="button" class="hidden w-36 max-w-full space-y-0.5 text-left" aria-live="polite" title="Open Settings &#8594; Updates for the whole message">
                     <div id="header-update-progress-text" class="text-[8px] font-mono text-slate-500 truncate">Checking for updates…</div>
                     <div id="header-update-progress-detail" class="hidden text-[8px] font-mono text-slate-500 truncate"></div>
-                    <div class="h-1 rounded bg-slate-800 overflow-hidden" role="progressbar" aria-label="Aether1 update progress">
+                    <div class="h-1 rounded bg-slate-800 overflow-hidden" role="progressbar" aria-label="Aurora1 update progress">
                         <div id="header-update-progress-bar" class="h-full w-0 bg-cyan-400 transition-all duration-200"></div>
                     </div>
                 </button>
@@ -229,7 +229,7 @@
                 <button id="btn-window-maximize" type="button" class="window-btn" title="Maximise" aria-pressed="false">
                     <span class="window-btn-glyph" aria-hidden="true">&#x25a1;</span><span class="sr-only">Maximise</span>
                 </button>
-                <button id="btn-window-close" type="button" class="window-btn window-btn-close" title="Close to the tray -- AETHER1 keeps running. Quit it from the tray icon.">
+                <button id="btn-window-close" type="button" class="window-btn window-btn-close" title="Close to the tray -- AURORA1 keeps running. Quit it from the tray icon.">
                     <span aria-hidden="true">&#x2715;</span><span class="sr-only">Close</span>
                 </button>
             </div>
@@ -265,10 +265,10 @@
          (see .chat-tabs below) driven through the same switchChatTab, because a sidebar
          entry that opened a different Notes from the tab's Notes would be two Notes. -->
     <div id="shell-row" class="flex-1 flex min-h-0">
-    <aside id="studio-sidebar" aria-label="Aether1 navigation">
+    <aside id="studio-sidebar" aria-label="Aurora1 navigation">
         <div class="studio-brand">
             <span class="studio-brand-mark" aria-hidden="true"></span>
-            <span class="studio-brand-name font-orbitron">AETHER1</span>
+            <span class="studio-brand-name font-orbitron">AURORA1</span>
             <span class="studio-brand-tag">STUDIO</span>
             <button id="btn-studio-sidebar" type="button" class="studio-icon-btn ml-auto"
                     title="Collapse the sidebar" aria-label="Collapse the sidebar" aria-expanded="true">&#x276E;</button>
@@ -312,7 +312,7 @@
                 <span id="studio-operator-mark" class="studio-operator-mark" aria-hidden="true">A</span>
                 <span class="studio-operator-text">
                     <span id="studio-operator-name" class="studio-operator-name">Operator</span>
-                    <span id="studio-operator-sub" class="studio-operator-sub">Aether1</span>
+                    <span id="studio-operator-sub" class="studio-operator-sub">Aurora1</span>
                 </span>
             </button>
             <button id="btn-studio-shell" type="button" class="studio-icon-btn" title="Back to the HUD panel grid" aria-label="Back to the HUD panel grid">&#9638;</button>
@@ -656,7 +656,7 @@
                      whenever that changes, which is what makes less and htop redraw properly. -->
                 <div id="terminal-surface" class="flex-1 min-h-0 px-2 py-2 hidden"></div>
                 <p id="terminal-note" class="px-4 py-3 text-[10px] font-mono text-slate-500 leading-relaxed">
-                    Your own shell, in the window. Aether1 cannot see it or type into it, and
+                    Your own shell, in the window. Aurora1 cannot see it or type into it, and
                     nothing runs here until you press Return.
                 </p>
             </div>
@@ -888,7 +888,7 @@
                 <button id="btn-verify" type="button" class="quick-chip chin-cmd" title="Check this install over without asking the companion">
                     &#10003; Verify
                 </button>
-                <button type="button" class="quick-chip chin-cmd" data-cmd="Run your self-check and tell me what is wrong with AETHER1 right now, and whether anything has crashed recently." title="Run the self-check and say what it found">
+                <button type="button" class="quick-chip chin-cmd" data-cmd="Run your self-check and tell me what is wrong with AURORA1 right now, and whether anything has crashed recently." title="Run the self-check and say what it found">
                     &#129658; Diagnostics
                 </button>
                 <button type="button" class="quick-chip chin-cmd" data-cmd="help" title="What can this thing do?">
@@ -993,7 +993,7 @@
             </div>
 
             <p class="text-xs font-mono text-slate-400 leading-snug">
-                Aether1 is the face and the memory. The thinking is done by an AI model that runs
+                Aurora1 is the face and the memory. The thinking is done by an AI model that runs
                 on this computer &mdash; it is a separate program, and it is free. This page
                 installs one, start to finish. You do not need to understand any of it.
             </p>
@@ -1027,7 +1027,7 @@
                 <div id="setup-downloads" class="space-y-2"></div>
                 <p class="text-[11px] font-mono text-slate-500 leading-snug">
                     You can close this window &mdash; the download belongs to the model server,
-                    not to Aether1, and it keeps going either way.
+                    not to Aurora1, and it keeps going either way.
                 </p>
             </div>
 
@@ -1095,7 +1095,7 @@
                     <div class="font-orbitron text-[11px] font-bold text-cyan-300 tracking-wider">PICK A BETTER VOICE</div>
                     <p id="voice-picker-note" class="text-[11px] font-mono text-slate-400 leading-snug">
                         These are voice files for Piper &mdash; recordings turned into numbers,
-                        not programs. Aether1 saves them in its own voices folder; nothing is
+                        not programs. Aurora1 saves them in its own voices folder; nothing is
                         installed, nothing is run, and you still need Piper itself from the
                         steps above for them to be used.
                     </p>
@@ -1218,7 +1218,7 @@
                             <span class="settings-nav-icon">⚡</span>
                             <span class="settings-nav-text">Startup &amp; Performance</span>
                         </button>
-                        <button type="button" id="settings-nav-doctor" class="settings-nav-item" data-settings-section="doctor" data-keywords="diagnostics broken fix repair doctor not working" data-hint="every part of AETHER1, and the broken ones" title="every part of AETHER1, and the broken ones">
+                        <button type="button" id="settings-nav-doctor" class="settings-nav-item" data-settings-section="doctor" data-keywords="diagnostics broken fix repair doctor not working" data-hint="every part of AURORA1, and the broken ones" title="every part of AURORA1, and the broken ones">
                             <span class="settings-nav-icon">🩺</span>
                             <span class="settings-nav-text">Is it working?</span>
                         </button>
@@ -1285,7 +1285,7 @@
                             <p id="profile-hostname" class="profile-hostname">&mdash;</p>
                             <p class="text-[10px] font-mono text-slate-400 leading-snug">
                                 The hostname, as the rest of your network knows this box.
-                                AETHER1 reads it and never changes it.
+                                AURORA1 reads it and never changes it.
                             </p>
                         </div>
                         <div class="space-y-1">
@@ -1577,7 +1577,7 @@
                 <!-- STAGE 1: the lines. -->
                 <div class="avatar-stage is-active" data-avatar-stage="groups">
                     <p class="avatar-stage-lede">
-                        The hologram is the thing AETHER1 has that nothing else does. Pick the
+                        The hologram is the thing AURORA1 has that nothing else does. Pick the
                         line first -- each one is a cast with its own idea of how the work gets
                         covered.
                     </p>
@@ -1849,7 +1849,7 @@
                         <div class="min-w-0">
                             <div class="text-xs font-mono text-cyan-200">Not sure what to put here?</div>
                             <div class="text-[11px] font-mono text-slate-400 leading-snug">
-                                Let Aether1 check this computer and walk you through installing a
+                                Let Aurora1 check this computer and walk you through installing a
                                 free AI that runs offline. Takes a few minutes.
                             </div>
                         </div>
@@ -2172,7 +2172,7 @@
                                     Optional. Checking for updates works without it &mdash; the releases are
                                     public. Signing in raises GitHub&rsquo;s hourly request limit, and lets this
                                     copy see releases that are not public. A short code typed in at github.com;
-                                    Aether1 never sees a password, and the access it gets is read-only.
+                                    Aurora1 never sees a password, and the access it gets is read-only.
                                     Declining leaves everything else working.
                                 </div>
                                 <!-- The device code, shown here as well as in the update panel: whichever
@@ -2192,7 +2192,7 @@
                                     computer, and it is what AETHER CODE runs read-only commands through
                                     (<span class="text-slate-400">gh pr view</span>, <span class="text-slate-400">gh run list</span>).
                                     It carries its own login, made with <span class="text-slate-400">gh auth login</span>
-                                    in a terminal; Aether1 never reads it. Signing in above does not install it
+                                    in a terminal; Aurora1 never reads it. Signing in above does not install it
                                     and is not what gives AETHER CODE its access, and updates need neither.
                                 </div>
                             </div>
@@ -2210,9 +2210,9 @@
                             <div class="bg-cyan-950/30 border border-cyan-500/40 p-3 rounded-md space-y-2">
                                 <div class="text-xs font-mono text-cyan-200">Write code with no subscription behind it</div>
                                 <div class="text-[11px] font-mono text-slate-400 leading-snug">
-                                    A coding model runs on this computer and costs nothing to use. Aether1
+                                    A coding model runs on this computer and costs nothing to use. Aurora1
                                     works out which one fits in this machine's memory, downloads it, and
-                                    gives you the exact commands to point a coding program at it. Aether1
+                                    gives you the exact commands to point a coding program at it. Aurora1
                                     does not do the editing itself &mdash; it sets up something that does.
                                 </div>
                                 <div class="flex items-center justify-end">
@@ -2360,7 +2360,7 @@
                         </div>
                         <details class="border border-cyan-500/20 rounded p-3 mt-3">
                             <summary class="text-xs font-mono text-cyan-200 cursor-pointer">🌙 Quiet hours / Night mode</summary>
-                            <p class="hub-blurb mt-2">During these hours Aether1 stays silent unless you mark headphones as connected or start a voice conversation. The startup voice check is silent by default.</p>
+                            <p class="hub-blurb mt-2">During these hours Aurora1 stays silent unless you mark headphones as connected or start a voice conversation. The startup voice check is silent by default.</p>
                             <div class="flex flex-wrap items-center gap-3 mt-2">
                                 <label class="flex items-center gap-2 text-xs font-mono text-slate-300"><input id="setting-quiet-hours" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0"> Enable quiet hours</label>
                                 <label class="text-xs font-mono text-slate-300">From <input id="setting-quiet-start" type="time" value="22:00" class="bg-slate-900 border border-cyan-500/40 rounded p-1 text-cyan-100"></label>
@@ -2372,7 +2372,7 @@
                     </div>
                     <div class="hub-detail mt-3">
                         <div class="hub-detail-name">✨ Quirky greetings</div>
-                        <p class="hub-blurb">Aether1 can greet you with a short, characterful line. Greeting styles will have a home here later; there are no greeting settings to configure yet.</p>
+                        <p class="hub-blurb">Aurora1 can greet you with a short, characterful line. Greeting styles will have a home here later; there are no greeting settings to configure yet.</p>
                     </div>
 
                     <!-- ---- Devices ----
@@ -2392,7 +2392,7 @@
                                 <button type="button" id="vhub-test-output" class="cyber-btn text-[10px] py-1 px-2">▶ Test this speaker</button>
                             </div>
                             <p class="hub-blurb">
-                                Only Aether1's own sound moves; nothing else on this computer is
+                                Only Aurora1's own sound moves; nothing else on this computer is
                                 changed. Remember to press Save Changes.
                             </p>
                         </div>
@@ -2662,7 +2662,7 @@
 
                 <details class="border border-cyan-500/25 rounded p-3 bg-slate-900/50">
                     <summary class="text-xs font-mono text-cyan-200 cursor-pointer">💡 Try a request in chat</summary>
-                    <p class="text-[10px] font-mono text-slate-400 mt-2">Choose a starter prompt to place it in chat. Aether1 will still show an approval card before a gated action runs.</p>
+                    <p class="text-[10px] font-mono text-slate-400 mt-2">Choose a starter prompt to place it in chat. Aurora1 will still show an approval card before a gated action runs.</p>
                     <div class="flex flex-wrap gap-2 mt-2">
                         <button type="button" data-prompt-suggestion="List the files in my selected project and summarize its layout." class="cyber-btn text-[10px] py-1 px-2">Explore this project</button>
                         <button type="button" data-prompt-suggestion="Review the selected project and suggest useful checks to run." class="cyber-btn text-[10px] py-1 px-2">Find checks to run</button>
@@ -3003,7 +3003,7 @@
                         <div class="net-card-heading">
                             <h4 class="net-card-title">Leaving this machine</h4>
                             <p class="net-card-hint">
-                                Whether AETHER1 may reach the internet at all. A separate
+                                Whether AURORA1 may reach the internet at all. A separate
                                 question from who may come in, and the stricter of the two.
                             </p>
                         </div>
@@ -3107,7 +3107,7 @@
                                     <span id="lan-state" class="net-state" data-state="off"><i aria-hidden="true"></i>Off</span>
                                 </h4>
                                 <p class="net-card-hint">
-                                    Use AETHER1 from a phone, a tablet or another computer on your
+                                    Use AURORA1 from a phone, a tablet or another computer on your
                                     Wi-Fi or wired network. Traffic is encrypted, and every request
                                     needs a token the device earns by typing the pairing phrase once.
                                 </p>
@@ -3135,7 +3135,7 @@
                         <div class="net-row">
                             <div class="net-row-text">
                                 <p class="net-row-title">Port</p>
-                                <p class="net-row-hint">Fixed. start.sh, start.bat, the README and <span class="font-mono">aether1 doctor</span> all assume this port, so it is a fact about AETHER1 rather than a setting.</p>
+                                <p class="net-row-hint">Fixed. start.sh, start.bat, the README and <span class="font-mono">aether1 doctor</span> all assume this port, so it is a fact about AURORA1 rather than a setting.</p>
                             </div>
                             <p id="lan-port" class="net-row-value">8378</p>
                         </div>
@@ -3143,7 +3143,7 @@
                         <div class="net-row">
                             <div class="net-row-text">
                                 <p class="net-row-title">Start automatically</p>
-                                <p class="net-row-hint">Put this machine on the network each time AETHER1 starts. Stopping LAN access now will not turn this off. Game Mode holds it back, like everything else it quiets.</p>
+                                <p class="net-row-hint">Put this machine on the network each time AURORA1 starts. Stopping LAN access now will not turn this off. Game Mode holds it back, like everything else it quiets.</p>
                             </div>
                             <label class="a1-switch net-row-switch">
                                 <input id="setting-lan-autostart" type="checkbox" class="a1-switch-input">
@@ -3161,7 +3161,7 @@
                         <div class="net-card-head">
                             <span class="net-card-icon" aria-hidden="true">📡</span>
                             <div class="net-card-heading">
-                                <h4 class="net-card-title">AETHER1s on this network</h4>
+                                <h4 class="net-card-title">AURORA1s on this network</h4>
                                 <p class="net-card-hint">
                                     Machines announcing themselves on your own network, found
                                     without anyone typing an address. Only a machine that is
@@ -3219,7 +3219,7 @@
                              question is asked -- this is how a device gets on the list. -->
                         <div class="net-row net-row-stacked">
                             <div class="net-row-text">
-                                <p class="net-row-title">Use a phrase from another AETHER1</p>
+                                <p class="net-row-title">Use a phrase from another AURORA1</p>
                                 <p class="net-row-hint">
                                     Paste the twelve words another copy showed you and this machine
                                     will answer to them too &mdash; one phrase to keep rather than one
@@ -3229,7 +3229,7 @@
                             </div>
                         </div>
                         <div class="net-field net-field-row">
-                            <label for="lan-phrase-input" class="sr-only">Pairing phrase from another AETHER1</label>
+                            <label for="lan-phrase-input" class="sr-only">Pairing phrase from another AURORA1</label>
                             <input id="lan-phrase-input" type="text" autocomplete="off" spellcheck="false"
                                    placeholder="twelve words, separated by spaces"
                                    class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
@@ -3277,7 +3277,7 @@
                     <div class="space-y-1">
                         <div class="flex items-center gap-2">
                             <input id="setting-autostart-app" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-autostart-app" class="text-xs font-mono text-slate-300">Launch AETHER1 at login</label>
+                            <label for="setting-autostart-app" class="text-xs font-mono text-slate-300">Launch AURORA1 at login</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
                             Starts resident in the tray as soon as you log in, exactly like
@@ -3292,7 +3292,7 @@
                             <label for="setting-autostart-ollama" class="text-xs font-mono text-slate-300">Start the local model server automatically</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            When AETHER1 starts, also start Ollama if it isn't already
+                            When AURORA1 starts, also start Ollama if it isn't already
                             running &mdash; without you having to ask for it. Does nothing
                             if Ollama isn't installed, or if something is already listening.
                         </p>
@@ -3308,9 +3308,9 @@
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
                             A model server with nobody talking to it is the most expensive
                             idle thing on this machine &mdash; it holds the whole model in
-                            memory. After this long with no local reply, AETHER1 stops the
+                            memory. After this long with no local reply, AURORA1 stops the
                             one it started; the next thing you ask starts it again, at the
-                            cost of waiting for the first token. Only servers AETHER1 started
+                            cost of waiting for the first token. Only servers AURORA1 started
                             itself &mdash; one you are running yourself is left alone. Set it
                             to 0 to keep it running.
                         </p>
@@ -3322,7 +3322,7 @@
                             <label for="setting-voice-startup-audible" class="text-xs font-mono text-slate-300">Speak the voice self-test out loud</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            On launch, AETHER1 checks that speech really plays &mdash; not
+                            On launch, AURORA1 checks that speech really plays &mdash; not
                             just that synthesis ran without error, but that audio was
                             actually decoded and produced sound. On, you'll hear a short
                             phrase confirming it. Off, the same check runs silently and
@@ -3352,11 +3352,11 @@
                 <details id="settings-group-doctor" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🩺 Is it working?</span>
-                    <span class="settings-group-hint">every part of AETHER1, and what to do about the broken ones</span>
+                    <span class="settings-group-hint">every part of AURORA1, and what to do about the broken ones</span>
                 </summary>
                 <div class="settings-group-body">
                     <div class="flex items-center justify-between gap-2 flex-wrap">
-                        <span id="doctor-headline" class="text-xs font-mono text-slate-300">Press Diagnose to check every part of AETHER1.</span>
+                        <span id="doctor-headline" class="text-xs font-mono text-slate-300">Press Diagnose to check every part of AURORA1.</span>
                         <div class="flex items-center gap-2">
                             <button id="btn-doctor-heal" class="cyber-btn text-xs py-1 px-3 text-amber-300 whitespace-nowrap">
                                 🛠 Fix what you can
@@ -3526,11 +3526,11 @@
          aria-labelledby="update-overlay-step" aria-live="polite">
         <div class="update-overlay-brand">
             <span class="update-overlay-mark" aria-hidden="true"></span>
-            <span class="update-overlay-name font-orbitron">AETHER1</span>
+            <span class="update-overlay-name font-orbitron">AURORA1</span>
         </div>
         <div class="update-overlay-body">
             <div class="update-overlay-spinner" aria-hidden="true"></div>
-            <div id="update-overlay-step" class="update-overlay-step">Updating Aether1&hellip;</div>
+            <div id="update-overlay-step" class="update-overlay-step">Updating Aurora1&hellip;</div>
             <div id="update-overlay-sub" class="update-overlay-sub">This may take a few minutes. Do not close the app.</div>
             <button id="btn-update-details" type="button" class="update-overlay-toggle" aria-expanded="false" aria-controls="update-overlay-log">
                 <span id="update-details-label">Show update details</span>

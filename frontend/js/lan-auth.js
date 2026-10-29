@@ -200,7 +200,7 @@
                     Type the code the other machine is showing you &mdash; Settings, Network
                     &amp; Remote, Pair a device &mdash; and this one is in. A browser cannot
                     see which certificate it reached, so the standing twelve-word phrase is
-                    not accepted here any more: pair from the AETHER1 app for that, or ask
+                    not accepted here any more: pair from the AURORA1 app for that, or ask
                     that machine for a code.
                 </p>
                 <label for="lan-pair-phrase" style="display:block;margin-bottom:6px;

@@ -35,9 +35,24 @@ fn truncate_chars(text: &str, limit: usize) -> String {
     format!("{}…", text.chars().take(limit).collect::<String>())
 }
 
-/// Where the vault lives unless the operator says otherwise. Under home so that the
-/// existing tool path guards already reach it.
-pub const DEFAULT_VAULT_DIR: &str = "Aether1Vault";
+/// Where the vault lives unless the operator says otherwise, in the two brandings this
+/// project has: the one it uses now first, then the one the Aurora1 rename moves it to.
+///
+/// **This is the costliest name in the program to rename carelessly.** It is reached only
+/// when the `vault_path` setting is empty, which is the default, so most operators have their
+/// memory bank at `$HOME/Aether1Vault` and nothing in the settings table recording that. It
+/// also sits in `$HOME` rather than under the project policy directory, so neither
+/// `code_policy::dir_in` nor the app data directory's own resolution reaches it. A rename with
+/// no fallback would therefore not move a note: `vault_path` would point at a folder that is
+/// not there, `ensure` would make it and write the three starter notes into it, and the
+/// operator would open Memories to find INDEX.md, profile.md and machine.md where their whole
+/// history used to be — with the real vault still on disk, unreferenced, under a name nothing
+/// looks at any more.
+///
+/// So the default follows whichever of the two is already in `$HOME`, the same rule as
+/// `paths::branded_dir` applies to the data directory and `code_policy::dir_in` to a
+/// project's own.
+pub const VAULT_DIR_NAMES: [&str; 2] = ["Aether1Vault", "Aurora1Vault"];
 const VAULT_PATH_SETTING: &str = "vault_path";
 const IMPORT_FLAG_SETTING: &str = "vault_imported_memories";
 
@@ -63,9 +78,10 @@ pub fn vault_path(db: &MemoryDb) -> PathBuf {
         // No home found (neither HOME nor USERPROFILE) is rare but real; putting the vault
         // beside the working directory at least keeps it findable rather than scattering
         // notes at the filesystem root.
-        crate::paths::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(DEFAULT_VAULT_DIR)
+        crate::paths::branded_dir(
+            &crate::paths::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            VAULT_DIR_NAMES,
+        )
     } else {
         crate::paths::expand_home(configured.trim())
     }
@@ -131,7 +147,7 @@ pub fn ensure(db: &MemoryDb) -> Result<PathBuf, String> {
             .map_err(|e| format!("could not create {}: {e}", path.display()))?;
     }
 
-    let agent_name = db.get_setting_string("agent_name", "AETHER1");
+    let agent_name = db.get_setting_string("agent_name", "AURORA1");
     for (name, contents) in [
         ("INDEX.md", starter_index(&agent_name)),
         ("profile.md", STARTER_PROFILE.to_string()),
@@ -671,6 +687,52 @@ mod tests {
         )
         .unwrap();
         (db, dir.join("vault"))
+    }
+
+    /// The default vault location follows whichever branding is already in `$HOME`.
+    ///
+    /// **This is the note-losing one.** `vault_path` reaches `VAULT_DIR_NAMES` only when the
+    /// `vault_path` setting is empty, which is the default — so most operators' memory bank is
+    /// at `$HOME/Aether1Vault` with nothing in the settings table recording that. It is also
+    /// in `$HOME` rather than under the project policy directory, so neither
+    /// `code_policy::dir_in` nor the data directory's own resolution reaches it. Renamed with
+    /// no fallback, `vault_path` would point at a folder that is not there and `ensure` would
+    /// make it and write the three starter notes into it: the operator opens Memories and
+    /// finds INDEX.md, profile.md and machine.md where their history was, with the real vault
+    /// still on disk under a name nothing looks at.
+    #[test]
+    fn the_default_vault_follows_the_branding_already_in_home() {
+        let home = std::env::temp_dir().join(format!(
+            "aether1_vault_branding_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let db = MemoryDb::open(home.join("memory.db")).unwrap();
+
+        // Neither there: the name a machine with no vault yet gets.
+        assert_eq!(
+            crate::paths::branded_dir(&home, VAULT_DIR_NAMES),
+            home.join(VAULT_DIR_NAMES[0])
+        );
+
+        // The other branding's vault already in place — an operator who set one up under the
+        // name this build is not writing. It is still their vault.
+        let other = home.join(VAULT_DIR_NAMES[1]);
+        std::fs::create_dir_all(&other).unwrap();
+        assert_eq!(crate::paths::branded_dir(&home, VAULT_DIR_NAMES), other);
+
+        // And an explicit `vault_path` still wins over both, which is what it is for.
+        let chosen = home.join("somewhere-else");
+        db.set_setting(
+            VAULT_PATH_SETTING,
+            &serde_json::Value::String(chosen.to_string_lossy().to_string()),
+        )
+        .unwrap();
+        assert_eq!(vault_path(&db), chosen);
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     /// The point of the feature: an ordinary exchange ends up as markdown in a folder the
