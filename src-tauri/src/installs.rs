@@ -32,6 +32,25 @@ use std::process::Command;
 
 use crate::paths;
 
+/// The binary name this project installs, in the two brandings it has: the one it uses now
+/// first, then the one the Aurora1 rename moves it to.
+///
+/// **Everything below reads both, before anything writes the second.** This module's whole
+/// job is finding copies of this app that were installed before now, and the rename makes
+/// "before now" include a change of name -- so a scanner that knows only one of them reports
+/// half the machine. The two cases that matter are `installs remove old`, which would stop
+/// seeing a copy under the other name and leave it running, and `data_roots`, which is the
+/// guard that stops a removal taking the vault and the conversation database with it. A guard
+/// that names only one directory is no guard at all on a machine that has the other.
+pub const BINARY_NAMES: [&str; 2] = ["aether1", "aurora1"];
+
+/// The launcher entry and icon each install leaves beside its binary, paired with the binary
+/// name they belong to.
+const DESKTOP_FILES: [(&str, &str, &str); 2] = [
+    ("aether1", "Aether1.desktop", "aether1.png"),
+    ("aurora1", "Aurora1.desktop", "aurora1.png"),
+];
+
 /// The settings key that turns the startup notice off. Answering "keep them" is a decision,
 /// and a decision the next launch has forgotten is a prompt that never goes away.
 pub const NOTICE_SETTING: &str = "installs_notice";
@@ -48,6 +67,18 @@ pub enum Version {
     /// increases -- across a major or minor bump as much as within one -- while the major
     /// and minor are editorial and are kept only so a version can be shown back accurately.
     Build { major: u32, minor: u32, pr: u32 },
+    /// The scheme the Aurora1 rename brings in: `Aurora1 rev0.261018.227`, tagged
+    /// `v0-261018-227` -- a revision number, the date the release was cut, and the pull
+    /// request it was built from. The date is editorial exactly as the major and minor were:
+    /// it says *when*, not *which is newer*, so this compares on `pr` against a `Build`
+    /// just as a `Build` compares against another one.
+    ///
+    /// **This variant exists before anything prints it.** A copy of AETHER1 installed today
+    /// has its parser baked in, so the parser has to learn the new spelling in a release
+    /// that still prints the old one -- otherwise the first renamed build is one no existing
+    /// copy can read a version off, and `installs remove old` starts calling it older than
+    /// everything (`pr` would come back as 0).
+    Dated { rev: u32, date: u32, pr: u32 },
     /// Whatever a package manager reports instead. Kept as text on purpose: a `0.4.0` from
     /// dpkg and a `0.4.152` from the binary are not points on the same number line, and
     /// pretending they are is how the wrong copy gets deleted.
@@ -72,16 +103,51 @@ impl Version {
             return None;
         }
         let lowered = text.to_ascii_lowercase();
-        // The old spelling first, because `Aether1 0.3.Rev152` also contains a bare `0.3`
-        // that the three-number branch below would happily read as a version and get wrong.
+        // Both `rev` spellings first, because `Aether1 0.3.Rev152` also contains a bare
+        // `0.3` that the three-number branch below would happily read as a version and get
+        // wrong -- and because `Aurora1 rev0.261018.227` contains `0.261018.227`, which that
+        // branch would read as a *major* of 0 and a pull request of 227. The second is the
+        // right pull request by luck rather than by reading, and the label it produced would
+        // be the wrong scheme.
         if let Some(at) = lowered.find("rev") {
-            let digits: String = text[at + 3..]
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
+            let after = &text[at + 3..];
+            // `rev0.261018.227`: three numbers run together with the `rev`, newest scheme.
+            let numbers: Vec<&str> = after
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches(['(', ')', ','])
+                .split('.')
                 .collect();
+            if numbers.len() == 3 {
+                if let (Ok(rev), Ok(date), Ok(pr)) = (
+                    numbers[0].parse::<u32>(),
+                    numbers[1].parse::<u32>(),
+                    numbers[2].parse::<u32>(),
+                ) {
+                    return Some(Version::Dated { rev, date, pr });
+                }
+            }
+            // `0.3.Rev152`: the pull request on its own, with the major and minor in front.
+            let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
             if let Ok(pr) = digits.parse::<u32>() {
                 let (major, minor) = Version::major_minor_before(&text[..at]).unwrap_or((0, 0));
                 return Some(Version::Build { major, minor, pr });
+            }
+        }
+        // `v0-261018-227`: the Aurora1 tag, which is the same three numbers with dashes so
+        // that a git tag reads cleanly. The leading `v` is the caller's to strip.
+        {
+            let token = text.split_whitespace().next().unwrap_or("");
+            let numbers: Vec<&str> = token.split('-').collect();
+            if numbers.len() == 3 {
+                if let (Ok(rev), Ok(date), Ok(pr)) = (
+                    numbers[0].parse::<u32>(),
+                    numbers[1].parse::<u32>(),
+                    numbers[2].parse::<u32>(),
+                ) {
+                    return Some(Version::Dated { rev, date, pr });
+                }
             }
         }
         // The current spelling: a token of exactly three numbers, `0.4.152`.
@@ -123,6 +189,7 @@ impl Version {
     pub fn label(&self) -> String {
         match self {
             Version::Build { major, minor, pr } => format!("{major}.{minor}.{pr}"),
+            Version::Dated { rev, date, pr } => format!("rev{rev}.{date}.{pr}"),
             Version::Opaque(text) => text.clone(),
         }
     }
@@ -131,15 +198,25 @@ impl Version {
     /// definitely not, and `None` when the two cannot be compared at all -- which is the
     /// answer whenever either side is opaque, and the reason `Standing::Unknown` exists.
     pub fn older_than(&self, other: &Version) -> Option<bool> {
-        match (self, other) {
-            // On `pr` alone: see the note on the variant. Comparing the major and minor
-            // first would say the same thing, since pull request numbers keep climbing
-            // across a version bump, but it would imply the bump carries information about
-            // which build is newer, and it does not.
-            (Version::Build { pr: mine, .. }, Version::Build { pr: theirs, .. }) => {
-                Some(mine < theirs)
-            }
+        // On `pr` alone: see the note on the variants. Comparing the major and minor first
+        // would say the same thing, since pull request numbers keep climbing across a
+        // version bump, but it would imply the bump carries information about which build is
+        // newer, and it does not. That is also what lets a `Ver 0.4.152` and an
+        // `Aurora1 rev0.261018.227` be compared at all: they are two spellings of a position
+        // in one repository's pull request history, and the rename does not reset it.
+        match (self.pull_request(), other.pull_request()) {
+            (Some(mine), Some(theirs)) => Some(mine < theirs),
             _ => None,
+        }
+    }
+
+    /// The pull request this build came from, which is the only part of any version that
+    /// orders two of them. None for an opaque version, which is why `Standing::Unknown`
+    /// exists.
+    fn pull_request(&self) -> Option<u32> {
+        match self {
+            Version::Build { pr, .. } | Version::Dated { pr, .. } => Some(*pr),
+            Version::Opaque(_) => None,
         }
     }
 }
@@ -344,12 +421,16 @@ impl Machine for ThisMachine {
     }
 
     fn deb_package(&self) -> Option<String> {
-        query_package("dpkg-query", &["-W", "-f=${Version}", "aether1"])
+        BINARY_NAMES
+            .iter()
+            .find_map(|name| query_package("dpkg-query", &["-W", "-f=${Version}", name]))
     }
 
     fn pacman_package(&self) -> Option<String> {
         // `-Q` prints "aether1 0.4.0-1"; the version is the second field.
-        query_package("pacman", &["-Q", "aether1"])
+        BINARY_NAMES
+            .iter()
+            .find_map(|name| query_package("pacman", &["-Q", name]))
             .and_then(|line| line.split_whitespace().nth(1).map(|v| v.to_string()))
     }
 
@@ -415,7 +496,11 @@ fn short_id(path: &Path) -> String {
 fn data_roots(home: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = vec![crate::project_root()];
     if let Some(home) = home {
-        roots.push(home.join(".local").join("share").join("aether1"));
+        // Both names, whether or not they exist: this list decides what a removal refuses to
+        // touch, and a directory that is not there yet costs nothing to protect.
+        for name in crate::paths::APP_DIR_NAMES {
+            roots.push(home.join(".local").join("share").join(name));
+        }
     }
     roots
 }
@@ -442,7 +527,7 @@ fn appimage_dirs(home: &Path) -> Vec<PathBuf> {
 
 fn is_appimage(name: &str) -> bool {
     let lowered = name.to_ascii_lowercase();
-    lowered.starts_with("aether1") && lowered.ends_with(".appimage")
+    lowered.ends_with(".appimage") && BINARY_NAMES.iter().any(|n| lowered.starts_with(n))
 }
 
 /// True when this path sits inside a git checkout of AETHER1 -- a directory with both
@@ -520,8 +605,11 @@ pub fn detect(machine: &dyn Machine) -> Vec<Install> {
         // The user bundle: one binary, one launcher entry, one icon. Piper's and whisper's
         // files under ~/.local/share are deliberately not in this list -- they are shared
         // engines that whichever copy survives still uses.
-        let bin = home.join(".local").join("bin").join("aether1");
-        if bin.is_file() {
+        for (name, desktop, icon) in DESKTOP_FILES {
+            let bin = home.join(".local").join("bin").join(name);
+            if !bin.is_file() {
+                continue;
+            }
             let removal = match checkout_root(&bin.canonicalize().unwrap_or_else(|_| bin.clone())) {
                 Some(_) => Removal::Keep {
                     why: "this is a link into a source checkout, not a copy of its own",
@@ -531,14 +619,14 @@ pub fn detect(machine: &dyn Machine) -> Vec<Install> {
                     home.join(".local")
                         .join("share")
                         .join("applications")
-                        .join("Aether1.desktop"),
+                        .join(desktop),
                     home.join(".local")
                         .join("share")
                         .join("icons")
                         .join("hicolor")
                         .join("256x256")
                         .join("apps")
-                        .join("aether1.png"),
+                        .join(icon),
                 ]),
             };
             let version = machine.version_of(&bin);
@@ -566,10 +654,16 @@ pub fn detect(machine: &dyn Machine) -> Vec<Install> {
     }
 
     if !package_owned {
-        for path in [
-            PathBuf::from("/usr/local/bin/aether1"),
-            PathBuf::from("/usr/bin/aether1"),
-        ] {
+        for path in BINARY_NAMES
+            .iter()
+            .flat_map(|name| {
+                [
+                    PathBuf::from(format!("/usr/local/bin/{name}")),
+                    PathBuf::from(format!("/usr/bin/{name}")),
+                ]
+            })
+            .collect::<Vec<_>>()
+        {
             if !path.is_file() {
                 continue;
             }
@@ -842,6 +936,113 @@ mod tests {
             Version::build(0, 5, 160).older_than(&Version::build(0, 4, 152)),
             Some(false)
         );
+    }
+
+    /// The Aurora1 scheme, read by a build that still prints the old one. This is the whole
+    /// point of the compatibility pass: the parser in an installed copy is the parser it was
+    /// compiled with, so it has to learn the new spelling one release *before* anything
+    /// prints it. Without this, `rev0.261018.227` parsed as pull request 0 -- the "rev"
+    /// branch took the digits immediately after the word and got the revision number
+    /// instead -- which reads as the oldest copy on the machine.
+    #[test]
+    fn reads_the_aurora1_scheme_before_anything_prints_it() {
+        assert_eq!(
+            Version::parse("Aurora1 rev0.261018.227"),
+            Some(Version::Dated {
+                rev: 0,
+                date: 261018,
+                pr: 227
+            })
+        );
+        // With the commit beside it, the way the running version is printed.
+        assert_eq!(
+            Version::parse("Aurora1 rev0.261018.227 (a1b2c3d)"),
+            Some(Version::Dated {
+                rev: 0,
+                date: 261018,
+                pr: 227
+            })
+        );
+        // The git tag, once the caller has taken the `v` off (see releases::is_newer).
+        assert_eq!(
+            Version::parse("0-261018-227"),
+            Some(Version::Dated {
+                rev: 0,
+                date: 261018,
+                pr: 227
+            })
+        );
+        // The label says which scheme it is, rather than flattening into the other one.
+        assert_eq!(
+            Version::parse("Aurora1 rev0.261018.227").unwrap().label(),
+            "rev0.261018.227"
+        );
+        // And the old spellings still read as they did -- the new branch must not shadow
+        // `0.3.Rev152`, whose pull request is the number straight after the word.
+        assert_eq!(
+            Version::parse("Aether1 0.3.Rev152"),
+            Some(Version::build(0, 3, 152))
+        );
+    }
+
+    /// **The writer and the reader have to agree, and only a test can say they do.**
+    /// `build.rs` assembles the version string and this module parses it, and nothing else
+    /// connects the two -- so a change to either one's spelling would otherwise be found by
+    /// an operator noticing that `installs` thinks the running copy is the oldest on the
+    /// machine, which is the symptom step 63 was written to prevent.
+    #[test]
+    fn this_build_can_read_its_own_version() {
+        let parsed = Version::parse(crate::APP_VERSION).unwrap_or_else(|| {
+            panic!(
+                "this build prints {:?}, which parses as nothing",
+                crate::APP_VERSION
+            )
+        });
+        assert!(
+            matches!(parsed, Version::Dated { .. }),
+            "this build prints {:?}, which reads as {parsed:?} rather than the Aurora1 scheme",
+            crate::APP_VERSION
+        );
+        // And it is comparable against a version from before the rename, in both
+        // directions, which is what an installed copy actually does with it. Comparable, not
+        // a direction: the pull request number of whatever commit this is being built from
+        // is not something a test can know, and `Some(_)` is the invariant that matters --
+        // `None` is what a copy reports as "cannot tell", and what it then stops acting on.
+        let before = Version::build(0, 4, 1);
+        assert!(before.older_than(&parsed).is_some());
+        assert!(parsed.older_than(&before).is_some());
+        // The direction, asserted where the numbers are known: one pull request further on.
+        if let Version::Dated { rev, date, pr } = parsed {
+            let next = Version::Dated {
+                rev,
+                date,
+                pr: pr + 1,
+            };
+            assert_eq!(parsed.older_than(&next), Some(true));
+            assert_eq!(next.older_than(&parsed), Some(false));
+        }
+    }
+
+    /// A rename is not a reset: the two schemes are two spellings of a position in the same
+    /// repository's pull request history, so they compare. A copy that could not compare them
+    /// would answer "cannot tell" for every release after the rename and quietly stop
+    /// offering updates.
+    #[test]
+    fn the_two_brandings_compare_across_the_rename() {
+        let before = Version::parse("Ver 0.4.152").unwrap();
+        let after = Version::parse("Aurora1 rev0.261018.227").unwrap();
+        assert_eq!(before.older_than(&after), Some(true));
+        assert_eq!(after.older_than(&before), Some(false));
+        // Two renamed builds, on the pull request and not on the date -- a release cut from
+        // an older branch on a later day is not newer for having a bigger date.
+        let same_day_later_pr = Version::parse("Aurora1 rev0.261018.228").unwrap();
+        let later_day_older_pr = Version::parse("Aurora1 rev0.261101.227").unwrap();
+        assert_eq!(
+            later_day_older_pr.older_than(&same_day_later_pr),
+            Some(true)
+        );
+        // A package manager's number is still not on the same line as either of them.
+        assert_eq!(Version::Opaque("0.4.0".into()).older_than(&after), None);
     }
 
     #[test]

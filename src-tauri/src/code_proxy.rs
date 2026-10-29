@@ -56,6 +56,9 @@ use crate::llm::MemoryDb;
 
 /// The per-project file. JSON rather than TOML only because `serde_json` is already here
 /// and a second parser is a dependency to maintain for the shape of one list.
+/// The per-project policy file as it is *named* to the operator. Reads and writes go through
+/// `code_policy::file_in`, which picks whichever of the two directory names the project
+/// already has -- see the note there on the Aurora1 rename.
 pub const POLICY_FILE: &str = ".aether/policy.json";
 
 /// Domains a fresh project trusts before anybody is asked anything: the package registries
@@ -106,7 +109,7 @@ pub const PENDING_SETTING: &str = "code_net_pending";
 /// adds, minus whatever it removes.
 pub fn allowed(root: &Path) -> BTreeSet<String> {
     let mut domains: BTreeSet<String> = STARTER_DOMAINS.iter().map(|d| d.to_string()).collect();
-    let Ok(text) = std::fs::read_to_string(root.join(POLICY_FILE)) else {
+    let Ok(text) = std::fs::read_to_string(crate::code_policy::file_in(root)) else {
         return domains;
     };
     let Ok(policy) = serde_json::from_str::<Value>(&text) else {
@@ -178,7 +181,7 @@ fn domain_name(domain: &str) -> Result<String, String> {
 
 /// Reads the project's policy file, or an empty object if there is not one yet.
 fn read_policy(root: &Path) -> Result<(PathBuf, Value), String> {
-    let path = root.join(POLICY_FILE);
+    let path = crate::code_policy::file_in(root);
     let policy: Value = std::fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())

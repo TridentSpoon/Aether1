@@ -54,8 +54,66 @@ pub const JUDGE_SETTING: &str = "auto_router_judge";
 /// giving it a provider key would put it in every `match` that dispatches a request.
 pub const PICKER_VALUE: &str = "\u{0}auto";
 
+/// The other spelling of "Auto is on": `llm_provider` set to the literal `auto`.
+///
+/// Not how this was designed -- Auto is a decision about where a question goes, not a place
+/// it can be sent, and a provider key for it would have to appear in every `match` that
+/// dispatches a request. But it is how a picker naturally writes it, because every other
+/// entry in that list is a provider and a model, and it is what the chat redesign's popover
+/// saves. Accepted here, in the one function that answers "is Auto on", rather than refused
+/// at the door: two front ends disagreeing about a setting's spelling is a thing to absorb
+/// in one place, and the place is the reader.
+pub const PROVIDER_SPELLING: &str = "auto";
+
+/// Where the local server's shape is remembered, for when `llm_provider` is holding `auto`
+/// instead. Written by `commands::save_settings` whenever a local provider is stored, so it
+/// is already right by the time somebody picks Auto.
+pub const LOCAL_SHAPE_SETTING: &str = "llm_provider_local";
+
+/// Whether Auto is in charge of this install's routing.
+///
+/// Either spelling counts. The switch is the canonical one and is what AETHER1's own picker
+/// writes; the provider spelling is what a picker that only knows how to save a provider
+/// writes. One reader, so they cannot disagree.
 pub fn enabled(db: &MemoryDb) -> bool {
     db.get_setting_bool(ENABLED_SETTING, false)
+        || db.get_setting_string("llm_provider", "") == PROVIDER_SPELLING
+}
+
+/// What the stored provider means, with `auto` read as "no provider of its own".
+///
+/// This exists because of one specific way the provider spelling could go wrong, and it is
+/// worse than it looks. `Provider::from_key` falls back to `Offline` for anything it does
+/// not recognise, so a stored `llm_provider` of `auto` would make the turn's *fallback*
+/// provider Offline -- and the fallback is exactly what runs when the judge cannot be
+/// reached. Somebody who picked Auto and then stopped their model server would get the
+/// offline persona's canned replies, with nothing anywhere saying that the setting naming
+/// the router had been read as "answer from a script".
+///
+/// So: `auto` resolves to the local provider the endpoint is being driven as, which is
+/// where a routed turn would have gone anyway, and the one answer that cannot strand
+/// anyone.
+pub fn stored_provider(db: &MemoryDb) -> Provider {
+    let key = db.get_setting_string("llm_provider", "offline");
+    if key == PROVIDER_SPELLING {
+        return local_provider_for(&db.get_setting_string(LOCAL_SHAPE_SETTING, ""));
+    }
+    Provider::from_key(&key)
+}
+
+/// Which of the two local providers an endpoint is being driven as.
+///
+/// The stored provider is the only thing that knows: the same address answers both shapes,
+/// and reading the port would be the mislabel this codebase has already chased through six
+/// pull requests. With Auto stored in the provider slot that record is gone, so
+/// `llm_provider_local` keeps it -- and an install that has never had one is Ollama, which
+/// is the default endpoint's own shape.
+fn local_provider_for(remembered: &str) -> Provider {
+    if remembered == "lmstudio" {
+        Provider::LmStudio
+    } else {
+        Provider::Ollama
+    }
 }
 
 /// One place a question could be sent.
@@ -104,10 +162,10 @@ pub fn candidates(db: &MemoryDb) -> Candidates {
     // Which of the two the endpoint is being driven as. The stored provider is the only
     // thing that knows: the same address answers both shapes, and reading the port would
     // be the mislabel this codebase has already chased through six pull requests.
-    let local_provider = if provider_key == "lmstudio" {
-        Provider::LmStudio
+    let local_provider = if provider_key == PROVIDER_SPELLING {
+        local_provider_for(&db.get_setting_string(LOCAL_SHAPE_SETTING, ""))
     } else {
-        Provider::Ollama
+        local_provider_for(&provider_key)
     };
 
     let local = crate::model_scanner::models_at(&endpoint)
@@ -133,7 +191,18 @@ pub fn candidates(db: &MemoryDb) -> Candidates {
     .into_iter()
     .map(|provider| Candidate {
         provider,
-        model: super::default_model_for(provider).to_string(),
+        // What the operator last set for *this* provider, which #245/#255 remember per
+        // provider, before the shipped default. Routing a hard question to Anthropic and
+        // sending it `claude-opus-5` when they have chosen something else for Anthropic
+        // would be the router overriding a choice it has no business touching.
+        model: {
+            let remembered = db.get_setting_string(&super::model_setting_for(provider), "");
+            if remembered.trim().is_empty() {
+                super::default_model_for(provider).to_string()
+            } else {
+                remembered.trim().to_string()
+            }
+        },
         local: false,
         tools: None,
         // A provider with no key switches and then fails with a 401, which is worse than
@@ -218,7 +287,7 @@ impl Candidates {
     /// the cost that matters is the one paid in front of every reply. `parameter_billions`
     /// returns `u32::MAX` for a name that claims no size, so an unlabelled model is never
     /// mistaken for a small one.
-    fn judge_model(&self, db: &MemoryDb) -> Option<String> {
+    pub fn judge_model(&self, db: &MemoryDb) -> Option<String> {
         let stored = db.get_setting_string(JUDGE_SETTING, "");
         let stored = stored.trim();
         if !stored.is_empty() {
@@ -264,10 +333,14 @@ pub struct Verdict {
     pub is_code: bool,
 }
 
-/// The schema the server is told to constrain the answer to. Three fields, all required,
+/// The schema the server is told to constrain the answer to.
+///
+/// Public because the tuning harness scores wordings of the judge prompt through the same
+/// schema the router uses -- a wording scored under a different schema is scored against
+/// something else. Three fields, all required,
 /// `difficulty` restricted to the two words -- so "medium" cannot come back and be read as
 /// neither.
-fn schema() -> Value {
+pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
@@ -280,13 +353,18 @@ fn schema() -> Value {
     })
 }
 
-/// What the judge is told it is doing.
+/// What the judge is told it is doing, as shipped.
+///
+/// The baseline rather than necessarily what runs: `llm::tuning` can score a different
+/// wording against cases with known answers and put that in force instead, and `route`
+/// below reads whichever is. This stays the thing every tuned wording is measured against,
+/// and the thing an install that has never tuned uses.
 ///
 /// Written for a small model: short, no persona, no politeness, and each field explained by
 /// the question it answers rather than by its name. It says *do not answer the question*
 /// twice, because the single most likely failure of a small model here is helpfulness --
 /// answering the operator instead of classifying them.
-fn judge_prompt() -> String {
+pub fn built_in_judge_prompt() -> String {
     "You sort questions. You do not answer them.\n\n\
      You will be given one message that somebody typed to an AI assistant. Decide three \
      things about it and reply with those three fields only.\n\n\
@@ -407,6 +485,7 @@ pub fn route(
     db: &MemoryDb,
     persona: &Persona,
     configured: Provider,
+    configured_model: &str,
     endpoint_in_use: &str,
     prompt: &str,
     tools_available: bool,
@@ -430,15 +509,32 @@ pub fn route(
         available.local_provider,
         endpoint,
         &judge,
-        &judge_prompt(),
+        // Whatever wording is in force: the shipped one, or one that beat it on this
+        // machine's model. See `llm::tuning`.
+        &super::tuning::text(db, super::tuning::Adapter::Judge),
         prompt,
         &schema(),
+        providers::VERDICT_TOKENS,
     )?;
     let verdict: Verdict = serde_json::from_value(answer.clone())
         .map_err(|e| format!("the judgment was JSON but not a verdict ({e}): {answer}"))?;
-    // Only where the stored model would be useless on a local server -- which is to say,
-    // only on a turn Auto is moving off the cloud.
-    let local_base = (!matches!(configured, Provider::Ollama | Provider::LmStudio))
+    /* Whether a locally-answered turn needs a model named for it, judged by asking the
+    question directly: is the stored model one the server actually has? Two ways it is not,
+    and the second was found by driving it rather than by reasoning:
+
+      * Auto moved this turn off a cloud provider, so the stored id is `claude-opus-5`.
+      * The stored model is *empty*, because the picker that turned Auto on wrote a provider
+        and a blank model -- which is what a picker does when every other row in it is a
+        provider and a model. Nothing then named a model at all, and the server answered
+        "no model by that name" on a machine with three installed.
+
+    Asking "is it installed" covers both, and covers the ones nobody has thought of. */
+    let installed = available.local.iter().any(|candidate| {
+        candidate
+            .model
+            .eq_ignore_ascii_case(configured_model.trim())
+    });
+    let local_base = (!installed)
         .then(|| available.local_base(persona, &super::routing::measured_speeds(db)))
         .flatten();
     decide(
@@ -707,6 +803,111 @@ mod tests {
     }
 
     #[test]
+    fn the_providers_own_spelling_of_auto_counts_as_on() {
+        let db = db_for("spelling");
+        assert!(!enabled(&db));
+        db.set_setting("llm_provider", &json!(PROVIDER_SPELLING))
+            .unwrap();
+        assert!(
+            enabled(&db),
+            "a picker that can only save a provider still turns Auto on"
+        );
+    }
+
+    /// The failure this is really about: `Provider::from_key` falls back to `Offline` for
+    /// anything it does not know, so `auto` in the provider slot would make the *fallback*
+    /// provider Offline -- and the fallback is what runs when the judge cannot be reached.
+    /// Picking Auto and then stopping the model server would get the offline persona's
+    /// canned replies, with nothing saying why.
+    #[test]
+    fn auto_in_the_provider_slot_never_resolves_to_offline() {
+        let db = db_for("not_offline");
+        db.set_setting("llm_provider", &json!(PROVIDER_SPELLING))
+            .unwrap();
+        assert_eq!(stored_provider(&db), Provider::Ollama);
+        assert_ne!(stored_provider(&db), Provider::Offline);
+
+        // And it remembers which local shape, which is the thing the provider slot was the
+        // only record of.
+        db.set_setting(LOCAL_SHAPE_SETTING, &json!("lmstudio"))
+            .unwrap();
+        assert_eq!(stored_provider(&db), Provider::LmStudio);
+        assert_eq!(
+            candidates(&db).local_provider,
+            Provider::LmStudio,
+            "so the local models are listed and judged as the server that is actually there"
+        );
+    }
+
+    #[test]
+    fn a_real_provider_in_the_slot_still_reads_as_itself() {
+        let db = db_for("real_provider");
+        for key in ["ollama", "lmstudio", "anthropic", "openai", "offline"] {
+            db.set_setting("llm_provider", &json!(key)).unwrap();
+            assert_eq!(
+                stored_provider(&db),
+                Provider::from_key(key),
+                "{key} is untouched by the auto spelling"
+            );
+        }
+    }
+
+    /// Found by driving it rather than by reading it. A picker whose every other row is a
+    /// provider and a model writes a *blank* model when Auto is chosen, so nothing named a
+    /// model at all and the server answered "no model by that name" on a machine with three
+    /// installed. The condition is therefore "is the stored model installed", which covers
+    /// the blank, the cloud id, and whatever else arrives in that slot.
+    #[test]
+    fn a_local_turn_gets_a_model_named_for_it_whenever_the_stored_one_is_not_installed() {
+        let available = both();
+        let installed = &available.local[0].model;
+        let speeds = std::collections::HashMap::new();
+        let base = available
+            .local_base(&Persona::Default, &speeds)
+            .expect("something installed to fall back to");
+        assert!(
+            available.local.iter().any(|c| c.model == base),
+            "the fallback is a model the server actually has: {base}"
+        );
+
+        // And it is only a fallback: a stored model that *is* installed is left alone, so
+        // step 19 stays the only thing choosing between installed models.
+        assert_eq!(installed, "qwen3:8b");
+    }
+
+    #[test]
+    fn a_routed_cloud_turn_uses_the_model_set_for_that_provider() {
+        let db = db_for("remembered_model");
+        let available = candidates(&db);
+        let anthropic = available
+            .online
+            .iter()
+            .find(|c| c.provider == Provider::Anthropic)
+            .expect("anthropic is offered");
+        assert_eq!(
+            anthropic.model,
+            super::super::default_model_for(Provider::Anthropic),
+            "the shipped default, while nothing has been chosen"
+        );
+
+        db.set_setting(
+            &super::super::model_setting_for(Provider::Anthropic),
+            &json!("claude-something-else"),
+        )
+        .unwrap();
+        let available = candidates(&db);
+        let anthropic = available
+            .online
+            .iter()
+            .find(|c| c.provider == Provider::Anthropic)
+            .expect("anthropic is offered");
+        assert_eq!(
+            anthropic.model, "claude-something-else",
+            "the router does not override a model the operator chose for that provider"
+        );
+    }
+
+    #[test]
     fn auto_is_off_until_it_is_asked_for() {
         let db = db_for("enabled");
         assert!(!enabled(&db));
@@ -758,7 +959,7 @@ mod tests {
 
     #[test]
     fn the_judge_is_told_not_to_answer() {
-        let prompt = judge_prompt();
+        let prompt = built_in_judge_prompt();
         assert!(prompt.contains("do not answer") || prompt.contains("Do not answer"));
         assert!(
             prompt.contains("difficulty")

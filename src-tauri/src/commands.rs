@@ -1314,9 +1314,66 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| engine.db().get_setting_string("llm_provider", "offline"));
+
+    /* Which of the two local shapes the endpoint is being driven as, remembered before the
+    write that could lose it. One address answers both Ollama's own API and an
+    OpenAI-compatible one, so the stored provider is the only record of which -- and a
+    picker that writes `llm_provider: "auto"` overwrites exactly that record. Without this,
+    an operator on LM Studio who picks Auto has their local models listed and judged as
+    Ollama's, which is the mislabel this codebase has already chased through six pull
+    requests. See `llm::auto::LOCAL_SHAPE_SETTING`. */
+    if matches!(provider_key.as_str(), "ollama" | "lmstudio") {
+        engine
+            .db()
+            .set_setting(
+                llm::auto::LOCAL_SHAPE_SETTING,
+                &Value::from(provider_key.as_str()),
+            )
+            .map_err(|e| format!("could not remember the local server's shape: {e}"))?;
+    }
+
+    /* "Auto" arriving in the provider slot, translated at the door into the switch it
+    means.
+
+    A picker whose every other row is a provider and a model naturally saves Auto the same
+    way -- `{llm_provider: "auto", llm_model: ""}` -- and that is a reasonable thing for a
+    picker to do. But Auto is a decision about where a question goes rather than a place it
+    can be sent, and letting the word live in the provider slot costs three things at once:
+    `Provider::from_key` reads it as Offline, so the fallback for an unroutable turn becomes
+    the offline persona's canned replies; the slot was the only record of which of the two
+    local shapes the endpoint is being driven as; and the blank model wipes the model the
+    operator had, so turning Auto off again leaves nothing named.
+
+    So the word never reaches the database. The switch goes on, the provider slot keeps the
+    local provider the turn would actually go to, and the blank model is dropped as the
+    absence of a choice rather than a choice of nothing. Every form that only knows how to
+    save a provider therefore works, and there is exactly one thing to read to find out
+    whether Auto is on. */
+    let means_auto = provider_key == llm::auto::PROVIDER_SPELLING;
+    if means_auto {
+        engine
+            .db()
+            .set_setting(llm::auto::ENABLED_SETTING, &Value::Bool(true))
+            .map_err(|e| format!("could not turn the Auto router on: {e}"))?;
+    }
+    let provider_key = if means_auto {
+        llm::auto::stored_provider(engine.db()).key().to_string()
+    } else {
+        provider_key
+    };
     let provider = llm::Provider::from_key(&provider_key);
 
     for (key, value) in map {
+        if means_auto {
+            // The provider is written as the resolved one below rather than as the word,
+            // and a blank model is not a model.
+            if key == "llm_provider" {
+                continue;
+            }
+            if key == "llm_model" && value.as_str().is_some_and(|model| model.trim().is_empty()) {
+                continue;
+            }
+        }
         // A secret never goes in the settings table. It is handled below, through
         // `secrets`, and a plain `set_setting` here would write the sentinel the page
         // was given in place of the key -- storing the literal text of the dots.
@@ -1327,6 +1384,13 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
             .db()
             .set_setting(key, value)
             .map_err(|e| format!("could not save setting {key:?}: {e}"))?;
+    }
+
+    if means_auto {
+        engine
+            .db()
+            .set_setting("llm_provider", &Value::from(provider_key.as_str()))
+            .map_err(|e| format!("could not store the provider behind Auto: {e}"))?;
     }
 
     /* The address and model are also filed under the provider they were typed for, so
@@ -2725,6 +2789,60 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_resume_{name}_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         LlmEngine::new(llm::MemoryDb::open(path).unwrap())
+    }
+
+    /// What a picker that can only save a provider and a model sends when Auto is chosen,
+    /// and what has to be in the database afterwards.
+    ///
+    /// The three things this is really defending, each of which was reachable before and
+    /// one of which was found by driving the real server rather than by reading:
+    ///   * `Provider::from_key("auto")` is `Offline`, so the word in the provider slot
+    ///     would make an unroutable turn answer from the offline persona's canned replies.
+    ///   * That slot is the only record of which of the two local shapes the endpoint is
+    ///     being driven as, and the word overwrites it.
+    ///   * The blank model that comes with it wiped the model the operator had, so nothing
+    ///     named a model at all -- "no model by that name" on a machine with three
+    ///     installed.
+    #[test]
+    fn the_pickers_spelling_of_auto_becomes_the_switch_and_never_reaches_the_database() {
+        let engine = resume_engine("auto_spelling");
+        save_settings(
+            &engine,
+            serde_json::json!({
+                "llm_provider": "lmstudio",
+                "llm_endpoint": "http://127.0.0.1:1234",
+                "llm_model": "qwen3:8b",
+            }),
+        )
+        .expect("the ordinary save works");
+
+        // Now the popover: a provider of "auto" and a blank model, and nothing else.
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "auto", "llm_model": ""}),
+        )
+        .expect("the auto save works");
+
+        let db = engine.db();
+        assert!(
+            llm::auto::enabled(db),
+            "the switch is on, which is the one thing to read"
+        );
+        assert_eq!(
+            db.get_setting_string("llm_provider", ""),
+            "lmstudio",
+            "the provider slot keeps a real provider, so an unroutable turn is not offline"
+        );
+        assert_eq!(
+            db.get_setting_string("llm_model", ""),
+            "qwen3:8b",
+            "a blank model is the absence of a choice, not a choice of nothing"
+        );
+        assert_eq!(
+            llm::auto::stored_provider(db),
+            llm::Provider::LmStudio,
+            "and the local server's shape survived, so its models are not read as Ollama's"
+        );
     }
 
     /// The whole point of the change. An approved action's output has to come back as a

@@ -1222,7 +1222,7 @@
                             <span class="settings-nav-icon">🩺</span>
                             <span class="settings-nav-text">Is it working?</span>
                         </button>
-                    <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="about help hotkey shortcut version update release guide" data-hint="what Aether1 is, help and updates" title="what Aether1 is, help and updates">
+                    <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="about help hotkey shortcut version update release guide" data-hint="what Aurora1 is, help and updates" title="what Aurora1 is, help and updates">
                             <span class="settings-nav-icon">🖥</span>
                         <span class="settings-nav-text">About &amp; Help</span>
                         </button>
@@ -3407,12 +3407,19 @@
                 <details id="settings-group-app" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">ℹ️ About &amp; Help</span>
-                    <span class="settings-group-hint">what Aether1 is, help and updates</span>
+                    <span class="settings-group-hint">what Aurora1 is, help and updates</span>
                 </summary>
                 <div class="settings-group-body">
                     <div class="hub-detail">
-                        <div class="hub-detail-name">Aether1</div>
+                        <div class="hub-detail-name">Aurora1</div>
                         <p class="hub-blurb">A local-first AI companion with a configurable model hub, voice, avatar, memory and coding workspace. Use the sections in Settings to connect models, adjust privacy and find diagnostics.</p>
+                        <!-- The one place the two names are said together, because this is the
+                             pane somebody opens to find out what they are running. Aurora1 is
+                             the companion; the Aether1 Platform is the machinery under it, which
+                             is what the logs, the environment variables and the developer
+                             command still call themselves. Saying so here means nobody has to
+                             work out whether they are the same program. -->
+                        <p class="hub-blurb">Aurora1 is the companion. The platform it runs on is the <span class="font-mono text-cyan-200">Aether1 Platform</span>, which is the name you will see in logs, in environment variables and on the <span class="font-mono text-cyan-200">aether1</span> command.</p>
                         <p class="hub-blurb">For setup and troubleshooting, open <span class="font-mono text-cyan-200">docs/GETTING_STARTED.md</span> in the project folder. “Is it working?” gathers diagnostics; “What it may do” explains tool access and approvals.</p>
                     </div>
                     <div id="setting-hotkey-wrap" class="space-y-1">
