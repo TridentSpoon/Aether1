@@ -4286,3 +4286,64 @@ its dashes back into dots for Inno Setup's AppVersion, and `is_newer` compares i
 version spellings. What is missing is the GitHub App and the minisign keypair the pipeline
 signs with, which only the repository's owner can create (see step 46). `release.yml` fails on
 half a keypair by design, so there is nothing to half-do here.
+
+## Step 69 — `aurora1` as a second command name
+
+The rename's last visible piece: typing `aurora1` works. Both names reach the same binary and
+every subcommand works under either; the only difference is the help banner, which names
+whichever name was typed (`cli::invoked_as`, step 67). Nothing is hidden or refused under
+either name — the split between "the companion" and "behind the curtain" is about which name
+an operator reaches for, not about what each one can do.
+
+**A hard link, not a second copy.** The three Linux install scripts
+(`install_desktop_app.sh`, `offline_install_linux.sh`, `install_slim_linux.sh`) and the
+Windows installer all make the second name point at the same file:
+
+```sh
+ln -f "$BIN_DIR/aether1" "$TMP_ALT" || cp "$BIN_DIR/aether1" "$TMP_ALT"
+mv -f "$TMP_ALT" "$BIN_DIR/aurora1"
+```
+
+A copy would double a large install for nothing and let the two drift apart on the next
+update, which is the failure that is hard to diagnose: one name a version behind the other.
+The link is made through a temporary name and then `mv`-ed into place because `ln` and `cp`
+onto a binary that is currently running fail with `Text file busy`, while a rename over it
+does not — the same reason the self-update path already does this dance. `cp` is the fallback
+for the filesystem that refuses hard links, and the whole block is non-fatal: if neither
+works the install is still complete, because `aether1` is there and runs everything.
+
+On Windows it is `mklink /H` in the installer's `[Run]` section, which needs no elevation on
+NTFS within one volume — and a per-user install under `{localappdata}` always is one. It is
+listed there rather than in `[Files]` precisely because it is allowed to fail quietly. The
+cost of that is that Inno does not track a file it did not install, so `[UninstallDelete]`
+removes `aurora1.exe` explicitly; without it an uninstall would leave a name pointing at a
+deleted file.
+
+**The install scanner had to learn that two names are one install.** Both names are real
+files on disk, so the loop over `DESKTOP_FILES` would have reported one copy twice: two rows
+for the operator to choose between that are the same bytes, and `installs remove` able to
+delete one name and leave the other dangling. The names are now grouped by the file they
+actually are, with `same_file` comparing device and inode on Unix:
+
+```rust
+match groups.iter_mut().find(|(first, ..)| same_file(first, &bin)) {
+    Some((_, names, _, _)) => names.push(bin),
+    None => groups.push((bin.clone(), vec![bin], desktop, icon)),
+}
+```
+
+Device and inode rather than `canonicalize`, because hard links are *peers*: there is no
+"real" path among them for a resolver to collapse them to, so comparing resolved paths says
+they are two different files. `one_install_under_two_command_names_is_one_install` asserts the
+row count and that removal takes both names; `two_separate_binaries_under_the_two_names_stay_two_installs`
+asserts the other direction, that the grouping is by the file and not by the pair of names.
+
+**Same pre-existing bug as step 68, two places further on.** Both packaging scripts ended by
+telling the operator `tar -xzf … && ./install-offline.sh`, which has the same problem the
+README snippets had: the archive carries no top-level directory, so that extracts into
+whatever directory they were standing in and the installer is not where the `&&` expects it.
+Both now print a `mkdir` and an extract into it.
+
+**Untested here:** the Windows `mklink` half. This container has no Windows and the installer
+is compiled by `package_offline_windows.ps1` on a runner, so the `[Run]` entry has been read
+but never watched running.

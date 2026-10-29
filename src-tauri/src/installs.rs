@@ -505,6 +505,28 @@ fn data_roots(home: Option<&Path>) -> Vec<PathBuf> {
     roots
 }
 
+/// Whether two paths are the same file on disk, so that one install reached by two names is
+/// not reported as two.
+///
+/// By device and inode on Unix, because the two command names are **hard** links: they are
+/// peers with no "real" one among them, so there is nothing for `canonicalize` to collapse
+/// them to and comparing resolved paths says they are different files. On Windows there is no
+/// cheap equivalent and the installer ships one name, so falling back to comparing the paths
+/// costs nothing there.
+fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(a), Ok(b)) = (a.metadata(), b.metadata()) {
+            return a.dev() == b.dev() && a.ino() == b.ino();
+        }
+    }
+    false
+}
+
 /// True when deleting `path` would take data with it -- either because it is inside a data
 /// directory, or because it is a parent of one.
 fn touches_data(path: &Path, roots: &[PathBuf]) -> bool {
@@ -605,29 +627,49 @@ pub fn detect(machine: &dyn Machine) -> Vec<Install> {
         // The user bundle: one binary, one launcher entry, one icon. Piper's and whisper's
         // files under ~/.local/share are deliberately not in this list -- they are shared
         // engines that whichever copy survives still uses.
+        // **The two command names are one install, and have to be reported as one.** The
+        // install scripts put the binary at `~/.local/bin/aether1` and hard-link
+        // `~/.local/bin/aurora1` to it, so that every subcommand works under either name.
+        // Both are therefore real files, and a loop over the names alone would report one
+        // install twice -- two rows to choose between that are the same copy, with
+        // `installs remove` able to delete one name and leave the other behind. So the names
+        // are grouped by the file they actually are, and each group becomes one row whose
+        // removal takes every name with it.
+        let mut groups: Vec<(PathBuf, Vec<PathBuf>, &str, &str)> = Vec::new();
         for (name, desktop, icon) in DESKTOP_FILES {
             let bin = home.join(".local").join("bin").join(name);
             if !bin.is_file() {
                 continue;
             }
+            match groups.iter_mut().find(|(first, ..)| same_file(first, &bin)) {
+                Some((_, names, _, _)) => names.push(bin),
+                None => groups.push((bin.clone(), vec![bin], desktop, icon)),
+            }
+        }
+        for (bin, names, desktop, icon) in groups {
             let removal = match checkout_root(&bin.canonicalize().unwrap_or_else(|_| bin.clone())) {
                 Some(_) => Removal::Keep {
                     why: "this is a link into a source checkout, not a copy of its own",
                 },
-                None => Removal::Files(vec![
-                    bin.clone(),
-                    home.join(".local")
-                        .join("share")
-                        .join("applications")
-                        .join(desktop),
-                    home.join(".local")
-                        .join("share")
-                        .join("icons")
-                        .join("hicolor")
-                        .join("256x256")
-                        .join("apps")
-                        .join(icon),
-                ]),
+                None => {
+                    let mut files = names;
+                    files.push(
+                        home.join(".local")
+                            .join("share")
+                            .join("applications")
+                            .join(desktop),
+                    );
+                    files.push(
+                        home.join(".local")
+                            .join("share")
+                            .join("icons")
+                            .join("hicolor")
+                            .join("256x256")
+                            .join("apps")
+                            .join(icon),
+                    );
+                    Removal::Files(files)
+                }
             };
             let version = machine.version_of(&bin);
             found.push(Install::new(Kind::UserBundle, bin, version, removal));
@@ -1254,6 +1296,65 @@ mod tests {
         assert!(matches!(checkout_row.removal, Removal::Keep { .. }));
         assert!(remove(checkout_row, &machine).is_err());
         assert!(others(&found, None).is_empty());
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// The two command names are one install. `~/.local/bin/aurora1` is a hard link to
+    /// `aether1`, which the install scripts and the Windows installer both make, so both
+    /// names are real files on disk and a loop over the names alone would offer the operator
+    /// two rows that are the same copy -- and remove one name while leaving the other
+    /// pointing at nothing.
+    #[cfg(unix)]
+    #[test]
+    fn one_install_under_two_command_names_is_one_install() {
+        let home = temp_home();
+        let bin = install_user_bundle(&home);
+        let alt = home.join(".local").join("bin").join("aurora1");
+        std::fs::hard_link(&bin, &alt).expect("hard link");
+
+        let machine = FakeMachine::new(home.clone());
+        let found = detect(&machine);
+        let bundles: Vec<&Install> = found
+            .iter()
+            .filter(|install| install.kind == Kind::UserBundle)
+            .collect();
+        assert_eq!(
+            bundles.len(),
+            1,
+            "two names for one file must be one row, got {bundles:?}"
+        );
+
+        remove(bundles[0], &machine).expect("removal");
+        assert!(!bin.exists(), "the binary should be gone");
+        assert!(
+            !alt.exists(),
+            "the second command name must go with it, not be left pointing at nothing"
+        );
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// ...and the grouping is by the file, not by the pair of names: two separate binaries
+    /// that happen to carry the two names are still two installs.
+    #[test]
+    fn two_separate_binaries_under_the_two_names_stay_two_installs() {
+        let home = temp_home();
+        install_user_bundle(&home);
+        write(
+            &home.join(".local").join("bin").join("aurora1"),
+            "a different binary",
+        );
+
+        let found = detect(&FakeMachine::new(home.clone()));
+        assert_eq!(
+            found
+                .iter()
+                .filter(|install| install.kind == Kind::UserBundle)
+                .count(),
+            2,
+            "different files are different installs however they are named"
+        );
 
         std::fs::remove_dir_all(&home).ok();
     }
