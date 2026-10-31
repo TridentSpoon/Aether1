@@ -185,9 +185,26 @@ impl ReleaseError {
 /// kept for the operator who has an older bundle on disk and asks this to verify it.
 ///
 /// The new name is listed first so that a release carrying both is read as the Aurora1 one.
+/// **macOS is matched with the extension on, unlike the others, and by architecture.** The
+/// two disk images are `Aurora1-aarch64.dmg` and `Aurora1-x86_64.dmg`, and the AppImage in
+/// the same release is `Aurora1-x86_64.AppImage` -- so a bare `Aurora1-x86_64` prefix would
+/// hand an Intel Mac a Linux bundle, whichever of the two GitHub happened to list first.
+/// An Apple Silicon Mac is not offered the Intel image: it would run under Rosetta, which is
+/// a slower copy of an app the release also ships natively.
+///
+/// **The AppImage is deliberately not in the Linux list.** Picking it would mean the updater
+/// offering a shape it cannot install: the two tarballs come with an installer that knows
+/// where things go, and replacing a running AppImage in place is a different mechanism that
+/// does not exist yet. Somebody running the AppImage updates it by downloading the next one.
 fn wanted_asset_prefixes() -> &'static [&'static str] {
     if cfg!(target_os = "windows") {
         &["Aurora1-Setup", "Aether1-Setup"]
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            &["Aurora1-aarch64.dmg"]
+        } else {
+            &["Aurora1-x86_64.dmg"]
+        }
     } else {
         // The offline bundle first: it is the one that needs no network on the target
         // machine, which is the point of having it. The slim one is the fallback for a
@@ -564,6 +581,14 @@ pub fn verify_file(path: &Path, signature_path: &Path) -> Result<(), FetchError>
 mod tests {
     use super::*;
 
+    /// The disk image this test machine would be offered, so the shared tests above carry an
+    /// asset for all three platforms rather than quietly asserting nothing on a Mac.
+    const DMG_HERE: &str = if cfg!(target_arch = "aarch64") {
+        "Aurora1-aarch64.dmg"
+    } else {
+        "Aurora1-x86_64.dmg"
+    };
+
     fn asset(name: &str, id: u64) -> RawAsset {
         RawAsset {
             id,
@@ -579,9 +604,18 @@ mod tests {
             asset("aether1-offline-linux-x86_64.tar.gz.minisig", 2),
             asset("Aether1-Setup.exe", 3),
             asset("Aether1-Setup.exe.minisig", 4),
+            asset(DMG_HERE, 5),
+            asset(&format!("{DMG_HERE}{SIGNATURE_SUFFIX}"), 6),
         ];
         let picked = pick_asset(&assets).expect("this platform has an asset in that list");
-        assert_eq!(picked.signature_id, Some(if cfg!(windows) { 4 } else { 2 }));
+        let expected = if cfg!(windows) {
+            4
+        } else if cfg!(target_os = "macos") {
+            6
+        } else {
+            2
+        };
+        assert_eq!(picked.signature_id, Some(expected));
     }
 
     #[test]
@@ -594,6 +628,8 @@ mod tests {
             asset("aether1-offline-linux-x86_64.tar.gz", 1),
             asset("Aether1-Setup.exe.minisig", 4),
             asset("Aether1-Setup.exe", 3),
+            asset(&format!("{DMG_HERE}{SIGNATURE_SUFFIX}"), 6),
+            asset(DMG_HERE, 5),
         ];
         let picked = pick_asset(&assets).expect("this platform has an asset in that list");
         assert!(!picked.name.ends_with(SIGNATURE_SUFFIX));
@@ -605,9 +641,34 @@ mod tests {
         let assets = vec![
             asset("aether1-offline-linux-x86_64.tar.gz", 1),
             asset("Aether1-Setup.exe", 3),
+            asset(DMG_HERE, 5),
         ];
         let picked = pick_asset(&assets).expect("this platform has an asset in that list");
         assert_eq!(picked.signature_id, None);
+    }
+
+    /// A Mac is offered the image built for its own processor, and the AppImage in the same
+    /// release -- which shares the `Aurora1-x86_64` stem with the Intel image -- is never
+    /// mistaken for one.
+    #[test]
+    fn a_mac_is_offered_its_own_disk_image_and_not_the_linux_file_beside_it() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let assets = vec![
+            asset("Aurora1-x86_64.AppImage", 1),
+            asset("Aurora1-x86_64.dmg", 2),
+            asset("Aurora1-aarch64.dmg", 3),
+        ];
+        let picked = pick_asset(&assets).expect("a Mac has an image in that list");
+        assert_eq!(
+            picked.name,
+            if cfg!(target_arch = "aarch64") {
+                "Aurora1-aarch64.dmg"
+            } else {
+                "Aurora1-x86_64.dmg"
+            }
+        );
     }
 
     #[test]
@@ -617,7 +678,7 @@ mod tests {
 
     #[test]
     fn the_slim_bundle_is_the_fallback_and_never_the_first_choice() {
-        if cfg!(windows) {
+        if cfg!(windows) || cfg!(target_os = "macos") {
             return;
         }
         let both = vec![
