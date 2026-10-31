@@ -53,7 +53,9 @@
 #[cfg(unix)]
 use std::collections::HashMap;
 use std::net::IpAddr;
-#[cfg(unix)]
+// Not gated, though the forwarder that dials one is: `dial_address` is the half of rule 2
+// that checks a resolved address, and it is compiled and tested on every platform so that
+// the rule is not quietly a Linux rule.
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::path::Path;
@@ -176,6 +178,9 @@ fn parse(endpoint: &str) -> Result<Endpoint, String> {
 /// Resolution happens here, outside the box, because the box has no DNS -- and the answer
 /// is checked against the same boundary the name was, since a name that passes and an
 /// address that does not is exactly the hole rule 2 is about.
+// Called by `spawn`, which is unix-only, and by its own tests, which are not: on Windows
+// this is compiled and exercised by `cargo test` while nothing in the program calls it.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn dial_address(endpoint: &Endpoint) -> Result<SocketAddr, String> {
     use std::net::ToSocketAddrs;
     let found: Vec<SocketAddr> = (endpoint.host.as_str(), endpoint.port)

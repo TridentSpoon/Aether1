@@ -43,7 +43,15 @@
 //! domain means trusting it with whatever the sandbox can read -- which, thanks to the
 //! sandbox, is the project folder and nothing more.
 
+// On Windows the proxy is one refusal (`spawn` below) and everything that would have
+// answered a connection is gated out with it, so the policy, the ask table and the refusal
+// log are all compiled and unreachable. That is the design rather than an oversight -- the
+// code is kept whole so the two platforms do not drift -- and this stops the compiler
+// listing every piece of it on a build where none of it can run.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use std::collections::{BTreeSet, HashMap};
+#[cfg(unix)]
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -729,12 +737,14 @@ pub fn start(db: &MemoryDb) -> Result<Proxy, String> {
 /// A handle of this thread's own on the same database. `MemoryDb` is a path and opens a
 /// connection per call, so this is a re-open rather than anything shared -- which is what
 /// makes it safe to hand one to the proxy's own runtime.
+#[cfg(unix)]
 fn reopen(db_path: &Path) -> Option<MemoryDb> {
     MemoryDb::open(db_path).ok()
 }
 
 /// The listener thread, with a runtime of its own so this works whether or not the rest of
 /// the program happens to be running one.
+#[cfg(unix)]
 fn spawn(db_path: PathBuf) -> Result<Proxy, String> {
     let dir = db_path
         .parent()
@@ -771,6 +781,33 @@ fn spawn(db_path: PathBuf) -> Result<Proxy, String> {
     Err("the proxy did not start listening".to_string())
 }
 
+/// Windows has no proxy socket, and says so.
+///
+/// Every part of this door is a unix socket crossing a network namespace: the sandbox has a
+/// network of its own precisely so a command inside it cannot reach an address, and the one
+/// kind of address that still crosses that boundary is a path on the filesystem. Neither
+/// half exists here -- `code_sandbox::detect` already refuses to run a command on this
+/// platform for want of a sandbox, so nothing that could use this socket can be started.
+///
+/// Refusing with the reason beats a named pipe that looks like the same confinement and is
+/// not: a proxy in front of a command that is *not* in a network namespace decides nothing,
+/// because the command can simply dial the host itself. See docs/SECURITY_MODEL.md, where
+/// "where there is no sandbox, `run` refuses" is section 1, and `code_model::start` for the
+/// same refusal on the model door.
+///
+/// `start` is the caller, and its one caller in turn -- `code_sandbox::net` -- already
+/// treats a proxy that will not start as `Net::None` rather than as the whole network.
+#[cfg(not(unix))]
+fn spawn(_db_path: PathBuf) -> Result<Proxy, String> {
+    Err(
+        "AETHER1 cannot put a network policy in front of a sandboxed command on Windows: the \
+         proxy's door is a unix socket crossing a network namespace, and this platform has \
+         neither. Commands are already refused here for want of a sandbox."
+            .to_string(),
+    )
+}
+
+#[cfg(unix)]
 async fn serve(socket: PathBuf, db_path: PathBuf) {
     let Ok(listener) = tokio::net::UnixListener::bind(&socket) else {
         return;
@@ -789,6 +826,7 @@ async fn serve(socket: PathBuf, db_path: PathBuf) {
 }
 
 /// One connection: read the request line, decide, then either tunnel or refuse.
+#[cfg(unix)]
 async fn handle(mut inbound: tokio::net::UnixStream, db: MemoryDb) -> std::io::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -906,6 +944,7 @@ async fn handle(mut inbound: tokio::net::UnixStream, db: MemoryDb) -> std::io::R
 /// started. A box is given one, both, or neither, and a port with no socket behind it is
 /// never opened -- a program that finds nothing listening on 8081 learns the truth, which is
 /// that this box has no model server, rather than hanging on a bridge to nowhere.
+#[cfg(unix)]
 pub fn relay_main(net_socket: Option<&str>, model_socket: Option<&str>, argv: &[String]) -> i32 {
     let Some((program, rest)) = argv.split_first() else {
         eprintln!("--net-relay needs a command to run after --");
@@ -991,11 +1030,28 @@ pub fn relay_main(net_socket: Option<&str>, model_socket: Option<&str>, argv: &[
     }
 }
 
+/// The same refusal as `spawn`, from the other side of the wall.
+///
+/// `--net-relay` is how Aether1 re-enters itself *inside* the box, and the box is
+/// bubblewrap's. On Windows there is no box to be inside, so this is only ever reached by
+/// someone running the flag by hand -- and the honest answer is the exit status and the
+/// reason, not a bridge to a socket this platform cannot open.
+#[cfg(not(unix))]
+pub fn relay_main(_net_socket: Option<&str>, _model_socket: Option<&str>, _argv: &[String]) -> i32 {
+    eprintln!(
+        "--net-relay is the sandbox's own half of AETHER1 and there is no sandbox on \
+         Windows: the bridges it would open end in unix sockets, which this platform does \
+         not have. Nothing was run."
+    );
+    125
+}
+
 /// One already-bound loopback port in front of one unix socket, copying bytes and reading
 /// none of them.
 ///
 /// The listener arrives bound rather than binding here, so `relay_main` can refuse before
 /// the command exists rather than after it has already failed. See the comment there.
+#[cfg(unix)]
 async fn bridge(listener: std::net::TcpListener, socket: String) {
     let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
         return;
@@ -1033,6 +1089,7 @@ mod tests {
     /// Proved by holding the model port and watching the command not run: the file it would
     /// have made is the evidence, because "it exited non-zero" could also mean it ran and
     /// failed.
+    #[cfg(unix)]
     #[test]
     fn a_port_the_relay_cannot_have_stops_the_command_rather_than_surprising_it() {
         let witness = std::env::temp_dir().join(format!(
@@ -1074,6 +1131,7 @@ mod tests {
 
     /// With nothing to bridge there is no port to fail on, and the command runs as it always
     /// has -- which is how `code run` works with the network off and no model socket.
+    #[cfg(unix)]
     #[test]
     fn a_relay_with_no_bridges_still_runs_what_it_was_given() {
         let status = relay_main(None, None, &["/bin/true".to_string()]);
@@ -1179,6 +1237,7 @@ mod tests {
 
     /// Speaks one proxy request over the socket and returns what came back, having first
     /// written whatever `then` says down the tunnel.
+    #[cfg(unix)]
     fn ask(socket: &Path, request: &str) -> String {
         use std::io::{Read, Write};
         let mut stream = std::os::unix::net::UnixStream::connect(socket).unwrap();
@@ -1198,6 +1257,7 @@ mod tests {
     /// The proxy over its real socket, refusing and allowing for real -- including carrying
     /// bytes both ways once it has said yes, which is the part an argument list cannot
     /// prove.
+    #[cfg(unix)]
     #[test]
     fn the_proxy_refuses_an_unknown_host_and_carries_an_allowed_one() {
         use std::io::{Read, Write};
@@ -1256,6 +1316,7 @@ mod tests {
     ///
     /// Skipped where the machine cannot do it -- no bubblewrap, no network namespace, or a
     /// test run that has no built binary to re-enter as the relay.
+    #[cfg(unix)]
     #[test]
     fn inside_the_sandbox_the_proxy_is_the_only_way_out() {
         // Same reason as the test above: this one asserts a refusal, and a refusal is
@@ -1604,6 +1665,7 @@ mod tests {
     /// Worth having as well as the unit test above because the thing being proved is that
     /// `handle` consults the operator at all -- the waiting loop can be correct while the
     /// proxy still refuses before reaching it.
+    #[cfg(unix)]
     #[test]
     fn a_card_answered_lets_the_held_connection_through() {
         use std::io::{Read, Write};
@@ -1692,6 +1754,7 @@ mod tests {
 
     /// And the other answer: refusing says no, says why in a way a build log can be read
     /// for, and records it where the Settings page looks.
+    #[cfg(unix)]
     #[test]
     fn a_card_refused_refuses_the_held_connection() {
         use std::io::{Read, Write};
@@ -1760,6 +1823,7 @@ mod tests {
     ///
     /// Skipped, loudly, where the machine cannot do it: no bubblewrap, no network
     /// namespace, no python, or a test run with no built binary to re-enter as the relay.
+    #[cfg(unix)]
     #[test]
     fn a_real_command_in_the_sandbox_is_released_by_answering_the_card() {
         use std::io::{Read, Write};
