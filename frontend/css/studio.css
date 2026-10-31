@@ -1491,3 +1491,73 @@ html[data-shell="studio"][data-studio-sidebar="closed"] .studio-operator {
   background: var(--neon-cyan);
   box-shadow: 0 0 10px var(--glow-cyan);
 }
+
+/* ---- the transcript ---------------------------------------------------------------
+ *
+ * In the HUD every message is sized to its own content and pinned to one side of a
+ * narrow panel, which is right there. In the studio's 820px column it left a one-line
+ * reply as a postage stamp in the top-left corner with the whole column empty beside
+ * it -- Trident, on a screenshot of four short replies: "Chat window looks weird".
+ *
+ * So the companion's messages take the column. They are the thing you are reading, and
+ * a transcript whose lines each stop at a different place is a transcript you read in
+ * a zigzag. What the operator typed stays a bubble, over on their side and capped, so
+ * the two voices are still told apart at a glance without a label.
+ */
+html[data-shell="studio"] #chat-messages > .msg-agent,
+html[data-shell="studio"] #chat-messages > .msg-system {
+  align-self: stretch;
+  margin-right: 0;
+}
+
+html[data-shell="studio"] #chat-messages > .msg-user {
+  align-self: flex-end;
+  max-width: min(78%, 620px);
+  margin-left: 0;
+}
+
+/* ---- the avatar's strength, on the stage bar -------------------------------------- */
+
+html[data-shell="studio"][data-studio-avatar="background"] #stage-avatar-opacity:not(.hidden) {
+  display: inline-flex;
+}
+
+#stage-avatar-opacity {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-neon);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(6px);
+  vertical-align: middle;
+  margin-left: 8px;
+}
+
+.stage-avatar-opacity-label,
+.stage-avatar-opacity-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.stage-avatar-opacity-value {
+  color: var(--text-accent);
+  min-width: 30px;
+  text-align: right;
+}
+
+#stage-avatar-opacity .avatar-opacity-range {
+  width: 92px;
+}
+
+/* The bar is narrow furniture; below this the model's name is the only thing on it
+   that has to fit. */
+@media (max-width: 900px) {
+  html[data-shell="studio"][data-studio-avatar="background"] #stage-avatar-opacity:not(.hidden) {
+    display: none;
+  }
+}
