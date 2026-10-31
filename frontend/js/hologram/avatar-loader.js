@@ -31,7 +31,7 @@
         'halcy':          { file: 'avatar-halcy.js',          v: 17, builder: 'buildHalcyAvatar',    animator: 'animateHalcy' },
         'arx-limes':      { file: 'avatar-arx-limes.js',      v: 20, builder: 'buildArxLimesAvatar', animator: 'animateArxLimes' },
         'nexus':          { file: 'avatar-nexus.js',          v: 29, builder: 'buildNexusAvatar',    animator: 'animateNexus' },
-        'red':            { file: 'avatar-red9000.js',        v: 19, builder: 'buildRed9000Avatar',  animator: 'animateRed9000' },
+        'red':            { file: 'avatar-red9000.js',        v: 20 },
         'arx-logos':      { file: 'avatar-arx-logos.js',      v: 18, builder: 'buildArxLogosAvatar', animator: 'animateArxLogos' },
         'alt':            { file: 'avatar-alt.js',            v: 3,  builder: 'buildAltAvatar',      animator: 'animateAlt' },
         'arx-locas':      { file: 'avatar-arx-locas.js',      v: 2 },

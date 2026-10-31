@@ -174,6 +174,22 @@ HologramAvatar.prototype.animate = function() {
                     // tiers 1-3, never its tier-4 effect) needs them directly.
                     viewRotationY: this.scene.rotation.y,
                     zoom: this.zoomScale,
+                    /* clickPulse above is the decaying strength of the last click. These
+                       two are the click itself: clickTime is when it happened, which is
+                       what an avatar compares against to notice a *new* click rather than
+                       a pulse that is merely still loud (R.E.D. 9000 blinks on one,
+                       A.R.X.LOGOS opens its aperture), and clickAge is how long ago. */
+                    clickTime: this.lastClickTime,
+                    clickAge,
+                    /* Where the pointer is over the viewport, -1..1 on each axis, and how
+                       long it has been still. The Nexus looks at it; nothing else has
+                       wanted it yet, which is why it was a nexus-prefixed field on the
+                       engine until this became part of the contract. */
+                    pointer: {
+                        x: this.nexusMouseNX,
+                        y: this.nexusMouseNY,
+                        idleFor: elapsedTime - this.lastMouseMoveTime,
+                    },
                     THREE,
                 });
             } catch (err) {
