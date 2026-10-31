@@ -233,6 +233,86 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+  # Windows was built nowhere until a tag was pushed.
+  #
+  # `code_proxy.rs` named `tokio::net::UnixListener` unconditionally from the day it was
+  # written, and `code_model.rs` used `SocketAddr` behind a `#[cfg(unix)]` import. Both were
+  # correct on the two platforms anybody here develops on, both made `cargo build` fail on
+  # Windows with five errors, and nothing in this file could notice: the Rust job above runs
+  # on ubuntu-latest, and release.yml's windows-installer job -- the only thing that ever
+  # compiled for Windows -- runs on a version tag, which is weeks after the commit and far
+  # too late to be a check. The first person to find out was an operator running setup.bat.
+  #
+  # So this job exists to say the one thing the Linux job cannot: it still compiles over
+  # there. It is a check rather than a build or a test run -- `cargo check --all-targets`,
+  # which covers the test code too, since a `#[cfg(unix)]` missing from a test breaks
+  # `cargo test` on Windows exactly as surely. Linking the Tauri bundle and running the
+  # suite stay with release.yml and with the machine that has a display; what matters here
+  # is that no new unix-only call reaches main unnoticed again.
+  #
+  # Warnings are not fatal here, unlike clippy on Linux. Half of the sandbox is deliberately
+  # compiled and unreachable on Windows -- the sandbox is a refusal on this platform, by
+  # design (docs/SECURITY_MODEL.md, section 1) -- and a `-D warnings` run would turn that
+  # into a failing check on every commit.
+  windows:
+    name: Windows -- compiles
+    runs-on: windows-latest
+    # A cold run is a few minutes; this is the "stuck, not slow" line, matched to the Rust
+    # job's own headroom minus the apt step it does not have.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Same reason as the Rust job: the filter below diffs against the base, and
+          # build.rs reads `git log`.
+          fetch-depth: 0
+
+      # The same early exit as the Rust job, for the same reason: around a third of what
+      # lands here touches nothing under src-tauri/, and a Windows runner is the most
+      # expensive minute in this file.
+      - name: Work out whether anything Rust changed
+        id: filter
+        shell: bash
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE:-}" ] \
+             || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "No usable base commit to compare against -- checking Windows."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "${BASE}...HEAD")
+          if [ -z "$changed" ]; then
+            echo "Nothing changed against ${BASE} -- checking Windows."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -qE '^(src-tauri/|\.github/workflows/ci\.yml$)' <<<"$changed"; then
+            echo "Rust-relevant files changed -- checking Windows."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing under src-tauri/ changed -- skipping the Windows check."
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.rust == 'true'
+
+      # A cache of its own: the key the action builds includes the runner's OS, so this
+      # never collides with the Linux job's.
+      - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.rust == 'true'
+        with:
+          workspaces: src-tauri
+
+      - name: Check it compiles on Windows
+        if: steps.filter.outputs.rust == 'true'
+        working-directory: src-tauri
+        run: cargo check --all-targets
+
   # Deliberately unfiltered, unlike the Rust job above. Several of these checks read
   # src-tauri/ as well as frontend/ -- check_panel_fields.sh compares the panel's fields
   # against llm/mod.rs, and check_terminal_isolation.sh reads only Rust files -- so a
