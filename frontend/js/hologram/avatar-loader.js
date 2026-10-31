@@ -33,7 +33,7 @@
         'nexus':          { file: 'avatar-nexus.js',          v: 29, builder: 'buildNexusAvatar',    animator: 'animateNexus' },
         'red':            { file: 'avatar-red9000.js',        v: 20 },
         'arx-logos':      { file: 'avatar-arx-logos.js',      v: 19 },
-        'alt':            { file: 'avatar-alt.js',            v: 3,  builder: 'buildAltAvatar',      animator: 'animateAlt' },
+        'alt':            { file: 'avatar-alt.js',            v: 4 },
         'arx-locas':      { file: 'avatar-arx-locas.js',      v: 2 },
         'arx-legionare':  { file: 'avatar-arx-legionare.js',  v: 1 },
         'arx-loregenda':  { file: 'avatar-arx-loregenda.js',  v: 1 },

@@ -141,6 +141,14 @@ cannot tell a *new* click from a pulse that is merely still loud, which is what 
 `pointer` is `{ x, y, idleFor }`: where the pointer is over the viewport, -1..1 on each
 axis, and how long it has been still. The Nexus looks at it.
 
+Two optional fields on the def handle what an avatar cannot do from inside its own group.
+`viewportClass` is a CSS class the engine puts on the viewport while that avatar is the one
+on screen, and takes off again when it is not -- A1ter_nul's `glitch-active` and The Nexus's
+`crt-active` overlays are defined in `A1theme.css` and `sprite.css`. `fitGroup`, returned
+from `build()` alongside `group`, is what auto-fit measures instead of the whole group:
+A1ter_nul's firewall perimeter is sized to the window's own edges on purpose, and measuring
+it would pull the camera back until the avatar inside it was a postage stamp.
+
 A broken avatar is reported to the console and skipped — a mistake in one avatar file
 does not take the HUD down with it.
 

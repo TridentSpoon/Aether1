@@ -15,7 +15,6 @@
     const BUILT_IN = [
         // Singular Ascended Class.
         { id: 'halcy', label: 'hAlcy', group: 'Singular Ascended Class' },
-        { id: 'alt', label: 'A1ter_nul', group: 'Singular Ascended Class' },
         // Trace Protocols. Nexus Sent, White Rabbit and Operator are plugins, not
         // hand-built like this one -- their half of the group lives on their own
         // registerAvatar defs (group: 'Trace Protocols' in avatar-senti.js,

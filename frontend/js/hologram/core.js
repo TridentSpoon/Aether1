@@ -473,15 +473,26 @@ class HologramAvatar {
         // look asks for it.
         if (this.container) this.container.classList.toggle('crt-active', isNexus);
 
-        // Chromatic-glitch scanline overlay (see #hologram-viewport.glitch-active::after in
-        // A1theme.css / sprite.css) -- only A1ter_nul's digital-ghost look asks for it.
-        if (this.container) this.container.classList.toggle('glitch-active', isAlt);
+        /* A viewport overlay the avatar itself asks for, through viewportClass on its
+           registerAvatar def -- A1ter_nul's chromatic glitch, and the CRT scanlines The
+           Nexus is watched through (see #hologram-viewport.glitch-active::after and
+           .crt-active::after in A1theme.css / sprite.css). Every class any registered
+           avatar declares is cleared first, so switching avatars can never leave somebody
+           else's overlay on the viewport. */
+        if (this.container) {
+            HologramAvatar.avatarPlugins.forEach((def) => {
+                if (def.viewportClass) this.container.classList.remove(def.viewportClass);
+            });
+            if (plugin && plugin.def.viewportClass) {
+                this.container.classList.add(plugin.def.viewportClass);
+            }
+        }
 
         // A different avatar can be a very different size (a hand-modelled built-in vs. a
         // custom recipe dialled up to its largest settings) -- measure the one now on
         // screen and refit the camera to it.
         const activeObjects = plugin && plugin.model && plugin.model.group
-            ? [plugin.model.group]
+            ? [this.fitGroupFor(plugin.model)]
             : [
                 isHalcy && this.particleSystem, isHalcy && this.halcyOuterRing,
                 isHalcy && this.halcyInnerRingGroup, isHalcy && this.coreOrb,
@@ -489,6 +500,15 @@ class HologramAvatar {
                 isRed && this.redGroup, isArxLogos && this.arxLogosGroup, isAlt && this.altGroup
             ].filter(Boolean);
         this.updateContentFit(activeObjects);
+    }
+
+    /* What auto-fit measures for a registered avatar: its whole group, unless it returned
+       a fitGroup saying otherwise. A1ter_nul does -- its firewall perimeter is a boundary
+       deliberately sized to the window's own edges, so measuring it would make the camera
+       pull back until the avatar inside it was a postage stamp. Anything an avatar wants
+       seen but not measured goes outside its fitGroup. */
+    fitGroupFor(model) {
+        return model.fitGroup || model.group;
     }
 
     // Measures the given objects' combined world-space bounding box and refits the camera
@@ -895,7 +915,7 @@ class HologramAvatar {
         // may have changed its radius/size settings) -- if it's the one currently on
         // screen, the camera's fit needs to be measured against the new geometry, not the
         // old one it was computed from.
-        if (wasVisible) this.updateContentFit([this.plugins.get(id).model.group]);
+        if (wasVisible) this.updateContentFit([this.fitGroupFor(this.plugins.get(id).model)]);
         return true;
     }
 
