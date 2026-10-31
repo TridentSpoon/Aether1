@@ -2927,12 +2927,28 @@ pub fn judge(
     // field entirely. Both end up here as text that is nearly JSON, so the object is cut
     // out rather than the whole string parsed -- and if there is no object in it, that is
     // an error and not a verdict.
+    parse_judgment(&text)
+}
+
+/// What came back, read as a verdict -- separated from the call so that every way a model
+/// can disappoint here is testable without a server.
+fn parse_judgment(text: &str) -> Result<Value, String> {
+    /* An empty answer is its own report. "The judgment was not JSON:" with nothing after
+    the colon is what the second desktop log said, and it reads as a parser that lost the
+    text rather than as a model that sent none -- which cost a round trip to find out. */
+    if text.trim().is_empty() {
+        return Err(
+            "the judge answered with nothing, which is what a model that thinks \
+                    does when the whole verdict budget goes on the thinking"
+                .to_string(),
+        );
+    }
     let body = text
         .find('{')
         .zip(text.rfind('}'))
         .filter(|(start, end)| end > start)
         .map(|(start, end)| &text[start..=end])
-        .ok_or_else(|| format!("the judgment was not JSON: {}", first_line(&text)))?;
+        .ok_or_else(|| format!("the judgment was not JSON: {}", first_line(text)))?;
     let parsed: Value = serde_json::from_str(body)
         .map_err(|e| format!("the judgment was not JSON ({e}): {}", first_line(body)))?;
     if parsed.is_object() {
@@ -2960,6 +2976,19 @@ struct OllamaJudgeRequest<'a> {
     messages: Vec<OllamaMessage>,
     stream: bool,
     format: &'a Value,
+    /// `Some(false)` wherever the server says this model can think, and absent otherwise.
+    ///
+    /// A thinking model thinks by default, and the first desktop log of the Auto router
+    /// shows what that costs here: `qwen3:8b` spent the whole verdict budget reasoning and
+    /// handed back an empty answer, which arrived as "the judgment was not JSON:" with
+    /// nothing after the colon. A judgment is three fixed fields under a grammar; there is
+    /// nothing in it to think about, and the deliberation is pure cost in front of a reply.
+    ///
+    /// Sent only on the capability, never blind: Ollama refuses `think` outright for a
+    /// model that does not have it, which would turn every judgment into an error on the
+    /// models least able to afford one. Same rule as `OllamaRequest::think`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
     options: OllamaJudgeOptions,
 }
 
@@ -2988,6 +3017,10 @@ fn judge_ollama(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, St
         ],
         stream: false,
         format: ask.schema,
+        think: ollama_facts(endpoint, model)
+            .thinking
+            .unwrap_or(false)
+            .then_some(false),
         options: OllamaJudgeOptions {
             temperature: 0.0,
             /* Named only when the model is being loaded for this call anyway. Ollama keys a
@@ -4465,6 +4498,7 @@ mod failure_tests {
                 messages: vec![],
                 stream: false,
                 format: &schema,
+                think: None,
                 options: OllamaJudgeOptions {
                     temperature: 0.0,
                     num_ctx: (pace != Pace::Warm).then_some(LOCAL_CTX_FLOOR),
@@ -4482,6 +4516,64 @@ mod failure_tests {
             Some(&json!(LOCAL_CTX_FLOOR)),
             "a model being loaded for this call is loaded at the floor, not the chat's size"
         );
+    }
+
+    /// A thinking model is told not to, and a model that cannot think is told nothing.
+    ///
+    /// The second desktop log of the router: `qwen3:8b` thinks by default, the verdict
+    /// budget is 120 tokens, and the whole of it went on the thinking -- so the answer came
+    /// back empty. The other half matters just as much: Ollama refuses `think` outright for
+    /// a model without the capability, so sending it blind would turn every judgment on
+    /// those models into an error.
+    #[test]
+    fn a_judgment_asks_a_thinking_model_not_to_think_and_says_nothing_to_one_that_cannot() {
+        let schema = json!({"type": "object"});
+        let payload = |capability: Option<bool>| {
+            serde_json::to_value(OllamaJudgeRequest {
+                model: "qwen3:8b",
+                messages: vec![],
+                stream: false,
+                format: &schema,
+                think: capability.unwrap_or(false).then_some(false),
+                options: OllamaJudgeOptions {
+                    temperature: 0.0,
+                    num_ctx: None,
+                    num_predict: VERDICT_TOKENS,
+                },
+            })
+            .expect("a request serialises")
+        };
+        assert_eq!(
+            payload(Some(true)).pointer("/think"),
+            Some(&json!(false)),
+            "a model that thinks by default has to be told not to"
+        );
+        for unasked in [Some(false), None] {
+            assert!(
+                payload(unasked).pointer("/think").is_none(),
+                "the field is never sent on a model the server has not said can think"
+            );
+        }
+    }
+
+    /// An empty answer says so, rather than reading as a parser that lost the text.
+    #[test]
+    fn a_judgment_with_nothing_in_it_says_so() {
+        for nothing in ["", "   ", "\n\n"] {
+            let why = parse_judgment(nothing).expect_err("nothing is not a verdict");
+            assert!(
+                why.contains("answered with nothing"),
+                "the operator is told the model sent none, not that a parser failed: {why}"
+            );
+        }
+    }
+
+    /// The object is still cut out of an answer that has furniture around it.
+    #[test]
+    fn a_judgment_in_a_fence_is_still_read() {
+        let parsed = parse_judgment("Here you go:\n```json\n{\"difficulty\": \"hard\"}\n```")
+            .expect("the object is found in it");
+        assert_eq!(parsed.pointer("/difficulty"), Some(&json!("hard")));
     }
 
     /// A pace is a claim about who is waiting, so the bounds have to be ordered that way.
