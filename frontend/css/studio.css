@@ -637,6 +637,174 @@ html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-gre
   color: var(--text-dim);
 }
 
+/* ---- the avatar's box ------------------------------------------------------------
+ *
+ * The greeting is pointer-events: none so that an empty screen is still a click
+ * through to whatever is behind it; the box is the one thing on it you can press,
+ * so it takes its pointer events back.
+ *
+ * The note is set in whatever handwriting the machine has. Nothing is downloaded for
+ * it -- a local-first app that reaches out to a font CDN to draw four words has given
+ * something away for a flourish -- so the stack names the script faces Windows, macOS
+ * and the common Linux font packages ship, and falls back to the generic cursive.
+ * Where there is none, it lands on the generic and still reads as an aside.
+ */
+.studio-cage {
+  position: relative;
+  pointer-events: auto;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Set by app.js: the avatar is in the window, so its stand-in is not. */
+.studio-cage.studio-cage-away {
+  display: none;
+}
+
+.studio-cage-note {
+  position: absolute;
+  bottom: calc(100% + 24px);
+  right: calc(50% + 22px);
+  white-space: nowrap;
+  font-family: 'Segoe Script', 'Bradley Hand', 'Snell Roundhand', 'URW Chancery L',
+    'Comic Sans MS', cursive;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-dim);
+  transform: rotate(-11deg);
+  transform-origin: 100% 100%;
+  opacity: 0.9;
+  text-shadow: 0 0 12px var(--bg-core), 0 0 4px var(--bg-core);
+}
+
+.studio-cage-arrow {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  right: calc(50% + 10px);
+  width: 30px;
+  height: 26px;
+  color: var(--text-accent);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.studio-cage-tile {
+  width: 62px;
+  height: 62px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-neon);
+  border-radius: 14px;
+  background: var(--bg-panel-solid);
+  box-shadow: 0 0 18px var(--viewport-glow), inset 0 0 22px var(--bg-wash-main);
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.studio-cage-tile:hover,
+.studio-cage-tile:focus-visible {
+  border-color: var(--border-neon-bright);
+  box-shadow: 0 0 26px var(--glow-cyan), inset 0 0 22px var(--bg-wash-main);
+  transform: translateY(-2px);
+}
+
+.studio-cage-mark {
+  font-size: 30px;
+  line-height: 1;
+  filter: drop-shadow(0 0 10px var(--viewport-glow));
+}
+
+/* Opens downward, over the greeting. Upward put it off the top of the stage, which
+   is overflow: hidden in the studio -- the menu was still in the layout and still
+   reported as visible, and the clipped half simply did not take clicks. There is
+   always room below: the box sits above the greeting line, and a popover over a
+   greeting is the usual way round. */
+.studio-cage-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: 268px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  border: 1px solid var(--border-neon-bright);
+  border-radius: 10px;
+  background: var(--bg-panel-solid);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55), 0 0 26px var(--viewport-glow);
+}
+
+.studio-cage-menu.hidden {
+  display: none;
+}
+
+.studio-cage-opt {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.studio-cage-opt:hover,
+.studio-cage-opt:focus-visible {
+  border-color: var(--border-neon);
+  background: var(--bg-panel-hover);
+}
+
+.studio-cage-opt[aria-checked="true"] {
+  border-color: var(--border-neon-bright);
+  background: var(--bg-panel-hover);
+}
+
+.studio-cage-opt-name {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-accent);
+}
+
+.studio-cage-opt[aria-checked="true"] .studio-cage-opt-name {
+  color: var(--text-highlight);
+}
+
+.studio-cage-opt-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+/* Short windows have the input card, the greeting and the box competing for the same
+   band; the note is the part that can go without taking the control with it. */
+@media (max-height: 620px) {
+  .studio-cage-note,
+  .studio-cage-arrow {
+    display: none;
+  }
+
+  .studio-cage-tile {
+    width: 48px;
+    height: 48px;
+    border-radius: 11px;
+  }
+
+  .studio-cage-mark {
+    font-size: 23px;
+  }
+}
+
 /* ================================================================== MODEL PICKER ===== */
 
 html[data-shell="studio"] #studio-stage-bar {
