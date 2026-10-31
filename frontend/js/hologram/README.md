@@ -119,16 +119,27 @@ HologramAvatar.registerAvatar({
 });
 ```
 
-`api` carries `THREE`, the current `palette`, and `helpers` (the same texture makers the
-built-in avatars use). `ctx` carries `time`, `audio` (0–1 loudness), `audioData` (the 64
-bins), `click` (a brief pulse when the avatar is clicked), `state`, `palette`, `zoom` (the
-current manual zoom scale, see `setZoom`) and `viewRotationY` (the scene's current drag-yaw).
-Most avatars can ignore the last two -- their group is scaled by `setZoom` for free, and
-spinning along with a drag is the normal, wanted behaviour. They're there for the rare
-avatar that wants to opt out of one: Operator counters `viewRotationY` every frame so its
-depth tunnel stays camera-locked instead of spinning with the hologram, and the custom
-avatar reads `zoom` directly because it must scale its own tiers 1-3 but never its tier-4
-effect layer.
+`api` carries `THREE`, the current `palette`, and `helpers`: the engine's own texture and
+shape makers, which is the only way to reach them from a file that has no `this` on the
+engine. The textures are `glowTexture`, `radialGlowTexture` and `ringTexture`; the shapes
+are `hexVertices`, `hexOutline`, `hexFill`, `hexPrism` and `polygonShard` (see
+`geometry-helpers.js`, which holds the one copy of each).
+
+`ctx` carries `time`, `audio` (0–1 loudness), `audioData` (the 64 bins), `click` (a brief
+pulse when the avatar is clicked), `state`, `palette`, `zoom` (the current manual zoom
+scale, see `setZoom`) and `viewRotationY` (the scene's current drag-yaw). Most avatars can
+ignore the last two -- their group is scaled by `setZoom` for free, and spinning along with
+a drag is the normal, wanted behaviour. They're there for the rare avatar that wants to opt
+out of one: Operator counters `viewRotationY` every frame so its depth tunnel stays
+camera-locked instead of spinning with the hologram, and the custom avatar reads `zoom`
+directly because it must scale its own tiers 1-3 but never its tier-4 effect layer.
+
+Three more are for an avatar that reacts to the operator rather than to the voice.
+`clickTime` is when the last click happened and `clickAge` how long ago -- `click` alone
+cannot tell a *new* click from a pulse that is merely still loud, which is what R.E.D.
+9000's blink and A.R.X.LOGOS's aperture need (`ctx.clickTime !== model.handledClick`).
+`pointer` is `{ x, y, idleFor }`: where the pointer is over the viewport, -1..1 on each
+axis, and how long it has been still. The Nexus looks at it.
 
 A broken avatar is reported to the console and skipped — a mistake in one avatar file
 does not take the HUD down with it.

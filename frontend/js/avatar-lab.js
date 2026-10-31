@@ -7,10 +7,14 @@
 (function () {
     'use strict';
 
+    /* The avatars still modelled on HologramAvatar.prototype rather than registering
+       themselves. They are listed by hand because nothing can ask the engine for them;
+       a plugin avatar is not here, it comes back from registeredAvatars() below. An
+       avatar converted to the plug-in contract must come off this list in the same
+       change, or the picker offers it twice. */
     const BUILT_IN = [
         // Singular Ascended Class.
         { id: 'halcy', label: 'hAlcy', group: 'Singular Ascended Class' },
-        { id: 'red', label: 'R.E.D. 9000', group: 'Singular Ascended Class' },
         { id: 'alt', label: 'A1ter_nul', group: 'Singular Ascended Class' },
         // Trace Protocols. Nexus Sent, White Rabbit and Operator are plugins, not
         // hand-built like this one -- their half of the group lives on their own
@@ -22,7 +26,6 @@
         // list -- add a new A.R.X. avatar here with the same group name, or give it
         // group: 'The Umbrals' on its own registerAvatar def if it's built as a plugin.
         { id: 'arx-limes', label: 'A.R.X.LIMES', group: 'The Umbrals' },
-        { id: 'arx-logos', label: 'A.R.X.LOGOS', group: 'The Umbrals' },
         // The eXcelsior Class is nowhere in this list on purpose: every member of it is a
         // plugin, so the whole group lives on their own registerAvatar defs (group: 'The
         // eXcelsior Class' in avatar-enxephalon.js, avatar-cicero.js, avatar-praxis.js,

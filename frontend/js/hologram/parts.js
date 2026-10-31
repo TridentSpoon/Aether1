@@ -71,16 +71,13 @@
     }
 
     // ---- Small shared geometry helpers ---------------------------------------
-    // Hand-rolled from api.helpers.hexVertices rather than the engine's own
-    // prototype methods (buildHexFill/buildHexOutline/buildPolygonShard), which a
-    // standalone part has no access to -- see js/hologram/README.md's four-helper
-    // contract.
+    // The hex makers are the engine's own, reached through api.helpers (see
+    // js/hologram/README.md's helper contract). They were hand-rolled copies here
+    // while only hexVertices was handed over; the rest followed when the avatars
+    // that predate the plug-in contract needed them too.
 
     function hexFillMesh(api, radius, rotationOffset, material, cx = 0, cy = 0) {
-        const geom = new THREE.CircleGeometry(radius, 6, rotationOffset);
-        const mesh = new THREE.Mesh(geom, material);
-        mesh.position.set(cx, cy, 0);
-        return mesh;
+        return api.helpers.hexFill(radius, rotationOffset, material, cx, cy);
     }
 
     // A real hex prism rather than a flat pane: a six-sided cylinder laid into the XY
@@ -88,20 +85,18 @@
     // vanish edge-on when the scene is dragged round. Anything positioned in front of a
     // flat hex fill sits in exactly the same place in front of this.
     function hexPrismMesh(api, radius, rotationOffset, material, thickness) {
-        const geom = new THREE.CylinderGeometry(radius, radius, thickness, 6, 1, false, rotationOffset);
-        geom.rotateX(-Math.PI / 2);
-        geom.translate(0, 0, -thickness / 2);
-        return new THREE.Mesh(geom, material);
+        return api.helpers.hexPrism(radius, rotationOffset, material, thickness);
     }
 
     function hexOutlineLoop(api, radius, rotationOffset, material, cx = 0, cy = 0) {
-        const geom = new THREE.BufferGeometry().setFromPoints(api.helpers.hexVertices(radius, rotationOffset, cx, cy));
-        return new THREE.LineLoop(geom, material);
+        return api.helpers.hexOutline(radius, rotationOffset, material, cx, cy);
     }
 
-    // One flat-ish irregular polygon "shard": points2D form a loop in local space with
-    // its near edge at y=0, extending toward +y; the far edge recedes in Z so a cluster
-    // of shards reads as facets of a convex dome.
+    /* One flat-ish irregular polygon "shard": points2D form a loop in local space with
+       its near edge at y=0, extending toward +y; the far edge recedes in Z so a cluster
+       of shards reads as facets of a convex dome. This one stays a local copy rather
+       than calling api.helpers.polygonShard: it is the simplified, always-hollow variant
+       (no thickness, no back face) and its callers here do not have an api in hand. */
     function polygonShard(points2D, bulge, fillMat, outlineMat) {
         const maxY = Math.max(...points2D.map((p) => p.y), 1);
         const verts = points2D.map((p) => new THREE.Vector3(p.x, p.y, -bulge * (p.y / maxY)));

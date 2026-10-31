@@ -826,6 +826,14 @@ class HologramAvatar {
         if (builder && typeof this[builder] === 'function') {
             this[builder]();
             this.builtAvatars.add(id);
+            /* A hand-modelled builder hard-codes the colours its avatar was authored in,
+               and this one has just run -- possibly long after the last theme change, since
+               an avatar is built the first time somebody picks it. Without this it wears
+               those authored colours until the theme next changes: pick A.R.X.LIMES in the
+               workbench and it comes up in its original orange whatever the theme is set
+               to. A registered avatar reads the palette in build() and so never had the
+               problem. */
+            this.applyColorPalette();
             return true;
         }
 
@@ -904,6 +912,16 @@ class HologramAvatar {
                 radialGlowTexture: (size, center, edge) => this.createRadialGlowTexture(size, center, edge),
                 ringTexture: (size, thickness) => this.createRingSpriteTexture(size, thickness),
                 hexVertices: (r, rot, cx, cy) => this.hexVertices(r, rot, cx, cy),
+                /* The shape makers that go with hexVertices. They are prototype methods
+                   on the engine (see geometry-helpers.js), which a registered avatar has
+                   no `this` to reach -- and three avatars plus the parts kit all want
+                   them, so they belong in the handed-over api rather than copied into
+                   each file. */
+                hexOutline: (r, rot, mat, cx, cy) => this.buildHexOutline(r, rot, mat, cx, cy),
+                hexFill: (r, rot, mat, cx, cy) => this.buildHexFill(r, rot, mat, cx, cy),
+                hexPrism: (r, rot, mat, thickness, cx, cy) => this.buildHexPrism(r, rot, mat, thickness, cx, cy),
+                polygonShard: (pts, bulge, fillMat, outlineMat, thickness) =>
+                    this.buildPolygonShard(pts, bulge, fillMat, outlineMat, thickness),
             },
         };
     }
