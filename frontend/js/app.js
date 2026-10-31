@@ -594,6 +594,8 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('aether_avatar', avatarName);
         setHologramAvatar(avatarName);
         updateAvatarBadge(avatarName);
+        // The empty screen draws this one as a mark in a box; it is the same pick.
+        paintStudioCage();
 
         // The Customise button belongs to the custom avatar and nothing else -- it would
         // be a lie next to hAlcy, whose shape is fixed in code.
@@ -9938,7 +9940,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const studio = { settings: null };
 
     function shellState() {
-        return (window.A1Shell && window.A1Shell.get()) || { shell: 'studio', avatar: 'background', sidebar: 'open' };
+        return (window.A1Shell && window.A1Shell.get()) || { shell: 'studio', avatar: 'off', sidebar: 'open' };
     }
 
     function setShell(patch) {
@@ -10124,7 +10126,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const view = document.getElementById('chat-view-conversation');
         if (!messages || !view) return;
 
-        const paint = () => view.classList.toggle('has-messages', messages.childElementCount > 0);
+        /* A conversation, not simply something in the box. Two things land in
+           #chat-messages before anyone has said a word -- the system notices, and the
+           "no AI is connected" card on a machine with no model yet -- and counting
+           those as a conversation took the greeting, and with it the avatar's box, off
+           the one screen they exist for. The first thing a fresh install shows should
+           not be a warning on a blank ground. */
+        const talking = () => [...messages.children]
+            .some((el) => el.id !== 'no-brain-card' && !el.classList.contains('msg-system'));
+        const paint = () => view.classList.toggle('has-messages', talking());
         new MutationObserver(paint).observe(messages, { childList: true });
         paint();
 
@@ -10286,9 +10296,117 @@ document.addEventListener('DOMContentLoaded', () => {
                 voiceEngine.playSFX('click');
                 setShell({ avatar: btn.getAttribute('data-avatar-place') });
                 paintAvatarPlace();
+                paintStudioCage();
             });
         });
         paintAvatarPlace();
+    }
+
+    /* ---- the avatar's box on the empty screen ---------------------------------
+     *
+     * Trident, on a Proton Lumo screen with its cat in a tile and "click to let me
+     * out" written beside it: the same, and clicking it picks "the mini-tar,
+     * background avatar or Holo-tar Desktop Companion".
+     *
+     * So this is not a fifth setting. It is the three that were already in Settings
+     * -> Display plus the desktop sprite, which is the same question -- where does
+     * the avatar live -- asked where you are actually looking at the avatar rather
+     * than four screens into a modal. Each option writes the setting the existing
+     * control writes, and the existing controls repaint this.
+     *
+     * The sprite is not a shell preference: it is a native always-on-top window and
+     * it is stored in the database by the Rust side, so the four places are two
+     * different stores and the painter reads the sprite first. Nothing here is the
+     * source of truth for anything.
+     */
+    const CAGE_NOTES = {
+        off: 'click to let me out',
+        background: 'click to move me',
+        minitar: 'click to move me',
+        holotar: 'click to call me back',
+    };
+
+    function avatarHome() {
+        return desktopSpriteEnabled ? 'holotar' : shellState().avatar;
+    }
+
+    function paintStudioCage() {
+        const home = avatarHome();
+        /* The box is the avatar's stand-in, so it is only on screen while the avatar
+           is not. Drawn over an avatar that is already behind the conversation it is
+           both unreadable -- a line of handwriting over a rotating lattice -- and a
+           lie: there it is, out, and here is a box saying it wants out. Off and out
+           on the desktop are the two states where this window has no avatar in it,
+           and they are exactly the two the note was written for. */
+        const away = home === 'off' || home === 'holotar';
+        document.getElementById('studio-cage')?.classList.toggle('studio-cage-away', !away);
+        if (!away) closeStudioCageMenu();
+        document.querySelectorAll('[data-avatar-home]').forEach((btn) => {
+            btn.setAttribute('aria-checked', btn.getAttribute('data-avatar-home') === home ? 'true' : 'false');
+        });
+        const mark = document.getElementById('studio-cage-mark');
+        const meta = window.Aether1Avatars ? window.Aether1Avatars.get(currentAvatar) : null;
+        if (mark && meta && meta.emoji) mark.textContent = meta.emoji;
+        const note = document.getElementById('studio-cage-note');
+        if (note) note.textContent = CAGE_NOTES[home] || CAGE_NOTES.background;
+        const btn = document.getElementById('btn-studio-cage');
+        if (btn) btn.title = `${(meta && meta.label) || 'The avatar'} -- where it goes`;
+    }
+
+    function closeStudioCageMenu() {
+        document.getElementById('studio-cage-menu')?.classList.add('hidden');
+        document.getElementById('btn-studio-cage')?.setAttribute('aria-expanded', 'false');
+    }
+
+    async function setAvatarHome(home) {
+        // Out on the desktop and in the window are the same avatar in two places, so
+        // picking one of the three in here has to bring it back first -- otherwise the
+        // mini-tar is chosen and the sprite is still the thing on screen.
+        if (home === 'holotar') {
+            await setDesktopSpriteMode(true);
+            return;
+        }
+        if (desktopSpriteEnabled) await setDesktopSpriteMode(false);
+        setShell({ avatar: home });
+        paintAvatarPlace();
+        paintStudioCage();
+    }
+
+    function initStudioCage() {
+        const btn = document.getElementById('btn-studio-cage');
+        const menu = document.getElementById('studio-cage-menu');
+        if (!btn || !menu) return;
+
+        // The holo-tar is a native transparent window; the browser flow has no such
+        // thing, so the row stays out rather than failing when pressed (mirrors
+        // initSpriteMode, which reveals the same switch in Settings).
+        if (IS_TAURI) document.getElementById('studio-cage-opt-holotar')?.classList.remove('hidden');
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            voiceEngine.playSFX('click');
+            const open = menu.classList.toggle('hidden') === false;
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) paintStudioCage();
+        });
+
+        menu.querySelectorAll('[data-avatar-home]').forEach((opt) => {
+            opt.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                voiceEngine.playSFX('click');
+                closeStudioCageMenu();
+                await setAvatarHome(opt.getAttribute('data-avatar-home'));
+            });
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!menu.classList.contains('hidden') && !e.target.closest('#studio-cage')) closeStudioCageMenu();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeStudioCageMenu();
+        });
+
+        paintStudioCage();
     }
 
     /* ---- the shell switch ------------------------------------------------------ */
@@ -10314,6 +10432,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Both shells put the chat panel in a differently shaped box, and three.js and
         // xterm both size themselves off theirs.
         requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+        paintStudioCage();
     }
 
     async function initStudio() {
@@ -10334,6 +10453,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initStudioGreeting();
         initChatChips();
         initAvatarPlace();
+        initStudioCage();
         paintStudioNav('conversation');
         paintShell();
 
@@ -12265,6 +12385,10 @@ document.addEventListener('DOMContentLoaded', () => {
         desktopSpriteEnabled = floating;
         const panel = document.querySelector('[data-panel="hologram"]');
         if (panel) panel.classList.toggle('avatar-floating', floating);
+        // Out on the desktop is one of the four places the studio's box offers, and
+        // every way of getting there -- the panel's Undock, the Settings switch, the
+        // tray, another window -- comes through here.
+        paintStudioCage();
     }
 
     // Turns Desktop Sprite Mode on or off: persists the setting, tells Rust to open/close the

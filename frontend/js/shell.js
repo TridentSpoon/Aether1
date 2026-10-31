@@ -20,7 +20,12 @@
     const KEY = 'aether_shell';
     const SHELLS = ['hud', 'studio'];
     const PLACES = ['background', 'minitar', 'off'];
-    const DEFAULTS = { shell: 'studio', avatar: 'background', sidebar: 'open' };
+    /* The avatar starts in its box, not behind the conversation. Trident's ask is a
+       screen where the avatar is a mark in a tile with "click to let me out" written
+       beside it, and clicking it is how you say where it should go -- which only works
+       if it is in the box to begin with. One click puts it behind the chat, and that
+       click is then a choice, so it sticks. */
+    const DEFAULTS = { shell: 'studio', avatar: 'off', sidebar: 'open' };
 
     /* localStorage throws rather than returning null when site data is blocked, so every
        read and write here is guarded. A window that cannot remember which shell it was in

@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
     <link rel="stylesheet" href="css/agent-browser.css?v=2">
-    <link rel="stylesheet" href="css/studio.css?v=3">
+    <link rel="stylesheet" href="css/studio.css?v=5">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
@@ -23,7 +23,7 @@
     <script src="js/solo-panel.js?v=1"></script>
     <!-- Which shell the window wears, in the head for the same reason the theme is:
          read any later and the panel grid paints before the studio replaces it. -->
-    <script src="js/shell.js?v=2"></script>
+    <script src="js/shell.js?v=3"></script>
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
@@ -507,9 +507,47 @@
                  empty and only in the studio, where there is room for it; the HUD's chat
                  column is 380px and a greeting there is 380px of the thing you came to
                  read. js/app.js toggles .has-messages on the view. -->
-            <div id="studio-greeting" class="studio-greeting" aria-hidden="true">
-                <div id="studio-greeting-line" class="studio-greeting-line font-orbitron">What are we building?</div>
-                <div id="studio-greeting-sub" class="studio-greeting-sub"></div>
+            <div id="studio-greeting" class="studio-greeting">
+                <!-- The avatar, shut in a box, on the one screen with room for it. Clicking
+                     it is how you say where it should live: behind the conversation, small
+                     in the corner, out on the desktop, or nowhere. The three were only ever
+                     in Settings -> Display before, which is a strange place to keep the
+                     companion. The note is written by app.js from where the avatar is now,
+                     so "let me out" is only ever said by an avatar that is actually shut in. -->
+                <div id="studio-cage" class="studio-cage">
+                    <span id="studio-cage-note" class="studio-cage-note">click to let me out</span>
+                    <svg class="studio-cage-arrow" viewBox="0 0 40 34" fill="none" aria-hidden="true">
+                        <path d="M3 2c10 2 19 10 25 22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M23 21l6 4 1-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <button id="btn-studio-cage" type="button" class="studio-cage-tile"
+                            aria-haspopup="true" aria-expanded="false" aria-controls="studio-cage-menu">
+                        <span id="studio-cage-mark" class="studio-cage-mark" aria-hidden="true">&#129302;</span>
+                        <span id="studio-cage-sr" class="sr-only">Where the avatar goes</span>
+                    </button>
+                    <div id="studio-cage-menu" class="studio-cage-menu hidden" role="radiogroup" aria-label="Where the avatar goes">
+                        <button type="button" class="studio-cage-opt" data-avatar-home="background" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">BEHIND THE CHAT</span>
+                            <span class="studio-cage-opt-sub">Full size, dimmed, behind the conversation.</span>
+                        </button>
+                        <button type="button" class="studio-cage-opt" data-avatar-home="minitar" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">MINI-TAR</span>
+                            <span class="studio-cage-opt-sub">Small, in the bottom corner, still live.</span>
+                        </button>
+                        <!-- Shown only in the desktop app: the holo-tar is a transparent
+                             always-on-top window, which the browser has no answer for. -->
+                        <button type="button" id="studio-cage-opt-holotar" class="studio-cage-opt hidden" data-avatar-home="holotar" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">HOLO-TAR</span>
+                            <span class="studio-cage-opt-sub">Out of the window entirely, loose on your desktop.</span>
+                        </button>
+                        <button type="button" class="studio-cage-opt" data-avatar-home="off" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">BACK IN THE BOX</span>
+                            <span class="studio-cage-opt-sub">A clean ground. The avatar stops drawing.</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="studio-greeting-line" class="studio-greeting-line font-orbitron" aria-hidden="true">What are we building?</div>
+                <div id="studio-greeting-sub" class="studio-greeting-sub" aria-hidden="true"></div>
             </div>
             <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
 
@@ -3571,7 +3609,7 @@
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=3"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=71"></script>
+    <script src="js/app.js?v=73"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>
