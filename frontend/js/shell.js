@@ -3,7 +3,9 @@
  * Two of them. HUD is the free-form panel grid AETHER1 has always been: everything
  * on screen at once, draggable, resizable. STUDIO is the chat-first one -- a left
  * sidebar, one centred column, the avatar behind it -- for the evenings that are a
- * conversation rather than a console.
+ * conversation rather than a console. STUDIO is the one a window opens in, because
+ * the first thing anyone does with this app is talk to it; the HUD is a keypress away
+ * and is still where you go to have the whole console at once.
  *
  * It lives here, in the head and in localStorage, for the same reason the theme does:
  * read after first paint, the window draws the panel grid and then jumps to the studio,
@@ -18,7 +20,12 @@
     const KEY = 'aether_shell';
     const SHELLS = ['hud', 'studio'];
     const PLACES = ['background', 'minitar', 'off'];
-    const DEFAULTS = { shell: 'hud', avatar: 'background', sidebar: 'open' };
+    /* The avatar starts in its box, not behind the conversation. Trident's ask is a
+       screen where the avatar is a mark in a tile with "click to let me out" written
+       beside it, and clicking it is how you say where it should go -- which only works
+       if it is in the box to begin with. One click puts it behind the chat, and that
+       click is then a choice, so it sticks. */
+    const DEFAULTS = { shell: 'studio', avatar: 'off', sidebar: 'open' };
 
     /* localStorage throws rather than returning null when site data is blocked, so every
        read and write here is guarded. A window that cannot remember which shell it was in
@@ -32,24 +39,42 @@
         };
     }
 
-    function read() {
+    /* Read back as the raw object rather than a cleaned one, because the difference
+       between "stored nothing" and "stored the default" is the whole of how a default
+       can ever change. Collapsing the sidebar writes the sidebar; it must not quietly
+       write down the shell the window happened to be in at the time, or every install
+       that ever touched the sidebar would be pinned to whatever the default was then. */
+    function readRaw() {
         try {
-            return clean(JSON.parse(global.localStorage.getItem(KEY) || '{}'));
+            const raw = JSON.parse(global.localStorage.getItem(KEY) || '{}');
+            return raw && typeof raw === 'object' ? raw : {};
         } catch (e) {
-            return { ...DEFAULTS };
+            return {};
         }
     }
 
-    function write(state) {
+    /* Only the keys that were actually asked for, each validated. An unknown value is
+       dropped rather than stored, so it falls back to the default on the next read
+       instead of sitting in storage forever. */
+    function keep(raw) {
+        const out = {};
+        if (SHELLS.includes(raw.shell)) out.shell = raw.shell;
+        if (PLACES.includes(raw.avatar)) out.avatar = raw.avatar;
+        if (raw.sidebar === 'closed' || raw.sidebar === 'open') out.sidebar = raw.sidebar;
+        return out;
+    }
+
+    function write(chosen) {
         try {
-            global.localStorage.setItem(KEY, JSON.stringify(state));
+            global.localStorage.setItem(KEY, JSON.stringify(chosen));
         } catch (e) {
             /* Nothing to do about it and nothing worth saying: the shell still works,
                it just will not be the one on screen next launch. */
         }
     }
 
-    let state = read();
+    let chosen = keep(readRaw());
+    let state = clean(chosen);
 
     function paint() {
         const root = global.document.documentElement;
@@ -65,8 +90,9 @@
         set(patch) {
             // Validated on the way in as well as on the way out of storage, so a bad value
             // from a caller cannot reach <html> any more than a bad one in storage can.
-            state = clean({ ...state, ...patch });
-            write(state);
+            chosen = keep({ ...chosen, ...(patch || {}) });
+            state = clean(chosen);
+            write(chosen);
             paint();
             global.dispatchEvent(new CustomEvent('a1-shell-change', { detail: { ...state } }));
             return { ...state };
