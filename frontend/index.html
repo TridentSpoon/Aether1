@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
     <link rel="stylesheet" href="css/agent-browser.css?v=2">
-    <link rel="stylesheet" href="css/studio.css?v=7">
+    <link rel="stylesheet" href="css/studio.css?v=8">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
@@ -347,6 +347,19 @@
                 <span class="studio-model-caret" aria-hidden="true">&#9662;</span>
             </button>
 
+            <!-- The same setting as the slider in Settings -> Display, put where you are
+                 actually looking at the avatar: a slider you cannot see the effect of is
+                 a slider you drag twice. Out only while the avatar is behind the chat,
+                 and only in the studio, since the stage bar is the studio's. Both inputs
+                 are painted by paintAvatarOpacity and both write through setShell, so
+                 neither is the record of anything. -->
+            <label id="stage-avatar-opacity" class="stage-avatar-opacity hidden">
+                <span class="stage-avatar-opacity-label">AVATAR</span>
+                <input id="stage-avatar-opacity-range" type="range" min="5" max="100" step="5" value="40"
+                       class="avatar-opacity-range" aria-label="How strongly the avatar is drawn behind the chat">
+                <span id="stage-avatar-opacity-value" class="stage-avatar-opacity-value">40%</span>
+            </label>
+
             <div id="brain-popover" class="brain-popover hidden" role="dialog" aria-label="Choose the model that answers">
                 <div class="brain-pop-search">
                     <span class="brain-pop-search-icon" aria-hidden="true">&#9906;</span>
@@ -555,7 +568,13 @@
             <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
 
             <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
-                <div id="chat-media-previews" class="hidden flex flex-wrap gap-2 mb-2"></div>
+                <!-- `hidden` and `flex` together is `hidden` losing: Tailwind emits the
+                     display utilities in one layer and flex comes after none, so this
+                     drew an empty bordered strip above the input card on every screen
+                     that had no images pending. renderChatImagePreviews carries both
+                     classes now, so the row is display: flex only while it holds
+                     something. -->
+                <div id="chat-media-previews" class="hidden flex-wrap gap-2 mb-2"></div>
                 <div class="flex items-center gap-2">
                     <button id="btn-mic" title="Hold to talk (or hold Space)" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
@@ -3625,7 +3644,7 @@
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=3"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=75"></script>
+    <script src="js/app.js?v=76"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

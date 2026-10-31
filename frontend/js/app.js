@@ -3445,7 +3445,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderChatImagePreviews() {
         if (!chatMediaPreviews) return;
         chatMediaPreviews.replaceChildren();
-        chatMediaPreviews.classList.toggle('hidden', pendingChatImages.length === 0);
+        // Both, because `hidden` alone does not beat a `flex` sitting in the class list.
+        const empty = pendingChatImages.length === 0;
+        chatMediaPreviews.classList.toggle('hidden', empty);
+        chatMediaPreviews.classList.toggle('flex', !empty);
         pendingChatImages.forEach((image, index) => {
             const wrap = document.createElement('div');
             wrap.className = 'relative border border-cyan-500/40 rounded overflow-hidden';
@@ -10299,28 +10302,44 @@ document.addEventListener('DOMContentLoaded', () => {
        the mini-tar is drawn at full strength in a box of its own with nothing reading
        through it, and OFF draws nothing at all. shell.js owns the number and writes it
        to --studio-avatar-opacity; this only moves it and says what it is. */
+    /* Two inputs, one setting: the row in Settings -> Display and the one on the stage
+       bar, which is the one you reach for while looking at the avatar it dims. Each is
+       painted from the state and each writes through setShell, so neither is a record
+       of anything and they cannot drift apart. */
+    const OPACITY_INPUTS = ['setting-avatar-opacity', 'stage-avatar-opacity-range'];
+    const OPACITY_LABELS = ['avatar-opacity-value', 'stage-avatar-opacity-value'];
+
     function paintAvatarOpacity() {
         const state = shellState();
-        const row = document.getElementById('avatar-opacity-row');
-        row?.classList.toggle('hidden', state.avatar !== 'background');
-        const slider = document.getElementById('setting-avatar-opacity');
-        if (slider && Number(slider.value) !== state.avatarOpacity) slider.value = String(state.avatarOpacity);
-        const label = document.getElementById('avatar-opacity-value');
-        if (label) label.textContent = `${state.avatarOpacity}%`;
+        const background = state.avatar === 'background';
+        document.getElementById('avatar-opacity-row')?.classList.toggle('hidden', !background);
+        document.getElementById('stage-avatar-opacity')?.classList.toggle('hidden', !background);
+        OPACITY_INPUTS.forEach((id) => {
+            const input = document.getElementById(id);
+            // Only when it differs: writing an identical value to the input you are
+            // dragging interrupts the drag in some engines.
+            if (input && Number(input.value) !== state.avatarOpacity) input.value = String(state.avatarOpacity);
+        });
+        OPACITY_LABELS.forEach((id) => {
+            const label = document.getElementById(id);
+            if (label) label.textContent = `${state.avatarOpacity}%`;
+        });
     }
 
     function initAvatarOpacity() {
-        const slider = document.getElementById('setting-avatar-opacity');
-        if (!slider) return;
         const limits = (window.A1Shell && window.A1Shell.OPACITY) || { min: 5, max: 100, step: 5 };
-        slider.min = String(limits.min);
-        slider.max = String(limits.max);
-        slider.step = String(limits.step);
-        // input, not change: the avatar is behind the text you are trying to read, so
-        // the point of the slider is watching the text come clear as you drag it.
-        slider.addEventListener('input', () => {
-            setShell({ avatarOpacity: Number(slider.value) });
-            paintAvatarOpacity();
+        OPACITY_INPUTS.forEach((id) => {
+            const slider = document.getElementById(id);
+            if (!slider) return;
+            slider.min = String(limits.min);
+            slider.max = String(limits.max);
+            slider.step = String(limits.step);
+            // input, not change: the avatar is behind the text you are trying to read,
+            // so the point of the slider is watching the text come clear as you drag it.
+            slider.addEventListener('input', () => {
+                setShell({ avatarOpacity: Number(slider.value) });
+                paintAvatarOpacity();
+            });
         });
         paintAvatarOpacity();
     }
