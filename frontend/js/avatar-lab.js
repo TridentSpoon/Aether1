@@ -15,11 +15,6 @@
     const BUILT_IN = [
         // Singular Ascended Class.
         { id: 'halcy', label: 'hAlcy', group: 'Singular Ascended Class' },
-        // Trace Protocols. Nexus Sent, White Rabbit and Operator are plugins, not
-        // hand-built like this one -- their half of the group lives on their own
-        // registerAvatar defs (group: 'Trace Protocols' in avatar-senti.js,
-        // avatar-white-rabbit.js and avatar-operator.js) rather than here.
-        { id: 'nexus', label: 'The Nexus', group: 'Trace Protocols' },
         // The Umbrals, the A.R.X. line, are all plugins now: their group comes from
         // group: 'The Umbrals' on each registerAvatar def, which fillAvatarPicker clusters
         // into the same <optgroup> a hand-written entry here would have.

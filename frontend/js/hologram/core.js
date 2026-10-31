@@ -931,6 +931,8 @@ class HologramAvatar {
                 glowTexture: (size) => this.createGlowSpriteTexture(size),
                 radialGlowTexture: (size, center, edge) => this.createRadialGlowTexture(size, center, edge),
                 ringTexture: (size, thickness) => this.createRingSpriteTexture(size, thickness),
+                gridTexture: (size, divisions) => this.createGridSpriteTexture(size, divisions),
+                letterTexture: (char, size) => this.createLetterSpriteTexture(char, size),
                 hexVertices: (r, rot, cx, cy) => this.hexVertices(r, rot, cx, cy),
                 /* The shape makers that go with hexVertices. They are prototype methods
                    on the engine (see geometry-helpers.js), which a registered avatar has

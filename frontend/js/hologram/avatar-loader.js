@@ -30,7 +30,7 @@
     const AVATARS = {
         'halcy':          { file: 'avatar-halcy.js',          v: 17, builder: 'buildHalcyAvatar',    animator: 'animateHalcy' },
         'arx-limes':      { file: 'avatar-arx-limes.js',      v: 21 },
-        'nexus':          { file: 'avatar-nexus.js',          v: 29, builder: 'buildNexusAvatar',    animator: 'animateNexus' },
+        'nexus':          { file: 'avatar-nexus.js',          v: 30 },
         'red':            { file: 'avatar-red9000.js',        v: 20 },
         'arx-logos':      { file: 'avatar-arx-logos.js',      v: 19 },
         'alt':            { file: 'avatar-alt.js',            v: 4 },
