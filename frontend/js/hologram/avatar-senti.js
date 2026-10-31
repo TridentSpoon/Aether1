@@ -3,7 +3,7 @@
  * tentacles trailing from its tail.
  *
  * The hull, its rib bands and its forward eye-lens cluster reuse the Nexus's own
- * technique (see avatar-nexus.js's buildNexusAvatar) at a smaller scale, with a small
+ * technique (see avatar-nexus.js) at a smaller scale, with a small
  * obsidian core nested in its belly -- the one piece of hardware every avatar here
  * keeps at its center. The tentacles are a dense, asynchronous swimming cluster: each
  * one ripples on its own traveling wave (root anchored, amplitude growing toward the

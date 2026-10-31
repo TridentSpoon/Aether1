@@ -7,31 +7,6 @@
 (function () {
     'use strict';
 
-    const BUILT_IN = [
-        // Singular Ascended Class.
-        { id: 'halcy', label: 'hAlcy', group: 'Singular Ascended Class' },
-        { id: 'red', label: 'R.E.D. 9000', group: 'Singular Ascended Class' },
-        { id: 'alt', label: 'A1ter_nul', group: 'Singular Ascended Class' },
-        // Trace Protocols. Nexus Sent, White Rabbit and Operator are plugins, not
-        // hand-built like this one -- their half of the group lives on their own
-        // registerAvatar defs (group: 'Trace Protocols' in avatar-senti.js,
-        // avatar-white-rabbit.js and avatar-operator.js) rather than here.
-        { id: 'nexus', label: 'The Nexus', group: 'Trace Protocols' },
-        // The Umbrals: the A.R.X. line. group clusters these under one <optgroup> in the
-        // picker below (see fillAvatarPicker) instead of scattering them through the flat
-        // list -- add a new A.R.X. avatar here with the same group name, or give it
-        // group: 'The Umbrals' on its own registerAvatar def if it's built as a plugin.
-        { id: 'arx-limes', label: 'A.R.X.LIMES', group: 'The Umbrals' },
-        { id: 'arx-logos', label: 'A.R.X.LOGOS', group: 'The Umbrals' },
-        // The eXcelsior Class is nowhere in this list on purpose: every member of it is a
-        // plugin, so the whole group lives on their own registerAvatar defs (group: 'The
-        // eXcelsior Class' in avatar-enxephalon.js, avatar-cicero.js, avatar-praxis.js,
-        // avatar-chrono-maistresse.js, avatar-mairad.js, avatar-valor.js and
-        // avatar-corvals.js, avatar-divinai.js and avatar-tithesa1s.js).
-        // fillAvatarPicker builds the <optgroup> from whatever carries the name, hand-built
-        // entry or plugin alike.
-    ];
-
     const $ = (id) => document.getElementById(id);
     const status = $('lab-status');
 
@@ -70,14 +45,16 @@
         const picker = $('lab-avatar');
         const registered = HologramAvatar.registeredAvatars();
         picker.innerHTML = '';
-        // Anything carrying a group (see BUILT_IN's A.R.X. entries and registerAvatar's
-        // optional def.group) gets clustered into that <optgroup> instead of sitting flat
-        // in the picker -- built-in and plugin avatars can join the same family this way.
+        /* Every avatar registers itself, so this list is simply what the engine has been
+           handed -- there is no second, hand-written list to keep in step with it. One
+           carrying a group (registerAvatar's optional def.group) is clustered into that
+           <optgroup> rather than sitting flat in the picker, which is how a family like
+           The Umbrals or The eXcelsior Class stays together. */
         const groups = new Map();
-        BUILT_IN.concat(registered).forEach(({ id, label, group }) => {
+        registered.forEach(({ id, label, group }) => {
             const option = document.createElement('option');
             option.value = id;
-            option.textContent = registered.some((r) => r.id === id) ? `${label}  (yours)` : label;
+            option.textContent = label;
             if (group) {
                 if (!groups.has(group)) {
                     const optgroup = document.createElement('optgroup');
