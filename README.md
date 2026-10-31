@@ -23,8 +23,9 @@ run, so you can check it against the one your browser shows you. Each device get
 token, and any one of them can be cut off on its own with `aether1 revoke <id>`.
 
 Built for Linux and Windows as peer platforms -- developed on Linux, installed on both, and a
-capability is not finished until it works on each -- with macOS to follow if the hardware ever
-does. It features real-time system and AI relevant telemetry, an interactive 3D holographic
+capability is not finished until it works on each. A macOS disk image is built for both Intel
+and Apple Silicon, but nothing here has ever been *run* on a Mac, and the AETHER CODE sandbox
+is Linux-only by construction, so treat that platform as unproven rather than supported. It features real-time system and AI relevant telemetry, an interactive 3D holographic
 avatar, with speech capabilities, a local persistent memory, and a system tray companion in or
 hovering next to your notification bar.
 
@@ -151,6 +152,40 @@ mkdir aurora1-slim && tar -xzf aurora1-slim-linux-x86_64.tar.gz -C aurora1-slim
 cd aurora1-slim
 ./install-slim-linux.sh
 ```
+
+### AppImage (Linux, one file, nothing installed)
+
+`Aurora1-x86_64.AppImage` from [Releases](../../releases) is the whole app, the webview and
+the GTK libraries under it in a single executable -- no installer, no package manager, no
+root:
+
+```sh
+chmod +x Aurora1-x86_64.AppImage
+./Aurora1-x86_64.AppImage
+```
+
+(On a machine with no FUSE -- some containers, some minimal installs -- add
+`--appimage-extract-and-run`.)
+
+What it does not carry is speech: no Piper, no whisper.cpp, no models, the same as the slim
+bundle, and for the AppImage there is no install step in which to fetch them. Everything else
+works. It also updates differently from the other two: the app offers you a newer release
+only for the shapes it knows how to install, so an AppImage is replaced by downloading the
+next one yourself.
+
+### macOS (unsigned, and unproven)
+
+`Aurora1-aarch64.dmg` (Apple Silicon) and `Aurora1-x86_64.dmg` (Intel) are on
+[Releases](../../releases). Open the image, drag Aurora1 to Applications, and **open it the
+first time with right-click -> Open** rather than a double-click: the app is not signed or
+notarized, which needs a paid Apple Developer account, so Gatekeeper refuses the ordinary
+route. The blunter equivalent is `xattr -dr com.apple.quarantine /Applications/Aurora1.app`.
+
+Two honest limits. There is no speech on macOS yet -- nothing fetches the macOS builds of
+Piper and whisper.cpp -- and AETHER CODE's sandbox is bubblewrap, which is Linux-only, so a
+command there refuses itself with a reason exactly as it does on Windows (see
+[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)). The image is built by CI on every release;
+it has not been opened on a Mac by anyone.
 
 ### Windows blocked it: SmartScreen and Smart App Control
 
