@@ -604,12 +604,17 @@ pub fn route(
             pace,
         },
     )
-    // Named, because the first desktop log of this said only "timeout: global" and the one
-    // thing worth knowing was which model it had gone to ask and whether that model was in
-    // memory at the time.
-    .map_err(|why| match pace {
-        providers::Pace::Warm => format!("{judge} is loaded and did not answer: {why}"),
-        _ => format!("{judge} had to be loaded first and did not answer in time: {why}"),
+    /* Named, because the first desktop log of this said only "timeout: global" and the one
+    thing worth knowing was which model it had gone to ask and whether that model was in
+    memory at the time. The state is all this adds: the second log showed the first attempt
+    at it claiming "did not answer in time" for a model that had answered promptly with
+    nothing, so what went wrong is left to `why`, which knows. */
+    .map_err(|why| {
+        let state = match pace {
+            providers::Pace::Warm => "in memory",
+            _ => "not in memory",
+        };
+        format!("{judge}, {state}: {why}")
     })?;
     let verdict: Verdict = serde_json::from_value(answer.clone())
         .map_err(|e| format!("the judgment was JSON but not a verdict ({e}): {answer}"))?;
