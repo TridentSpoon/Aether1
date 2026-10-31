@@ -322,7 +322,16 @@ jobs:
     # architectures, so the Intel one is `rustup target add` and a `--target` flag -- and
     # keeping them on one runner image means the two differ in exactly that flag rather than
     # in which macOS, which Xcode and which linker built them.
-    runs-on: macos-14
+    #
+    # `macos-latest` rather than a pinned image, which is the opposite of what the rest of
+    # this file does. It was `macos-14` first and both jobs were cancelled two seconds in
+    # with no runner assigned, no steps and no log -- what GitHub does with a label it will
+    # not serve, rather than the "no runner matching the labels" error it gives for a label
+    # it has never heard of. Pinning buys reproducibility only while the pin is honoured; an
+    # image that quietly stops being served costs the whole job instead, and there is no Mac
+    # here to notice it on. If a macOS upgrade ever breaks a build, pin it then, to whatever
+    # is being served that day.
+    runs-on: macos-latest
     strategy:
       # One architecture failing is worth knowing about separately from the other, and a
       # cancelled sibling job teaches nothing.
