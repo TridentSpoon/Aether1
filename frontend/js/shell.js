@@ -25,7 +25,21 @@
        beside it, and clicking it is how you say where it should go -- which only works
        if it is in the box to begin with. One click puts it behind the chat, and that
        click is then a choice, so it sticks. */
-    const DEFAULTS = { shell: 'studio', avatar: 'off', sidebar: 'open' };
+    /* How strongly the avatar is drawn behind the conversation, 5 to 100. Trident:
+       "I like the idea of the avatar in the background with an opacity slider to make
+       text easier to see (if needed)". 40 is what the stylesheet drew before there was
+       a slider, so nobody's screen changes by gaining one. Never 0 -- that is what OFF
+       is for, and an avatar turned invisible by a slider is a setting you cannot see
+       to undo. */
+    const OPACITY = { min: 5, max: 100, step: 5 };
+    const DEFAULTS = { shell: 'studio', avatar: 'off', sidebar: 'open', avatarOpacity: 40 };
+
+    function cleanOpacity(value) {
+        const n = Math.round(Number(value));
+        if (!Number.isFinite(n)) return null;
+        if (n < OPACITY.min || n > OPACITY.max) return null;
+        return n;
+    }
 
     /* localStorage throws rather than returning null when site data is blocked, so every
        read and write here is guarded. A window that cannot remember which shell it was in
@@ -36,6 +50,7 @@
             shell: SHELLS.includes(stored.shell) ? stored.shell : DEFAULTS.shell,
             avatar: PLACES.includes(stored.avatar) ? stored.avatar : DEFAULTS.avatar,
             sidebar: stored.sidebar === 'closed' ? 'closed' : DEFAULTS.sidebar,
+            avatarOpacity: cleanOpacity(stored.avatarOpacity) || DEFAULTS.avatarOpacity,
         };
     }
 
@@ -61,6 +76,8 @@
         if (SHELLS.includes(raw.shell)) out.shell = raw.shell;
         if (PLACES.includes(raw.avatar)) out.avatar = raw.avatar;
         if (raw.sidebar === 'closed' || raw.sidebar === 'open') out.sidebar = raw.sidebar;
+        const opacity = cleanOpacity(raw.avatarOpacity);
+        if (opacity !== null) out.avatarOpacity = opacity;
         return out;
     }
 
@@ -81,11 +98,15 @@
         root.dataset.shell = state.shell;
         root.dataset.studioAvatar = state.avatar;
         root.dataset.studioSidebar = state.sidebar;
+        // A custom property rather than an attribute: it is a number the stylesheet
+        // does arithmetic with, not a mode it switches on.
+        root.style.setProperty('--studio-avatar-opacity', String(state.avatarOpacity / 100));
     }
 
     paint();
 
     global.A1Shell = {
+        OPACITY,
         get: () => ({ ...state }),
         set(patch) {
             // Validated on the way in as well as on the way out of storage, so a bad value

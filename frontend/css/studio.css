@@ -374,7 +374,9 @@ html[data-shell="studio"] #hud-layout > [data-panel="hologram"] {
    where it is a thing you can turn again. */
 html[data-shell="studio"][data-studio-avatar="background"] #hud-layout > [data-panel="hologram"] {
   pointer-events: none;
-  opacity: 0.4;
+  /* js/shell.js writes the property from the slider; the fallback is what this rule
+     said before there was one, so a window that never touches the slider is unchanged. */
+  opacity: var(--studio-avatar-opacity, 0.4);
 }
 
 html[data-shell="studio"] #hud-layout > [data-panel="hologram"] .hologram-chin,
@@ -643,19 +645,19 @@ html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-gre
  * through to whatever is behind it; the box is the one thing on it you can press,
  * so it takes its pointer events back.
  *
- * The note is set in whatever handwriting the machine has. Nothing is downloaded for
- * it -- a local-first app that reaches out to a font CDN to draw four words has given
- * something away for a flourish -- so the stack names the script faces Windows, macOS
- * and the common Linux font packages ship, and falls back to the generic cursive.
- * Where there is none, it lands on the generic and still reads as an aside.
+ * The label is set the way every other label in this app is set -- mono, upper case,
+ * spaced, dim -- rather than in handwriting at an angle with an arrow drawn to the
+ * tile, which is how the screen that prompted this did it. What was worth taking was
+ * the empty ground with one thing on it, not the flourish.
  */
 .studio-cage {
   position: relative;
   pointer-events: auto;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 10px;
 }
 
 /* Set by app.js: the avatar is in the window, so its stand-in is not. */
@@ -664,30 +666,11 @@ html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-gre
 }
 
 .studio-cage-note {
-  position: absolute;
-  bottom: calc(100% + 24px);
-  right: calc(50% + 22px);
-  white-space: nowrap;
-  font-family: 'Segoe Script', 'Bradley Hand', 'Snell Roundhand', 'URW Chancery L',
-    'Comic Sans MS', cursive;
-  font-size: 15px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
   line-height: 1;
+  letter-spacing: 0.16em;
   color: var(--text-dim);
-  transform: rotate(-11deg);
-  transform-origin: 100% 100%;
-  opacity: 0.9;
-  text-shadow: 0 0 12px var(--bg-core), 0 0 4px var(--bg-core);
-}
-
-.studio-cage-arrow {
-  position: absolute;
-  bottom: calc(100% + 2px);
-  right: calc(50% + 10px);
-  width: 30px;
-  height: 26px;
-  color: var(--text-accent);
-  opacity: 0.75;
-  pointer-events: none;
 }
 
 .studio-cage-tile {
@@ -789,8 +772,7 @@ html[data-shell="studio"] #chat-view-conversation:not(.has-messages) #studio-gre
 /* Short windows have the input card, the greeting and the box competing for the same
    band; the note is the part that can go without taking the control with it. */
 @media (max-height: 620px) {
-  .studio-cage-note,
-  .studio-cage-arrow {
+  .studio-cage-note {
     display: none;
   }
 
@@ -1438,4 +1420,74 @@ html[data-shell="studio"][data-studio-sidebar="closed"] .studio-operator {
   html[data-shell="studio"] .studio-operator {
     flex: 0 0 auto;
   }
+}
+
+/* ---- how strongly the background avatar is drawn --------------------------------
+ *
+ * In the HUD this row is inside the Display section like the cards above it, so it
+ * needs no shell gate of its own -- app.js hides it whenever the avatar is anywhere
+ * but behind the chat, in either shell.
+ */
+.avatar-opacity-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+}
+
+.avatar-opacity-row.hidden {
+  display: none;
+}
+
+.avatar-opacity-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-accent);
+}
+
+.avatar-opacity-value {
+  color: var(--text-highlight);
+}
+
+.avatar-opacity-help {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+.avatar-opacity-range {
+  width: 100%;
+  height: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 2px;
+  background: var(--bg-panel-hover);
+  border: 1px solid var(--border-neon);
+  cursor: pointer;
+}
+
+.avatar-opacity-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border-neon-bright);
+  background: var(--neon-cyan);
+  box-shadow: 0 0 10px var(--glow-cyan);
+}
+
+.avatar-opacity-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border-neon-bright);
+  background: var(--neon-cyan);
+  box-shadow: 0 0 10px var(--glow-cyan);
 }
