@@ -9938,7 +9938,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const studio = { settings: null };
 
     function shellState() {
-        return (window.A1Shell && window.A1Shell.get()) || { shell: 'hud', avatar: 'background', sidebar: 'open' };
+        return (window.A1Shell && window.A1Shell.get()) || { shell: 'studio', avatar: 'background', sidebar: 'open' };
     }
 
     function setShell(patch) {
@@ -10300,6 +10300,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         const sidebarBtn = document.getElementById('btn-studio-sidebar');
         sidebarBtn?.setAttribute('aria-expanded', state.sidebar === 'open' ? 'true' : 'false');
+        // One entry in the header menu, both directions. It names where it goes, not
+        // where you are, because a menu item that names the current state reads as a
+        // label rather than a thing to press.
+        const shellBtn = document.getElementById('btn-shell-toggle');
+        if (shellBtn) {
+            const toHud = state.shell === 'studio';
+            shellBtn.textContent = toHud ? '\u25a6 HUD panel grid' : '\u25a6 Chat studio';
+            shellBtn.title = toHud
+                ? 'Everything on screen at once, draggable and resizable'
+                : 'Chat first: a sidebar, one centred column, the avatar behind it';
+        }
         // Both shells put the chat panel in a differently shaped box, and three.js and
         // xterm both size themselves off theirs.
         requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
@@ -10313,6 +10324,11 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
         window.addEventListener('a1-shell-change', paintShell);
+
+        document.getElementById('btn-shell-toggle')?.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            setShell({ shell: shellState().shell === 'studio' ? 'hud' : 'studio' });
+        });
 
         initStudioSidebar();
         initStudioGreeting();
