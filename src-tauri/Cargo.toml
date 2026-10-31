@@ -69,3 +69,16 @@ strip = true
 # Windows path there is std::fs and says so.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# A transparent window on macOS is the one thing Tauri puts behind a feature flag rather
+# than a method: without `macos-private-api`, `WebviewWindowBuilder::transparent` does not
+# exist on that platform at all, and the HUD's own window and the mini-tar's sprite window
+# are both built with it. The name is honest -- it uses private Apple APIs, which bars an
+# app from the Mac App Store. AURORA1 is not distributed there (an unsigned .dmg from a
+# GitHub release is the whole channel, see scripts/package_dmg_macos.sh), so the trade is
+# a transparent HUD against a store this project was never going to be in.
+#
+# Target-gated so no other platform's build grows a feature it cannot use, and paired with
+# `tauri.macos.conf.json`, which turns the matching config flag on for macOS alone.
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
