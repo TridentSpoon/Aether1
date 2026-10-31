@@ -24,11 +24,8 @@
 
     const BASE = 'js/hologram/';
 
-    /* builder/animator name a hand-modelled avatar's two methods on HologramAvatar.prototype
-       (see avatar-halcy.js and animate.js). A plugin avatar has neither -- it registers
-       itself with HologramAvatar.registerAvatar and carries its own build/animate. */
     const AVATARS = {
-        'halcy':          { file: 'avatar-halcy.js',          v: 17, builder: 'buildHalcyAvatar',    animator: 'animateHalcy' },
+        'halcy':          { file: 'avatar-halcy.js',          v: 18 },
         'arx-limes':      { file: 'avatar-arx-limes.js',      v: 21 },
         'nexus':          { file: 'avatar-nexus.js',          v: 30 },
         'red':            { file: 'avatar-red9000.js',        v: 20 },
@@ -100,17 +97,14 @@
         return ALIASES[id] || id;
     };
 
-    HologramAvatar.builderNameFor = function (id) {
-        const entry = AVATARS[HologramAvatar.canonicalAvatarId(id)];
-        return entry ? entry.builder : undefined;
-    };
-
-    /* hAlcy is the engine's fallback shape for a name it does not recognise (see setAvatar
-       and animate), so an unknown id animates as hAlcy here too rather than standing still. */
-    HologramAvatar.animatorNameFor = function (id) {
-        const entry = AVATARS[HologramAvatar.canonicalAvatarId(id)];
-        if (entry) return entry.animator;
-        return AVATARS.halcy.animator;
+    /* The id this engine will actually show for a given name: its canonical spelling, or
+       hAlcy when nothing here answers to it. A name can be unknown because a saved setting
+       outlived the avatar it named, or because an older build wrote something this one has
+       never heard of -- and showing the fallback shape beats showing an empty bay. */
+    HologramAvatar.resolveAvatarId = function (id) {
+        const canonical = HologramAvatar.canonicalAvatarId(id);
+        if (AVATARS[canonical] || HologramAvatar.avatarPlugins.has(canonical)) return canonical;
+        return 'halcy';
     };
 
     HologramAvatar.knownAvatarIds = function () {

@@ -69,9 +69,10 @@ it, or open Settings and use **Design your own avatar**. Either opens the workbe
 its own window. (You can also open `frontend/avatar-lab.html` directly in a browser --
 it needs nothing else running.)
 
-Choose four tiers -- a core (the thing at the middle), an inner ring (wrapping close
-around it), an outer ring (further out, toward the edge) and an effect (an ambient layer
-or background) -- set the sizes and the motion, and press **Use this in Aether1**. The
+Choose seven tiers -- a core (the thing at the middle), an inner ring (wrapping close
+around it), an outer ring (further out, toward the edge), an effect (an ambient layer or
+background), and eyes, brows and a mouth, which share one face plane in front of the core
+-- set the sizes and the motion, and press **Use this in Aether1**. The
 HUD picks it up immediately: the two windows share the saved recipe, so an open HUD
 updates the moment you save, with no reload.
 
