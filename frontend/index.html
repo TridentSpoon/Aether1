@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
     <link rel="stylesheet" href="css/agent-browser.css?v=2">
-    <link rel="stylesheet" href="css/studio.css?v=5">
+    <link rel="stylesheet" href="css/studio.css?v=7">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
@@ -23,7 +23,7 @@
     <script src="js/solo-panel.js?v=1"></script>
     <!-- Which shell the window wears, in the head for the same reason the theme is:
          read any later and the panel grid paints before the studio replaces it. -->
-    <script src="js/shell.js?v=3"></script>
+    <script src="js/shell.js?v=4"></script>
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
@@ -508,23 +508,26 @@
                  column is 380px and a greeting there is 380px of the thing you came to
                  read. js/app.js toggles .has-messages on the view. -->
             <div id="studio-greeting" class="studio-greeting">
-                <!-- The avatar, shut in a box, on the one screen with room for it. Clicking
+                <!-- The avatar, shut in a box, on the one screen with room for it. Pressing
                      it is how you say where it should live: behind the conversation, small
                      in the corner, out on the desktop, or nowhere. The three were only ever
                      in Settings -> Display before, which is a strange place to keep the
-                     companion. The note is written by app.js from where the avatar is now,
-                     so "let me out" is only ever said by an avatar that is actually shut in. -->
+                     companion.
+
+                     The label under it is written by app.js from where the avatar is now,
+                     and it is set the way every other label in this app is set -- mono,
+                     upper case, spaced. It was a line of handwriting at an angle with a
+                     drawn arrow, lifted from the screen the idea came off; Trident:
+                     "I don't want it as a carbon copy I just like that they are clean
+                     interfaces". The clean part was the empty ground and the one thing on
+                     it to press, which is what this keeps. -->
                 <div id="studio-cage" class="studio-cage">
-                    <span id="studio-cage-note" class="studio-cage-note">click to let me out</span>
-                    <svg class="studio-cage-arrow" viewBox="0 0 40 34" fill="none" aria-hidden="true">
-                        <path d="M3 2c10 2 19 10 25 22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        <path d="M23 21l6 4 1-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
                     <button id="btn-studio-cage" type="button" class="studio-cage-tile"
                             aria-haspopup="true" aria-expanded="false" aria-controls="studio-cage-menu">
                         <span id="studio-cage-mark" class="studio-cage-mark" aria-hidden="true">&#129302;</span>
                         <span id="studio-cage-sr" class="sr-only">Where the avatar goes</span>
                     </button>
+                    <span id="studio-cage-note" class="studio-cage-note">LET IT OUT</span>
                     <div id="studio-cage-menu" class="studio-cage-menu hidden" role="radiogroup" aria-label="Where the avatar goes">
                         <button type="button" class="studio-cage-opt" data-avatar-home="background" role="radio" aria-checked="false">
                             <span class="studio-cage-opt-name">BEHIND THE CHAT</span>
@@ -1797,6 +1800,19 @@
                             <span class="shell-choice-name">OFF</span>
                             <span class="shell-choice-sub">A clean ground. The avatar stops drawing.</span>
                         </button>
+                    </div>
+                    <!-- Only out while the avatar is behind the chat: it is that mode's
+                         own control, and the mini-tar is drawn at full strength in a box
+                         of its own where nothing is reading through it. app.js shows and
+                         hides the row from the same painter that lights the cards. -->
+                    <div id="avatar-opacity-row" class="avatar-opacity-row hidden">
+                        <label for="setting-avatar-opacity" class="avatar-opacity-label">
+                            How strongly it is drawn
+                            <span id="avatar-opacity-value" class="avatar-opacity-value">40%</span>
+                        </label>
+                        <input id="setting-avatar-opacity" type="range" min="5" max="100" step="5" value="40"
+                               class="avatar-opacity-range" aria-describedby="avatar-opacity-help">
+                        <span id="avatar-opacity-help" class="avatar-opacity-help">Turn it down when the conversation is hard to read over it.</span>
                     </div>
                 </div>
 
@@ -3609,7 +3625,7 @@
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=3"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=73"></script>
+    <script src="js/app.js?v=75"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

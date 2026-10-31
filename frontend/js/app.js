@@ -10285,9 +10285,44 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('[data-avatar-place]').forEach((btn) => {
             btn.setAttribute('aria-checked', btn.getAttribute('data-avatar-place') === place ? 'true' : 'false');
         });
+        paintAvatarOpacity();
         // The hologram sizes its canvas to its viewport, and in the studio that viewport
         // goes from the whole stage to 220px and back. Nothing else tells it so.
         requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+
+    /* How strongly the avatar is drawn behind the conversation. Trident: "I like the
+       idea of the avatar in the background with an opacity slider to make text easier
+       to see (if needed)".
+
+       It is the background mode's own control, so the row is out only in that mode --
+       the mini-tar is drawn at full strength in a box of its own with nothing reading
+       through it, and OFF draws nothing at all. shell.js owns the number and writes it
+       to --studio-avatar-opacity; this only moves it and says what it is. */
+    function paintAvatarOpacity() {
+        const state = shellState();
+        const row = document.getElementById('avatar-opacity-row');
+        row?.classList.toggle('hidden', state.avatar !== 'background');
+        const slider = document.getElementById('setting-avatar-opacity');
+        if (slider && Number(slider.value) !== state.avatarOpacity) slider.value = String(state.avatarOpacity);
+        const label = document.getElementById('avatar-opacity-value');
+        if (label) label.textContent = `${state.avatarOpacity}%`;
+    }
+
+    function initAvatarOpacity() {
+        const slider = document.getElementById('setting-avatar-opacity');
+        if (!slider) return;
+        const limits = (window.A1Shell && window.A1Shell.OPACITY) || { min: 5, max: 100, step: 5 };
+        slider.min = String(limits.min);
+        slider.max = String(limits.max);
+        slider.step = String(limits.step);
+        // input, not change: the avatar is behind the text you are trying to read, so
+        // the point of the slider is watching the text come clear as you drag it.
+        slider.addEventListener('input', () => {
+            setShell({ avatarOpacity: Number(slider.value) });
+            paintAvatarOpacity();
+        });
+        paintAvatarOpacity();
     }
 
     function initAvatarPlace() {
@@ -10319,11 +10354,15 @@ document.addEventListener('DOMContentLoaded', () => {
      * different stores and the painter reads the sprite first. Nothing here is the
      * source of truth for anything.
      */
+    /* What pressing it does, not where the avatar is: the tile already shows that.
+       Set like every other label in the app rather than as an aside in handwriting --
+       Trident, on the screen the idea came from: "I don't want it as a carbon copy I
+       just like that they are clean interfaces". */
     const CAGE_NOTES = {
-        off: 'click to let me out',
-        background: 'click to move me',
-        minitar: 'click to move me',
-        holotar: 'click to call me back',
+        off: 'LET IT OUT',
+        background: 'MOVE IT',
+        minitar: 'MOVE IT',
+        holotar: 'BRING IT BACK',
     };
 
     function avatarHome() {
@@ -10453,6 +10492,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initStudioGreeting();
         initChatChips();
         initAvatarPlace();
+        initAvatarOpacity();
         initStudioCage();
         paintStudioNav('conversation');
         paintShell();
