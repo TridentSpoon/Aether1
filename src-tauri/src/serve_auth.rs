@@ -1217,18 +1217,23 @@ mod tests {
     use super::*;
 
     fn temp_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "aether1_serve_auth_{name}_{}.hash",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("aether1_serve_auth_{name}_{}", std::process::id()))
     }
 
-    /// The phrase file and the device list, both fresh.
+    /// The phrase file and the device list, both fresh, in a directory of this test's own.
+    ///
+    /// A directory rather than two file names, because `ServeAuth` keeps its pairing code
+    /// *beside* the device list (`load_or_create_at`) and every device list used to sit
+    /// directly in the system temp directory -- so the three tests that mint a code were
+    /// sharing one `serve_pair_code.json` and spoiling each other's run. One of them had
+    /// already worked around it on its own; this is that workaround, done once for all of
+    /// them.
     fn temp_paths(name: &str) -> (PathBuf, PathBuf) {
-        let hash = temp_path(name);
-        let devices = hash.with_extension("devices.json");
-        let _ = std::fs::remove_file(&hash);
-        let _ = std::fs::remove_file(&devices);
+        let dir = temp_path(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory for the test's own files");
+        let hash = dir.join("serve_auth.hash");
+        let devices = dir.join("serve_devices.json");
         (hash, devices)
     }
 
@@ -1287,12 +1292,7 @@ mod tests {
     #[test]
     fn a_code_collected_by_an_impostor_is_no_use_either() {
         let (hash_file, devices_file) = temp_paths("impostor_code");
-        // A directory of its own: the code file sits beside the device list, and tests run
-        // side by side, so sharing the temp directory would mean sharing the one code.
-        let dir = devices_file.with_extension("dir");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let devices_file = dir.join("serve_devices.json");
+        let dir = devices_file.parent().unwrap().to_path_buf();
         let (auth, _setup) = load_or_create_at(&hash_file, &devices_file).unwrap();
         let (code, _expires) = mint_pairing_code_at(&dir.join("serve_pair_code.json")).unwrap();
         let hash = code_credential_hash(&code);
