@@ -922,6 +922,7 @@ class HologramAvatar {
                 hexPrism: (r, rot, mat, thickness, cx, cy) => this.buildHexPrism(r, rot, mat, thickness, cx, cy),
                 polygonShard: (pts, bulge, fillMat, outlineMat, thickness) =>
                     this.buildPolygonShard(pts, bulge, fillMat, outlineMat, thickness),
+                roundedCube: (radius, segments, round) => this.buildRoundedCube(radius, segments, round),
             },
         };
     }

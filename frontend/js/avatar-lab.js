@@ -21,11 +21,9 @@
         // registerAvatar defs (group: 'Trace Protocols' in avatar-senti.js,
         // avatar-white-rabbit.js and avatar-operator.js) rather than here.
         { id: 'nexus', label: 'The Nexus', group: 'Trace Protocols' },
-        // The Umbrals: the A.R.X. line. group clusters these under one <optgroup> in the
-        // picker below (see fillAvatarPicker) instead of scattering them through the flat
-        // list -- add a new A.R.X. avatar here with the same group name, or give it
-        // group: 'The Umbrals' on its own registerAvatar def if it's built as a plugin.
-        { id: 'arx-limes', label: 'A.R.X.LIMES', group: 'The Umbrals' },
+        // The Umbrals, the A.R.X. line, are all plugins now: their group comes from
+        // group: 'The Umbrals' on each registerAvatar def, which fillAvatarPicker clusters
+        // into the same <optgroup> a hand-written entry here would have.
         // The eXcelsior Class is nowhere in this list on purpose: every member of it is a
         // plugin, so the whole group lives on their own registerAvatar defs (group: 'The
         // eXcelsior Class' in avatar-enxephalon.js, avatar-cicero.js, avatar-praxis.js,
