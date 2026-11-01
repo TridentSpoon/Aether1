@@ -169,9 +169,16 @@ chmod +x Aurora1-x86_64.AppImage
 
 What it does not carry is speech: no Piper, no whisper.cpp, no models, the same as the slim
 bundle, and for the AppImage there is no install step in which to fetch them. Everything else
-works. It also updates differently from the other two: the app offers you a newer release
-only for the shapes it knows how to install, so an AppImage is replaced by downloading the
-next one yourself.
+works.
+
+It also updates differently from the other two. AURORA1's own updater offers a newer release
+only for the shapes it knows how to install, so it will not replace an AppImage in place.
+Instead the file carries its own update information, pointing at the newest release of this
+repository, and the release publishes `Aurora1-x86_64.AppImage.zsync` beside it. An AppImage
+manager -- Gear Lever, AppImageLauncher, `AppImageUpdate` -- reads that and updates the file
+for you, fetching only the parts that changed. Nothing else needs to be configured, and a
+manager that shows "Update Strategy: None" for it is looking at a build from before this
+existed.
 
 ### macOS (unsigned, and unproven)
 
