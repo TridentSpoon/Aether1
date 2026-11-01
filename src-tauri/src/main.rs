@@ -43,6 +43,7 @@ mod downloads;
 mod github_auth;
 mod gpu;
 mod graft;
+mod graft_install;
 mod hf;
 mod hotkey;
 mod installs;
@@ -1856,6 +1857,21 @@ fn voice_catalogue_rust() -> serde_json::Value {
 }
 
 #[tauri::command(async)]
+fn start_graft_install_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::start_graft_install(&engine)
+}
+
+#[tauri::command(async)]
+fn graft_install_status_rust() -> serde_json::Value {
+    commands::graft_install_status()
+}
+
+#[tauri::command(async)]
+fn forget_graft_install_rust() -> serde_json::Value {
+    commands::forget_graft_install()
+}
+
+#[tauri::command(async)]
 fn start_voice_download_rust(engine: tauri::State<LlmEngine>, voice: String) -> serde_json::Value {
     commands::start_voice_download(&engine, voice)
 }
@@ -3299,6 +3315,9 @@ fn main() {
             download_status_rust,
             forget_download_rust,
             voice_catalogue_rust,
+            start_graft_install_rust,
+            graft_install_status_rust,
+            forget_graft_install_rust,
             start_voice_download_rust,
             voice_download_status_rust,
             forget_voice_download_rust,

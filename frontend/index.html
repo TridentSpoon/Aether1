@@ -2685,9 +2685,23 @@
                             <button id="btn-graft-build-all" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🔨 Build All Missing</button>
                         </div>
 
+                        <!-- Shown only when Graft is missing. The paragraph below used to tell the
+                             operator to run the npm line themselves; this runs it for them, the same
+                             way AETHER1 already sets up Ollama rather than handing over a command. -->
+                        <div id="graft-install-row" class="hidden mb-3 border border-cyan-500/40 rounded p-2 bg-slate-900">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <button id="btn-graft-install" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">⬇ Download &amp; Install Graft</button>
+                                <span id="graft-install-step" class="text-[10px] font-mono text-slate-400"></span>
+                            </div>
+                            <div id="graft-install-bar-track" class="hidden mt-2 h-1.5 w-full rounded bg-slate-800 overflow-hidden">
+                                <div id="graft-install-bar" class="h-full w-0 bg-cyan-400 transition-all duration-300"></div>
+                            </div>
+                            <div id="graft-install-detail" class="mt-1 text-[10px] font-mono text-slate-500 break-all"></div>
+                        </div>
+
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Graft builds a graph of your codebase to help understand its structure. Install it
-                            with <span class="text-cyan-300">npm install -g @nanonets/graft</span>, then build a
+                            Graft builds a graph of your codebase to help understand its structure. AETHER1
+                            fetches it with <span class="text-cyan-300">npm</span> when it is missing, then build a
                             graph for each project you want it to know about. Every ticked project is asked when
                             you ask a code question, and the nodes that match best across all of them are
                             injected into the AI's context, each labelled with its project and the file and line

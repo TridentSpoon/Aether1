@@ -259,6 +259,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/setup/downloads", get(download_status))
         .route("/api/setup/download/forget", post(forget_download))
         .route("/api/voice/catalogue", get(voice_catalogue))
+        .route("/api/graft/version", get(graft_version))
+        .route("/api/graft/install", post(start_graft_install))
+        .route("/api/graft/install/status", get(graft_install_status))
+        .route("/api/graft/install/forget", post(forget_graft_install))
         .route("/api/voice/download", post(start_voice_download))
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
@@ -1900,6 +1904,34 @@ async fn forget_download(Query(q): Query<DownloadQuery>) -> Json<serde_json::Val
 #[derive(Deserialize)]
 struct VoiceQuery {
     voice: Option<String>,
+}
+
+/* The panel's status line asked `graft_version_rust` and told a browser "requires Tauri",
+which left the served copy unable to say whether Graft was there -- and now unable to say
+whether an install worked. Same command behind both doors, the rule the model picker was
+fixed to follow in #251. */
+async fn graft_version() -> Json<serde_json::Value> {
+    Json(match commands::graft_version() {
+        Ok(value) => value,
+        Err(message) => serde_json::json!({ "installed": false, "message": message }),
+    })
+}
+
+async fn start_graft_install(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let engine = state.engine.clone();
+    Json(
+        tokio::task::spawn_blocking(move || commands::start_graft_install(&engine))
+            .await
+            .expect("start_graft_install panicked"),
+    )
+}
+
+async fn graft_install_status() -> Json<serde_json::Value> {
+    Json(commands::graft_install_status())
+}
+
+async fn forget_graft_install() -> Json<serde_json::Value> {
+    Json(commands::forget_graft_install())
 }
 
 async fn voice_catalogue() -> Json<serde_json::Value> {
