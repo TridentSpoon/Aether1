@@ -4347,3 +4347,34 @@ Both now print a `mkdir` and an extract into it.
 **Untested here:** the Windows `mklink` half. This container has no Windows and the installer
 is compiled by `package_offline_windows.ps1` on a runner, so the `[Run]` entry has been read
 but never watched running.
+
+## Step 70 — the header stops saying two names
+
+Trident saw `AETHER1 PLATFORM` in the header while the studio sidebar beside it said
+`AURORA1`, on rev0.261031.279. It was not a bug in the sense of a thing that malfunctioned:
+the wordmark alternated between the companion's name and the platform's every fourteen
+seconds, deliberately, and the screenshot caught it mid-rotation. It was still wrong.
+
+**Why the rotation stopped being defensible.** It was written when the companion and the
+platform shared a name: `AETHER1` alternating with `AETHER1 PLATFORM` is barely a change at
+all, and step 66 noted the rename would finally make the alternation do something. It did —
+it made it *visible*, and what it showed is a product that cannot decide what it is called.
+The locked plan puts `Aurora1` in front of the operator and keeps the `Aether1 Platform` for
+whoever is building on it; a header that spends half its time on the internal name reads as a
+rename somebody abandoned halfway. Two names side by side on one screen is exactly what he
+noticed, and the studio shell is what put them there: its sidebar carries `AURORA1`
+permanently, which the HUD never did.
+
+So the wordmark is the companion's name and nothing else. The platform keeps the two places
+that are addressed to somebody who wants to know it — this element's tooltip
+(`AURORA1 — running on the Aether1 Platform`) and the About box. A fourteen-second rotation
+was never a way to tell anybody anything: whoever needs the platform's name is not waiting on
+a timer, and whoever does not is being shown a second brand for no reason.
+
+**Two things went with it.** The `name !== 'AETHER1'` guard existed only to stop the
+alternation being a no-op, so it had nothing left to do. And the empty-name fallback now
+reads `AURORA1` rather than the platform: the only moment the name is empty is before
+settings load, so that fallback was the one thing still flashing the old brand on every
+start — the frame nobody designed and everybody sees.
+
+`setInterval` is gone with it, which is one timer fewer running forever behind an idle window.

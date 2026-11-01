@@ -428,43 +428,36 @@ document.addEventListener('DOMContentLoaded', () => {
         try { localStorage.setItem(SESSION_KEY, id); } catch (e) { /* private mode: this run only */ }
     }
 
-    /* The wordmark. Once the companion has a name of its own, that is what the top-left of
-       the window should say -- it is the thing you are talking to. Turning over to
-       AETHER1 PLATFORM every so often is how the product it runs on stays visible without
-       taking a permanent second line to say so. A name that already is Aether1 has nothing
-       to alternate with, so it just sits there.
+    /* The wordmark says the companion's name, and only that. It used to turn over to
+       AETHER1 PLATFORM every fourteen seconds, so the product underneath stayed visible
+       without a permanent second line -- defensible while the companion and the platform
+       shared a name, because then the alternation was invisible.
 
-       The rename is what this was waiting for without knowing it: the companion is AURORA1
-       and the platform is the AETHER1 PLATFORM, so the two names are different and the
-       default avatar now alternates between them properly instead of sitting on one. The
-       AETHER1 guard below is kept rather than retargeted -- somebody who names their
-       companion after the platform should still see one name, and nothing says AURORA1
-       should be that somebody. */
-    const PLATFORM_WORDMARK = 'AETHER1 PLATFORM';
-    const WORDMARK_TURNOVER_MS = 14000;
+       The rename made it visible, and wrong. AURORA1 is what the operator talks to; the
+       Aether1 Platform is the name behind the curtain, for whoever builds on it. The
+       studio's sidebar says AURORA1 permanently, so a header saying AETHER1 PLATFORM half
+       the time put the two names side by side on one screen and read as a rename left
+       half-done -- which is how it was reported. The platform keeps the two places
+       addressed to somebody who wants to know it: this wordmark's tooltip, and the About
+       box. A fourteen-second rotation was never a way to tell anybody anything.
+
+       An empty name falls back to AURORA1 rather than to the platform. The only moment it
+       is empty is before settings load, and that fallback is what flashed the old name on
+       every start. */
+    const DEFAULT_WORDMARK = 'AURORA1';
     const elWordmark = document.getElementById('hud-wordmark');
-    let wordmarkShowingPlatform = false;
 
     function wordmarkName() {
-        const name = (currentAgentName || '').trim().toUpperCase();
-        return name && name !== 'AETHER1' ? name : PLATFORM_WORDMARK;
+        return (currentAgentName || '').trim().toUpperCase() || DEFAULT_WORDMARK;
     }
 
     function refreshWordmark() {
         if (!elWordmark) return;
         const name = wordmarkName();
-        const next = wordmarkShowingPlatform && name !== PLATFORM_WORDMARK ? PLATFORM_WORDMARK : name;
-        if (elWordmark.textContent === next) return;
-        elWordmark.textContent = next;
-        elWordmark.title = name === PLATFORM_WORDMARK
-            ? 'Aether1 Platform'
-            : `${name} — running on the Aether1 Platform`;
+        if (elWordmark.textContent === name) return;
+        elWordmark.textContent = name;
+        elWordmark.title = `${name} — running on the Aether1 Platform`;
     }
-
-    setInterval(() => {
-        wordmarkShowingPlatform = !wordmarkShowingPlatform;
-        refreshWordmark();
-    }, WORDMARK_TURNOVER_MS);
 
     /* The bar's two slide-outs. Only one is ever open, and anything that is not a deliberate
        interaction with the open one closes it -- a click elsewhere, Escape, or opening the
