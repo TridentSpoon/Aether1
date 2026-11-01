@@ -168,9 +168,10 @@
         <div class="flex items-center gap-2.5 shrink-0">
             <div class="w-2.5 h-2.5 rounded-full bg-cyan-400 box-glow-cyan animate-pulse shrink-0"></div>
             <div class="flex flex-col items-start gap-0.5">
-                <!-- The wordmark carries the agent's own name once one is set, and turns over
-                     to AETHER1 PLATFORM every so often so what it is running on is never a
-                     mystery. See refreshWordmark in app.js. -->
+                <!-- The wordmark carries the companion's own name once one is set, and
+                     nothing else: the platform it runs on is named in this element's tooltip
+                     and in the About box, not by rotating the header through a second name.
+                     See refreshWordmark in app.js. -->
                 <h1 id="hud-wordmark" class="font-orbitron font-bold text-base leading-none text-cyan-400 tracking-wider glow-cyan">AURORA1</h1>
                 <!-- Starts hidden and is revealed by initVersionAndUpdates, which only runs
                      in the desktop app: the browser has no version to report, and an empty
