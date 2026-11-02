@@ -14017,25 +14017,134 @@ document.addEventListener('DOMContentLoaded', () => {
     /* Graft integration for code analysis                             */
     /* ================================================================ */
 
-    async function loadGraftStatus() {
-        try {
-            const statusEl = document.getElementById('graft-status');
-            if (!statusEl) return;
+    /* Asked through whichever door this copy has, rather than answering "requires Tauri" in a
+       browser: the served copy has to be able to say whether Graft is there, and now whether
+       an install worked. Same rule the model picker was fixed to in #251. */
+    async function graftVersion() {
+        if (IS_TAURI) return await tauriInvoke('graft_version_rust');
+        const response = await apiFetch('/api/graft/version');
+        if (!response.ok) throw new Error(await response.text());
+        return await response.json();
+    }
 
-            // Check Graft version
+    async function loadGraftStatus() {
+        const statusEl = document.getElementById('graft-status');
+        const installRow = document.getElementById('graft-install-row');
+        if (!statusEl) return;
+        try {
+            const version = await graftVersion();
+            if (version && version.installed) {
+                statusEl.textContent = `✓ Graft ${version.version} installed`;
+                installRow?.classList.add('hidden');
+                return;
+            }
+            throw new Error((version && version.message) || 'not installed');
+        } catch (e) {
+            // Not an error the operator has to act on any more -- there is a button under
+            // this line that does the acting, so the sentence stops naming a command.
+            statusEl.textContent = '✗ Graft is not installed.';
+            installRow?.classList.remove('hidden');
+        }
+    }
+
+    /* The install's progress, polled while it runs.
+
+       One timer at a time, cleared on every terminal state: a second press, or reopening
+       Settings mid-install, would otherwise leave two polls writing the same three elements
+       and the bar flickering between their answers. */
+    let graftInstallPoll = null;
+
+    function paintGraftInstall(install) {
+        const step = document.getElementById('graft-install-step');
+        const detail = document.getElementById('graft-install-detail');
+        const track = document.getElementById('graft-install-bar-track');
+        const bar = document.getElementById('graft-install-bar');
+        const button = document.getElementById('btn-graft-install');
+        if (!step || !detail || !track || !bar || !button) return;
+
+        if (!install) {
+            step.textContent = '';
+            detail.textContent = '';
+            track.classList.add('hidden');
+            button.disabled = false;
+            return;
+        }
+
+        const running = install.phase !== 'done' && install.phase !== 'failed';
+        button.disabled = running;
+        track.classList.toggle('hidden', !running && install.phase !== 'done');
+        // A failure drops the percentage rather than freezing the bar part-way, which reads
+        // as "still going"; the width is left where it stopped only while it is still going.
+        if (typeof install.percent === 'number') bar.style.width = `${install.percent}%`;
+
+        if (install.phase === 'failed') {
+            step.textContent = 'Install failed';
+            detail.textContent = install.error || install.detail || '';
+            track.classList.add('hidden');
+            return;
+        }
+        if (install.phase === 'done') {
+            step.textContent = install.version ? `Graft ${install.version} installed` : 'Installed';
+            detail.textContent = install.detail || '';
+            return;
+        }
+        step.textContent = `Step ${install.step} of ${install.steps}`;
+        detail.textContent = install.detail || '';
+    }
+
+    async function graftInstallStatus() {
+        if (IS_TAURI) return await tauriInvoke('graft_install_status_rust');
+        const response = await apiFetch('/api/graft/install/status');
+        if (!response.ok) throw new Error(await response.text());
+        return await response.json();
+    }
+
+    function watchGraftInstall() {
+        if (graftInstallPoll) clearInterval(graftInstallPoll);
+        graftInstallPoll = setInterval(async () => {
+            let install = null;
             try {
-                if (IS_TAURI) {
-                    const version = await tauriInvoke('graft_version_rust');
-                    statusEl.textContent = `✓ Graft ${version.version} installed`;
-                } else {
-                    statusEl.textContent = `ℹ️ Graft status requires Tauri`;
-                }
+                install = (await graftInstallStatus()).install;
             } catch (e) {
-                statusEl.textContent = '✗ Graft not found. Install it with: npm install -g @nanonets/graft';
+                // The window is still here and the install is still running in the app; a
+                // dropped poll is not a reason to tell the operator it failed.
+                return;
+            }
+            paintGraftInstall(install);
+            if (!install || install.phase === 'done' || install.phase === 'failed') {
+                clearInterval(graftInstallPoll);
+                graftInstallPoll = null;
+                // Re-asked rather than assumed: "done" means npm exited cleanly, and whether
+                // the binary is now findable is a different question with its own answer.
+                if (install && install.phase === 'done') await loadGraftStatus();
+            }
+        }, 1000);
+    }
+
+    async function startGraftInstall() {
+        const button = document.getElementById('btn-graft-install');
+        if (button) button.disabled = true;
+        voiceEngine.playSFX('click');
+        let result;
+        try {
+            if (IS_TAURI) result = await tauriInvoke('start_graft_install_rust');
+            else {
+                const response = await apiFetch('/api/graft/install', { method: 'POST' });
+                if (!response.ok) throw new Error(await response.text());
+                result = await response.json();
             }
         } catch (e) {
-            console.error('Error loading Graft status:', e);
+            paintGraftInstall({ phase: 'failed', error: `Could not start: ${e.message || e}` });
+            return;
         }
+        if (!result.ok) {
+            // The local-only refusal arrives here, and it is the operator's own setting
+            // talking, so it is shown as it was written rather than relabelled an error.
+            paintGraftInstall({ phase: 'failed', error: result.message || 'Could not start.' });
+            return;
+        }
+        paintGraftInstall(result.install);
+        watchGraftInstall();
     }
 
     // The rows are built with DOM calls rather than interpolated HTML: a project is a
@@ -14166,6 +14275,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    document.getElementById('btn-graft-install')?.addEventListener('click', startGraftInstall);
     document.getElementById('btn-graft-detect')?.addEventListener('click', loadGraftProjects);
 
     // Built one at a time on purpose: a first build parses every file in a repository, and

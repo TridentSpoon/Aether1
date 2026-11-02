@@ -55,6 +55,17 @@ for page in "$root"/frontend/*.html; do
         grep -nE '<style' "$page" | sed 's/^/    /' >&2
         fail "    Move the rules into frontend/css/ and link them with <link rel=stylesheet>."
     fi
+    # A `style="..."` attribute is inline CSS, and `style-src 'self'` blocks it exactly as it
+    # blocks a <style> block -- the browser logs a violation and drops the declaration, so the
+    # element renders without it. Caught the hard way: a progress bar was given
+    # `style="width:0%"` as its starting state and the console carried a CSP violation from
+    # the moment the page loaded. Writing the same property from JavaScript is fine and is
+    # what the eight other bars in this app already do -- CSSOM is not inline CSS.
+    if grep -noE '[[:space:]]style=' "$page" >/dev/null; then
+        fail "$name has an inline style attribute, which 'style-src self' will not apply:"
+        grep -noE '[[:space:]]style=' "$page" | sed 's/^/    /' >&2
+        fail "    Put it in a class in frontend/css/, or set it from JavaScript (element.style.x = ...)."
+    fi
     # An inline handler attribute is script too, and there has never been one here.
     if grep -noE '[[:space:]]on(click|change|input|load|error|submit|mouseover|keydown)=' "$page" >/dev/null; then
         fail "$name has an inline event-handler attribute, which the policy will not run:"

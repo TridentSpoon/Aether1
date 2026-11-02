@@ -2787,6 +2787,29 @@ pub fn graft_version() -> Result<Value, String> {
     }))
 }
 
+/// Starts installing Graft, returning immediately with the install's first state.
+///
+/// Nothing from the HUD reaches npm: the package name is a constant in `graft_install`, and
+/// this takes no arguments at all. The local-only refusal lives there rather than here, the
+/// same way the voice download's does, because this is not the only door into it.
+pub fn start_graft_install(engine: &LlmEngine) -> Value {
+    match crate::graft_install::start(engine.db()) {
+        Ok(install) => serde_json::json!({ "ok": true, "install": install }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    }
+}
+
+/// What the Graft install has reported, or a null when none has been started this session.
+/// Polled about once a second while the bar is on screen, so it stays a cheap read.
+pub fn graft_install_status() -> Value {
+    serde_json::json!({ "install": crate::graft_install::snapshot() })
+}
+
+/// Clears a finished or failed install row. Never touches a running one.
+pub fn forget_graft_install() -> Value {
+    serde_json::json!({ "ok": crate::graft_install::forget() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
