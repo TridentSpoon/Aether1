@@ -101,7 +101,12 @@ bad=0
 compared=0
 while read -r key value; do
   [ -n "$key" ] || continue
-  mine="$(grep "^$key " "$engine" | cut -d' ' -f2 | head -1 || true)"
+  # `grep -m1` rather than piping into `head -1`: head closes the pipe as soon as it has
+  # its line, cut dies of SIGPIPE, and `pipefail` makes that the script's exit status --
+  # 141, which is how this check first failed in CI while passing here. It passed locally
+  # only because a short list fits the pipe buffer and cut is finished before head exits,
+  # so the fault appears or not depending on how many settings the file happens to hold.
+  mine="$(grep -m1 "^$key " "$engine" | cut -d' ' -f2 || true)"
   # A key the engine never reads as a boolean is not a disagreement: plenty of the declared
   # block is read by the page alone.
   [ -n "$mine" ] || continue
