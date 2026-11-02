@@ -100,6 +100,11 @@ struct RawRelease {
     prerelease: bool,
     #[serde(default)]
     assets: Vec<RawAsset>,
+    /// The release notes GitHub wrote. `release.yml` sets `generate_release_notes: true`,
+    /// so this is a list of the pull requests that went in -- which is the only reason it
+    /// is worth showing an operator at all. See [`changes_from_notes`].
+    #[serde(default)]
+    body: Option<String>,
 }
 
 /// One downloadable file on a release, and the signature that goes with it.
@@ -124,6 +129,99 @@ pub struct Release {
     pub html_url: String,
     /// The asset for the platform this binary is running on, if the release has one.
     pub asset: Option<Asset>,
+    /// What changed, one plain line each, newest first. Empty when the release has no notes
+    /// -- which is reported as having none rather than filled in with the tag.
+    pub changes: Vec<String>,
+}
+
+/// How many change lines are carried. An update is a decision, and a decision is not helped
+/// by the fifty-first line: past this the operator is sent to the release page, which is
+/// what `html_url` is for.
+const MAX_CHANGES: usize = 12;
+
+/// The release notes, reduced to what an operator would recognise as a list of changes.
+///
+/// `release.yml` asks GitHub to write the notes, so the body arrives in a known shape: a
+/// `## What's Changed` heading, then one `* <pull request title> by @who in <url>` per
+/// merged pull request, then sometimes `## New Contributors` and a `**Full Changelog**`
+/// line. Two of those four parts are about the project rather than about the machine in
+/// front of the operator, so they come out.
+///
+/// **This does not rewrite anything into plain English; it relies on the titles already
+/// being plain English.** Aether1's pull request titles are written as sentences about what
+/// changed for the operator ("Stop asking the model the same question twice"), so the title
+/// with its attribution trailer removed *is* the plain-language line. Where a title is not
+/// written that way, this says so by showing it unchanged rather than inventing something
+/// friendlier, because a made-up summary of an update is worse than a terse true one.
+///
+/// A hand-written body (no bullets at all) is kept as its own non-empty, non-heading lines,
+/// so a release whose notes somebody wrote themselves is not silently reported as having
+/// changed nothing.
+pub fn changes_from_notes(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // Anything under "New Contributors" is a bullet in the same shape as a change and is
+    // not one, so the section is skipped by name rather than by trying to tell its lines
+    // apart from the real ones.
+    let mut in_contributors = false;
+
+    for raw in body.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(heading) = line.strip_prefix('#') {
+            in_contributors = heading.to_ascii_lowercase().contains("contributor");
+            continue;
+        }
+        // `**Full Changelog**: <compare url>` -- a link for whoever wants the diff, not a
+        // change. Matched on the words rather than the asterisks, which GitHub has moved
+        // around before.
+        if line
+            .to_ascii_lowercase()
+            .replace('*', "")
+            .starts_with("full changelog")
+        {
+            continue;
+        }
+        if in_contributors {
+            continue;
+        }
+
+        let bullet = line
+            .strip_prefix("* ")
+            .or_else(|| line.strip_prefix("- "))
+            .map(str::trim);
+        let text = match bullet {
+            Some(text) => text,
+            // Not a bullet. Kept, because a hand-written body is prose and dropping it
+            // would report a real release as having no changes.
+            None => line,
+        };
+
+        let text = strip_attribution(text);
+        if text.is_empty() {
+            continue;
+        }
+        if out.len() == MAX_CHANGES {
+            break;
+        }
+        out.push(text.to_string());
+    }
+    out
+}
+
+/// Takes ` by @someone in <url>` off the end of a generated bullet.
+///
+/// Cut at the *last* ` by @`, not the first: a title may legitimately contain the words
+/// ("Stop the watcher being woken by @mentions" is a title this project could plausibly
+/// have), and the trailer GitHub appends is always last.
+fn strip_attribution(text: &str) -> &str {
+    match text.rfind(" by @") {
+        // Only when what follows really is the trailer -- a login, then ` in `, then a URL.
+        // Otherwise the title ends with those words for its own reasons and keeps them.
+        Some(at) if text[at..].contains(" in http") => text[..at].trim_end(),
+        _ => text.trim_end(),
+    }
 }
 
 #[derive(Debug)]
@@ -325,6 +423,11 @@ pub fn latest(repo: &str, agent_label: &str) -> Result<Release, ReleaseError> {
 
     Ok(Release {
         asset: pick_asset(&raw.assets),
+        changes: raw
+            .body
+            .as_deref()
+            .map(changes_from_notes)
+            .unwrap_or_default(),
         name: raw.name.unwrap_or_else(|| raw.tag_name.clone()),
         tag: raw.tag_name,
         html_url: raw.html_url,
@@ -595,6 +698,78 @@ mod tests {
             name: name.to_string(),
             size: 1,
         }
+    }
+
+    /// The exact shape `generate_release_notes: true` produces, down to the blank lines.
+    const GENERATED_NOTES: &str = "\
+## What's Changed
+* Stop asking the model the same question twice by @TridentSpoon in https://github.com/TridentSpoon/Aether1/pull/285
+* Let the AppImage say where its next version lives by @TridentSpoon in https://github.com/TridentSpoon/Aether1/pull/284
+
+## New Contributors
+* @somebody made their first contribution in https://github.com/TridentSpoon/Aether1/pull/284
+
+**Full Changelog**: https://github.com/TridentSpoon/Aether1/compare/v0-261101-276...v0-261102-285
+";
+
+    #[test]
+    fn the_notes_become_the_pull_request_titles_and_nothing_else() {
+        assert_eq!(
+            changes_from_notes(GENERATED_NOTES),
+            vec![
+                "Stop asking the model the same question twice",
+                "Let the AppImage say where its next version lives",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_contributors_section_is_not_mistaken_for_a_change() {
+        // Its bullets are the same shape as a change's and say nothing about what the
+        // operator is about to install, which is why the section is skipped by name.
+        let changes = changes_from_notes(GENERATED_NOTES);
+        assert!(
+            !changes.iter().any(|c| c.contains("first contribution")),
+            "{changes:?}"
+        );
+    }
+
+    #[test]
+    fn a_title_that_ends_in_those_words_keeps_them() {
+        // ` by @` is cut only where the whole GitHub trailer follows it. A title that just
+        // happens to end that way is a title, and rewriting it would be reporting an update
+        // as something other than what it is.
+        assert_eq!(
+            changes_from_notes("* Stop the watcher being woken by @mentions"),
+            vec!["Stop the watcher being woken by @mentions"]
+        );
+    }
+
+    #[test]
+    fn a_hand_written_body_is_kept_rather_than_read_as_no_changes() {
+        assert_eq!(
+            changes_from_notes("The voice no longer stops mid-sentence.\n\nRebuilt for Wayland."),
+            vec![
+                "The voice no longer stops mid-sentence.",
+                "Rebuilt for Wayland.",
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_notes_report_no_changes_rather_than_one_blank_line() {
+        assert!(changes_from_notes("").is_empty());
+        assert!(changes_from_notes("\n\n   \n").is_empty());
+        assert!(changes_from_notes("## What's Changed\n").is_empty());
+    }
+
+    #[test]
+    fn a_very_long_release_stops_at_the_cap_rather_than_filling_the_panel() {
+        let body: String = (0..40).map(|i| format!("* change number {i}\n")).collect();
+        let changes = changes_from_notes(&body);
+        assert_eq!(changes.len(), MAX_CHANGES);
+        // Newest first, as GitHub orders them: the cap drops the oldest, not the newest.
+        assert_eq!(changes[0], "change number 0");
     }
 
     #[test]

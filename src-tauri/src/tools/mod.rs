@@ -298,6 +298,7 @@ pub fn registry() -> &'static Registry {
             // answer that is not the system log pasted into the conversation.
             Box::new(selfcheck::RecentCrashes),
             Box::new(selfcheck::SelfCheck),
+            Box::new(selfcheck::SelfRepair),
             // Everything below changes something, so everything below goes through the
             // consent path -- proposed to the operator, never run from a conversation.
             Box::new(mutating::WriteFile),
@@ -685,6 +686,15 @@ mod tests {
                 "append_note",
                 "archive_note",
                 "run_command",
+                /* It starts the model server, downloads the configured model or voice, or
+                clears the stale proposals -- every one of them a change to the machine, so
+                it is proposed and waits like the rest of this list. What it does *not* do
+                is let the model choose which of those happens: it is given the name of a
+                check and `doctor::repair_for` decides the act, from a probe taken when the
+                operator answers the card. It refuses to be always-allowed for the reason
+                `run_command` does -- its name says which program acts and not what it will
+                do. See tools/selfcheck.rs. */
+                "self_repair",
                 "set_aether_setting",
                 "write_file",
                 "write_note"
