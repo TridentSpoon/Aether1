@@ -6,11 +6,12 @@
 #     install-slim-linux.sh pip-install Piper/Whisper on the target machine instead, trading
 #     offline-forever for a much smaller download
 #   - the Linux AppImage (scripts/package_appimage_linux.sh): one file, no installer, no
-#     speech, for somebody who wants to try it rather than install it
+#     speech, for somebody who wants to try it rather than install it, plus the `.zsync`
+#     beside it that lets an AppImage manager find the next release on its own
 #   - the two macOS disk images (scripts/package_dmg_macos.sh), Apple Silicon and Intel,
 #     unsigned and unnotarized because notarization needs a paid Apple Developer account
 #
-# Six assets, five shapes, three platforms. Each is signed with minisign in publish-release
+# Six assets, five shapes, three platforms, and the AppImage's zsync. Each is signed with minisign in publish-release
 # below, which is the signature AURORA1's own updater checks; the Windows installer is
 # additionally Authenticode-signed for Windows' sake when the certificate secrets are set.
 #
@@ -285,14 +286,16 @@ jobs:
 
       # The same list as the slim bundle's: no cmake, because nothing here builds
       # whisper.cpp. The AppImage bundler needs `file` and `fuse`-free extraction, both of
-      # which ubuntu-latest already has.
+      # which ubuntu-latest already has. `zsync` is the one addition: it carries
+      # `zsyncmake`, which writes the delta file that makes the AppImage updatable, and the
+      # packaging script refuses to build without it.
       - name: Install the Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config curl wget file libssl-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libnotify-bin
+            librsvg2-dev libxdo-dev libnotify-bin zsync
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -309,10 +312,15 @@ jobs:
       - name: Package the AppImage
         run: ./scripts/package_appimage_linux.sh dist
 
+      # Both files, and both required. The zsync alone is useless and the AppImage alone is
+      # a dead end: the update information baked into it names a zsync beside it in the
+      # release, so shipping one without the other is worse than shipping neither.
       - uses: actions/upload-artifact@v4
         with:
           name: aurora1-linux-appimage
-          path: dist/Aurora1-x86_64.AppImage
+          path: |
+            dist/Aurora1-x86_64.AppImage
+            dist/Aurora1-x86_64.AppImage.zsync
           if-no-files-found: error
           retention-days: 1
 
@@ -475,6 +483,7 @@ jobs:
             dist/aurora1-offline-linux-x86_64.tar.gz
             dist/aurora1-slim-linux-x86_64.tar.gz
             dist/Aurora1-x86_64.AppImage
+            dist/Aurora1-x86_64.AppImage.zsync
             dist/Aurora1-Setup.exe
             dist/Aurora1-aarch64.dmg
             dist/Aurora1-x86_64.dmg

@@ -26,10 +26,18 @@
 # Usage: ./scripts/package_appimage_linux.sh [output-dir]
 #
 # Output: <output-dir>/Aurora1-x86_64.AppImage
+#         <output-dir>/Aurora1-x86_64.AppImage.zsync
 #
-# Needs: the Linux build dependencies from the README (webkit2gtk, GTK) and Node, for the
+# The second file is what makes the first one updatable by anything other than AURORA1
+# itself. An AppImage carries a string in an ELF section called `.upd_info` saying where its
+# next version will be; an AppImage manager reads it and offers the update. Without it a
+# manager shows "Update Strategy: None" and the file is a dead end -- which is what AURORA1
+# shipped until now.
+#
+# Needs: the Linux build dependencies from the README (webkit2gtk, GTK), Node, for the
 # Tauri CLI, which is run through npx rather than installed -- `cargo install tauri-cli`
-# compiles it from source on every cold runner, and nothing else in this repo needs it.
+# compiles it from source on every cold runner, and nothing else in this repo needs it --
+# and `zsyncmake`, from the `zsync` package.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,6 +49,21 @@ OUT_DIR="${1:-dist}"
 # a bundler that changes under a release is a difference nobody chose.
 TAURI_CLI_VERSION="${TAURI_CLI_VERSION:-2.9.2}"
 
+# Where this AppImage should look for its own next version.
+#
+# `gh-releases-zsync` means "the newest release of this repository", so the string survives
+# every future tag without being rebuilt -- which it has to, since it is baked into a file
+# that is already on somebody's disk by the time the next release exists. The last field is
+# the *published* name of the zsync, not the one the bundler happens to write.
+#
+# Read by `linuxdeploy-plugin-appimage`, which Tauri's bundler drives, and turned by it into
+# `appimagetool -u`. Set here rather than in the workflow so that a build made by hand is
+# the same artifact as a build made by CI; `GITHUB_REPOSITORY` only ever overrides the owner
+# and name, for a fork that should point at itself rather than at this repository.
+UPDATE_REPO="${AURORA1_UPDATE_REPO:-${GITHUB_REPOSITORY:-TridentSpoon/Aether1}}"
+APPIMAGE_NAME="Aurora1-x86_64.AppImage"
+export UPDATE_INFORMATION="gh-releases-zsync|${UPDATE_REPO%%/*}|${UPDATE_REPO##*/}|latest|${APPIMAGE_NAME}.zsync"
+
 echo "======================================================================"
 echo "📦 Packaging AURORA1 AppImage (Linux x86_64)"
 echo "======================================================================"
@@ -50,9 +73,29 @@ if ! command -v npx >/dev/null 2>&1; then
     exit 1
 fi
 
+# Checked here rather than where it is used, because the thing it would cost to find out
+# late is a full Tauri release build.
+if ! command -v zsyncmake >/dev/null 2>&1; then
+    echo "zsyncmake was not found, and without it this AppImage cannot be updated by \
+anything but AURORA1 itself." >&2
+    echo "  Debian/Ubuntu: sudo apt-get install zsync      Fedora: sudo dnf install zsync" >&2
+    echo "  To build one anyway, without update information:" >&2
+    echo "    AURORA1_APPIMAGE_NO_UPDATE_INFO=1 $0 ${OUT_DIR}" >&2
+    exit 1
+fi
+
 # `--bundles appimage` rather than a target list in tauri.conf.json: bundling stays off by
 # default there, so `cargo build` and the other two packaging scripts are untouched by this
 # one existing.
+if [ -n "${AURORA1_APPIMAGE_NO_UPDATE_INFO:-}" ]; then
+    # Said out loud. The difference between the two builds is invisible in the file listing
+    # and decides whether anyone who installs this ever sees another version.
+    echo "⚠ AURORA1_APPIMAGE_NO_UPDATE_INFO is set: this AppImage will not be updatable."
+    unset UPDATE_INFORMATION
+else
+    echo "🔗 Update information: $UPDATE_INFORMATION"
+fi
+
 echo "🦀 Building and bundling (this compiles the release binary first)..."
 npx -y "@tauri-apps/cli@${TAURI_CLI_VERSION}" build --bundles appimage
 
@@ -68,13 +111,45 @@ fi
 # be read as the release's version by whoever downloads it. The release's own name comes
 # from its tag, so the asset carries no number at all.
 mkdir -p "$OUT_DIR"
-APPIMAGE="$OUT_DIR/Aurora1-x86_64.AppImage"
+APPIMAGE="$OUT_DIR/$APPIMAGE_NAME"
 cp "$BUILT" "$APPIMAGE"
 chmod +x "$APPIMAGE"
+
+if [ -n "${UPDATE_INFORMATION:-}" ]; then
+    # Checked, not assumed. The bundler reads `UPDATE_INFORMATION` through two layers of
+    # tooling, and a release that quietly stopped embedding it would look exactly like one
+    # that did -- until somebody's manager showed "Update Strategy: None" again.
+    if ! grep -aqF "$UPDATE_INFORMATION" "$APPIMAGE"; then
+        echo "The AppImage carries no update information. UPDATE_INFORMATION was set, so \
+the bundler ignored it: check whether this Tauri CLI still drives linuxdeploy." >&2
+        exit 1
+    fi
+
+    # Made here from the finished file rather than kept from the bundler's own, and the two
+    # are not interchangeable. A zsync names the file it describes, the bundler makes one
+    # for `Aurora1_0.4.0_amd64.AppImage`, and the release publishes
+    # `Aurora1-x86_64.AppImage` -- so the bundler's copy would send every updater looking
+    # for a name that is not there.
+    echo "🧩 Writing the zsync..."
+    ( cd "$OUT_DIR" && zsyncmake -u "$APPIMAGE_NAME" -o "${APPIMAGE_NAME}.zsync" "$APPIMAGE_NAME" )
+
+    # Said here rather than left to whatever collects the files afterwards. An upload step
+    # given two paths fails only when *neither* matched, so "both files or nothing" has to
+    # be a rule somewhere, and this is the only place that knows both were meant.
+    if [ ! -s "$OUT_DIR/${APPIMAGE_NAME}.zsync" ]; then
+        echo "zsyncmake reported success and wrote no zsync. The AppImage would be \
+published pointing at a file that is not there." >&2
+        exit 1
+    fi
+fi
 
 echo ""
 echo "======================================================================"
 echo "✔ Wrote $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
+if [ -f "$OUT_DIR/${APPIMAGE_NAME}.zsync" ]; then
+    echo "✔ Wrote $OUT_DIR/${APPIMAGE_NAME}.zsync -- publish it beside the AppImage, or"
+    echo "  every manager that reads the update information will look for it and find none."
+fi
 echo "  On the target machine: chmod +x $(basename "$APPIMAGE") && ./$(basename "$APPIMAGE")"
 echo "  A machine with no FUSE: ./$(basename "$APPIMAGE") --appimage-extract-and-run"
 echo "======================================================================"
