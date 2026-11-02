@@ -132,6 +132,15 @@ the bundler ignored it: check whether this Tauri CLI still drives linuxdeploy." 
     # for a name that is not there.
     echo "🧩 Writing the zsync..."
     ( cd "$OUT_DIR" && zsyncmake -u "$APPIMAGE_NAME" -o "${APPIMAGE_NAME}.zsync" "$APPIMAGE_NAME" )
+
+    # Said here rather than left to whatever collects the files afterwards. An upload step
+    # given two paths fails only when *neither* matched, so "both files or nothing" has to
+    # be a rule somewhere, and this is the only place that knows both were meant.
+    if [ ! -s "$OUT_DIR/${APPIMAGE_NAME}.zsync" ]; then
+        echo "zsyncmake reported success and wrote no zsync. The AppImage would be \
+published pointing at a file that is not there." >&2
+        exit 1
+    fi
 fi
 
 echo ""
