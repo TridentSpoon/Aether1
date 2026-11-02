@@ -479,6 +479,27 @@ struct Config {
 /// for "it" and "that one" to still mean something.
 const DELIBERATION_HISTORY: usize = 2;
 
+/// Drops the user turns off the end of a stored history, because the prompt is about to be
+/// appended as one.
+///
+/// `ChatContext` carries the history and the prompt separately and every provider stitches
+/// them together the same way: the history first, then the prompt as a fresh user message.
+/// A history that already ends with a user row therefore produces two user turns in a row,
+/// which no provider's chat format means anything sensible by -- a model handed the same
+/// question twice reads it as two questions and says so.
+///
+/// It drops trailing user rows rather than the one whose text matches the prompt, for two
+/// reasons. A turn with media attached is stored with an "[N image(s) attached]" line the
+/// prompt itself does not carry, so the texts are not reliably equal. And a turn whose
+/// generation failed leaves a user row behind with no reply after it, which is the same
+/// malformed shape arriving by a different route.
+fn without_trailing_user_turn(mut history: Vec<Message>) -> Vec<Message> {
+    while history.last().is_some_and(|m| m.sender == "user") {
+        history.pop();
+    }
+    history
+}
+
 impl Config {
     /// Whether answering this turn would send the prompt off the local host or the local
     /// network. The provider alone does not settle it: Ollama and LM Studio are addressed
@@ -1805,7 +1826,15 @@ impl LlmEngine {
             .map(|r| crate::tools::protocol::trace_of(&r.why))
             .unwrap_or_default();
 
-        let history = self.db.get_messages(session_id, 8).unwrap_or_default();
+        /* The message the operator just sent is already in the table -- `chat` stores it
+        before it generates, so the reply has somewhere to belong even if generation dies
+        halfway. Every provider appends `ChatContext::prompt` as a fresh user turn on top
+        of this history, so handing the stored row over as well shows the model the same
+        question twice in a row, and a model shown a question twice answers as though two
+        were asked: "A double question!", then a haiku and a request to clarify which
+        haiku was wanted. */
+        let history =
+            without_trailing_user_turn(self.db.get_messages(session_id, 8).unwrap_or_default());
         let telem = Telemetry::snapshot();
         let mut system_prompt = self.system_prompt(&config, &telem);
 
@@ -3259,5 +3288,62 @@ mod tests {
             "generate_response fell back to the offline/error path instead of calling Ollama: {reply}"
         );
         println!("live Ollama reply: {reply:?}");
+    }
+
+    /// The question the operator just asked must reach the model once.
+    ///
+    /// `commands::chat` stores the operator's message before it generates, so by the time
+    /// the history is read back the question is already the last row in it -- and the
+    /// providers append `ChatContext::prompt` as a user turn of its own. Handing both over
+    /// showed the model the same question twice, and the models said what that looks like:
+    /// "A double question!", followed by an answer and a request to clarify which of the
+    /// two was wanted.
+    #[test]
+    fn the_history_never_ends_with_the_question_about_to_be_asked() {
+        let engine = temp_engine("double_turn");
+        engine.add_message("s", "user", "first question");
+        engine.add_message("s", "a1", "first answer");
+        engine.add_message("s", "user", "Please write me a haiku about gaming");
+
+        let stored = engine.db.get_messages("s", 8).unwrap();
+        assert_eq!(stored.len(), 3, "all three rows are in the table");
+
+        let history = without_trailing_user_turn(stored);
+        let shape: Vec<&str> = history.iter().map(|m| m.sender.as_str()).collect();
+        assert_eq!(
+            shape,
+            ["user", "a1"],
+            "the just-stored question is left to the prompt to carry"
+        );
+        assert!(
+            !history
+                .iter()
+                .any(|m| m.text == "Please write me a haiku about gaming"),
+            "the question must not be in the history as well as the prompt"
+        );
+    }
+
+    /// A turn whose generation failed leaves a user row with no reply after it. That is the
+    /// same malformed shape by another route, so it is trimmed too rather than sent as a
+    /// second consecutive user turn.
+    #[test]
+    fn an_unanswered_turn_is_trimmed_rather_than_doubled() {
+        let engine = temp_engine("orphan_turn");
+        engine.add_message("s", "user", "one that died");
+        engine.add_message("s", "user", "and the one just asked");
+
+        let history = without_trailing_user_turn(engine.db.get_messages("s", 8).unwrap());
+        assert!(history.is_empty());
+    }
+
+    /// Nothing is trimmed from a history that ends the way most do, with the last reply.
+    #[test]
+    fn a_history_ending_in_a_reply_is_left_alone() {
+        let engine = temp_engine("intact_history");
+        engine.add_message("s", "user", "a question");
+        engine.add_message("s", "a1", "an answer");
+
+        let history = without_trailing_user_turn(engine.db.get_messages("s", 8).unwrap());
+        assert_eq!(history.len(), 2);
     }
 }
