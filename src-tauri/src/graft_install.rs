@@ -45,7 +45,7 @@ pub const PACKAGE: &str = "@nanonets/graft";
 /// install killed at four minutes on a slow line is a worse outcome than one that took six.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// How long `graft telemetry off` and `graft --version` may each take. Local, no network, so
+/// How long `graft telemetry disable` and `graft --version` may each take. Local, no network, so
 /// anything beyond this is a hang rather than slowness.
 const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -219,7 +219,10 @@ fn run() {
     // is installed and talkative is still a Graft that works, and telling the operator the
     // install failed when it did not would send them round the loop again.
     enter_step(2);
-    let telemetry = quiet_graft(&["telemetry", "off"]);
+    // `disable`, not `off`. Graft 0.28.1 answers `off` with
+    // `unknown action "off": expected status, enable, disable, or debug`, which would have
+    // put "switching Graft's telemetry off failed" on the panel of every successful install.
+    let telemetry = quiet_graft(&["telemetry", "disable"]);
 
     enter_step(3);
     let version = quiet_graft(&["--version"])
@@ -237,7 +240,7 @@ fn run() {
             // may phone home, so they are owed the fact that switching it off did not take.
             Err(why) => format!(
                 "installed, but switching Graft's telemetry off failed ({why}) -- run \
-                 `graft telemetry off` yourself"
+                 `graft telemetry disable` yourself"
             ),
         };
     });
@@ -416,6 +419,15 @@ mod tests {
         *state() = None;
     }
 
+    /// There is one status board for the whole process, so the tests that write to it take
+    /// this before they touch it. Without it they interleave -- one test's `clear` lands
+    /// between another's `fail` and the snapshot it reads back, and the suite fails on a
+    /// schedule rather than on a fault.
+    fn alone() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// The package name is the whole trap. Three plausible spellings install something that is
     /// not Graft, and one of them shadows the real binary, so this is pinned rather than left
     /// to be retyped from memory by whoever next touches this file.
@@ -434,6 +446,7 @@ mod tests {
     states; this is that rule being obeyed, not an omission. */
     #[test]
     fn local_only_mode_refuses_to_install() {
+        let _alone = alone();
         clear();
         let db = temp_db("local_only");
         db.set_setting(crate::local_only::SETTING, &serde_json::Value::Bool(true))
@@ -454,6 +467,7 @@ mod tests {
     /// precision npm's output does not carry.
     #[test]
     fn the_steps_are_counted_and_the_last_one_is_a_check_that_it_worked() {
+        let _alone = alone();
         clear();
         *state() = Some(Install::new());
 
@@ -480,6 +494,7 @@ mod tests {
     /// through a slot that clearing would empty, and it would carry on with nobody watching.
     #[test]
     fn only_a_finished_install_can_be_forgotten() {
+        let _alone = alone();
         clear();
         *state() = Some(Install::new());
         assert!(!forget(), "a running install is not clearable");
@@ -494,6 +509,7 @@ mod tests {
     /// rather than freezing a bar partway, which reads as "still going".
     #[test]
     fn a_failure_keeps_its_reason_and_stops_claiming_progress() {
+        let _alone = alone();
         clear();
         *state() = Some(Install::new());
         enter_step(1);
