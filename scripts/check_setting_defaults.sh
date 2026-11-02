@@ -41,20 +41,33 @@ src="$here/src-tauri/src"
 # `defaults_obj.insert("key", Value::Bool(x))` calls that live just past it because the
 # `json!` literal is at the macro's recursion limit.
 declared="$(mktemp)"
-inserted="$(mktemp)"
+slice="$(mktemp)"
 engine="$(mktemp)"
-trap 'rm -f "$declared" "$inserted" "$engine"' EXIT
+trap 'rm -f "$declared" "$slice" "$engine"' EXIT
 
-awk '/^pub fn get_settings/{inside=1} inside' "$commands" \
-  | awk '/^}/{if (seen) exit} {seen=1; print}' \
-  | { grep -oE '"[a-z0-9_]+": (true|false),' || true; } \
+# The body of get_settings, to its own temp file, by one awk reading the source directly.
+#
+# **Not a pipeline, on purpose.** The first version sliced it with `awk ... | awk '/^}/{exit}'`,
+# and a consumer that exits early kills the producer still writing into the pipe: SIGPIPE,
+# `pipefail` turns that into exit 141, and the check fails having printed nothing. Whether it
+# happens at all depends on how much of the file fits in the pipe buffer before the consumer
+# goes, so it passed on the machine it was written on and failed in CI, twice. One awk reading
+# a file has nothing upstream to kill. `inside = 0` rather than `exit` for the same reason:
+# nothing in this script may stop reading early, and only the function header sets `inside`
+# again, so a later `}` cannot let anything back in.
+awk '
+  /^pub fn get_settings/ { inside = 1; next }
+  inside && /^}/         { inside = 0; next }
+  inside                 { print }
+' "$commands" > "$slice"
+
+{ grep -oE '"[a-z0-9_]+": (true|false),' "$slice" || true; } \
   | tr -d '",:' \
   | awk '{print $1, $2}' \
   | sort -u > "$declared"
 
-awk '/^pub fn get_settings/{inside=1} inside' "$commands" \
-  | awk '/^}/{if (seen) exit} {seen=1; print}' \
-  | { grep -oE 'insert\("[a-z0-9_]+"\.to_string\(\), Value::Bool\((true|false)\)' || true; } \
+# The keys declared just past that `json!` literal, which is at the macro's recursion limit.
+{ grep -oE 'insert\("[a-z0-9_]+"\.to_string\(\), Value::Bool\((true|false)\)' "$slice" || true; } \
   | sed -E 's/insert\("([a-z0-9_]+)"\.to_string\(\), Value::Bool\((true|false)\)/\1 \2/' \
   | sort -u >> "$declared"
 
@@ -70,11 +83,14 @@ if [ ! -s "$declared" ]; then
   exit 1
 fi
 
-# The engine side: every non-test `get_setting_bool("key", default)`. Files under tests/ and
-# blocks guarded by #[cfg(test)] are out -- the latter by dropping anything after the file's
-# `mod tests`, which is where every test in this codebase lives.
+# The engine side: every non-test `get_setting_bool("key", default)`. Tests are dropped by
+# cutting each file at its `mod tests`, which is where every test in this codebase lives.
+#
+# Cut there rather than at the first `#[cfg(test)]`: several modules have a small test-only
+# helper above their tests (doctor.rs's `forget_attempts` is one), and stopping at that
+# would skip every real call site below it -- the quiet way for this check to stop checking.
 for file in $(grep -rl 'get_setting_bool("' "$src" --include='*.rs'); do
-  awk '/^#\[cfg\(test\)\]/{exit} {print}' "$file" \
+  awk '/^mod tests/{exit} {print}' "$file" \
     | grep -oE 'get_setting_bool\("[a-z0-9_]+",[[:space:]]*(true|false)\)' \
     | sed -E 's/get_setting_bool\("([a-z0-9_]+)",[[:space:]]*(true|false)\)/\1 \2/' || true
 done | sort -u > "$engine"
