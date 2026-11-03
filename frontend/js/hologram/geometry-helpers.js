@@ -109,7 +109,7 @@ HologramAvatar.prototype.createLetterSpriteTexture = function(char, size = 64) {
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
-    ctx.font = `bold ${Math.round(size * 0.7)}px "Share Tech Mono", monospace`;
+    ctx.font = `bold ${Math.round(size * 0.7)}px "Noto Sans Mono", monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.shadowColor = 'rgba(255,255,255,0.9)';

@@ -37,8 +37,9 @@ pub use stt::{local_status as stt_local_status, managed_env_command, stage_audio
 pub use telemetry::{Pulse, Sampler, Telemetry};
 pub use tts::{
     generate_speech_reporting, generate_speech_with, local_status as tts_local_status,
-    os_engine_name as tts_os_engine_name, os_status as tts_os_status, Engine as TtsEngine,
-    DEFAULT_VOICE, LOCAL_NAME as TTS_LOCAL_NAME,
+    os_engine_name as tts_os_engine_name, os_status as tts_os_status,
+    system_voices as tts_system_voices, Engine as TtsEngine, DEFAULT_VOICE,
+    LOCAL_NAME as TTS_LOCAL_NAME,
 };
 
 /// How many times the model may call tools before it has to answer. High enough for a

@@ -30,14 +30,12 @@ pub enum Speaking {
     /// see `media_playback_step`. Ranked below Silent because it is worse to diagnose:
     /// Silent at least says something is missing.
     Unheard,
-    /// Nothing on this machine can produce speech. Only reachable on Linux without
-    /// espeak-ng, or in local-only mode with no Piper: Windows and macOS both ship a
-    /// voice that cannot be uninstalled.
+    /// Nothing on this machine can produce speech. Currently reachable on Linux when
+    /// eSpeak NG is unavailable.
     Silent,
-    /// The operating system's own voice works. It is understandable and it is robotic,
-    /// and it is the reason "voice doesn't work" is usually really "voice sounds bad".
+    /// The operating system's own voice works.
     BasicVoice,
-    /// Piper is installed with a voice model: offline, and the best of the three.
+    /// An explicitly selected local Piper model is available.
     GoodVoice,
 }
 
@@ -49,15 +47,14 @@ impl Speaking {
                  audio plumbing is missing."
             }
             Speaking::Silent => "Nothing on this computer can speak yet.",
-            Speaking::BasicVoice => "It can speak, using the basic voice built into this computer.",
-            Speaking::GoodVoice => "It can speak, using the good offline voice.",
+            Speaking::BasicVoice => "It can speak, using this computer's system speech engine.",
+            Speaking::GoodVoice => "It can speak, using the configured local Piper model.",
         }
     }
 
-    /// True while there is something worth doing. The basic voice counts: it works, so
-    /// this is a suggestion rather than a fault, and the HUD says so in those words.
+    /// True when speech is broken or unheard. A system voice is the normal working state.
     pub fn needs_attention(self) -> bool {
-        !matches!(self, Speaking::GoodVoice)
+        matches!(self, Speaking::Unheard | Speaking::Silent)
     }
 }
 
@@ -127,13 +124,13 @@ pub struct VoiceAdvice {
 /// The GStreamer elements the webview needs before any synthesized audio can be heard, and
 /// the plugin each one lives in.
 ///
-/// `wavparse` is the one that matters: Piper and espeak-ng both produce WAV, so without it
+/// `wavparse` is the one that matters: system and Piper engines produce WAV, so without it
 /// every local engine is inaudible. `avdec_mp3` covers the online voice, which returns MP3.
 #[cfg(target_os = "linux")]
 const REQUIRED_GST_ELEMENTS: &[(&str, &str)] = &[
     (
         "wavparse",
-        "the offline voices (Piper and espeak-ng both produce WAV)",
+        "offline voices (system speech and Piper both produce WAV)",
     ),
     ("avdec_mp3", "the online voice (it returns MP3)"),
 ];
@@ -146,7 +143,7 @@ const REQUIRED_GST_ELEMENTS: &[(&str, &str)] = &[
 /// plugins that do the decoding as *optional* for WebKitGTK -- on Arch, `gst-plugins-good`
 /// and `gst-libav` are optdepends of `webkit2gtk-4.1`, so installing the webview does not
 /// install them. When they are absent the `<audio>` element reports no error and plays
-/// silence, so Piper synthesizes correctly, this module's every status field says
+/// silence, so synthesis succeeds, this module's every status field says
 /// "installed", the voice test reports "spoke", and the operator hears nothing. Nothing
 /// downstream of synthesis is visible to the rest of this app, which is exactly why it has
 /// to be asked about here rather than inferred from a failure that never arrives.
@@ -182,20 +179,65 @@ pub fn media_playback_step() -> Option<Step> {
         .collect::<Vec<_>>()
         .join("; and ");
 
-    Some(Step::run(
-        "Install the audio decoders",
-        &format!(
-            "Speech is being produced correctly and this computer cannot play it. The \
-             window Aether1 draws itself in plays sound through GStreamer, and the \
-             decoders are missing: {what}. Most distributions treat these as optional \
-             for the webview, so installing Aether1 did not bring them in. The line below \
-             is the Arch one; on Debian, Ubuntu and Mint use: sudo apt install \
-             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav. On \
-             Fedora: sudo dnf install gstreamer1-plugins-good gstreamer1-plugins-bad-free. \
-             Restart Aether1 afterwards.",
-        ),
-        "sudo pacman -S gst-plugins-good gst-plugins-bad gst-libav",
-    ))
+    let detail = format!(
+        "Speech is being produced correctly and this computer cannot play it. The \
+         window Aether1 draws itself in plays sound through GStreamer, and the \
+         decoders are missing: {what}. These plugins are optional on some distributions. \
+         Install the matching packages below, then restart Aether1."
+    );
+    match linux_audio_install_command() {
+        Some((manager, command)) => Some(Step::run(
+            &format!("Install the audio decoders with {manager}"),
+            &detail,
+            command,
+        )),
+        None => Some(Step::say(
+            "Install the audio decoders",
+            &format!("{detail} Aether1 could not identify this distribution's package manager. Install GStreamer plugins that provide wavparse and avdec_mp3.")
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_audio_install_command() -> Option<(&'static str, &'static str)> {
+    let release = std::fs::read_to_string("/etc/os-release").ok()?;
+    let ids = release
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            if key != "ID" && key != "ID_LIKE" {
+                return None;
+            }
+            Some(
+                value
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_ascii_lowercase(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if ids.contains("debian") || ids.contains("ubuntu") || ids.contains("linuxmint") {
+        Some((
+            "APT",
+            "sudo apt install gstreamer1.0-plugins-good gstreamer1.0-libav",
+        ))
+    } else if ids.contains("fedora") {
+        Some((
+            "DNF",
+            "sudo dnf install gstreamer1-plugins-good gstreamer1-libav",
+        ))
+    } else if ids.contains("arch") || ids.contains("manjaro") || ids.contains("endeavouros") {
+        Some(("Pacman", "sudo pacman -S gst-plugins-good gst-libav"))
+    } else if ids.contains("opensuse") || ids.contains("suse") {
+        Some((
+            "Zypper",
+            "sudo zypper install gstreamer-plugins-good gstreamer-plugins-libav",
+        ))
+    } else {
+        None
+    }
 }
 
 /// Non-Linux platforms play audio through the OS's own media stack, which is not something
@@ -205,118 +247,52 @@ pub fn media_playback_step() -> Option<Step> {
     None
 }
 
-/// Where to get Piper, per operating system. Piper is two separate things: a program,
-/// which has to come from a package manager because it runs, and a voice, which is a pair
-/// of data files Aether1 now fetches itself. Only the first half is still a chore, which
-/// is why the OS voice exists as a fallback and why these steps are an offer rather than
-/// a requirement.
-fn piper_steps(os: Os) -> Vec<Step> {
-    // The voice is the one half of this Aether1 can do for somebody, and "Pick a better
-    // voice" is sitting directly beneath these steps in the same panel. A voice is two
-    // files and it does not work with only one of them, which was far and away the most
-    // common way the by-hand route went wrong -- so the button is the step now, and the
-    // manual route is kept underneath for anyone who wants a voice outside the short list.
-    let voices = Step::say(
-        "Pick a voice below -- Aether1 fetches it",
-        "Under these steps there is a short list of voices with a Download button beside \
-         each. Aether1 downloads both of the files a voice is made of, into the folder it \
-         already looks in, and shows you a bar while it does. Nothing is installed and \
-         nothing is run: a voice file is sound, not a program.",
-    );
-
-    let voices_by_hand = Step::open(
-        "...or fetch a voice by hand",
-        "Only needed for a voice that is not on the list -- another language, say. Open a \
-         voice folder and download the .onnx file AND the small .onnx.json sitting next to \
-         it, then put both in ~/.local/share/piper/voices. Taking only the big .onnx is the \
-         usual reason a voice that looks installed never speaks.",
-        "https://huggingface.co/rhasspy/piper-voices/tree/main/en",
-    );
-
+/// How to install the system TTS when the platform does not provide one.
+fn system_voice_steps(os: Os) -> Vec<Step> {
     match os {
-        Os::Windows => vec![
-            Step::run(
-                "Install Piper",
-                "Piper is maintained as a Python package now, and this is the shortest route \
-                 on Windows. Open Command Prompt and paste the line below. If Windows says \
-                 there is no python, install it from the Microsoft Store first, then try \
-                 again. It goes into a small Python environment belonging to Aether1, which \
-                 Aether1 looks in by itself -- that keeps piper.exe out of a Scripts folder \
-                 that may or may not be on your PATH, and leaves your own Python alone.",
-                &llm::managed_env_command("piper-tts"),
-            ),
-            Step::open(
-                "...or take the old ready-made zip",
-                "Only if the line above will not run. This is the last ready-made Windows \
-                 build the original project made before it was archived -- it still works, \
-                 but it is frozen. Download the file ending in windows_amd64.zip and unzip \
-                 it anywhere; your Documents folder is fine.",
-                "https://github.com/rhasspy/piper/releases/latest",
-            ),
-            Step::say(
-                "Put it where Aether1 looks",
-                "Only for the zip route. Move the unzipped piper folder so that piper.exe \
-                 sits inside it, then add that folder to your PATH -- or simply copy \
-                 piper.exe next to Aether1's own program. Aether1 looks for a command called \
-                 piper, piper-tts or piper_tts.",
-            ),
-            voices,
-            voices_by_hand,
-        ],
-        Os::Mac => vec![
-            Step::run(
-                "Install Piper",
-                "Homebrew is the shortest route on a Mac. Paste this into Terminal.",
-                "brew install piper-tts",
-            ),
-            voices,
-            voices_by_hand,
-        ],
-        Os::Linux => vec![
-            Step::say(
-                "Careful: 'piper' is two different programs",
-                "Do NOT install the package called plainly 'piper'. On Arch, CachyOS and \
-                 several other distributions that name belongs to an app for configuring \
-                 gaming mice, which has nothing to do with speech. The one you want is \
-                 Piper TTS, and it is usually packaged as piper-tts.",
-            ),
-            Step::run(
-                "Install Piper TTS",
-                "On Arch and CachyOS it lives in the AUR, so it needs an AUR helper rather \
-                 than pacman -- the line below is the Arch one. On Debian, Ubuntu and Mint, \
-                 use: sudo apt install piper-tts. If neither finds it, use the tarball step \
-                 below instead, which needs no package manager at all.",
-                "yay -S piper-tts-bin",
-            ),
-            Step::run(
-                "...or install it into Aether1's own Python, which works on any distribution",
-                "Piper is also a Python package, which is the route that does not depend on \
-                 your distribution packaging it. Not `pip install --user`, though: Arch, \
-                 Debian, Ubuntu and Fedora all refuse to let pip write to the system \
-                 Python at all now (the `externally-managed-environment` error), so this \
-                 puts it in a small environment belonging to Aether1 instead. Aether1 \
-                 looks in there for the piper program by itself.",
-                &llm::managed_env_command("piper-tts"),
-            ),
-            Step::open(
-                "...or take the old ready-made tarball",
-                "Last resort, and frozen: this is the final ready-made Linux build the \
-                 original project made before it was archived. Download the file ending in \
-                 linux_x86_64.tar.gz, unpack it, and copy the piper program inside to \
-                 ~/.local/bin (create that folder if it is not there). Aether1 looks there \
-                 as well as on your PATH.",
-                "https://github.com/rhasspy/piper/releases/latest",
-            ),
-            Step::say(
-                "Where the voices go",
-                "Aether1 looks in ~/.local/share/piper/voices, ~/.local/share/piper, \
-                 /usr/share/piper/voices and /usr/local/share/piper-voices. Create the first \
-                 one if it does not exist -- that is the one that needs no permissions.",
-            ),
-            voices,
-            voices_by_hand,
-        ],
+        Os::Linux => vec![linux_espeak_step()],
+        Os::Windows | Os::Mac => Vec::new(),
     }
+}
+
+fn linux_espeak_step() -> Step {
+    let release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let values = release
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            Some((key, value))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let ids = format!(
+        "{} {}",
+        values.get("ID").copied().unwrap_or_default(),
+        values.get("ID_LIKE").copied().unwrap_or_default()
+    );
+    let (manager, command, playback) = if ids.contains("debian")
+        || ids.contains("ubuntu")
+        || ids.contains("linuxmint")
+    {
+        ("APT", "sudo apt install espeak-ng gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav", "GStreamer playback decoders")
+    } else if ids.contains("fedora") {
+        ("DNF", "sudo dnf install espeak-ng gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-libav", "GStreamer playback decoders")
+    } else if ids.contains("arch") || ids.contains("manjaro") || ids.contains("endeavouros") {
+        (
+            "Pacman",
+            "sudo pacman -S espeak-ng gst-plugins-good gst-plugins-bad gst-libav",
+            "GStreamer playback decoders",
+        )
+    } else if ids.contains("opensuse") || ids.contains("suse") {
+        ("Zypper", "sudo zypper install espeak-ng gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-libav", "GStreamer playback decoders")
+    } else {
+        return Step::say("Install eSpeak NG", "Aether1 detected Linux but could not identify a supported package manager. Install eSpeak NG and the GStreamer playback plugins for your distribution, then choose Check again.");
+    };
+    Step::run(
+        &format!("Install eSpeak NG and {playback} with {manager}"),
+        "This installs the offline system speech engine and the media decoders Aether1 checked for. After it finishes, return here and choose Check again.",
+        command,
+    )
 }
 
 /// Where to get speech recognition, per operating system.
@@ -403,9 +379,8 @@ pub fn advise(
 ) -> VoiceAdvice {
     let os = Os::current();
 
-    // Speech out. Piper is the good answer, the OS voice is the working answer, and the
-    // order matters: an operator with Piper installed should not be shown instructions
-    // for installing Piper.
+    // System speech is the default and first answer. Piper remains an explicit option for
+    // an existing user-supplied model, but Aether1 does not install or fetch it.
     let piper = llm::tts_local_status(Some(local_voice));
     let os_voice = llm::tts_os_status();
 
@@ -416,8 +391,8 @@ pub fn advise(
     // actually arrives.
     let playback = media_playback_step();
 
-    let speaking = match (&playback, &piper, &os_voice) {
-        (Some(fix), piper_status, _) => Half {
+    let speaking = match (&playback, &os_voice, &piper) {
+        (Some(fix), _, piper_status) => Half {
             stage: Speaking::Unheard,
             headline: Speaking::Unheard.headline().to_string(),
             detail: format!(
@@ -425,7 +400,7 @@ pub fn advise(
                 fix.detail,
                 match piper_status {
                     Ok((_, voice)) => format!(
-                        " -- Piper is installed, with the voice at {}",
+                        " -- an optional Piper model is installed at {}",
                         voice.display()
                     ),
                     Err(_) => String::new(),
@@ -435,48 +410,57 @@ pub fn advise(
             steps: vec![fix.clone()],
             working: false,
         },
-        (None, Ok((_, voice)), _) => Half {
+        (None, Ok(()), piper_status) if chosen_engine == "local" => match piper_status {
+            Ok((_, voice)) => Half {
+                stage: Speaking::GoodVoice,
+                headline: Speaking::GoodVoice.headline().to_string(),
+                detail: format!("Using the configured Piper model at {}.", voice.display()),
+                engine: llm::TTS_LOCAL_NAME.to_string(),
+                steps: Vec::new(),
+                working: true,
+            },
+            Err(_) => Half {
+                stage: Speaking::BasicVoice,
+                headline: Speaking::BasicVoice.headline().to_string(),
+                detail: format!(
+                    "{} is available as the system fallback.",
+                    llm::tts_os_engine_name()
+                ),
+                engine: llm::tts_os_engine_name().to_string(),
+                steps: Vec::new(),
+                working: true,
+            },
+        },
+        (None, Ok(()), _) => Half {
+            stage: Speaking::BasicVoice,
+            headline: Speaking::BasicVoice.headline().to_string(),
+            detail: format!(
+                "{} is the default voice. It runs on this computer and uses the voice \
+                 configured in the operating system.",
+                llm::tts_os_engine_name()
+            ),
+            engine: llm::tts_os_engine_name().to_string(),
+            steps: Vec::new(),
+            working: true,
+        },
+        (None, Err(os_why), Ok((_, voice))) if chosen_engine == "local" => Half {
             stage: Speaking::GoodVoice,
             headline: Speaking::GoodVoice.headline().to_string(),
             detail: format!(
-                "Piper is installed and using the voice at {}. Nothing you say or hear \
-                 leaves this computer.",
+                "The system speech engine is unavailable ({os_why}); the configured local \
+                 Piper model at {} can speak instead.",
                 voice.display()
             ),
             engine: llm::TTS_LOCAL_NAME.to_string(),
             steps: Vec::new(),
             working: true,
         },
-        (None, Err(why), Ok(())) => Half {
-            stage: Speaking::BasicVoice,
-            headline: Speaking::BasicVoice.headline().to_string(),
-            detail: format!(
-                "{} will do the talking, which always works and sounds like a computer \
-                 reading aloud. Installing Piper is optional and makes it sound much \
-                 better. ({why})",
-                llm::tts_os_engine_name()
-            ),
-            engine: llm::tts_os_engine_name().to_string(),
-            steps: piper_steps(os),
-            working: true,
-        },
-        (None, Err(piper_why), Err(os_why)) => Half {
+        (None, Err(os_why), _) => Half {
             stage: Speaking::Silent,
             headline: Speaking::Silent.headline().to_string(),
-            detail: format!("{os_why} ({piper_why})"),
+            detail: os_why.clone(),
             engine: String::new(),
-            // The OS voice is one package away and Piper is a manual install, so the
-            // cheap fix goes first. On Linux this is the only stage where it is missing.
-            steps: {
-                let mut steps = vec![Step::run(
-                    "Install the basic voice",
-                    "espeak-ng is small, offline, and the thing Aether1 falls back to when \
-                     nothing better is installed. This is the one-line fix.",
-                    "sudo pacman -S espeak-ng || sudo apt install espeak-ng",
-                )];
-                steps.extend(piper_steps(os));
-                steps
-            },
+            steps: system_voice_steps(os),
             working: false,
         },
     };
@@ -533,8 +517,6 @@ pub fn advise(
         speaking.headline.clone()
     } else if !listening.working {
         listening.headline.clone()
-    } else if speaking.stage == Speaking::BasicVoice {
-        speaking.headline.clone()
     } else {
         "Voice is fully set up -- it can talk, and it can hear you.".to_string()
     };
@@ -557,10 +539,8 @@ pub fn advise(
 mod tests {
     use super::*;
 
-    /// The sentence that matters most: a machine whose only voice is the OS one is
-    /// *working*, and must never be told it is broken. That is the difference between
-    /// "install this optional thing to sound better" and "your computer cannot speak",
-    /// and getting it wrong sends somebody off installing Piper for no reason.
+    /// A machine whose only voice is the OS one is working and must not be told it is
+    /// broken or prompted to install an optional model.
     #[test]
     fn the_basic_voice_counts_as_working() {
         let half = Half {
@@ -572,10 +552,7 @@ mod tests {
             working: true,
         };
         assert!(half.working);
-        assert!(
-            half.stage.needs_attention(),
-            "there is still something worth offering"
-        );
+        assert!(!half.stage.needs_attention());
         assert!(
             !half.headline.contains("Nothing"),
             "the basic voice must not be described as nothing"
@@ -583,18 +560,17 @@ mod tests {
     }
 
     #[test]
-    fn only_a_finished_voice_stops_asking_for_attention() {
+    fn working_system_voice_needs_no_attention() {
         assert!(Speaking::Silent.needs_attention());
-        assert!(Speaking::BasicVoice.needs_attention());
+        assert!(!Speaking::BasicVoice.needs_attention());
         assert!(!Speaking::GoodVoice.needs_attention());
         assert!(Listening::Deaf.needs_attention());
         assert!(Listening::ModelMissing.needs_attention());
         assert!(!Listening::Ready.needs_attention());
     }
 
-    /// Speaking being switched off makes every other finding irrelevant -- somebody who
-    /// installs Piper because the wizard suggested it, and still hears nothing, has been
-    /// sent on an errand by their own companion.
+    /// Speaking being switched off makes every other finding irrelevant -- the user should
+    /// not be sent to install optional speech software until they have enabled speaking.
     #[test]
     fn speaking_switched_off_is_the_first_thing_reported() {
         let advice = advise(false, "auto", "", "", false);
@@ -607,7 +583,10 @@ mod tests {
     #[test]
     fn no_voice_step_asks_for_two_things_at_once() {
         for os in [Os::Windows, Os::Mac, Os::Linux] {
-            for step in piper_steps(os).iter().chain(whisper_steps(os).iter()) {
+            for step in system_voice_steps(os)
+                .iter()
+                .chain(whisper_steps(os).iter())
+            {
                 assert!(
                     step.command.is_none() || step.url.is_none(),
                     "{:?} step {:?} carries both a command and a url",
@@ -639,7 +618,10 @@ mod tests {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "pyenv".to_string());
         for os in [Os::Windows, Os::Mac, Os::Linux] {
-            for step in piper_steps(os).iter().chain(whisper_steps(os).iter()) {
+            for step in system_voice_steps(os)
+                .iter()
+                .chain(whisper_steps(os).iter())
+            {
                 let Some(command) = &step.command else {
                     continue;
                 };
@@ -718,7 +700,10 @@ mod tests {
     #[test]
     fn every_os_has_somewhere_to_go() {
         for os in [Os::Windows, Os::Mac, Os::Linux] {
-            assert!(!piper_steps(os).is_empty(), "{os:?} has no piper route");
+            assert!(
+                os == Os::Linux || system_voice_steps(os).is_empty(),
+                "system TTS install steps should only be needed on Linux"
+            );
             assert!(!whisper_steps(os).is_empty(), "{os:?} has no whisper route");
         }
     }

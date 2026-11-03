@@ -43,8 +43,7 @@ Intended features
   - **Local Offline AI**: Connect or Install a Local AI with zero cloud dependencies.
   - **Cloud AI APIs**: Support using different popular services via API or Local App installation.
   - **Offline Standby Mode**: While offline the Platform can still use TTS to read out the basic local system stats/information.
-- **Neural Voice Synthesis & Speech Recognition**:
-  - Neural text-to-speech. With Persona specific voices
+  - **Speech**: system text-to-speech by default, with optional local models and explicit cloud selection.
   - Speech-to-Text via Web Speech API with auto-send voice chat.
   - Built-in Web Audio API sci-fi synthesizer for UI sound effects.
 - **Persistent Long-Term Memory**:
@@ -52,9 +51,8 @@ Intended features
   - Type `remember that [fact]` or `save memory [key]: [value]` to store data permanently and locally.
 - **1-Click Packaging & Portability**:
   - Auto-installer for Linux and Windows (`setup.sh` / `setup.bat`).
-  - Offline installers for both platforms with speech (Piper + whisper.cpp) already bundled
-    -- see "Offline install" below. A slim Linux installer trades that for a much smaller
-    download, fetching speech via pip instead -- see "Slim install" below.
+  - Linux and Windows offline installers include local speech recognition; TTS uses the
+    platform system voice. The slim Linux installer installs eSpeak NG from the distro.
 
 ## Installing
 
@@ -126,10 +124,9 @@ which does this for every tagged release) and requiring nothing but itself once 
   to say about it first -- see "Windows blocked it" below, and read the warning there before
   touching Smart App Control.
 
-Both bundle Piper (TTS) and whisper.cpp (STT) with a voice and a model already inside, so
-speech works fully offline immediately, not just once you separately track those down --
-see the "Speech" section below for what that buys you either way. `THIRD_PARTY_NOTICES.md`
-in each bundle credits what's inside.
+The offline installers include whisper.cpp (speech recognition). TTS uses the platform
+system voice; the Linux offline installer requires eSpeak NG to be present. See
+`THIRD_PARTY_NOTICES.md` for bundled component licenses.
 
 This is a different distribution from cloning the repo: it installs a fixed version rather
 than a live checkout, so `git pull` isn't how you update it -- download a newer release
@@ -139,13 +136,10 @@ instead. If you want to build and modify the code, use `setup.sh`/`setup.bat` ab
 
 The trade-off in the other direction: `aurora1-slim-linux-x86_64.tar.gz` (also on
 [Releases](../../releases)) ships just the binary -- no Piper, no whisper.cpp, no models --
-and has its install script fetch speech separately into a Python environment of
-Aurora1's own (`~/.local/share/aether1/pyenv` -- not the system Python, which current
-distributions refuse to let `pip` write to at all), plus `python3`, `espeak-ng` and the
-GStreamer audio decoders via your distribution's package manager if any are missing. A fraction of the offline bundle's size, at the cost of needing a
-network for that one install step (and the first time each engine's model downloads,
-which happens automatically the first time you actually speak or listen -- after that it's
-cached and works offline like everything else here).
+and has its install script install eSpeak NG and audio decoders through the distribution
+package manager, plus faster-whisper into Aether1's private Python environment. TTS uses
+eSpeak NG without a model download. Speech recognition may download its model the first
+time it is used.
 
 ```sh
 mkdir aurora1-slim && tar -xzf aurora1-slim-linux-x86_64.tar.gz -C aurora1-slim
@@ -167,9 +161,8 @@ chmod +x Aurora1-x86_64.AppImage
 (On a machine with no FUSE -- some containers, some minimal installs -- add
 `--appimage-extract-and-run`.)
 
-What it does not carry is speech: no Piper, no whisper.cpp, no models, the same as the slim
-bundle, and for the AppImage there is no install step in which to fetch them. Everything else
-works.
+The AppImage does not carry local speech recognition or speech models, and has no install
+step for adding them. TTS still uses Linux system eSpeak NG when available.
 
 It also updates differently from the other two. AURORA1's own updater offers a newer release
 only for the shapes it knows how to install, so it will not replace an AppImage in place.
@@ -188,8 +181,8 @@ first time with right-click -> Open** rather than a double-click: the app is not
 notarized, which needs a paid Apple Developer account, so Gatekeeper refuses the ordinary
 route. The blunter equivalent is `xattr -dr com.apple.quarantine /Applications/Aurora1.app`.
 
-Two honest limits. There is no speech on macOS yet -- nothing fetches the macOS builds of
-Piper and whisper.cpp -- and AETHER CODE's sandbox is bubblewrap, which is Linux-only, so a
+Two honest limits. Local speech recognition is not packaged for macOS; TTS uses macOS's
+built-in `say` synthesizer. AETHER CODE's sandbox is bubblewrap, which is Linux-only, so a
 command there refuses itself with a reason exactly as it does on Windows (see
 [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)). The image is built by CI on every release;
 it has not been opened on a Mac by anyone.
@@ -314,87 +307,37 @@ The GStreamer entries are not build dependencies and they are the ones worth not
 Aurora1's window is WebKitGTK, and WebKitGTK plays `<audio>` through GStreamer -- but every
 distribution above packages the plugins that do the *decoding* as optional for it. On Arch,
 `gst-plugins-good` and `gst-libav` are optdepends of `webkit2gtk-4.1`, so installing the
-webview does not install them. Without them, Piper synthesizes correctly, every status
-screen in the app says "installed", the voice test reports that it spoke, and you hear
-nothing at all. The voice panel now checks for this directly and names the packages, but it
-is cheaper to just have them.
+webview does not install them. Without them, speech synthesis may succeed while the app
+cannot play the generated audio. The voice panel checks for this and names the packages.
 
-### Speech: what's local, what isn't, and what always works
+### Speech: system voice by default
 
-Speaking (TTS) has three tiers, tried in that order by the default **Auto** engine so there
-is always something to speak with, on a machine that has done nothing but run setup:
+Text-to-speech uses the computer's system speech engine by default and stays on the device:
 
-1. **[Piper](https://github.com/OHF-Voice/piper1-gpl)** -- the best-sounding local voice,
-   if you install its binary (the offline installer above does this for you; otherwise
-   your package manager, or the Python route under "The two Piper traps" below). The voice
-   file itself Aurora1 can
-   fetch for you -- see below. **Two traps here, and between them they account for
-   most "I installed it and it still doesn't talk" reports** -- see below.
-2. **Cloud** (Microsoft) -- better than the OS voice, but the text of everything the AI
-   says leaves your machine, and it needs a network.
-3. **This OS's own voice** -- SAPI on Windows (ships with every edition, nothing to
-   install) or `espeak-ng` on Linux (installed by `./setup.sh`). Lower audio quality than
-   the other two, but it cannot be "not installed" the way Piper can or offline the way the
-   cloud engine is, which is what makes it the guaranteed fallback rather than an optional
-   extra.
+- **Windows:** Windows Speech (SAPI).
+- **macOS:** the built-in `say` synthesizer and the voice selected in macOS.
+- **Linux:** eSpeak NG, installed by the setup script through the distribution package manager.
+  Linux does not have one shared built-in TTS service across distributions.
 
-#### The two Piper traps
+The default **System** selection uses the system voice. **Auto** tries that voice first and
+then a configured local model; **Local** tries a configured model and falls back to system
+speech. Neither sends speech text to a cloud service. Cloud speech is available only when explicitly chosen, and local-only mode overrides it to system speech.
 
-**`piper` is the name of two unrelated programs.** The one you want is
-[Piper TTS](https://github.com/OHF-Voice/piper1-gpl), which turns text into speech. The one you
-will find first is [Piper](https://github.com/libratbag/piper), a GTK app for configuring
-gaming mice — and on Arch and CachyOS that is exactly what `sudo pacman -S piper` installs,
-because the mouse app is the one in the official repositories. Piper TTS is in the AUR:
-`yay -S piper-tts-bin`. On Debian and Ubuntu, `sudo apt install piper-tts`. On any
-distribution, the Python package works without anything your distribution has to carry --
-but not via `pip install --user`, which Arch, Debian 12+, Ubuntu 23.04+ and Fedora all
-refuse now with `error: externally-managed-environment` (PEP 668). Put it in Aurora1's own
-environment instead, which it knows to look in:
-`python3 -m venv ~/.local/share/aether1/pyenv && ~/.local/share/aether1/pyenv/bin/pip
-install piper-tts`. (The old `linux_x86_64.tar.gz` release still works too, but it
-is frozen: the original `rhasspy/piper` repository was archived in October 2025 and
-development moved to `OHF-Voice/piper1-gpl`, which ships no pre-built binaries.)
+A1 no longer installs Piper, bundles its runtime, includes a default Piper voice, or offers
+voice downloads. Piper remains available as an optional engine for someone who already has
+a Piper installation and a model they have rights to use. The built-in voice list is paused
+until the model cards and their training datasets have been reviewed. Voice terms are
+separate from the Piper engine's MIT license; the former Lessac default is excluded because
+its source dataset has non-commercial terms.
 
-Aurora1 no longer takes the name at its word. It asks each candidate binary what its
-options are and only accepts one that knows about `--model`, so a machine with the mouse app
-and no Piper TTS now correctly reports the good voice as missing instead of ticking the box
-and going silent.
-
-**A voice is two files, not one.** On the
-[voices page](https://huggingface.co/rhasspy/piper-voices/tree/main/en), every voice is a
-large `.onnx` *and* a small `.onnx.json` beside it, with separate download buttons. Piper
-cannot load the model without the `.json`, and downloading only the big obvious one is the
-natural mistake. Aurora1 now checks for the sidecar — and for a plausible file size, which
-catches a download that stopped halfway — before it reports a voice as installed.
-
-`en_GB-alba-medium` and `en_US-amy-medium` are good, ordinary-sounding places to start.
-
-**And you no longer have to fetch them yourself.** *Set up the voice* now has a short list
-of voices with a Download button beside each. Aurora1 downloads both of the files a voice
-is made of, into the folder it already looks in, and shows a progress bar while it does —
-so the "two files, not one" trap above is one you can only fall into if you go and do it by
-hand anyway.
-
-It fetches voices and never programs. A voice file is sound turned into numbers, handed to
-an engine you installed yourself; nothing downloaded here is executed, marked executable or
-put on your PATH, and Piper itself still comes from your package manager. The list is a
-fixed table built into Aurora1, so nothing you or the page can type ever becomes part of a
-web address or a folder name. Bytes land in a `.part` file that is only renamed once the
-whole voice has arrived and been checked, so an interrupted download leaves nothing behind
-that looks usable. And in **local-only mode it does not run at all** — the buttons go dead
-with the reason printed beside them, rather than quietly reaching the internet.
-
-Listening (STT) only has the first two of those -- there is no universal OS-level
-equivalent to fall back to yet:
+Speech recognition is separate and has no universal OS-level equivalent:
 
 - **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** for local listening, plus a
   `.bin` model in `~/.local/share/whisper` (also handled by the offline installer).
-- Cloud, otherwise.
 
 Settings → Speech Engine reports which of these are actually available on this machine and
-what's missing for the rest, and lets you pin a specific tier instead of Auto (e.g. "Local
-only" to guarantee nothing ever leaves the machine, refusing to speak rather than silently
-falling back to the cloud).
+what's missing for the rest, and lets you choose a tier. Auto never silently sends speech
+text to a cloud service; Local-only mode forces the system voice.
 
 **🗣 Set up the voice** (in the HUD menu, and at the top of Settings → Voice & Sound) is
 the guided version of all of that: it checks speaking and listening separately, gives the
@@ -412,9 +355,8 @@ from anywhere.
 Two things still reached out on their own, and **Settings → Network → Local only** stops
 them. With it ticked:
 
-- **Speech never falls back to the cloud.** Without it, a missing Piper means the text of
-  everything the AI says is sent to Microsoft to be spoken. With it, Piper speaks or
-  nothing does, and Settings says which.
+- **Speech text never leaves unless you select cloud TTS.** Cloud TTS is explicit.
+  Local-only mode forces system TTS and blocks cloud speech.
 - **No update check.** Aurora1 asks GitHub for the latest commit on every launch. That
   stops, and so does installing an update.
 - **Cloud providers are refused.** Gemini, Groq, OpenAI and Anthropic are not contacted;
@@ -475,7 +417,7 @@ by the question you came in with rather than by which module implements it: **�
 **📓 Memory** and **🧩 Code Analysis**. Folded under **🛠 Advanced** at the bottom are the ones
 you set once or go looking for only when something is wrong: **🔐 What it may do**,
 **🌐 Network & Remote**, **⚡ Startup & Performance**, **🩺 Is it working?** and
-**🖥 The app itself**. The things almost nobody needs — the Piper voice file, the Whisper
+**🖥 The app itself**. The things almost nobody needs — an optional Piper voice file, the Whisper
 model file — are nested one level further inside the section they belong to, and the search
 box at the top of the list finds a section by what is in it, so "api key" or "ollama"
 both reach The Brain.
@@ -933,7 +875,7 @@ this computer* names `/etc`, `/proc` and `/var/log` on Linux, and the Windows ev
 `System32\drivers\etc` on Windows. It asks the running copy of Aurora1 which it is, never the
 browser — so when you open the HUD on a Windows laptop pointed at a Linux desktop, you get the
 Linux wording, because the Linux machine is the one being described. The same goes for the
-setup and voice guides, and for the folders named when no Piper voice or Whisper model can be
+setup and voice guides, and for the folders named when no local Piper voice or Whisper model can be
 found.
 
 ### Running programs

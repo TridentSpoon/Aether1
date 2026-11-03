@@ -263,6 +263,9 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/net/decide", post(code_net_decide))
         .route("/api/code/net/clear", post(code_net_clear))
         .route("/api/voice/test", post(test_speech))
+        .route("/api/voice/voices", get(system_voices))
+        .route("/api/voice/test-system", post(test_system_voice))
+        .route("/api/voice/piper/uninstall", post(uninstall_managed_piper))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
         .route("/api/setup/downloads", get(download_status))
@@ -1851,6 +1854,40 @@ async fn test_speech(State(state): State<AppState>) -> Json<serde_json::Value> {
     let outcome = tokio::task::spawn_blocking(move || commands::test_speech(&state.engine))
         .await
         .expect("test_speech panicked");
+    Json(match outcome {
+        Ok((path, mut report)) => {
+            if let Some(file_name) = path.file_name() {
+                report["audio_url"] =
+                    serde_json::json!(format!("/api/audio/{}", file_name.to_string_lossy()));
+            }
+            report
+        }
+        Err(report) => report,
+    })
+}
+
+async fn system_voices() -> Json<serde_json::Value> {
+    Json(commands::available_system_voices())
+}
+
+async fn uninstall_managed_piper() -> Json<serde_json::Value> {
+    Json(commands::uninstall_managed_piper())
+}
+
+#[derive(Deserialize)]
+struct SystemVoiceRequest {
+    voice: String,
+}
+
+async fn test_system_voice(
+    State(state): State<AppState>,
+    Json(request): Json<SystemVoiceRequest>,
+) -> Json<serde_json::Value> {
+    let outcome = tokio::task::spawn_blocking(move || {
+        commands::test_system_voice(&state.engine, &request.voice)
+    })
+    .await
+    .expect("test_system_voice panicked");
     Json(match outcome {
         Ok((path, mut report)) => {
             if let Some(file_name) = path.file_name() {

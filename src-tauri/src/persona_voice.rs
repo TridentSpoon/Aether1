@@ -162,7 +162,7 @@ fn write(db: &MemoryDb, map: &BTreeMap<String, Choice>) -> Result<(), String> {
         .map_err(|why| format!("could not save the voice choice: {why}"))
 }
 
-/// The two pickers, for the HUD: the cloud voices, and the Piper voices with whether each
+/// The two pickers, for the HUD: the cloud voices, and the optional Piper voices with whether each
 /// one is actually on this machine. A Piper voice that has not been downloaded is still
 /// listed -- it is a real choice, it just needs fetching first, and hiding it would make the
 /// avatar's picker disagree with the download list two panes away.
@@ -208,11 +208,8 @@ mod tests {
             cloud_voice(&db, "red9000").as_deref(),
             Some("en-GB-SoniaNeural")
         );
-        // The Piper half was left alone, so it is still the identity table's.
-        assert_eq!(
-            local_voice(&db, "red9000").as_deref(),
-            Some("en_US-ryan-medium")
-        );
+        // No per-persona Piper voice is configured by default; system TTS is the normal path.
+        assert!(local_voice(&db, "red9000").is_none());
 
         clear(&db, "red9000").unwrap();
         assert_eq!(
@@ -228,18 +225,13 @@ mod tests {
         // says. Being able to hand it a voice is most of the point of this pane.
         let db = db();
         assert!(cloud_voice(&db, "llm").is_none());
-        set(
-            &db,
-            "llm",
-            Some("en-AU-NatashaNeural"),
-            Some("en_US-amy-medium"),
-        )
-        .unwrap();
+        set(&db, "llm", Some("en-AU-NatashaNeural"), None).unwrap();
         assert_eq!(
             cloud_voice(&db, "llm").as_deref(),
             Some("en-AU-NatashaNeural")
         );
-        assert_eq!(local_voice(&db, "llm").as_deref(), Some("en_US-amy-medium"));
+        assert!(local_voice(&db, "llm").is_none());
+        assert!(set(&db, "llm", None, Some("en_US-amy-medium")).is_err());
     }
 
     #[test]

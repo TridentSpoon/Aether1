@@ -240,10 +240,7 @@ fn runnable_self(appimage: Option<PathBuf>, exe: Option<PathBuf>) -> Option<Path
 /// reports. A source checkout is never offered: its path is a directory, not something a
 /// desktop can execute.
 pub fn replacement(installed: &[crate::installs::Install]) -> Option<PathBuf> {
-    let running = runnable_self(
-        std::env::var_os("APPIMAGE").map(PathBuf::from),
-        std::env::current_exe().ok(),
-    );
+    let running = runnable_self(verified_appimage(), std::env::current_exe().ok());
     if let Some(exe) = running {
         if exe.is_file() {
             return Some(exe);
@@ -258,6 +255,84 @@ pub fn replacement(installed: &[crate::installs::Install]) -> Option<PathBuf> {
             ) && install.path.is_file()
         })
         .map(|install| install.path.clone())
+}
+
+/// APPIMAGE is an inherited environment hint, not proof that the named file launched us.
+/// Accept it only when its canonical path is the executable's own AppImage container.
+fn verified_appimage() -> Option<PathBuf> {
+    let appimage = PathBuf::from(std::env::var_os("APPIMAGE")?);
+    if !appimage.is_absolute() || !appimage.is_file() {
+        return None;
+    }
+    let appimage_real = std::fs::canonicalize(&appimage).ok()?;
+    let exe_real = std::fs::canonicalize(std::env::current_exe().ok()?).ok()?;
+    // AppImage mounts its image under /tmp/.mount_*/...; the running executable's
+    // canonical path is inside that mount. Verify the mount relationship before trusting
+    // the environment value as a durable launcher target.
+    let parent = exe_real.ancestors().find(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".mount_"))
+    })?;
+    appimage_matches_mount(parent, &appimage_real).then_some(appimage_real)
+}
+
+fn appimage_matches_mount(mountpoint: &Path, appimage: &Path) -> bool {
+    let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") else {
+        return false;
+    };
+    mountinfo.lines().any(|line| {
+        let Some((before, after)) = line.split_once(" - ") else {
+            return false;
+        };
+        let fields: Vec<_> = before.split_whitespace().collect();
+        let source: Vec<_> = after.split_whitespace().collect();
+        if fields.len() < 5 || source.len() < 2 || unescape_mount_field(fields[4]) != mountpoint {
+            return false;
+        }
+        let Some(loop_name) = Path::new(source[1]).file_name().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        if !loop_name.starts_with("loop") {
+            return false;
+        }
+        let Ok(backing) =
+            std::fs::read_to_string(format!("/sys/block/{loop_name}/loop/backing_file"))
+        else {
+            return false;
+        };
+        let backing = PathBuf::from(unescape_mount_text(backing.trim()));
+        std::fs::canonicalize(backing).is_ok_and(|path| path == appimage)
+    })
+}
+
+fn unescape_mount_field(value: &str) -> PathBuf {
+    PathBuf::from(unescape_mount_text(value))
+}
+
+fn unescape_mount_text(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\'
+            && index + 3 < bytes.len()
+            && bytes[index + 1..index + 4]
+                .iter()
+                .all(|byte| (b'0'..=b'7').contains(byte))
+        {
+            let octal = (bytes[index + 1] - b'0') * 64
+                + (bytes[index + 2] - b'0') * 8
+                + (bytes[index + 3] - b'0');
+            out.push(octal);
+            index += 4;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The contents of an entry with its `Exec` line pointed at `target`, and a `TryExec` line
@@ -278,23 +353,38 @@ pub fn repointed(contents: &str, target: &Path) -> String {
         let rewritten = if in_main {
             match trimmed.split_once('=') {
                 Some(("Exec", value)) => {
-                    let rest = tokenise(value)
-                        .into_iter()
-                        .skip(1)
-                        .map(|token| {
-                            if token.contains(' ') {
-                                format!("\"{token}\"")
-                            } else {
-                                token
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    Some(if rest.is_empty() {
-                        format!("Exec={quoted}")
+                    let tokens = tokenise(value);
+                    let (prefix, suffix) = if tokens
+                        .first()
+                        .and_then(|token| Path::new(token).file_name())
+                        .and_then(|name| name.to_str())
+                        == Some("env")
+                    {
+                        let mut program_index = 1;
+                        while program_index < tokens.len() && tokens[program_index].contains('=') {
+                            program_index += 1;
+                        }
+                        if program_index >= tokens.len() {
+                            (Vec::new(), Vec::new())
+                        } else {
+                            (
+                                tokens[..program_index].to_vec(),
+                                tokens
+                                    .into_iter()
+                                    .skip(program_index + 1)
+                                    .collect::<Vec<_>>(),
+                            )
+                        }
                     } else {
-                        format!("Exec={quoted} {rest}")
-                    })
+                        (Vec::new(), tokens.into_iter().skip(1).collect::<Vec<_>>())
+                    };
+                    let mut exec = prefix
+                        .iter()
+                        .map(|token| quote_exec_token(token))
+                        .collect::<Vec<_>>();
+                    exec.push(quoted.clone());
+                    exec.extend(suffix.iter().map(|token| quote_exec_token(token)));
+                    Some(format!("Exec={}", exec.join(" ")))
                 }
                 Some(("TryExec", _)) => Some(format!("TryExec={quoted}")),
                 _ => None,
@@ -311,11 +401,14 @@ pub fn repointed(contents: &str, target: &Path) -> String {
 /// A path as an `Exec` token: quoted only when it has to be, since a quoted path in a file
 /// people read looks like something was wrong with it.
 fn quote(path: &Path) -> String {
-    let text = path.display().to_string();
-    if text.contains(' ') || text.contains('"') {
+    quote_exec_token(&path.display().to_string())
+}
+
+fn quote_exec_token(text: &str) -> String {
+    if text.chars().any(char::is_whitespace) || text.contains('"') {
         format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
-        text
+        text.to_string()
     }
 }
 
@@ -328,11 +421,42 @@ pub fn repoint(entry: &Stale, target: &Path) -> Result<String, String> {
             target.display()
         ));
     }
+    let metadata = std::fs::symlink_metadata(&entry.path)
+        .map_err(|e| format!("could not inspect {}: {e}", entry.path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "{} is not a regular launcher file; refusing to follow links while repairing it",
+            entry.path.display()
+        ));
+    }
     let contents = std::fs::read_to_string(&entry.path)
         .map_err(|e| format!("could not read {}: {e}", entry.path.display()))?;
     let updated = repointed(&contents, target);
-    std::fs::write(&entry.path, updated)
-        .map_err(|e| format!("could not write {}: {e}", entry.path.display()))?;
+    let parent = entry.path.parent().unwrap_or_else(|| Path::new("."));
+    let name = entry
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("launcher.desktop");
+    let temporary = parent.join(format!(".{name}.aether1-{}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(metadata.permissions().mode());
+    }
+    use std::io::Write;
+    let write_result = (|| {
+        let mut file = options.open(&temporary)?;
+        file.write_all(updated.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &entry.path)
+    })();
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    write_result.map_err(|e| format!("could not safely replace {}: {e}", entry.path.display()))?;
     Ok(format!(
         "{} now starts {}",
         entry.path.display(),
