@@ -252,7 +252,7 @@ pub fn graph(db: &MemoryDb) -> Graph {
 /// A deliberately small parser rather than a markdown library: the whole of the syntax this
 /// needs to understand is two brackets, and pulling in a parser would mean inheriting its
 /// opinions about everything else in the file.
-fn links_in(text: &str) -> Vec<String> {
+pub(super) fn links_in(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = text;
     while let Some(start) = rest.find("[[") {
@@ -282,7 +282,7 @@ fn links_in(text: &str) -> Vec<String> {
 /// `[[profile]]` means `profile.md` wherever it happens to live, and archiving a note moves
 /// it between folders without breaking a single link. A link that names a folder too is
 /// honoured as written, so `[[daily/2026-09-15]]` also resolves.
-fn resolve_links(targets: &[String], notes: &[String]) -> Vec<Link> {
+pub(super) fn resolve_links(targets: &[String], notes: &[String]) -> Vec<Link> {
     let mut out: Vec<Link> = Vec::new();
     for target in targets {
         let wanted = target.trim_end_matches(".md");

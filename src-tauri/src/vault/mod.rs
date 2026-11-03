@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::llm::MemoryDb;
 
 pub mod consulted;
+pub mod curator;
 pub mod reader;
 pub mod search;
 

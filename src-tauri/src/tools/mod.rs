@@ -296,6 +296,9 @@ pub fn registry() -> &'static Registry {
             // model that does not call this does not know they exist -- which is the
             // point: the cost is paid by the turns that use it.
             Box::new(skills::FindSkill),
+            // Looks over the vault and says what wants attention. Reads only: it
+            // reports what to propose, and `archive_note` is what acts.
+            Box::new(crate::vault::curator::ReviewMemory),
             Box::new(builtin::SearchWeb),
             Box::new(builtin::FetchUrl),
             Box::new(eventlog::ReadEventLog),

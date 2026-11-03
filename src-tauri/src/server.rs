@@ -291,6 +291,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/vault/notes", get(vault_notes))
         .route("/api/vault/note", get(vault_note))
         .route("/api/vault/graph", get(vault_graph))
+        .route("/api/vault/review", get(vault_review))
         .route("/api/vault/search", get(vault_search))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
@@ -2141,6 +2142,15 @@ async fn vault_graph(State(state): State<AppState>) -> Json<Value> {
     let graph = tokio::task::spawn_blocking(move || commands::vault_graph(&engine)).await;
     Json(match graph {
         Ok(g) => serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    })
+}
+
+async fn vault_review(State(state): State<AppState>) -> Json<Value> {
+    let engine = state.engine.clone();
+    let review = tokio::task::spawn_blocking(move || commands::vault_review(&engine)).await;
+    Json(match review {
+        Ok(r) => serde_json::to_value(r).unwrap_or_else(|_| serde_json::json!({})),
         Err(_) => serde_json::json!({}),
     })
 }
