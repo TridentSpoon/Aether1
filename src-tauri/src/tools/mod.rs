@@ -21,6 +21,7 @@ pub mod mutating;
 mod notes;
 pub mod protocol;
 pub(crate) mod selfcheck;
+pub mod skills;
 
 use std::sync::LazyLock;
 
@@ -291,6 +292,10 @@ pub fn registry() -> &'static Registry {
             Box::new(builtin::ListProcesses),
             Box::new(builtin::TelemetryDetail),
             Box::new(builtin::SearchMemory),
+            // Procedural memory. Nothing names the installed skills anywhere else, so a
+            // model that does not call this does not know they exist -- which is the
+            // point: the cost is paid by the turns that use it.
+            Box::new(skills::FindSkill),
             Box::new(builtin::SearchWeb),
             Box::new(builtin::FetchUrl),
             Box::new(eventlog::ReadEventLog),
