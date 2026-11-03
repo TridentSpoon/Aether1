@@ -75,11 +75,25 @@ pub enum Mode {
 }
 
 pub fn mode() -> Mode {
-    if crate::project_root().join(".git").exists() {
+    // `project_root()` is the writable per-user data directory for release builds, not
+    // necessarily the source tree. A release install can retain a `.git` directory there
+    // from an older clone; treating that data as a checkout offers the git/rebuild action
+    // against a directory that does not contain this app's source. Check the source path
+    // baked in at compile time instead, and require the checkout marker plus its frontend.
+    // For CI-built release binaries the baked-in path is absent on the target machine, so
+    // these checks correctly select the signed-release flow.
+    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf);
+    if source_root.as_deref().is_some_and(is_checkout_root) {
         Mode::Checkout
     } else {
         Mode::Release
     }
+}
+
+fn is_checkout_root(root: &Path) -> bool {
+    root.join(".git").exists() && root.join("frontend").is_dir()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -683,6 +697,30 @@ pub fn verify_file(path: &Path, signature_path: &Path) -> Result<(), FetchError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkout_mode_requires_source_markers_at_the_source_root() {
+        let unique = format!(
+            "aether1-update-mode-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let source = root.join("source");
+        let data = root.join("data");
+        std::fs::create_dir_all(source.join(".git")).expect("create checkout marker");
+        std::fs::create_dir_all(source.join("frontend")).expect("create frontend marker");
+        // A stale repository marker in an app's data directory is not the compiled source.
+        std::fs::create_dir_all(data.join(".git")).expect("create stale data marker");
+
+        assert!(is_checkout_root(&source));
+        assert!(!is_checkout_root(&data));
+
+        std::fs::remove_dir_all(root).expect("remove temporary update-mode fixture");
+    }
 
     /// The disk image this test machine would be offered, so the shared tests above carry an
     /// asset for all three platforms rather than quietly asserting nothing on a Mac.
