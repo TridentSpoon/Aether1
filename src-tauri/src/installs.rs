@@ -545,6 +545,11 @@ fn touches_data(path: &Path, roots: &[PathBuf]) -> bool {
 
 /// Where AppImages are left. Not a search of the disk: an AppImage anywhere else was put
 /// there deliberately, and finding it would mean reading every directory the operator has.
+///
+/// The last two are where the AppImage managers put a file they have taken charge of --
+/// Gear Lever and AppImageLauncher both *move* the file out of wherever it was downloaded.
+/// Without them, installing the AppImage into a manager makes it vanish from this list, and
+/// `installs` reports a machine that plainly has AURORA1 on it as having none.
 fn appimage_dirs(home: &Path) -> Vec<PathBuf> {
     vec![
         home.join("Applications"),
@@ -552,6 +557,8 @@ fn appimage_dirs(home: &Path) -> Vec<PathBuf> {
         home.join(".local").join("bin"),
         home.join("bin"),
         PathBuf::from("/opt"),
+        home.join(".local").join("share").join("AppImages"),
+        home.join("AppImages"),
     ]
 }
 

@@ -63,6 +63,7 @@ pub enum CheckId {
     Hotkey,
     DiskRoom,
     UpdatePath,
+    Launcher,
 }
 
 /// Whose fault a failure is, which decides what can be done about it.
@@ -76,7 +77,7 @@ pub enum Owner {
 }
 
 impl CheckId {
-    pub const ALL: [CheckId; 14] = [
+    pub const ALL: [CheckId; 15] = [
         CheckId::Database,
         CheckId::Hud,
         CheckId::Tray,
@@ -91,6 +92,7 @@ impl CheckId {
         CheckId::Hotkey,
         CheckId::DiskRoom,
         CheckId::UpdatePath,
+        CheckId::Launcher,
     ];
 
     /// The stable key: what a repair record names, and what `--replay` matches on. Spelled
@@ -112,6 +114,7 @@ impl CheckId {
             CheckId::Hotkey => "hotkey",
             CheckId::DiskRoom => "disk-room",
             CheckId::UpdatePath => "update-path",
+            CheckId::Launcher => "launcher",
         }
     }
 
@@ -138,6 +141,7 @@ impl CheckId {
             CheckId::Hotkey => "The keys that summon it",
             CheckId::DiskRoom => "Room to work",
             CheckId::UpdatePath => "Updates",
+            CheckId::Launcher => "The way you start it",
         }
     }
 
@@ -156,7 +160,12 @@ impl CheckId {
             | CheckId::VoiceIn
             | CheckId::Hotkey
             | CheckId::DiskRoom
-            | CheckId::UpdatePath => Owner::Foundation,
+            | CheckId::UpdatePath
+            // The machine's, not AETHER1's: the entry is a file in the operator's menu that
+            // anything may have written -- an AETHER1 installer, an AppImage manager, a
+            // desktop asked to pin a file -- and unlike a bug in AETHER1 it is a thing that
+            // can simply be fixed.
+            | CheckId::Launcher => Owner::Foundation,
         }
     }
 }
@@ -213,6 +222,7 @@ pub struct Observation {
     pub hotkey: HotkeyProbe,
     pub disk: DiskProbe,
     pub update: UpdateProbe,
+    pub launcher: LauncherProbe,
 }
 
 /// The memory database: it opens, a write round-trips, and there is room under it.
@@ -242,6 +252,13 @@ pub struct AppProbe {
     pub local_server_asleep: Option<bool>,
     pub autostart_ollama: bool,
     pub hotkey_registered: Option<bool>,
+    /// Which rung of the Linux webview's rendering fallback ladder this machine is on, and
+    /// whether the operator set those variables themselves. Read from disk rather than from
+    /// the app, so a terminal can report it too. See webview.rs.
+    #[serde(default)]
+    pub renderer_level: u8,
+    #[serde(default)]
+    pub renderer_operator_set: bool,
 }
 
 /// Whether anything on this desktop can host a tray icon. On a bare window manager there is
@@ -352,6 +369,17 @@ pub struct UpdateProbe {
     pub declined: bool,
 }
 
+/// The launcher entries that start AETHER1 from a menu or a panel, and whether they still
+/// point at a program that is there. A `.desktop` file is a path written down, and nothing
+/// keeps it true when the program moves -- see launchers.rs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LauncherProbe {
+    pub stale: Vec<crate::launchers::Stale>,
+    /// A copy of AETHER1 that is on this machine and could be put in those entries, when
+    /// there is one. `None` is the case where repointing would be a lie.
+    pub replacement: Option<String>,
+}
+
 // ---------------------------------------------------------------------------------------
 // The probe: the only part of this file that touches the world.
 // ---------------------------------------------------------------------------------------
@@ -426,6 +454,8 @@ pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
             local_server_asleep: facts.local_server_asleep,
             autostart_ollama: db.get_setting_bool("autostart_ollama", true),
             hotkey_registered: facts.hotkey_registered,
+            renderer_level: crate::webview::current_level(),
+            renderer_operator_set: crate::webview::operator_decides(),
         },
         tray: probe_tray(),
         watcher: WatcherProbe {
@@ -478,7 +508,23 @@ pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
             signed_in: Some(crate::github_auth::signed_in()),
             declined: db.get_setting_bool(crate::github_auth::DECLINED_SETTING, false),
         },
+        launcher: probe_launcher(),
     }
+}
+
+/// The launcher entries, and what could be done about the broken ones.
+///
+/// `installs::detect` is only asked when something is actually wrong: it spawns package
+/// managers and reads several directories, and a machine whose menu works does not need it.
+fn probe_launcher() -> LauncherProbe {
+    let stale = crate::launchers::stale();
+    let replacement = if stale.is_empty() {
+        None
+    } else {
+        crate::launchers::replacement(&crate::installs::detect(&crate::installs::ThisMachine))
+            .map(|path| path.display().to_string())
+    };
+    LauncherProbe { stale, replacement }
 }
 
 /// Opens the database and writes to it. The write is the point: a database that opens on a
@@ -759,6 +805,7 @@ fn judge(id: CheckId, obs: &Observation) -> (Verdict, String, Vec<Step>) {
         CheckId::Hotkey => judge_hotkey(&obs.hotkey, &obs.app),
         CheckId::DiskRoom => judge_disk(&obs.disk),
         CheckId::UpdatePath => judge_update(&obs.update),
+        CheckId::Launcher => judge_launcher(&obs.launcher),
     }
 }
 
@@ -803,6 +850,21 @@ fn judge_database(probe: &DatabaseProbe) -> (Verdict, String, Vec<Step>) {
 }
 
 fn judge_hud(probe: &AppProbe) -> (Verdict, String, Vec<Step>) {
+    let (verdict, detail, steps) = judge_hud_window(probe);
+    // The rendering rung is appended rather than given a check of its own: a machine on a
+    // fallback rung is not broken, and a row saying so would read as a fault. It belongs on
+    // the window's line because it is the reason the window looks the way it does.
+    let detail = match probe.renderer_level {
+        0 if !probe.renderer_operator_set => detail,
+        _ => format!(
+            "{detail} {}",
+            crate::webview::explain(probe.renderer_level, probe.renderer_operator_set)
+        ),
+    };
+    (verdict, detail, steps)
+}
+
+fn judge_hud_window(probe: &AppProbe) -> (Verdict, String, Vec<Step>) {
     if !probe.asked_in_app {
         return (
             Verdict::Unknown,
@@ -821,7 +883,8 @@ fn judge_hud(probe: &AppProbe) -> (Verdict, String, Vec<Step>) {
         (_, Some(0)) => (
             Verdict::Failed,
             "AETHER1 is running with no window at all. The tray menu's Show is the way back; \
-             if that does nothing, the webview failed to start."
+             if that does nothing, the webview failed to start, and the next launch will try \
+             it with the accelerated rendering path off."
                 .to_string(),
             Vec::new(),
         ),
@@ -1423,6 +1486,47 @@ fn judge_update(probe: &UpdateProbe) -> (Verdict, String, Vec<Step>) {
     }
 }
 
+/// A menu entry that starts nothing is the failure an operator meets before they can meet
+/// any other one, so it is reported even though AETHER1 is plainly running when it is asked.
+fn judge_launcher(probe: &LauncherProbe) -> (Verdict, String, Vec<Step>) {
+    let Some(first) = probe.stale.first() else {
+        return (
+            Verdict::Ok,
+            "Every launcher entry for AETHER1 points at a program that is there.".to_string(),
+            Vec::new(),
+        );
+    };
+    let which = if probe.stale.len() == 1 {
+        format!("\"{}\" starts {}", first.name, first.target.display())
+    } else {
+        format!(
+            "{} launcher entries start programs that are not there, the first of them \"{}\" \
+             at {}",
+            probe.stale.len(),
+            first.name,
+            first.target.display()
+        )
+    };
+    match &probe.replacement {
+        Some(replacement) => (
+            Verdict::Failed,
+            format!(
+                "{which}, which is not there -- so the menu entry fails before AETHER1 is \
+                 reached. A copy that is there: {replacement}."
+            ),
+            Vec::new(),
+        ),
+        None => (
+            Verdict::Failed,
+            format!(
+                "{which}, which is not there, and no copy of AETHER1 was found to point it \
+                 at instead. Install one, or delete the entry."
+            ),
+            Vec::new(),
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Rung 1: the repairs written by hand, each one asked for at the moment of acting.
 // ---------------------------------------------------------------------------------------
@@ -1444,6 +1548,8 @@ pub enum RepairId {
     ReregisterHotkey,
     /// Install the GStreamer decoders the webview needs. Needs root, so it is handed over.
     InstallAudioDecoders,
+    /// Point the launcher entries that start nothing at a copy of AETHER1 that is there.
+    RepointLauncher,
 }
 
 /// What kind of act a repair is, which decides who does it.
@@ -1505,6 +1611,25 @@ pub fn repair_for(id: CheckId, obs: &Observation) -> Option<Repair> {
                     "Runs `ollama pull {}`. This is a download of several gigabytes from \
                      Ollama's registry to this machine, and it will take a while.",
                     obs.model.model
+                ),
+                kind: RepairKind::Run,
+            })
+        }
+        CheckId::Launcher if !obs.launcher.stale.is_empty() => {
+            let replacement = obs.launcher.replacement.as_ref()?;
+            let entries = obs
+                .launcher
+                .stale
+                .iter()
+                .map(|entry| entry.path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(Repair {
+                id: RepairId::RepointLauncher,
+                title: "Point the launcher at this copy".to_string(),
+                detail: format!(
+                    "Rewrites the Exec line of {entries} to run {replacement}. Nothing else \
+                     in those files changes, and no other program's launcher is touched."
                 ),
                 kind: RepairKind::Run,
             })
@@ -1774,6 +1899,30 @@ fn run_repair(
                     .to_string(),
             ),
         },
+        RepairId::RepointLauncher => {
+            let stale = crate::launchers::stale();
+            if stale.is_empty() {
+                return Ok(
+                    "the launcher entries were already pointing at a program that is \
+                           there"
+                        .to_string(),
+                );
+            }
+            let target = crate::launchers::replacement(&crate::installs::detect(
+                &crate::installs::ThisMachine,
+            ))
+            .ok_or_else(|| {
+                "no copy of AETHER1 was found on this machine to point the launcher at".to_string()
+            })?;
+            // Both command names leave an entry, so there are commonly two to repoint. A
+            // failure stops at the one that failed and says so, rather than reporting a
+            // repair that only half happened.
+            let mut done = Vec::new();
+            for entry in &stale {
+                done.push(crate::launchers::repoint(entry, &target)?);
+            }
+            Ok(done.join("; "))
+        }
         RepairId::InstallAudioDecoders => Err(
             "AETHER1 does not run commands that need root. The command is in the report; run it \
              yourself and restart AETHER1."
@@ -2097,6 +2246,8 @@ mod tests {
                 local_server_asleep: Some(false),
                 autostart_ollama: true,
                 hotkey_registered: Some(true),
+                renderer_level: 0,
+                renderer_operator_set: false,
             },
             tray: TrayProbe {
                 host_present: Some(true),
@@ -2153,6 +2304,10 @@ mod tests {
                 signed_in: None,
                 declined: false,
             },
+            launcher: LauncherProbe {
+                stale: Vec::new(),
+                replacement: None,
+            },
         }
     }
 
@@ -2172,6 +2327,68 @@ mod tests {
         // Every row says something, including the ones that passed: a report of bare ticks
         // is a report nobody reads twice.
         assert!(health.checks.iter().all(|check| !check.detail.is_empty()));
+    }
+
+    #[test]
+    fn a_launcher_entry_that_starts_nothing_is_a_failure_with_a_repair() {
+        let mut obs = healthy();
+        obs.launcher = LauncherProbe {
+            stale: vec![crate::launchers::Stale {
+                path: std::path::PathBuf::from("/home/t/.local/share/applications/Aurora1.desktop"),
+                name: "Aurora1".to_string(),
+                target: std::path::PathBuf::from("/home/t/.local/bin/Aurora1-x86_64.AppImage"),
+            }],
+            replacement: Some("/home/t/.local/bin/aurora1".to_string()),
+        };
+        assert_eq!(verdict(&obs, CheckId::Launcher), Verdict::Failed);
+        let detail = diagnose(&obs)
+            .check(CheckId::Launcher)
+            .unwrap()
+            .detail
+            .clone();
+        // The path that is missing and the one that would replace it are both in the row,
+        // because an operator reading this is deciding whether to let it be rewritten.
+        assert!(detail.contains("Aurora1-x86_64.AppImage"), "{detail}");
+        assert!(detail.contains("/home/t/.local/bin/aurora1"), "{detail}");
+        let repair = repair_for(CheckId::Launcher, &obs).expect("a repair is offered");
+        assert_eq!(repair.id, RepairId::RepointLauncher);
+        assert_eq!(repair.kind, RepairKind::Run);
+    }
+
+    #[test]
+    fn a_broken_launcher_with_nothing_to_point_it_at_is_reported_and_not_repaired() {
+        let mut obs = healthy();
+        obs.launcher = LauncherProbe {
+            stale: vec![crate::launchers::Stale {
+                path: std::path::PathBuf::from("/home/t/.local/share/applications/Aurora1.desktop"),
+                name: "Aurora1".to_string(),
+                target: std::path::PathBuf::from("/home/t/.local/bin/aurora1"),
+            }],
+            replacement: None,
+        };
+        assert_eq!(verdict(&obs, CheckId::Launcher), Verdict::Failed);
+        assert!(repair_for(CheckId::Launcher, &obs).is_none());
+    }
+
+    #[test]
+    fn the_window_row_says_which_rendering_path_it_is_on_only_when_it_is_not_the_fast_one() {
+        let healthy = diagnose(&healthy());
+        let plain = &healthy.check(CheckId::Hud).unwrap().detail;
+        assert!(!plain.contains("WEBKIT"), "{plain}");
+
+        let mut obs = super::tests::healthy();
+        obs.app.renderer_level = 1;
+        let fallen_back = diagnose(&obs);
+        let detail = &fallen_back.check(CheckId::Hud).unwrap().detail;
+        assert!(
+            detail.contains("WEBKIT_DISABLE_DMABUF_RENDERER"),
+            "{detail}"
+        );
+        // Still a working window: a fallback is not a fault.
+        assert_eq!(
+            fallen_back.check(CheckId::Hud).unwrap().verdict,
+            Verdict::Ok
+        );
     }
 
     #[test]
