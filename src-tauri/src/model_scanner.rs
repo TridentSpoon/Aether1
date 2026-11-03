@@ -4,7 +4,6 @@
 // with `match` instead of a free-form "status" string the caller has to compare by hand.
 
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::time::Duration;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
@@ -592,7 +591,10 @@ pub fn pull_model(model_name: &str) -> PullResult {
     }
 
     if which::which("ollama").is_ok() {
-        return match Command::new("ollama").args(["pull", model_name]).spawn() {
+        return match crate::paths::quiet_command("ollama")
+            .args(["pull", model_name])
+            .spawn()
+        {
             // Started, not finished: nothing here waits for it, and a several-gigabyte
             // download does not fit in any timeout worth holding a thread for. Whoever asked
             // for this finds out it landed by asking the server what models it has -- which

@@ -23,7 +23,7 @@
 //! saying nothing would make that promise false in a way they could not see.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -256,13 +256,12 @@ fn run_streaming(
     args: &[&str],
     timeout: Duration,
 ) -> Result<(), String> {
-    let mut command = Command::new(program);
+    let mut command = crate::paths::quiet_command(program);
     command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::paths::suppress_console_window(&mut command);
 
     let mut child = command
         .spawn()
@@ -354,13 +353,12 @@ enum PipeKind {
 /// put the binary where npm puts globals, which is routinely not on the PATH a desktop
 /// launcher started the app with -- the whole reason that resolver exists.
 fn quiet_graft(args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new(crate::graft::program());
+    let mut command = crate::paths::quiet_command(crate::graft::program());
     command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::paths::suppress_console_window(&mut command);
 
     let mut child = command
         .spawn()

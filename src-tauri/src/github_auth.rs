@@ -387,9 +387,8 @@ pub fn token_for_requests() -> Option<String> {
 }
 
 fn gh_cli_token() -> Option<String> {
-    let mut cmd = std::process::Command::new("gh");
+    let mut cmd = crate::paths::quiet_command("gh");
     cmd.args(["auth", "token"]);
-    crate::paths::suppress_console_window(&mut cmd);
     let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;

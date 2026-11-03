@@ -28,7 +28,6 @@
 // and the Windows registry directly, so the tests can hand it a machine that does not exist.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::paths;
 
@@ -412,7 +411,10 @@ impl Machine for ThisMachine {
         // Asking a binary its own version means running it, which is only safe because every
         // path this is called with is one AETHER1 itself writes to. `--version` is handled in
         // cli::parse before anything is built or opened, so this returns immediately.
-        let output = Command::new(binary).arg("--version").output().ok()?;
+        let output = crate::paths::quiet_command(binary)
+            .arg("--version")
+            .output()
+            .ok()?;
         if !output.status.success() {
             return None;
         }
@@ -443,7 +445,10 @@ impl Machine for ThisMachine {
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\",
             r"{9B7B6C6E-7B3E-4A9B-9C7A-8A1E8B6A6F1E}_is1"
         );
-        let output = Command::new("reg").args(["query", KEY]).output().ok()?;
+        let output = crate::paths::quiet_command("reg")
+            .args(["query", KEY])
+            .output()
+            .ok()?;
         if !output.status.success() {
             return None;
         }
@@ -467,7 +472,10 @@ impl Machine for ThisMachine {
 /// Runs a package manager query, treating "not installed" and "not here at all" as the same
 /// answer, because they are: either way there is no package to remove.
 fn query_package(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = crate::paths::quiet_command(program)
+        .args(args)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -771,7 +779,7 @@ pub fn remove(install: &Install, machine: &dyn Machine) -> Result<Outcome, Strin
             command: command.clone(),
         }),
         Removal::Uninstaller { program, args } => {
-            let status = Command::new(program)
+            let status = crate::paths::quiet_command(program)
                 .args(args)
                 .status()
                 .map_err(|e| format!("could not run {}: {e}", program.display()))?;

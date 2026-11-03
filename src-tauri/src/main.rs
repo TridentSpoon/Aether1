@@ -971,14 +971,13 @@ fn run_build_with_progress<R: tauri::Runtime>(
 /// GIT_TERMINAL_PROMPT=0 turns that hang into an error with a name. Credential helpers with
 /// their own GUI (Git Credential Manager, the usual one on Windows) are unaffected.
 fn run_git(root: &std::path::Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::paths::quiet_command("git");
     cmd.args(args)
         .current_dir(root)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    paths::suppress_console_window(&mut cmd);
     cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             // The single most likely Windows cause, and the one the old message hid
@@ -1223,7 +1222,7 @@ fn perform_update_core<R: tauri::Runtime>(
             "cargo build --release (this is the long step)",
             45,
         );
-        let mut build = Command::new("cargo");
+        let mut build = crate::paths::quiet_command("cargo");
         build.args(["build", "--release"]);
         build.current_dir(root.join("src-tauri"));
         run_build_with_progress(app, build).map_err(|e| (UpdateStage::Build, e))?;
@@ -1237,7 +1236,7 @@ fn perform_update_core<R: tauri::Runtime>(
             "scripts/install_desktop_app.sh (this is the long step)",
             45,
         );
-        let mut build = Command::new("bash");
+        let mut build = crate::paths::quiet_command("bash");
         build.arg(root.join("scripts").join("install_desktop_app.sh"));
         build.current_dir(&root);
         run_build_with_progress(app, build).map_err(|e| (UpdateStage::Build, e))?;
@@ -1269,7 +1268,10 @@ fn perform_update_core<R: tauri::Runtime>(
         &new_binary.display().to_string(),
         95,
     );
-    match Command::new(&new_binary).current_dir(&root).spawn() {
+    match crate::paths::quiet_command(&new_binary)
+        .current_dir(&root)
+        .spawn()
+    {
         Ok(_child) => {
             note_expected_exit(app);
             app.exit(0);

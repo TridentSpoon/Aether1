@@ -523,7 +523,7 @@ fn probe_tray() -> TrayProbe {
             desktop,
         };
     }
-    let mut cmd = std::process::Command::new("gdbus");
+    let mut cmd = crate::paths::quiet_command("gdbus");
     cmd.args([
         "call",
         "--session",
@@ -535,7 +535,6 @@ fn probe_tray() -> TrayProbe {
         "org.freedesktop.DBus.NameHasOwner",
         "org.kde.StatusNotifierWatcher",
     ]);
-    crate::paths::suppress_console_window(&mut cmd);
     let host_present = cmd.output().ok().and_then(|out| {
         if !out.status.success() {
             return None;

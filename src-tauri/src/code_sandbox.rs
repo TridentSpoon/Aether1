@@ -346,7 +346,7 @@ fn probe(bwrap: &Path, network_off: bool) -> bool {
         }),
         &Access::project_only(),
     );
-    let ok = Command::new(bwrap)
+    let ok = crate::paths::quiet_command(bwrap)
         .args(&args)
         .env_clear()
         .envs(passthrough_env())
@@ -508,12 +508,12 @@ pub fn command(
     let net = &bridges.net;
     match sandbox {
         Sandbox::Unavailable(_) => {
-            let mut cmd = Command::new(program);
+            let mut cmd = crate::paths::quiet_command(program);
             cmd.args(rest).current_dir(cwd);
             cmd
         }
         Sandbox::Bubblewrap { bwrap, .. } => {
-            let mut cmd = Command::new(bwrap);
+            let mut cmd = crate::paths::quiet_command(bwrap);
             // With a socket bridged in the command is wrapped: Aether1 itself runs inside
             // the box, listens on loopback in front of each socket it was given, and then
             // runs what was asked for. Two processes rather than a shell line, so nothing in

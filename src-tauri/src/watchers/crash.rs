@@ -23,8 +23,6 @@
 // neither `coredumpctl` nor a journal, and a reader you cannot test is a reader you are
 // guessing at.
 
-use std::process::Command;
-
 use serde::{Deserialize, Serialize};
 
 /// How many lines of the failing program's log travel with a crash. Enough to see what it
@@ -130,7 +128,7 @@ pub struct LinuxCrashReader;
 
 impl CrashReader for LinuxCrashReader {
     fn crashes_since(&self, since: u64) -> Result<Vec<Crash>, String> {
-        let output = Command::new("coredumpctl")
+        let output = crate::paths::quiet_command("coredumpctl")
             .args(["list", "--no-pager", "--json=short"])
             .output()
             .map_err(|e| format!("could not run coredumpctl: {e}"))?;
@@ -147,7 +145,10 @@ impl CrashReader for LinuxCrashReader {
     }
 
     fn availability(&self) -> Availability {
-        match Command::new("coredumpctl").arg("--version").output() {
+        match crate::paths::quiet_command("coredumpctl")
+            .arg("--version")
+            .output()
+        {
             Ok(output) if output.status.success() => Availability::Ready,
             _ => Availability::Unavailable(
                 "coredumpctl was not found, so AETHER1 cannot see crashes on this machine. \
@@ -163,7 +164,7 @@ impl CrashReader for LinuxCrashReader {
 /// crash with no log is still a crash worth showing, so every failure here is an empty tail
 /// rather than an error that loses the crash with it.
 fn journal_tail(program: &str, pid: u32) -> Vec<String> {
-    let by_pid = Command::new("journalctl")
+    let by_pid = crate::paths::quiet_command("journalctl")
         .args([
             "--no-pager",
             "--output=cat",
@@ -180,7 +181,7 @@ fn journal_tail(program: &str, pid: u32) -> Vec<String> {
     }
     // The pid may have left nothing behind -- a program that logged through a parent, or a
     // journal that has already rotated. The program's own unit is the next best thing.
-    Command::new("journalctl")
+    crate::paths::quiet_command("journalctl")
         .args([
             "--no-pager",
             "--output=cat",
@@ -329,7 +330,7 @@ impl CrashReader for WindowsCrashReader {
                process_id = $p[8].Value; message = $_.Message }} }} | \
              ConvertTo-Json -Compress -AsArray"
         );
-        let output = Command::new("powershell")
+        let output = crate::paths::quiet_command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .map_err(|e| format!("could not read the Windows event log: {e}"))?;
@@ -337,7 +338,7 @@ impl CrashReader for WindowsCrashReader {
     }
 
     fn availability(&self) -> Availability {
-        match Command::new("powershell")
+        match crate::paths::quiet_command("powershell")
             .args([
                 "-NoProfile",
                 "-NonInteractive",
@@ -594,7 +595,24 @@ impl Seen {
 /// How often the watcher looks. A crash is not an emergency that needs sub-second notice --
 /// the program is already gone -- and the interval is what keeps an unasked-for watcher
 /// cheap enough to leave on.
-pub const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
+///
+/// Two figures, because a look costs two different things. On Linux `coredumpctl` is a
+/// small C program reading a journal. On Windows it is `powershell -Command Get-WinEvent`,
+/// which starts a .NET runtime, loads the event-log provider and queries the Application
+/// log -- tens of megabytes and the better part of a second, three times a minute, for the
+/// whole time the app is open. That is what an operator sees as memory climbing while
+/// nothing is happening. Two minutes keeps the same promise (a crash is noticed while you
+/// are still looking at the screen it happened on) at a sixth of the cost.
+/// Both figures are compiled everywhere, for the same reason the Windows reader above is:
+/// a number that only exists on the machine it runs on is a number nobody can test.
+pub const POLL_INTERVAL_JOURNAL: std::time::Duration = std::time::Duration::from_secs(20);
+pub const POLL_INTERVAL_EVENT_LOG: std::time::Duration = std::time::Duration::from_secs(120);
+
+pub const POLL_INTERVAL: std::time::Duration = if cfg!(target_os = "windows") {
+    POLL_INTERVAL_EVENT_LOG
+} else {
+    POLL_INTERVAL_JOURNAL
+};
 
 /// The whole watcher: a reader, what it has already said, and where it started watching.
 ///
@@ -714,6 +732,26 @@ pub fn muted_programs(raw: Option<serde_json::Value>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// Reading the Windows event log means starting PowerShell, so the watcher's cost
+    /// there is a different order of magnitude from `coredumpctl`'s. An operator saw it as
+    /// memory climbing while the app sat idle. If anyone ever brings the two intervals back
+    /// together, it should be a decision rather than a tidy-up.
+    #[test]
+    fn the_event_log_is_looked_at_far_less_often_than_the_journal() {
+        assert!(
+            POLL_INTERVAL_EVENT_LOG >= POLL_INTERVAL_JOURNAL * 3,
+            "PowerShell is too expensive to run at journal pace"
+        );
+        assert_eq!(
+            POLL_INTERVAL,
+            if cfg!(target_os = "windows") {
+                POLL_INTERVAL_EVENT_LOG
+            } else {
+                POLL_INTERVAL_JOURNAL
+            }
+        );
+    }
+
     use super::*;
 
     // Real `coredumpctl list --json=short` output, field for field. Two crashes and one

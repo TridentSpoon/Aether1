@@ -225,20 +225,34 @@ pub fn suppress_console_window(cmd: &mut std::process::Command) {
 #[cfg(not(target_os = "windows"))]
 pub fn suppress_console_window(_cmd: &mut std::process::Command) {}
 
+/// A `Command` that has already been told not to flash a console window.
+///
+/// `suppress_console_window` only works if every call site remembers to call it, and on a
+/// machine with no Windows to test on, "remembers" means "nobody noticed for a release".
+/// Aurora1 rev0.261101.276 shipped with the crash watcher running PowerShell every twenty
+/// seconds and the theme probe running it on every window focus, neither suppressed, which
+/// on Windows is a black console window appearing over the HUD several times a minute.
+/// Building the command through here makes the quiet version the one that is easy to write;
+/// `scripts/check_console_windows.sh` makes it the only one.
+pub fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    suppress_console_window(&mut cmd);
+    cmd
+}
+
 /// Opens `path` in the OS's own file manager -- Explorer, Finder, or whichever handler
 /// `xdg-open` resolves to on Linux. Fire-and-forget: this only has to confirm the file
 /// manager *launched*, the same way a desktop icon double-click does not wait around for
 /// the window it opened.
 pub fn open_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     let mut cmd = if cfg!(target_os = "windows") {
-        std::process::Command::new("explorer")
+        quiet_command("explorer")
     } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
+        quiet_command("open")
     } else {
-        std::process::Command::new("xdg-open")
+        quiet_command("xdg-open")
     };
     cmd.arg(path);
-    suppress_console_window(&mut cmd);
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("could not open {}: {e}", path.display()))
