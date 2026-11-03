@@ -18,11 +18,11 @@ fn main() {
 
     println!("cargo:rustc-env=AETHER1_GIT_COMMIT={commit}");
 
-    // Bake in the human-readable "revision" half of the version scheme: the PR number of
-    // the most recently merged pull request reachable from HEAD. This is what turns into
-    // "Rev13" in APP_VERSION (main.rs) -- deliberately not a hand-maintained version
-    // number, since PR merges already happen on every release and a human would inevitably
-    // forget to bump a separate counter.
+    // Bake in the human-readable "revision" half of the version scheme: the *highest* pull
+    // request number reachable from HEAD. This is what turns into "Rev13" in APP_VERSION
+    // (main.rs) -- deliberately not a hand-maintained version number, since PR merges
+    // already happen on every release and a human would inevitably forget to bump a
+    // separate counter.
     //
     // **Two subject shapes count, not one.** This used to look only for GitHub's default
     // merge-commit subject, "Merge pull request #N from ...", which silently misreports the
@@ -30,9 +30,23 @@ fn main() {
     // (#N)", and so is a merge commit given a custom title. Both have happened on this
     // repo, and the symptom is a binary that names an older PR than the code it contains --
     // which is worse than no revision at all, because it is read as proof that a rebuild
-    // did not take. Subjects are scanned newest-first and the first recognisable one wins.
+    // did not take.
+    //
+    // **The highest number wins, not the newest subject.** Taking the newest assumed that
+    // pull requests land in the order they were opened, which held until #238 -- opened
+    // months earlier -- was merged on top of #293. That stamps a tree containing #293 as
+    // revision 238, and because `installs::Version` orders releases on this number alone,
+    // every installed copy reads such a release as *older* than the one it already has and
+    // never offers it. The release is not broken in any way its own tests can see; it is
+    // simply invisible to the updater, which is found weeks later by somebody wondering why
+    // they were never offered an upgrade. The high-water mark cannot move backwards however
+    // a branch is merged, which is the only property the comparison actually needs.
+    //
+    // The window is wide enough that the high-water mark cannot fall out of the bottom of it
+    // during any plausible run of late merges; the cost is one `git log` of a few hundred
+    // subject lines, once, at build time.
     let subjects = Command::new("git")
-        .args(["log", "-60", "--format=%s", "HEAD"])
+        .args(["log", "-400", "--format=%s", "HEAD"])
         .output()
         .ok()
         .filter(|output| output.status.success())
@@ -64,7 +78,10 @@ fn main() {
 
     let pr_rev = subjects
         .lines()
-        .find_map(pr_number)
+        .filter_map(pr_number)
+        .filter_map(|number| number.parse::<u32>().ok())
+        .max()
+        .map(|number| number.to_string())
         .unwrap_or_else(|| "0".to_string());
 
     println!("cargo:rustc-env=AETHER1_PR_REV={pr_rev}");
