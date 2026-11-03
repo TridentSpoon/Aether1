@@ -637,6 +637,27 @@ impl MemoryDb {
         Ok(JsonValue::Object(map))
     }
 
+    /// Which settings have actually been answered: the keys with a row of their own.
+    ///
+    /// **The distinction this restores.** `get_setting_bool(key, default)` collapses two
+    /// quite different machines into one answer -- one where the operator chose this value,
+    /// and one where nobody has ever been asked. The row is the only record of which, and
+    /// every typed accessor above throws it away at the point of reading. So the Settings
+    /// pane renders a declared default indistinguishably from a decision, and because it
+    /// writes every field back on Save, the first Save of anything at all freezes that
+    /// declared value into a real answer. That is the whole mechanism of the fault PR #261
+    /// found in `tools_enabled`, and it will recur for as long as a default and a choice
+    /// look the same on the wire.
+    ///
+    /// This is the fact a caller needs to tell them apart. It is sent alongside the
+    /// settings and never inside them -- see the note in `commands::get_settings`.
+    pub fn answered_settings(&self) -> rusqlite::Result<Vec<String>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare("SELECT key FROM settings ORDER BY key")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
     /// Records a tool call and returns its id. Every call is logged, mutating or not, and
     /// logged *before* it runs -- an action that panics or never returns still leaves a
     /// trace of having been attempted, which is the whole point of having the log.

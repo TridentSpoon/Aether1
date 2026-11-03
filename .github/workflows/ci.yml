@@ -405,6 +405,15 @@ jobs:
       - name: Check every outbound request goes through the egress gate
         run: ./scripts/check_egress_gate.sh
 
+      # The Settings pane declares its own default for every switch and writes every field
+      # back on Save, so a default that disagrees with the one the engine reads is not
+      # cosmetic: the pane shows the operator the opposite of what is happening, and their
+      # first Save of anything at all makes the wrong value real. That is what tools_enabled
+      # did twice (#245, then #261 from the other end), and it was found by driving the
+      # binary rather than by reading, because both halves look correct on their own.
+      - name: Check the Settings pane and the engine share their defaults
+        run: ./scripts/check_setting_defaults.sh
+
       # An argument named snake_case in JavaScript never reaches its Tauri command, and
       # nothing else notices: both halves are individually correct, so the build, clippy
       # and the tests all pass and the panel fails in front of the operator. Two calls in
