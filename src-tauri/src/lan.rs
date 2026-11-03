@@ -29,7 +29,7 @@
 
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -207,7 +207,7 @@ pub fn start(engine: &LlmEngine, managed: &ManagedServer) -> Result<Value, Strin
 
     let binary = std::env::current_exe()
         .map_err(|e| format!("could not find AETHER1's own binary to start a server with: {e}"))?;
-    let child = Command::new(binary)
+    let child = crate::paths::quiet_command(binary)
         .args(["--serve", "--lan"])
         // The child prints the pairing notice and its certificate fingerprint to a terminal
         // that, started from the window, nobody is reading. The pane shows both, so the

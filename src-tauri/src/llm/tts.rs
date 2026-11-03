@@ -172,9 +172,8 @@ fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
          $s.Speak('{escaped_text}'); \
          $s.Dispose();"
     );
-    let mut cmd = Command::new("powershell");
+    let mut cmd = crate::paths::quiet_command("powershell");
     cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
-    crate::paths::suppress_console_window(&mut cmd);
     let output = cmd
         .output()
         .map_err(|e| format!("could not start powershell: {e}"))?;
@@ -196,7 +195,7 @@ fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
         .or_else(|_| which::which("espeak"))
         .map_err(|_| os_status().unwrap_err())?;
 
-    let mut cmd = Command::new(&binary);
+    let mut cmd = crate::paths::quiet_command(&binary);
     cmd.arg("-w").arg(output_path);
     let output = speak_via_subprocess(cmd, text)?;
     if !output.status.success() {
@@ -225,9 +224,8 @@ fn synthesize_os(text: &str, output_path: &Path) -> Result<(), String> {
 /// instead of the better one, and the cost of a wrong "yes" is silence with a tick beside
 /// it, which is the failure this whole module exists to stop.
 fn is_piper_tts(binary: &Path) -> bool {
-    let mut cmd = Command::new(binary);
+    let mut cmd = crate::paths::quiet_command(binary);
     cmd.arg("--help");
-    crate::paths::suppress_console_window(&mut cmd);
     let Ok(output) = cmd.output() else {
         return false;
     };
@@ -421,7 +419,6 @@ pub fn local_status(configured_voice: Option<&str>) -> Result<(PathBuf, PathBuf)
 /// does with the child's exit, instead of only starting to drain after stdin is done.
 fn speak_via_subprocess(mut cmd: Command, text: &str) -> Result<std::process::Output, String> {
     let program = cmd.get_program().to_string_lossy().to_string();
-    crate::paths::suppress_console_window(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -449,7 +446,7 @@ fn synthesize_local(
     text: &str,
     output_path: &Path,
 ) -> Result<(), String> {
-    let mut cmd = Command::new(binary);
+    let mut cmd = crate::paths::quiet_command(binary);
     cmd.arg("--model")
         .arg(voice)
         .arg("--output_file")

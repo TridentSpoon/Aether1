@@ -10,8 +10,6 @@
 // Same shape as crash.rs: the parsing is a free function over the tool's output, so the
 // formats are testable on a machine that has neither systemd nor Windows.
 
-use std::process::Command;
-
 /// How many lines the sweep returns. Long enough to cover a bad morning, short enough to
 /// read and to put in front of a model with a small context.
 const SWEEP_LINES: usize = 60;
@@ -50,7 +48,7 @@ pub fn sweep() -> Result<Vec<Event>, String> {
 
 #[cfg(not(target_os = "windows"))]
 fn linux_sweep() -> Result<Vec<Event>, String> {
-    let output = Command::new("journalctl")
+    let output = crate::paths::quiet_command("journalctl")
         .args([
             "--no-pager",
             "--priority=err",
@@ -80,7 +78,7 @@ fn windows_sweep() -> Result<Vec<Event>, String> {
            '{{0}}  {{1}}: {{2}}' -f $_.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ssK'), \
            $_.ProviderName, ($_.Message -split \"`r?`n\")[0] }}"
     );
-    let output = Command::new("powershell")
+    let output = crate::paths::quiet_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .map_err(|e| format!("could not read the Windows event log: {e}"))?;

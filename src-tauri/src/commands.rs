@@ -523,7 +523,7 @@ pub fn start_local_server_tracked(engine: &LlmEngine) -> (Value, Option<std::pro
     floor rather than the largest window the machine could hold. */
     let num_ctx = crate::local_server::server_context_tokens();
 
-    let mut command = std::process::Command::new(&server.binary);
+    let mut command = crate::paths::quiet_command(&server.binary);
     command.args(server.args);
     // Only Ollama has a variable for this. LM Studio takes a model's context from that
     // model's own load settings, so there is nothing to set here and nothing is pretended.
@@ -2217,7 +2217,7 @@ fn code_approved_git_push(engine: &LlmEngine, args: &[String]) -> Result<String,
         return Err("One-time push approval supports `git push [--set-upstream] [remote] branch`; force, delete, mirror, and arbitrary refspec options are refused.".to_string());
     }
     let root = crate::code_workspace::root(engine.db())?;
-    let mut child = std::process::Command::new("git")
+    let mut child = crate::paths::quiet_command("git")
         .current_dir(&root)
         .args(["push"])
         .args(args)

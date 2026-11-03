@@ -1097,7 +1097,7 @@ fn play_audio(path: &Path, device: &str) -> Result<(), String> {
         let Ok(binary) = which::which(player) else {
             continue;
         };
-        let mut command = std::process::Command::new(binary);
+        let mut command = crate::paths::quiet_command(binary);
         if let Some((key, value)) = &env {
             command.env(key, value);
         }

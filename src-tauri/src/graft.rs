@@ -13,7 +13,7 @@
 use crate::llm::MemoryDb;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// Path setting for the project chosen before there was more than one. Read only to carry
@@ -224,14 +224,13 @@ fn run_graft(
     args: &[&str],
     timeout: Duration,
 ) -> Result<std::process::Output, String> {
-    let mut command = Command::new(graft_program());
+    let mut command = crate::paths::quiet_command(graft_program());
     command
         .args(args)
         .current_dir(project_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::paths::suppress_console_window(&mut command);
 
     let mut child = command.spawn().map_err(|e| {
         format!(

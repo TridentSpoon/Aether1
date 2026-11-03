@@ -72,12 +72,54 @@ impl DesktopTheme {
     }
 }
 
-/// Asks this machine what the desktop looks like.
+/// How long one answer stands for before the desktop is asked again.
 ///
-/// Not cached. The whole point is that it is re-read when the desktop changes, and the cost
-/// is one short-lived process on a path that runs when a window opens or a setting is
-/// toggled, never in a loop.
+/// The probe was written as "one short-lived process when a window opens", and on Linux
+/// that is what it is. On Windows it is PowerShell, which costs tens of megabytes and the
+/// better part of a second to start, and the frontend asks on every `focus` and
+/// `visibilitychange` -- in *each* of the four windows AETHER1 can have open (the HUD, the
+/// sprite, the face and the avatar lab). Clicking between two of them was enough to run
+/// PowerShell repeatedly, which is what an operator saw as the memory graph jumping.
+///
+/// Three seconds is long enough that a flurry of focus events is answered once, and short
+/// enough that the sequence this follows exists for -- change the accent in Windows'
+/// settings, come back to AETHER1 -- still repaints on arrival rather than on a restart.
+const COALESCE_FOR: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Asks this machine what the desktop looks like, or repeats the answer from a moment ago.
+///
+/// See [`COALESCE_FOR`]: the cache is there to collapse a burst of focus events into one
+/// probe, not to hold an answer. Anything slower than a few seconds re-reads as before.
 pub fn read() -> DesktopTheme {
+    static LAST: Cache = std::sync::Mutex::new(None);
+    read_coalesced(&LAST, probe)
+}
+
+/// The cache itself: when the desktop was last asked, and what it said.
+type Cache = std::sync::Mutex<Option<(std::time::Instant, DesktopTheme)>>;
+
+/// Separated from [`read`] so the rule can be tested without a desktop to read: the cache
+/// is passed in, and so is the probe, which the tests make count its own calls.
+fn read_coalesced(cache: &Cache, probe: impl FnOnce() -> DesktopTheme) -> DesktopTheme {
+    // A poisoned lock here would mean a probe panicked, which is worth neither a crash nor
+    // a stale answer: clear it and ask again.
+    let mut last = cache.lock().unwrap_or_else(|e| {
+        let mut guard = e.into_inner();
+        *guard = None;
+        guard
+    });
+    if let Some((at, theme)) = last.as_ref() {
+        if at.elapsed() < COALESCE_FOR {
+            return theme.clone();
+        }
+    }
+    let fresh = probe();
+    *last = Some((std::time::Instant::now(), fresh.clone()));
+    fresh
+}
+
+/// The platform probe itself, with no cache in front of it.
+fn probe() -> DesktopTheme {
     #[cfg(target_os = "windows")]
     {
         read_windows()
@@ -152,7 +194,7 @@ $dwm = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\DWM'
   colorization_color   = $dwm.ColorizationColor
 } | ConvertTo-Json -Compress
 "#;
-    let Ok(output) = std::process::Command::new("powershell")
+    let Ok(output) = crate::paths::quiet_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
         .output()
     else {
@@ -233,7 +275,7 @@ pub(crate) fn parse_windows(json: &str) -> DesktopTheme {
 fn read_linux() -> DesktopTheme {
     // The portal first: it is the cross-desktop answer, and the only one of the three that
     // carries both the colour scheme and the accent.
-    if let Ok(output) = std::process::Command::new("gdbus")
+    if let Ok(output) = crate::paths::quiet_command("gdbus")
         .args([
             "call",
             "--session",
@@ -286,7 +328,7 @@ fn read_linux() -> DesktopTheme {
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn gsettings(schema: &str, key: &str) -> Option<String> {
-    let output = std::process::Command::new("gsettings")
+    let output = crate::paths::quiet_command("gsettings")
         .args(["get", schema, key])
         .output()
         .ok()?;
@@ -510,7 +552,7 @@ fn read_macos() -> DesktopTheme {
 /// `defaults read -g <key>`, where a missing key is an error exit rather than empty output.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn defaults_read(key: &str) -> Option<String> {
-    let output = std::process::Command::new("defaults")
+    let output = crate::paths::quiet_command("defaults")
         .args(["read", "-g", key])
         .output()
         .ok()?;
@@ -596,6 +638,62 @@ fn parse_macos_highlight(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn answer(mode: &str) -> DesktopTheme {
+        DesktopTheme {
+            mode: Some(mode.to_string()),
+            accent: None,
+            source: "test".to_string(),
+            note: String::new(),
+        }
+    }
+
+    /// The fault this exists for: four windows, each re-reading on focus and on
+    /// visibilitychange, ran PowerShell once per event.
+    #[test]
+    fn a_burst_of_focus_events_asks_the_desktop_once() {
+        let cache: Cache = std::sync::Mutex::new(None);
+        let calls = AtomicUsize::new(0);
+        let probe = || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            answer("dark")
+        };
+
+        for _ in 0..8 {
+            assert_eq!(read_coalesced(&cache, probe).mode.as_deref(), Some("dark"));
+        }
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "one probe, not eight");
+    }
+
+    /// And the other half: the cache collapses a burst, it does not hold an answer. An
+    /// entry older than the window is re-read, which is what makes "change the accent in
+    /// Windows, come back" still work.
+    #[test]
+    fn an_answer_older_than_the_window_is_read_again() {
+        let stale = std::time::Instant::now() - (COALESCE_FOR + std::time::Duration::from_secs(1));
+        let cache: Cache = std::sync::Mutex::new(Some((stale, answer("light"))));
+
+        let fresh = read_coalesced(&cache, || answer("dark"));
+
+        assert_eq!(fresh.mode.as_deref(), Some("dark"));
+    }
+
+    /// A probe that panicked must not leave every later read answering from a poisoned
+    /// lock -- or, worse, repeating the answer from before the panic for ever.
+    #[test]
+    fn a_panicking_probe_does_not_wedge_the_cache() {
+        let cache: Cache = std::sync::Mutex::new(None);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            read_coalesced(&cache, || panic!("the probe fell over"));
+        }));
+
+        assert_eq!(
+            read_coalesced(&cache, || answer("dark")).mode.as_deref(),
+            Some("dark")
+        );
+    }
 
     // ---- Windows ----------------------------------------------------------------------
 

@@ -425,3 +425,9 @@ jobs:
       # correctly and answered every question with "plugin:event:listen not allowed by ACL".
       - name: Check every undockable panel window has a capability
         run: ./scripts/check_panel_capability.sh
+
+      # Every job here is Linux, so a process spawned without CREATE_NO_WINDOW is invisible
+      # to all of CI and shows up as a black console window over the HUD on Windows -- which
+      # is how rev0.261101.276 shipped with fifty spawn sites and twelve of them quiet.
+      - name: Check no process is spawned with a console window
+        run: ./scripts/check_console_windows.sh

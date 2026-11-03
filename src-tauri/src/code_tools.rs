@@ -14,7 +14,7 @@
 //! `code_workspace`, which checks the project boundary, edit/run grants, and sandbox before
 //! anything is changed or spawned. The terminal is not used by these tools.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -418,7 +418,7 @@ fn run_gh(db: &MemoryDb, argv: &[String]) -> Result<String, String> {
             .to_string()
     })?;
 
-    let mut command = Command::new(&binary);
+    let mut command = crate::paths::quiet_command(&binary);
     // gh otherwise inherits AETHER1's install directory as its repository context. When
     // the operator has nominated a workspace, make the local checkout the default target;
     // remote-only tasks can still name an explicit OWNER/REPO in the invocation.
