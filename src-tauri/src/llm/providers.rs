@@ -775,11 +775,11 @@ impl<'a> Relay<'a> {
 /// for it on a 16GB card to hold a chat is how a model ends up swapping to CPU and taking
 /// a minute a reply. 16K is comfortably more than a system prompt plus a tool round plus
 /// the history AETHER1 sends, which is the whole requirement.
-const LOCAL_CTX_CEILING: u64 = 16_384;
+const LOCAL_CTX_CEILING: u64 = crate::fit::CTX_CEILING as u64;
 
 /// The floor, for a model that reports something tiny or reports nothing at all. Ollama's
 /// own default is 4096 and that is the number that was overflowing.
-const LOCAL_CTX_FLOOR: u64 = 8_192;
+const LOCAL_CTX_FLOOR: u64 = crate::fit::CTX_FLOOR as u64;
 
 #[derive(Serialize)]
 struct OllamaOptions {
@@ -1000,7 +1000,7 @@ fn ollama_payload(
         options: OllamaOptions {
             temperature: 0.7,
             top_p: 0.9,
-            num_ctx: local_context_window(facts.context_tokens),
+            num_ctx: local_context_window(facts.context_tokens, local_context_room(facts)),
         },
         // From the probe rather than from the caller: `tools` above is decided the same
         // way, off the same cached body, so the two cannot disagree about one model.
@@ -1028,17 +1028,58 @@ fn ollama_url(endpoint: &str) -> String {
     format!("{}/api/chat", endpoint.trim_end_matches('/'))
 }
 
-/// The context size to ask for, from what the model says it was built with.
+/// The context size to ask for: the smallest of what the model was built with, what
+/// AETHER1 will ever ask for, and **what this machine has room for once the weights are
+/// paid for**.
 ///
-/// Clamped at both ends: above, because a long window costs memory that a reply would
-/// rather have (see `LOCAL_CTX_CEILING`); below, because a model reporting a 2048-token
-/// window cannot be given more than it has, and asking for more is how Ollama ends up
-/// refusing or silently truncating.
-pub fn local_context_window(reported: Option<u64>) -> u64 {
-    match reported {
+/// The third of those is the one that was missing, and #249 is what missing it costs. A
+/// 27B at IQ2_XS on a 16GB card was handed a window sized from system memory, the cache did
+/// not fit beside the weights, Ollama moved layers onto the processor, and a greeting took
+/// 167 seconds. Nothing in this function knew the model's size or the card's, so nothing
+/// in it could have refused.
+///
+/// `room` is `fit::plan(...).context` for this model on this machine, and `None` means
+/// *unknown* -- an older server that does not report `details`, or no reading of the
+/// machine -- in which case the first two clamps stand alone, exactly as before. It does
+/// **not** mean "nothing fits": a caller whose plan says nothing fits still has to ask for
+/// something, and `fit::CTX_FLOOR` is what it asks for while the picker says why.
+///
+/// It stays a pure function of its arguments, and stays the *only* place the figure is
+/// decided. That second part is the lesson of #249 rather than a tidiness preference: the
+/// server-wide `OLLAMA_CONTEXT_LENGTH` was a second number deciding the same thing, the
+/// looser of the two won, and `local_server` now asserts it can never exceed this ceiling.
+pub fn local_context_window(reported: Option<u64>, room: Option<u32>) -> u64 {
+    let by_model = match reported {
         Some(limit) if limit > 0 => limit.min(LOCAL_CTX_CEILING).max(limit.min(LOCAL_CTX_FLOOR)),
         _ => LOCAL_CTX_FLOOR,
+    };
+    match room {
+        Some(room) => by_model.min(u64::from(room)),
+        None => by_model,
     }
+}
+
+/// The window this machine has room for, for one model on one local server.
+///
+/// The bridge between the pure arithmetic in `fit` and the two cached probes that feed it,
+/// kept here so `local_context_window` can stay a function of numbers. `None` whenever
+/// anything it needs is missing, which is the value that leaves the old behaviour in place.
+pub fn local_context_room(facts: LocalFacts) -> Option<u32> {
+    crate::fit::plan(facts.model?, this_machine()).context
+}
+
+/// This machine's memory, read once.
+///
+/// Probing the cards costs a syscall sweep and the answer does not change while the program
+/// runs, so it is read on first use and kept. It sits in front of a reply, which is the
+/// same reason every other probe in this file is cached.
+fn this_machine() -> crate::fit::Machine {
+    static MACHINE: std::sync::LazyLock<crate::fit::Machine> =
+        std::sync::LazyLock::new(|| crate::fit::Machine {
+            ram_total_gb: crate::llm::Telemetry::snapshot().ram_total_gb,
+            vram_gb: crate::gpu::dedicated(&crate::gpu::detect()).and_then(|gpu| gpu.vram_gb),
+        });
+    *MACHINE
 }
 
 pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
@@ -1380,10 +1421,20 @@ pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability>
 ///
 /// `None` for either means the server did not say -- an older Ollama, or something else
 /// answering on the port. A missing answer is never filled in with a plausible one.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/* No `Eq`: the model's size is a pair of floating-point figures, and a size is a thing to
+compare approximately or not at all. Nothing compares these for equality outside tests. */
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct LocalFacts {
     pub tools: Option<bool>,
     pub context_tokens: Option<u64>,
+    /// What the weights weigh and how many parameters a token routes through -- the two
+    /// figures `fit` needs to say how much room is left for a window.
+    ///
+    /// Read off the same `/api/show` body as everything else here, for the reason the
+    /// `thinking` note gives: one request, one reader, so two facts about one model cannot
+    /// disagree. `None` for a server too old to report `details`, and then the window is
+    /// clamped by what the model says and nothing else -- exactly what it was before.
+    pub model: Option<crate::fit::Model>,
     /// Whether the model can reason, read off the same `capabilities` list as `tools` and
     /// with the same three answers. Deliberately here rather than probed separately: it is
     /// the same request to the same endpoint, and two readers of one fact are two answers
@@ -1430,6 +1481,7 @@ fn probe_ollama_facts(endpoint: &str, model: &str) -> Option<LocalFacts> {
         tools: capability_of(&body, "tools"),
         thinking: capability_of(&body, "thinking"),
         context_tokens: context_length_of(&body),
+        model: model_size_of(&body, model),
     })
 }
 
@@ -1458,6 +1510,38 @@ pub fn forget_local_facts() {
     if let Ok(mut seen) = NO_NATIVE_TOOLS.lock() {
         seen.clear();
     }
+}
+
+/// How big the model is, out of an `/api/show` body and the name it was asked about: what
+/// it weighs, and how much of it a token actually uses.
+///
+/// Ollama reports `details.parameter_size` ("8.0B", "30.5B") and
+/// `details.quantization_level` ("Q4_K_M"), which multiply out to the weights through the
+/// same table the Hugging Face tab sizes a download with -- so the figure the picker
+/// promised and the figure the window is chosen from come from one place.
+///
+/// The **active** count is not reported at all, and it is the one the cache is sized by.
+/// It lives in the tag instead: `qwen3:30b-a3b` carries its own answer, which is why the
+/// name is read here as well as the body. Costing a 30B-A3B's cache at thirty billion is
+/// the one mistake in this file that would refuse a model that fits comfortably.
+///
+/// `None` unless both halves are there. Half a fit is not a fit, and a window sized from a
+/// weight invented out of a missing quantisation would be worse than the clamp it replaced.
+fn model_size_of(body: &serde_json::Value, name: &str) -> Option<crate::fit::Model> {
+    let details = body.get("details")?.as_object()?;
+    let text = |key: &str| details.get(key).and_then(serde_json::Value::as_str);
+    let (total, active_from_size) = crate::hf::parameters_billions(text("parameter_size")?)?;
+    let mut model =
+        crate::fit::Model::from_quant(total, active_from_size, text("quantization_level")?)?;
+
+    /* `parameter_size` is the whole model and says nothing about routing, so a
+    mixture-of-experts arrives from the body looking dense. The tag is where the `a3b`
+    lives, so read it too and take the smaller of the two answers -- a tag that mentions no
+    routing leaves the body's figure alone. */
+    if let Some((_, from_name)) = crate::hf::parameters_billions(name) {
+        model.active_params_b = model.active_params_b.min(from_name);
+    }
+    Some(model)
 }
 
 /// The context length out of an `/api/show` body.
@@ -1534,6 +1618,47 @@ pub fn loaded_models(provider: Provider, endpoint: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// How much video memory the local server is holding right now, in gigabytes.
+///
+/// The other half of `loaded_models`: which models are resident answers "will this cost a
+/// load", and this answers "will loading it turn something else out". Ollama reports
+/// `size_vram` per resident model on `/api/ps`, which is the figure that matters rather
+/// than `size` -- a model partly on the processor is only occupying the card with the part
+/// that is on it.
+///
+/// Zero when the server does not answer, is not Ollama, or is holding nothing. Zero always
+/// makes a caller *less* cautious, so it is the wrong way to be wrong -- but the
+/// alternative is refusing to answer a question whose answer is usually zero, and the
+/// caller's own `fit::Plan` has already settled whether the model fits the card at all.
+/// Deliberately short-timeout, for the reason `loaded_models` gives.
+pub fn resident_vram_gb(endpoint: &str) -> f64 {
+    let url = format!("{}/api/ps", endpoint.trim_end_matches('/'));
+    let Some(body) = crate::net::get(&url, "the server was not asked what it has loaded")
+        .ok()
+        .and_then(|request| {
+            request
+                .config()
+                .timeout_global(Some(std::time::Duration::from_millis(2500)))
+                .build()
+                .call()
+                .ok()
+        })
+        .and_then(|response| response.into_body().read_json::<Value>().ok())
+    else {
+        return 0.0;
+    };
+    body.get("models")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("size_vram").and_then(Value::as_u64))
+                .map(|bytes| bytes as f64 / 1_000_000_000.0)
+                .sum()
+        })
+        .unwrap_or(0.0)
 }
 
 /// The model a provider answers with when the operator has named none.
@@ -4360,13 +4485,96 @@ mod failure_tests {
     /// 128K model is capped -- a window that size is gigabytes of KV cache.
     #[test]
     fn the_local_context_window_is_clamped_at_both_ends() {
-        assert_eq!(local_context_window(None), LOCAL_CTX_FLOOR);
-        assert_eq!(local_context_window(Some(0)), LOCAL_CTX_FLOOR);
-        assert_eq!(local_context_window(Some(2048)), 2048);
-        assert_eq!(local_context_window(Some(4096)), 4096);
-        assert_eq!(local_context_window(Some(8192)), LOCAL_CTX_FLOOR);
-        assert_eq!(local_context_window(Some(32_768)), LOCAL_CTX_CEILING);
-        assert_eq!(local_context_window(Some(131_072)), LOCAL_CTX_CEILING);
+        // With nothing known about the machine, the clamp is what it always was.
+        assert_eq!(local_context_window(None, None), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(0), None), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(2048), None), 2048);
+        assert_eq!(local_context_window(Some(4096), None), 4096);
+        assert_eq!(local_context_window(Some(8192), None), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(32_768), None), LOCAL_CTX_CEILING);
+        assert_eq!(local_context_window(Some(131_072), None), LOCAL_CTX_CEILING);
+    }
+
+    /// The two numbers a window is chosen from, read off one `/api/show` body and the tag
+    /// it was asked about.
+    #[test]
+    fn a_models_size_comes_off_the_body_and_its_routing_off_the_tag() {
+        let body = serde_json::json!({
+            "details": {"parameter_size": "8.0B", "quantization_level": "Q4_K_M"}
+        });
+        let dense = model_size_of(&body, "qwen3:8b").expect("both halves are there");
+        assert!((dense.weights_gb - 8.0 * 0.62).abs() < 1e-9);
+        assert!((dense.active_params_b - 8.0).abs() < 1e-9);
+
+        let moe_body = serde_json::json!({
+            "details": {"parameter_size": "30.5B", "quantization_level": "Q4_K_M"}
+        });
+        let moe = model_size_of(&moe_body, "qwen3:30b-a3b").expect("both halves are there");
+        assert!(
+            (moe.active_params_b - 3.0).abs() < 1e-9,
+            "the tag said a3b and the body could not have: {moe:?}"
+        );
+        assert!(
+            moe.weights_gb > dense.weights_gb,
+            "it still weighs what it weighs"
+        );
+    }
+
+    #[test]
+    fn half_a_fit_is_no_fit() {
+        // No quantisation reported: nothing to turn a parameter count into gigabytes with.
+        let no_quant = serde_json::json!({"details": {"parameter_size": "8.0B"}});
+        assert_eq!(model_size_of(&no_quant, "qwen3:8b"), None);
+        // No parameter count: nothing to size a cache with.
+        let no_size = serde_json::json!({"details": {"quantization_level": "Q4_K_M"}});
+        assert_eq!(model_size_of(&no_size, "qwen3:8b"), None);
+        // An older server that reports no details at all -- the case the clamp alone
+        // already handled, and still does.
+        assert_eq!(model_size_of(&serde_json::json!({}), "qwen3:8b"), None);
+    }
+
+    /// With no size known, the room is unknown rather than zero -- which is what leaves the
+    /// window exactly where it was before this existed.
+    #[test]
+    fn a_server_that_reports_no_size_leaves_the_window_to_the_old_clamp() {
+        let facts = LocalFacts {
+            tools: Some(true),
+            context_tokens: Some(131_072),
+            thinking: None,
+            model: None,
+        };
+        assert_eq!(local_context_room(facts), None);
+        assert_eq!(
+            local_context_window(facts.context_tokens, local_context_room(facts)),
+            LOCAL_CTX_CEILING
+        );
+    }
+
+    /// The third clamp, and the one #249 did not have.
+    #[test]
+    fn a_window_the_card_has_no_room_for_is_not_asked_for() {
+        // A model built for 128K, on a machine with room for the floor and no more.
+        assert_eq!(
+            local_context_window(Some(131_072), Some(crate::fit::CTX_FLOOR)),
+            LOCAL_CTX_FLOOR,
+            "what the card has room for wins over what the model was built with"
+        );
+        // And it only ever takes away. A machine with room to spare does not get to hand a
+        // 2048-token model a bigger window than it has.
+        assert_eq!(
+            local_context_window(Some(2048), Some(LOCAL_CTX_CEILING as u32)),
+            2048,
+            "room is a ceiling, never a floor"
+        );
+    }
+
+    /// The two modules must agree about the bounds, because they are the same bounds: `fit`
+    /// chooses a window out of them and this function clamps to them, and a disagreement
+    /// would be two numbers deciding one thing again.
+    #[test]
+    fn the_fit_ladder_and_this_clamp_share_their_bounds() {
+        assert_eq!(u64::from(crate::fit::CTX_FLOOR), LOCAL_CTX_FLOOR);
+        assert_eq!(u64::from(crate::fit::CTX_CEILING), LOCAL_CTX_CEILING);
     }
 
     /// `capabilities` present and without "tools" is a real "it cannot"; the field missing

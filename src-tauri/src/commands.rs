@@ -324,7 +324,18 @@ pub fn hf_search(query: String) -> Value {
 }
 
 pub fn hf_quants(repo: String) -> Value {
-    match crate::hf::quants(&repo, this_machine()) {
+    /* Two probes of this machine beyond its memory, both for things the arithmetic cannot
+    know: what the card is called, which is the only thing the speed estimate needs, and
+    what the local server is already holding, which is what turns "it fits" into "it fits
+    as well". The server is asked on loopback, the same address `model_scanner` probes and
+    for the same reason -- this is a question about this machine, and an operator browsing
+    for a model has not necessarily configured a provider yet. */
+    let gpus = crate::gpu::detect();
+    let card = crate::hf::Card {
+        name: crate::gpu::dedicated(&gpus).map(|gpu| gpu.name.as_str()),
+        resident_gb: crate::llm::providers::resident_vram_gb("http://localhost:11434"),
+    };
+    match crate::hf::quants(&repo, this_machine(), card) {
         Ok(quants) => serde_json::json!({"quants": quants}),
         Err(error) => serde_json::json!({"error": error, "quants": []}),
     }

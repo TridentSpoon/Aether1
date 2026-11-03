@@ -40,6 +40,7 @@ mod desktop_theme;
 mod discovery;
 mod doctor;
 mod downloads;
+mod fit;
 mod github_auth;
 mod gpu;
 mod graft;

@@ -482,7 +482,7 @@ mod tests {
     fn the_server_wide_context_does_not_exceed_what_a_request_would_ask_for() {
         let server_wide = u64::from(server_context_tokens());
         assert!(
-            server_wide <= crate::llm::providers::local_context_window(Some(1_000_000)),
+            server_wide <= crate::llm::providers::local_context_window(Some(1_000_000), None),
             "the server-wide default ({server_wide}) must not be larger than the ceiling \
              the per-request path clamps to"
         );
