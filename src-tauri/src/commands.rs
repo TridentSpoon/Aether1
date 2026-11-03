@@ -1531,6 +1531,14 @@ pub fn vault_graph(engine: &LlmEngine) -> crate::vault::reader::Graph {
     crate::vault::reader::graph(engine.db())
 }
 
+/// What a look over the vault found, handed to the operator rather than to the model.
+///
+/// The same review `review_memory` gives the companion. One computation, so the Memories
+/// pane and the companion cannot come to different conclusions about the same vault.
+pub fn vault_review(engine: &LlmEngine) -> crate::vault::curator::Review {
+    crate::vault::curator::review_vault(engine.db())
+}
+
 /// The same search the companion itself uses on the vault, handed to the operator.
 ///
 /// Built into JSON here rather than derived on `search::Hit`, because the hit carries a
