@@ -475,6 +475,7 @@ mod tests {
         assert_eq!(parse("level=1\nstate=sideways\n"), None);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_renderer_is_recognised_by_name_however_it_is_spelled() {
         assert!(is_renderer_process("WebKitWebProcess"));
