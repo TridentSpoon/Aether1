@@ -4,7 +4,7 @@
  * almost nothing about one: a pill in a menu knew its id and its emoji, avatar-lab.js knew
  * its group, app.js knew its structure line, and the backend knew its persona. Four
  * half-lists, none of which could answer "what is this one FOR?" -- the question an operator
- * actually has in front of a grid of twenty-two faces.
+ * actually has in front of a grid of twenty-six faces.
  *
  * This is that answer, and it is the source the Settings avatar browser reads. Deliberately
  * static data with no behaviour: the browser renders it, the backend's persona catalogue
@@ -56,9 +56,10 @@
             name: 'The eXcelsior Class',
             tagline: 'Instruments rather than faces',
             blurb: 'The newest line, and the least humanoid: a mind-scanner, a hovering '
-                + 'chassis, a training room, a clock and a sentry. They are shapes first -- '
-                + 'none of them carries a persona of its own yet, so each one keeps whichever '
-                + 'persona is already selected.',
+                + 'chassis, a training room, a clock, a sentry, an overlay on the glass, an '
+                + 'assembly that takes itself apart, a voice made visible and a shell that is '
+                + 'never all there. They are shapes first -- none of them carries a persona of '
+                + 'its own yet, so each one keeps whichever persona is already selected.',
         },
         {
             id: 'unaligned',
@@ -264,6 +265,54 @@
             who: 'Mutative Autonomous Intrusion Response and Defense. The shell and the lattice '
                 + 'turn against each other and never settle into the same relationship twice. '
                 + 'The rest of this line has eyes; this one has a lens watching the door.',
+            does: 'No persona of its own yet, so it keeps whichever one is selected.',
+        },
+
+        {
+            id: 'valor', label: 'vA1or', emoji: '🛰', group: 'excelsior',
+            structure: 'TACTICAL OPTICS OVERLAY', persona: null,
+            form: 'A tactical grid with a reticle stack and four corner brackets framing it, '
+                + 'and a drifting network of drone nodes wiring itself to whichever '
+                + 'neighbours each node happens to be near.',
+            who: 'Vanguard Assigned for Legacy Operational Response. The first one here that '
+                + 'is not an object standing in space but the overlay painted on the glass '
+                + 'you are looking through, which is why it keeps facing you however far the '
+                + 'view is turned while the drones out beyond it turn with the room.',
+            does: 'No persona of its own yet, so it keeps whichever one is selected.',
+        },
+        {
+            id: 'corvals', label: 'CorvA1s', emoji: '🛠', group: 'excelsior',
+            structure: 'SELF-OPENING PLATED ASSEMBLY', persona: null,
+            form: 'A wireframe heart inside three hoops on crossed axes, inside a shell of '
+                + 'drifting points, wrapped in six plates that open.',
+            who: 'Centralized Operational Routine, Very Adept 1n Service. The only one that '
+                + 'takes itself apart: shut and breathing when idle, and when it is working '
+                + 'the plates travel out, callout leaders snap to anchors in the shell and '
+                + 'dimension lines draw themselves across the gaps.',
+            does: 'No persona of its own yet, so it keeps whichever one is selected.',
+        },
+        {
+            id: 'divinai', label: 'Divinai', emoji: '🔥', group: 'excelsior',
+            structure: 'VOICE-DRIVEN PLASMA CORE', persona: null,
+            form: 'A wireframe plasma core with five loose ribbons turning on their own axes, '
+                + 'two dashed rings counter-turning around them and a warm ember field '
+                + 'behind the lot.',
+            who: 'Direct Interface and Virtually Integrated Network A.I. The first one made of '
+                + 'its own voice rather than decorated by it -- every vertex of the core and '
+                + 'the ribbons\' radius along their length are pushed out by their own '
+                + 'frequency band, so the shape is what it is saying.',
+            does: 'No persona of its own yet, so it keeps whichever one is selected.',
+        },
+        {
+            id: 'tithesa1s', label: 'TithesA1s', emoji: '💎', group: 'excelsior',
+            structure: 'PHASING SLICED SHELL', persona: null,
+            form: 'A faceted stone cut into forty horizontal slices, of which only a '
+                + 'travelling band is ever solid, the rest left as the yellow framework '
+                + 'saying where they would have been.',
+            who: 'Terminal Interface for Theoretic Heuristics, Execution System on A1 Service. '
+                + 'The only one that is never entirely there. Thinking narrows the band, '
+                + 'speaking opens it to nearly the whole shell, and listening stops it dead, '
+                + 'half-present.',
             does: 'No persona of its own yet, so it keeps whichever one is selected.',
         },
 
