@@ -144,76 +144,76 @@ pub fn os_status() -> Result<(), String> {
 
 /// Lists installed voices from the platform speech engine. Voice identifiers are passed
 /// only as process arguments to the native synthesizer.
+#[cfg(target_os = "windows")]
 pub fn system_voices() -> Result<Vec<(String, String)>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        let mut cmd = crate::paths::quiet_command("powershell");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $v=$_.VoiceInfo; [Console]::WriteLine($v.Name + \"`t\" + $v.Name) }"]);
-        let out = cmd
-            .output()
-            .map_err(|e| format!("could not list Windows voices: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-        }
-        return Ok(String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|line| {
-                let (id, label) = line.split_once('\t')?;
-                let id = id.trim().to_string();
-                let label = label.trim().to_string();
-                (!id.is_empty()).then_some((id, label))
-            })
-            .collect());
+    let mut cmd = crate::paths::quiet_command("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $v=$_.VoiceInfo; [Console]::WriteLine($v.Name + \"`t\" + $v.Name) }"]);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("could not list Windows voices: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    #[cfg(target_os = "macos")]
-    {
-        let out = crate::paths::quiet_command("/usr/bin/say")
-            .args(["-v", "?"])
-            .output()
-            .map_err(|e| format!("could not list macOS voices: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-        }
-        return Ok(String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                let id = fields.next()?.to_string();
-                let label = fields.collect::<Vec<_>>().join(" ");
-                (!id.is_empty()).then_some((id, label))
-            })
-            .collect());
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (id, label) = line.split_once('\t')?;
+            let id = id.trim().to_string();
+            let label = label.trim().to_string();
+            (!id.is_empty()).then_some((id, label))
+        })
+        .collect())
+}
+
+#[cfg(target_os = "macos")]
+pub fn system_voices() -> Result<Vec<(String, String)>, String> {
+    let out = crate::paths::quiet_command("/usr/bin/say")
+        .args(["-v", "?"])
+        .output()
+        .map_err(|e| format!("could not list macOS voices: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let binary = which::which("espeak-ng")
-            .or_else(|_| which::which("espeak"))
-            .map_err(|_| os_status().unwrap_err())?;
-        let out = crate::paths::quiet_command(binary)
-            .arg("--voices")
-            .output()
-            .map_err(|e| format!("could not list eSpeak NG voices: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-        }
-        return Ok(String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let fields = line.split_whitespace().collect::<Vec<_>>();
-                let id = *fields.get(1)?;
-                let label = fields.get(3..).unwrap_or_default().join(" ");
-                (!id.is_empty()).then_some((
-                    id.to_string(),
-                    if label.is_empty() {
-                        id.to_string()
-                    } else {
-                        format!("{id} — {label}")
-                    },
-                ))
-            })
-            .collect());
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let id = fields.next()?.to_string();
+            let label = fields.collect::<Vec<_>>().join(" ");
+            (!id.is_empty()).then_some((id, label))
+        })
+        .collect())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn system_voices() -> Result<Vec<(String, String)>, String> {
+    let binary = which::which("espeak-ng")
+        .or_else(|_| which::which("espeak"))
+        .map_err(|_| os_status().unwrap_err())?;
+    let out = crate::paths::quiet_command(binary)
+        .arg("--voices")
+        .output()
+        .map_err(|e| format!("could not list eSpeak NG voices: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            let id = *fields.get(1)?;
+            let label = fields.get(3..).unwrap_or_default().join(" ");
+            (!id.is_empty()).then_some((
+                id.to_string(),
+                if label.is_empty() {
+                    id.to_string()
+                } else {
+                    format!("{id} — {label}")
+                },
+            ))
+        })
+        .collect())
 }
 
 /// Speaks through the platform speech engine: SAPI on Windows, `say` on macOS, and the
