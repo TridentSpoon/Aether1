@@ -330,9 +330,9 @@ pub struct VoiceProbe {
     pub auto_speak: bool,
     pub chosen_engine: String,
     pub local_voice: String,
-    /// The Piper failure, or None when Piper and its voice files are both there.
+    /// The optional Piper engine failure, or None when its binary and voice are available.
     pub piper_error: Option<String>,
-    /// The OS voice failure (espeak-ng, or SAPI on Windows), or None when it works.
+    /// The system voice failure (eSpeak NG on Linux, SAPI on Windows, say on macOS).
     pub os_voice_error: Option<String>,
     /// The webview cannot play what the engines produce -- the failure that looks like
     /// nothing at all. Carries the detail of `voice_setup::media_playback_step`.
@@ -486,7 +486,7 @@ pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
         },
         voice: VoiceProbe {
             auto_speak: db.get_setting_bool("auto_speak", true),
-            chosen_engine: settings("tts_engine", "auto"),
+            chosen_engine: settings("tts_engine", "os"),
             local_voice,
             piper_error,
             os_voice_error,
@@ -1297,37 +1297,22 @@ fn judge_voice_out(probe: &VoiceProbe) -> (Verdict, String, Vec<Step>) {
         );
     }
     match (&probe.piper_error, &probe.os_voice_error) {
-        (None, _) => (
+        (None, None) if probe.chosen_engine == "local" => (
             Verdict::Ok,
-            format!(
-                "Piper is installed with its voice files, so speech is local and offline{}.",
-                if probe.local_voice.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", probe.local_voice)
-                }
-            ),
+            format!("The configured local Piper model ({}) is available.", probe.local_voice),
             Vec::new(),
         ),
-        (Some(piper), None) => (
-            Verdict::Degraded,
-            format!(
-                "Piper is not usable ({piper}), so the operating system's own voice is doing \
-                 the speaking. It works and it sounds like a robot."
-            ),
-            vec![Step::say(
-                "Download a Piper voice",
-                "Settings -> Voice & Sound has the catalogue; each voice is about 60 MB and \
-                 stays on this machine.",
-            )],
+        (_, None) => (
+            Verdict::Ok,
+                "The system speech engine is available, so replies can be spoken locally and offline.".to_string(),
+            Vec::new(),
         ),
-        (Some(piper), Some(os_voice)) => (
+        (_, Some(os_voice)) => (
             Verdict::Failed,
-            format!("Nothing can speak. Piper: {piper}. The system voice: {os_voice}"),
+            format!("The system speech engine is unavailable: {os_voice}"),
             vec![Step::say(
-                "Install one speech engine",
-                "Either is enough: a Piper voice from Settings -> Voice & Sound for the good \
-                 one, or your distribution's espeak-ng package for the plain one.",
+                "Install the system speech engine",
+                "On Linux, install your distribution's eSpeak NG package. On Windows or macOS, check the system speech service.",
             )],
         ),
     }
@@ -1539,8 +1524,7 @@ pub enum RepairId {
     StartModelServer,
     /// Download the model the settings name.
     PullConfiguredModel,
-    /// Fetch the Piper voice that is configured and absent -- or the default one, when none
-    /// is configured, since the catalogue is a fixed table either way.
+    /// Fetch a configured Piper voice that is absent, if it is in the reviewed catalogue.
     FetchVoice,
     /// Expire and clear the proposals nobody answered.
     ClearStaleProposals,
@@ -1651,15 +1635,19 @@ pub fn repair_for(id: CheckId, obs: &Observation) -> Option<Repair> {
                     },
                 });
             }
-            if obs.voice.piper_error.is_some() {
+            if obs.voice.chosen_engine == "local"
+                && obs.voice.piper_error.is_some()
+                && !obs.voice.local_voice.trim().is_empty()
+                && !crate::voice_download::catalogue().is_empty()
+            {
                 let voice = default_voice_name(&obs.voice.local_voice);
                 return Some(Repair {
                     id: RepairId::FetchVoice,
                     title: format!("Download the {voice} voice"),
                     detail: format!(
                         "Fetches the two files Piper needs for {voice} (about 60 MB) into \
-                         AETHER1's own voices folder. The name comes from a fixed catalogue, \
-                         so nothing typed anywhere becomes part of a URL."
+                         AETHER1's own voices folder. The name comes from the reviewed \
+                         catalogue, so nothing typed anywhere becomes part of a URL."
                     ),
                     kind: RepairKind::Run,
                 });
@@ -1690,16 +1678,10 @@ pub fn repair_for(id: CheckId, obs: &Observation) -> Option<Repair> {
     }
 }
 
-/// The configured Piper voice, or the one the catalogue leads with when none is set. Named
-/// here rather than inside the repair so the table above stays a pure function.
+/// The configured Piper voice, or no voice when none is set. Named here rather than inside
+/// the repair so the table above stays a pure function; never download a model implicitly.
 fn default_voice_name(configured: &str) -> String {
-    if !configured.trim().is_empty() {
-        return configured.trim().to_string();
-    }
-    crate::voice_download::catalogue()
-        .first()
-        .map(|voice| voice.name.to_string())
-        .unwrap_or_else(|| "en_GB-alba-medium".to_string())
+    configured.trim().to_string()
 }
 
 /// What a repair attempt did, and -- because this is the part that makes it a repair rather
@@ -1878,6 +1860,9 @@ fn run_repair(
         RepairId::FetchVoice => {
             let configured = engine.db().get_setting_string("tts_local_voice", "");
             let voice = default_voice_name(&configured);
+            if voice.is_empty() {
+                return Err("choose a Piper voice in Settings -> Voice & Sound after reviewing its model and dataset terms".to_string());
+            }
             crate::voice_download::start(engine.db(), &voice)
                 .map(|fetch| format!("downloading {} -- {}", fetch.voice, fetch.detail))
         }
@@ -2480,15 +2465,16 @@ mod tests {
     }
 
     #[test]
-    fn no_engine_at_all_fails_and_one_working_engine_only_degrades() {
+    fn system_voice_is_the_expected_working_engine() {
         let mut both = healthy();
         both.voice.piper_error = Some("no piper".to_string());
         both.voice.os_voice_error = Some("no espeak-ng".to_string());
         assert_eq!(verdict(&both, CheckId::VoiceOut), Verdict::Failed);
 
         let mut piper_only = healthy();
-        piper_only.voice.piper_error = Some("no voice files".to_string());
-        assert_eq!(verdict(&piper_only, CheckId::VoiceOut), Verdict::Degraded);
+        piper_only.voice.piper_error = Some("no Piper".to_string());
+        piper_only.voice.os_voice_error = None;
+        assert_eq!(verdict(&piper_only, CheckId::VoiceOut), Verdict::Ok);
     }
 
     #[test]

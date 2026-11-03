@@ -19,12 +19,12 @@ select, input[type="range"] { width: 100%; }
    else. */
 select {
     background: var(--bg-panel-hover); border: 1px solid var(--border-neon); border-radius: 3px;
-    color: var(--text-main); font-family: 'Share Tech Mono', monospace; font-size: 12px; padding: 4px 6px;
+    color: var(--text-main); font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-size: 12px; padding: 4px 6px;
 }
 .lab-readout { font-variant-numeric: tabular-nums; }
 textarea {
     width: 100%; background: var(--bg-panel-hover); border: 1px solid var(--border-neon); border-radius: 3px;
-    color: var(--text-main); font-family: 'Share Tech Mono', monospace; font-size: 11px; padding: 6px;
+    color: var(--text-main); font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-size: 11px; padding: 6px;
 }
 .state-btn.is-on { background: var(--neon-cyan); color: var(--bg-core); border-color: var(--neon-cyan); }
 

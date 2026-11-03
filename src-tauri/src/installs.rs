@@ -639,9 +639,8 @@ pub fn detect(machine: &dyn Machine) -> Vec<Install> {
     }
 
     if let Some(home) = machine.home() {
-        // The user bundle: one binary, one launcher entry, one icon. Piper's and whisper's
-        // files under ~/.local/share are deliberately not in this list -- they are shared
-        // engines that whichever copy survives still uses.
+        // The user bundle: one binary, one launcher entry, one icon. User-installed speech
+        // models and whisper files under ~/.local/share are deliberately not in this list.
         // **The two command names are one install, and have to be reported as one.** The
         // install scripts put the binary at `~/.local/bin/aether1` and hard-link
         // `~/.local/bin/aurora1` to it, so that every subcommand works under either name.

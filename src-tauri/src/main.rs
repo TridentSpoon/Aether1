@@ -16,6 +16,7 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+#![recursion_limit = "256"]
 
 mod agents;
 mod audio_devices;
@@ -1872,6 +1873,27 @@ fn voice_catalogue_rust() -> serde_json::Value {
 }
 
 #[tauri::command(async)]
+fn system_voices_rust() -> serde_json::Value {
+    commands::available_system_voices()
+}
+
+#[tauri::command(async)]
+fn test_system_voice_rust(engine: tauri::State<LlmEngine>, voice: String) -> serde_json::Value {
+    match commands::test_system_voice(&engine, &voice) {
+        Ok((path, mut report)) => {
+            report["path"] = serde_json::json!(path.to_string_lossy());
+            report
+        }
+        Err(report) => report,
+    }
+}
+
+#[tauri::command(async)]
+fn uninstall_managed_piper_rust() -> serde_json::Value {
+    commands::uninstall_managed_piper()
+}
+
+#[tauri::command(async)]
 fn start_graft_install_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::start_graft_install(&engine)
 }
@@ -2996,6 +3018,7 @@ fn announce_crash<R: tauri::Runtime>(
     crash: &watchers::crash::Crash,
     amber: Option<tauri::image::Image<'static>>,
     plain: Option<tauri::image::Image<'static>>,
+    own_renderer: bool,
 ) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         if let Some(amber) = amber {
@@ -3027,7 +3050,7 @@ fn announce_crash<R: tauri::Runtime>(
         .notification()
         .builder()
         .title(crash.headline())
-        .body(if webview::is_renderer_process(&crash.program) {
+        .body(if own_renderer {
             // AETHER1's own window process. Saying "open AETHER1 to look into it" about the
             // thing that draws AETHER1 would be asking the operator to use what just broke.
             "This is AETHER1's own window process. The next launch will start it with the \
@@ -3347,6 +3370,9 @@ fn main() {
             download_status_rust,
             forget_download_rust,
             voice_catalogue_rust,
+            system_voices_rust,
+            test_system_voice_rust,
+            uninstall_managed_piper_rust,
             start_graft_install_rust,
             graft_install_status_rust,
             forget_graft_install_rust,
@@ -3904,6 +3930,8 @@ fn main() {
                         {
                             continue;
                         }
+                        #[cfg(target_os = "linux")]
+                        webview::refresh_own_renderers();
                         let muted = watchers::crash::muted_programs(
                             engine
                                 .db()
@@ -3925,10 +3953,21 @@ fn main() {
                             // The webview's own renderer dying is a crash AETHER1 can do
                             // something about rather than merely report: remembered here,
                             // the next launch starts it on a rung that works.
-                            if webview::is_renderer_process(&crash.program) {
+                            #[cfg(target_os = "linux")]
+                            let own_renderer =
+                                webview::take_own_renderer_crash(crash.pid, &crash.program);
+                            #[cfg(not(target_os = "linux"))]
+                            let own_renderer = false;
+                            if own_renderer {
                                 webview::note_crash();
                             }
-                            announce_crash(&app_handle, &crash, amber.clone(), plain.clone());
+                            announce_crash(
+                                &app_handle,
+                                &crash,
+                                amber.clone(),
+                                plain.clone(),
+                                own_renderer,
+                            );
                         }
                     }
                 });

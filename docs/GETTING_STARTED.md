@@ -195,7 +195,7 @@ Speech is separate from the brain and already works out of the box, using a voic
 built into your operating system. Everything under **Settings → Agent & System → 🗣
 Voice & Sound** is
 optional. The **Offline speech files** box nested in there is for people who have
-installed Piper or Whisper by hand and need to point Aether1 at the files; leaving
+installed a Piper model or Whisper by hand and need to point Aether1 at the files; leaving
 those boxes empty means "find them yourself", which is what you want.
 
 ### If you cannot hear anything
@@ -207,17 +207,15 @@ assuming, and it tells you one thing to do at a time.
 
 It checks two separate things, because either can be broken while the other is fine:
 
-- **Speaking out loud.** If this says the basic voice is being used, everything works —
-  it just sounds robotic, and the steps shown will install Piper if you want it to sound
-  better. If it says nothing can speak, the steps are the fix.
+- **Speaking out loud.** If this says the system voice is being used, everything works.
+  On Linux, the setup steps install eSpeak NG if it is missing. Windows and macOS use their
+  built-in speech engines. An existing Piper model can be configured as an optional voice.
 - **Hearing you.** There is no built-in fallback for listening, so if this one is missing,
   it really is missing, and the steps install it.
 
 Then press **▶ Say something**. This is the important button: it does not check a setting,
 it actually tries to speak, through exactly the same path a reply uses. Underneath it
-lists every voice it tried, in order, and what happened to each — so "Piper: not
-installed, Microsoft's online voice: no network, this computer's own voice: spoke it" tells
-you the whole story at a glance. If you heard it, speech works.
+lists each engine it tried and what happened. If you heard it, speech works.
 
 If you still hear nothing after the test says it spoke, the problem is the sound coming
 out of the computer rather than Aether1: check the system volume and that the right

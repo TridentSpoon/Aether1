@@ -1,12 +1,12 @@
 // The local-only switch.
 //
 // Aether1 can already run without the internet: the model scanner probes loopback ports,
-// Piper speaks, whisper.cpp listens, the vault is a file on disk, and every stylesheet,
+// system speech speaks, whisper.cpp listens, the vault is a file on disk, and every stylesheet,
 // font and script the HUD needs is vendored into the repo. But "runs offline" was an
 // emergent property of what happened to be installed rather than something the operator
 // could switch on and check. Two paths reached out on their own -- speech fell back to
-// Microsoft's Read Aloud service when Piper was missing, and the launch-time update check
-// called GitHub -- and a cloud API key sitting in the environment could quietly promote an
+// Microsoft's Read Aloud service when cloud speech was selected, and the launch-time update
+// check called GitHub -- and a cloud API key sitting in the environment could quietly promote an
 // "offline" install to a cloud one.
 //
 // This module is the switch that makes it a stated mode instead of a hope. When it is on,

@@ -17,9 +17,8 @@
 #     account. macOS will refuse to open it on a double-click; the way in is right-click ->
 #     Open, once, or `xattr -dr com.apple.quarantine /Applications/Aurora1.app`. Same shape
 #     as the unsigned Windows installer, and the same fix: a certificate, when there is one.
-#   * **There is no voice stack in here.** Piper and whisper.cpp are fetched per platform by
-#     the two Linux bundles and the Windows installer, and nothing has ever fetched the macOS
-#     builds of them. Everything else works; speech does not, and says so.
+#   * **Speech recognition is not bundled.** The built-in macOS `say` synthesizer provides
+#     system TTS; whisper.cpp is not packaged for macOS. The app has not been exercised on a Mac.
 #
 # Nothing in AURORA1 has been run on a Mac. The sandbox for AETHER CODE is bubblewrap, which
 # is Linux-only, so a command there refuses itself with a message the same way it does on

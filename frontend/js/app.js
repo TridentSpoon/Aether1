@@ -1156,10 +1156,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
-    /* Both voices, named, because they are two different answers to "what does it sound
-       like": the cloud voice and the Piper model on this machine. Which of the two actually
-       speaks is decided at the moment of speech (see commands::synthesize_speech), and an
-       operator running local-only wants to read the second one. */
+    /* Both optional voice choices, named: the cloud voice and the Piper model on this
+       machine. The system voice remains the default. */
     function avatarVoiceLine(persona) {
         const parts = [];
         if (persona.voice) parts.push(persona.voice);
@@ -1226,6 +1224,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 // the download list in Voice & Sound.
                 label: `${v.name} — ${v.label}${v.installed ? '' : ' (not downloaded)'}`,
             })), persona.default_local_voice, persona.local_voice);
+            if (lists.local.length === 0) {
+                note.textContent = 'Piper models are unavailable until their model and dataset licenses are reviewed. You can still configure a model you have rights to use in Voice & Sound.';
+                local.disabled = true;
+            } else {
+                local.disabled = false;
+            }
         }).catch((e) => {
             console.warn('Could not load the voice lists', e);
             note.textContent = 'The voice lists could not be loaded, so this avatar keeps '
@@ -3087,15 +3091,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const status = IS_TAURI
                 ? await tauriInvoke('voice_status_rust')
                 : await toolsApi('/api/voice/status');
-            // Only speaking has ever had a cloud fallback. Listening is local or it does
-            // not happen -- saying "cloud" there told the operator a missing whisper.cpp
-            // still worked over the network, which was never true. And with local-only
-            // mode on, speaking has no fallback either.
+            // Speech recognition is local or it does not happen -- saying "cloud" there
+            // told the operator a missing whisper.cpp still worked over the network, which
+            // was never true. TTS cloud is an explicit choice only.
             const line = (label, part, hasCloudFallback) => {
                 if (part.local) {
-                    return `<span class="text-emerald-400">✔</span> ${label}: local (${part.binary.split('/').pop()})`;
+                    const engineLabel = label === 'Speaking' && status.tts_engine === 'local'
+                        ? 'local model' : 'system';
+                    return `<span class="text-emerald-400">✔</span> ${label}: ${engineLabel} (${part.binary.split('/').pop()})`;
                 }
-                const state = hasCloudFallback && !status.local_only ? 'cloud' : 'unavailable';
+                const state = hasCloudFallback && !status.local_only && status.tts_engine === 'cloud'
+                    ? 'cloud (explicit)' : 'unavailable';
                 return `<span class="text-amber-400">•</span> ${label}: ${state} — ${part.why}`;
             };
             const missingLocally = !status.speech_out.local || !status.speech_in.local;
@@ -3121,17 +3127,15 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (forcedNote) forcedNote.classList.toggle('hidden', !status.local_only_forced);
 
-            // The engine dropdown above describes a cloud fallback the mode has closed, so
-            // it is reworded rather than left advertising something that cannot happen.
+            // The cloud option is unavailable while local-only is active, so reflect that
+            // in the selector rather than leaving it looking usable.
             const engineSelect = document.getElementById('setting-tts-engine');
             if (engineSelect) {
                 const cloud = engineSelect.querySelector('option[value="cloud"]');
                 if (cloud) cloud.disabled = !!status.local_only;
                 const auto = engineSelect.querySelector('option[value="auto"]');
                 if (auto) {
-                    auto.textContent = status.local_only
-                        ? 'Auto — Piper only while Local only is on'
-                        : 'Auto — local if installed, otherwise cloud';
+                    auto.textContent = 'Automatic — system voice, then an installed local model';
                 }
             }
         } catch (e) {
@@ -7195,8 +7199,7 @@ document.addEventListener('DOMContentLoaded', () => {
      * to a console nobody has open, and the companion simply did not say anything. So
      * the centrepiece here is not the status fields, it is the "Say something" button:
      * it makes a real attempt and reports what every engine said on the way, because
-     * "Piper: not installed. Microsoft's online voice: timed out. Windows Speech:
-     * spoke." is a diagnosis and silence is not.
+     * "Windows Speech: spoke." is a diagnosis and silence is not.
      */
 
     const voiceModal = document.getElementById('voice-modal');
@@ -7211,6 +7214,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnVoiceRecheck = document.getElementById('btn-voice-recheck');
     const btnVoiceTest = document.getElementById('btn-voice-test');
     const btnVoiceEnable = document.getElementById('btn-voice-enable');
+    const systemVoiceSelect = document.getElementById('system-voice-select');
+    const systemVoiceStatus = document.getElementById('system-voice-status');
 
     function setVoiceStatus(text, tone = 'info') {
         if (!voiceWizardStatus) return;
@@ -7284,6 +7289,14 @@ document.addEventListener('DOMContentLoaded', () => {
             voiceListeningSteps.innerHTML = '';
             (advice.listening?.steps || []).forEach((step, i) => voiceListeningSteps.appendChild(renderSetupStep(step, i)));
         }
+        const installNote = document.getElementById('voice-system-install');
+        if (installNote) {
+            const playbackMissing = advice.speaking?.stage === 'unheard';
+            installNote.classList.toggle('hidden', !playbackMissing);
+            installNote.textContent = playbackMissing
+                ? 'A1 checked audio playback too: required GStreamer decoders are missing. Follow the install step above, then restart A1 and check again.'
+                : '';
+        }
 
         // Replies not being spoken at all is the one fault here Aether1 can fix itself,
         // so it offers to rather than describing a checkbox somewhere else.
@@ -7292,7 +7305,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (advice.auto_speak === false) {
             setVoiceStatus('Everything below is switched off until speaking is turned back on.', 'info');
         } else if (advice.local_only && advice.chosen_engine === 'cloud') {
-            setVoiceStatus('Local-only mode is on, so the cloud voice you picked is being overruled -- Piper or nothing.', 'info');
+            setVoiceStatus('Local-only mode is on, so the cloud voice is overruled by this computer’s system voice.', 'info');
         } else {
             setVoiceStatus('');
         }
@@ -7306,6 +7319,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Not awaited: the verdict above is the answer somebody opened this for, and
             // it should not wait on a list of optional extras to appear underneath it.
             renderVoiceCatalogue(advice).catch(() => null);
+            refreshSystemVoices().catch(() => null);
             return advice;
         } catch (e) {
             if (voiceHeadline) voiceHeadline.textContent = 'Could not check this computer.';
@@ -7377,6 +7391,113 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function refreshSystemVoices() {
+        if (!systemVoiceSelect) return;
+        const data = IS_TAURI
+            ? await tauriInvoke('system_voices_rust')
+            : await (async () => {
+                const response = await apiFetch('/api/voice/voices');
+                if (!response.ok) throw new Error(`voice list failed: ${response.status}`);
+                return response.json();
+            })();
+        const previous = systemVoiceSelect.value || document.getElementById('setting-tts-system-voice')?.value || '';
+        systemVoiceSelect.innerHTML = '';
+        for (const voice of data.voices || []) {
+            const option = document.createElement('option');
+            option.value = voice.id;
+            option.textContent = voice.label || voice.id;
+            systemVoiceSelect.appendChild(option);
+        }
+        if (previous && [...systemVoiceSelect.options].some(option => option.value === previous)) {
+            systemVoiceSelect.value = previous;
+        }
+        const usable = systemVoiceSelect.options.length > 0;
+        systemVoiceSelect.disabled = !usable;
+        document.getElementById('btn-system-voice-preview')?.toggleAttribute('disabled', !usable);
+        document.getElementById('btn-system-voice-save')?.toggleAttribute('disabled', !usable);
+        if (systemVoiceStatus) systemVoiceStatus.textContent = usable
+            ? `${systemVoiceSelect.options.length} installed system voice${systemVoiceSelect.options.length === 1 ? '' : 's'} found.`
+            : (data.why || 'No system voices found. Install or enable the system speech engine, then check again.');
+    }
+
+    async function previewSystemVoice() {
+        const voice = systemVoiceSelect?.value;
+        if (!voice) return;
+        const button = document.getElementById('btn-system-voice-preview');
+        if (button) button.disabled = true;
+        setVoiceStatus('Previewing selected system voice...', 'busy');
+        try {
+            let report, url;
+            if (IS_TAURI) {
+                report = await tauriInvoke('test_system_voice_rust', { voice });
+                if (report.path) url = window.__TAURI__.core.convertFileSrc(report.path);
+            } else {
+                const response = await apiFetch('/api/voice/test-system', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice }),
+                });
+                if (!response.ok) throw new Error(`voice preview failed: ${response.status}`);
+                report = await response.json();
+                if (report.audio_url) url = API_BASE + report.audio_url;
+            }
+            renderVoiceAttempts(report.attempts);
+            if (!report.ok || !url) throw new Error(report.why || 'The selected voice could not produce audio.');
+            await voiceEngine.playTTSAudio(url);
+            setVoiceStatus(`Previewed ${systemVoiceSelect.selectedOptions[0]?.textContent || voice}.`, 'good');
+        } catch (error) {
+            setVoiceStatus(`Preview failed: ${error.message || error}`, 'bad');
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    async function saveSystemVoice() {
+        const voice = systemVoiceSelect?.value;
+        if (!voice) return;
+        try {
+            const voices = await (IS_TAURI
+                ? tauriInvoke('system_voices_rust')
+                : (await apiFetch('/api/voice/voices')).json());
+            if (!(voices.voices || []).some(item => item.id === voice)) {
+                throw new Error('That voice is no longer available. Refresh the list and select an installed voice.');
+            }
+            const advice = await fetchVoiceAdvice();
+            if (advice.speaking?.stage === 'unheard') {
+                throw new Error('Audio playback dependencies are missing. Follow the decoder install step above, restart A1, then activate the voice.');
+            }
+            document.getElementById('setting-tts-system-voice').value = voice;
+            document.getElementById('setting-tts-engine').value = 'os';
+            await saveSettings(false);
+            setVoiceStatus(`System speech is active with ${systemVoiceSelect.selectedOptions[0]?.textContent || voice}.`, 'good');
+            await refreshVoiceAdvice();
+        } catch (error) {
+            setVoiceStatus(`Could not activate this voice: ${error.message || error}`, 'bad');
+        }
+    }
+
+    async function uninstallManagedPiper() {
+        if (!window.confirm('Remove Piper only if it was installed in A1’s private Python environment? A1 will switch to system speech; voice model files will be kept.')) return;
+        const button = document.getElementById('btn-piper-uninstall');
+        if (button) button.disabled = true;
+        try {
+            const result = IS_TAURI
+                ? await tauriInvoke('uninstall_managed_piper_rust')
+                : await (async () => {
+                    const response = await apiFetch('/api/voice/piper/uninstall', { method: 'POST' });
+                    if (!response.ok) throw new Error(`Piper removal failed: ${response.status}`);
+                    return response.json();
+                })();
+            if (!result.ok) throw new Error(result.message || 'Piper could not be removed.');
+            document.getElementById('setting-tts-engine').value = 'os';
+            await saveSettings(false);
+            setVoiceStatus(result.message, 'good');
+            await refreshVoiceAdvice();
+        } catch (error) {
+            setVoiceStatus(error.message || `${error}`, 'bad');
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
     /* Turning speaking back on. Saved through the ordinary settings path so the checkbox
        in Settings and this button can never disagree about what is stored. */
     async function handleVoiceEnable() {
@@ -7397,13 +7518,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Picking a voice.                                                     */
+    /* Optional Piper voice catalogue. Downloads remain disabled until rights review. */
     /*                                                                      */
-    /* Only the voice file is fetched here, never the engine: a .onnx is    */
-    /* numbers handed to a program the operator installed themselves, so a  */
-    /* bad one costs garbled speech. Downloading the engine would be        */
-    /* downloading something that runs, which is a different risk and is    */
-    /* deliberately left to the package manager in the steps above.         */
+    /* Voice files have separate dataset rights from Piper's engine. The   */
+    /* built-in list stays empty until each model and dataset is reviewed.  */
 
     const voicePicker = document.getElementById('voice-picker');
     const voicePickerNote = document.getElementById('voice-picker-note');
@@ -7475,7 +7593,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return row;
     }
 
-    /* The catalogue. `local_only` is asked of the advice rather than guessed at, and the
+    /* The reviewed catalogue. `local_only` is asked of the advice rather than guessed at, and the
        buttons go dead with a reason beside them -- a button that silently refuses is how
        someone ends up thinking the app is broken rather than doing as it was told. */
     async function renderVoiceCatalogue(advice) {
@@ -7483,7 +7601,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const data = await fetchVoiceCatalogue().catch(() => null);
         const voices = (data && data.voices) || [];
-        if (!voices.length) { voicePicker.classList.add('hidden'); return; }
+        if (!voices.length) {
+            if (voicePickerNote) voicePickerNote.textContent =
+                'Choose an installed system voice above. Piper downloads are paused until each model and dataset license is reviewed; existing models can still be configured in Settings.';
+            voicePicker.classList.remove('hidden');
+            voicePickerList.innerHTML = '';
+            if (voicePickerDownloads) voicePickerDownloads.innerHTML = '';
+            return;
+        }
 
         const downloadable = !(advice && advice.local_only);
         if (voicePickerNote) {
@@ -7617,6 +7742,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-voice-setup')?.addEventListener('click', openVoiceWizard);
     if (btnVoiceRecheck) btnVoiceRecheck.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshVoiceAdvice(); });
     if (btnVoiceTest) btnVoiceTest.addEventListener('click', handleVoiceTest);
+    document.getElementById('btn-system-voice-preview')?.addEventListener('click', previewSystemVoice);
+    document.getElementById('btn-system-voice-save')?.addEventListener('click', saveSystemVoice);
+    document.getElementById('btn-piper-uninstall')?.addEventListener('click', uninstallManagedPiper);
     if (btnVoiceEnable) btnVoiceEnable.addEventListener('click', handleVoiceEnable);
     document.getElementById('btn-close-voice')?.addEventListener('click', () => {
         voiceModal.classList.add('hidden');
@@ -7634,7 +7762,7 @@ document.addEventListener('DOMContentLoaded', () => {
      *
      * Two tabs, because the pane answers two questions and they had been stirred
      * together into one column of fields. Voices is *which voice it speaks in*: the
-     * fixed Piper catalogue, with a detail panel instead of a row of download buttons.
+     * Piper model list, with a detail panel instead of a row of download buttons.
      * Devices is *which speaker and which microphone*, which the app had never asked
      * about at all -- it used whatever the system handed it, which on a desk with a
      * headset, an interface and an HDMI monitor is a coin toss, and the symptom is
@@ -13007,7 +13135,8 @@ document.addEventListener('DOMContentLoaded', () => {
             showPersonaSpeciality();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
-            document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
+            document.getElementById('setting-tts-engine').value = s.tts_engine || 'os';
+            document.getElementById('setting-tts-system-voice').value = s.tts_system_voice || '';
             // Empty is the normal, working value for these two: it means "find Piper and
             // Whisper yourself". They are here so a machine where that search fails has a
             // way out that isn't editing the database by hand.
@@ -13212,6 +13341,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
                 tts_engine: document.getElementById('setting-tts-engine').value,
+                tts_system_voice: document.getElementById('setting-tts-system-voice').value,
                 tts_local_voice: document.getElementById('setting-tts-local-voice').value.trim(),
                 stt_model_path: document.getElementById('setting-stt-model').value.trim(),
                 // Falls back rather than saving an empty language: transcribe_audio passes

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Builds the *slim* Linux install bundle: just the release binary, the desktop launcher,
-# and an install script -- no Piper, no whisper.cpp, no models. Counterpart to
-# package_offline_linux.sh, which bundles everything including those; this one instead has
-# install-slim-linux.sh pip-install Piper (piper-tts) and Whisper (faster-whisper) on the
-# target machine, trading "works with the network unplugged" for a much smaller download.
+# and an install script -- no whisper.cpp or models. Counterpart to
+# package_offline_linux.sh, which bundles local speech recognition; this one instead has
+# install-slim-linux.sh install eSpeak NG through the distro and faster-whisper via pip on
+# the target machine, trading "works with the network unplugged" for a much smaller download.
 #
 # Usage: ./scripts/package_slim_linux.sh [output-dir]
 #
@@ -36,9 +36,9 @@ cp desktop/icons/icon.png "$STAGE/share/icons/aether1.png"
 
 cp scripts/install_slim_linux.sh "$STAGE/install-slim-linux.sh"
 chmod +x "$STAGE/install-slim-linux.sh"
-# No THIRD_PARTY_NOTICES.md here (unlike the offline bundle) -- this bundle doesn't
-# actually contain Piper, whisper.cpp, or espeak-ng; install-slim-linux.sh fetches them
-# separately via pip and the system package manager, each under its own license as always.
+# No THIRD_PARTY_NOTICES.md here (unlike the offline bundle) -- this bundle contains no
+# third-party runtime binaries; install-slim-linux.sh obtains eSpeak NG from the distro and
+# faster-whisper via pip, each under its own license.
 
 mkdir -p "$OUT_DIR"
 BUNDLE="$OUT_DIR/aurora1-slim-linux-x86_64.tar.gz"

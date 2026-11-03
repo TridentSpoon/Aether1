@@ -162,7 +162,7 @@ fn write(db: &MemoryDb, map: &BTreeMap<String, Choice>) -> Result<(), String> {
         .map_err(|why| format!("could not save the voice choice: {why}"))
 }
 
-/// The two pickers, for the HUD: the cloud voices, and the Piper voices with whether each
+/// The two pickers, for the HUD: the cloud voices, and the optional Piper voices with whether each
 /// one is actually on this machine. A Piper voice that has not been downloaded is still
 /// listed -- it is a real choice, it just needs fetching first, and hiding it would make the
 /// avatar's picker disagree with the download list two panes away.

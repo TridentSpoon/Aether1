@@ -79,92 +79,11 @@ pub struct Voice {
 /// HUD sends is looked up here and the URL is built from what this table says; a name that
 /// is not in it is refused. Nothing the operator or the page can type becomes part of a URL
 /// or a file path, so there is no request to redirect and no directory to traverse out of.
-const CATALOGUE: &[(&str, &str, &str, &str)] = &[
-    (
-        "en_GB-alba-medium",
-        "British, Scottish, female",
-        "about 60 MB",
-        "en/en_GB/alba/medium",
-    ),
-    (
-        "en_GB-alan-medium",
-        "British, English, male",
-        "about 60 MB",
-        "en/en_GB/alan/medium",
-    ),
-    (
-        "en_GB-cori-medium",
-        "British, English, female",
-        "about 60 MB",
-        "en/en_GB/cori/medium",
-    ),
-    (
-        "en_GB-northern_english_male-medium",
-        "British, northern English, male",
-        "about 60 MB",
-        "en/en_GB/northern_english_male/medium",
-    ),
-    (
-        "en_US-amy-medium",
-        "American, female",
-        "about 60 MB",
-        "en/en_US/amy/medium",
-    ),
-    (
-        "en_US-arctic-medium",
-        "American, multi-speaker",
-        "about 60 MB",
-        "en/en_US/arctic/medium",
-    ),
-    (
-        "en_US-hfc_female-medium",
-        "American, female",
-        "about 60 MB",
-        "en/en_US/hfc_female/medium",
-    ),
-    (
-        "en_US-hfc_male-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/hfc_male/medium",
-    ),
-    (
-        "en_US-john-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/john/medium",
-    ),
-    (
-        "en_US-kathleen-medium",
-        "American, female",
-        "about 60 MB",
-        "en/en_US/kathleen/medium",
-    ),
-    (
-        "en_US-lessac-medium",
-        "American, female, clear and neutral",
-        "about 60 MB",
-        "en/en_US/lessac/medium",
-    ),
-    (
-        "en_US-ryan-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/ryan/medium",
-    ),
-    (
-        "en_US-ljspeech-medium",
-        "American, female, expressive",
-        "about 60 MB",
-        "en/en_US/ljspeech/medium",
-    ),
-    (
-        "en_US-norman-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/norman/medium",
-    ),
-];
+/// A voice belongs here only after its model card and underlying dataset terms have been
+/// reviewed. Lessac is deliberately absent: its card points to a non-commercial dataset.
+/// The catalogue is currently empty until the remaining cards and training datasets have
+/// been reviewed. Users may still point Piper at a model they are entitled to use.
+const CATALOGUE: &[(&str, &str, &str, &str)] = &[];
 
 fn find(name: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
     CATALOGUE.iter().copied().find(|(n, _, _, _)| *n == name)

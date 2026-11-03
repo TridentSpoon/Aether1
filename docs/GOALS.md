@@ -188,18 +188,15 @@ Built (steps 1–12, 14, 20–35 of [IMPLEMENTATION.md](IMPLEMENTATION.md)):
 - The vault: a folder of markdown notes it primes from, writes back to, searches and
   archives — and a dated note per day holding every conversation, written automatically
   (`vault/`).
-- Speech in and out without the network, given a local engine: Piper for synthesis,
-  whisper.cpp for recognition, hold-Space to talk (`llm/tts.rs`, `llm/stt.rs`).
+- Speech in and out without the network: the platform's system TTS by default (SAPI on
+  Windows, `say` on macOS, and eSpeak NG on Linux), whisper.cpp for recognition, hold-Space
+  to talk. Piper remains an optional local engine for user-supplied models
+  (`llm/tts.rs`, `llm/stt.rs`).
 - Cross-platform host telemetry, a model-performance scoreboard built from real requests,
   the theme engine, personas with per-persona voices, identity forging, holographic avatars
   and HUD, tray presence, setup/packaging scripts.
 
 Missing, against the three things above:
-
-- **The good voice is still a manual install.** Piper's binary and its voice files are
-  fetched by hand, from a project whose name collides with an unrelated gaming-mouse app.
-  Step 36 made every failure along that path say what is wrong instead of reporting success
-  and going quiet, but the path itself is still four manual steps.
 - **The hotkey doesn't reach the microphone.** Push-to-talk works while the HUD has focus;
   holding a key to talk from another application needs an OS-level press-and-hold that the
   global-shortcut plugin doesn't express yet.

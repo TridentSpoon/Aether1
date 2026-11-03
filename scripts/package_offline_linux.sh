@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds a self-contained Linux offline-install bundle: the release binary plus Piper (TTS)
-# and whisper.cpp (STT) with a voice and a model already in the box, so the result installs
+# Builds a self-contained Linux offline-install bundle: the release binary plus whisper.cpp
+# (STT) and its speech-recognition model, so the result installs
 # on a machine with no internet access at all -- this script is the only part of the whole
 # offline story that needs a network, and it is meant to be run once, by whoever is cutting
 # a release (a maintainer's machine, or the release.yml GitHub Actions workflow).
@@ -14,8 +14,6 @@
 #
 # Output: <output-dir>/aurora1-offline-linux-x86_64.tar.gz containing:
 #   bin/aether1, bin/whisper-cli
-#   share/piper/runtime/ (piper binary + the shared libraries it needs)
-#   share/piper/voices/<voice>.onnx(.json)
 #   share/whisper/<model>.bin
 #   share/applications/Aether1.desktop, share/icons/aether1.png
 #   install-offline.sh, THIRD_PARTY_NOTICES.md
@@ -36,8 +34,6 @@ trap 'rm -rf "$STAGE"' EXIT
 # v1.9.3, confirmed absent at v1.7.2 (the --target whisper-cli build below fails there with
 # "No rule to make target"). If bumping this ever breaks the same way, check
 # examples/cli/CMakeLists.txt exists at the new ref before assuming something else broke.
-PIPER_VERSION="${PIPER_VERSION:-2023.11.14-2}"
-PIPER_VOICE="${PIPER_VOICE:-en_US-lessac-medium}"
 WHISPER_CPP_REF="${WHISPER_CPP_REF:-v1.9.3}"
 WHISPER_MODEL="${WHISPER_MODEL:-small}"
 
@@ -45,32 +41,15 @@ echo "======================================================================"
 echo "📦 Packaging AETHER1 offline bundle (Linux x86_64)"
 echo "======================================================================"
 
-mkdir -p "$STAGE"/{bin,share/piper/voices,share/whisper,share/applications,share/icons}
+mkdir -p "$STAGE"/{bin,share/whisper,share/applications,share/icons}
 
 echo "🦀 Building the release binary..."
 (cd src-tauri && cargo build --release)
 cp src-tauri/target/release/aether1 "$STAGE/bin/aether1"
 
-echo "🔊 Fetching Piper $PIPER_VERSION (TTS)..."
-curl -fL "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_x86_64.tar.gz" \
-    -o "$STAGE/piper.tar.gz"
-tar -xzf "$STAGE/piper.tar.gz" -C "$STAGE"
-# The release tarball unpacks to a piper/ directory containing the binary plus the shared
-# libraries (onnxruntime, piper_phonemize) it needs at runtime -- those have to travel with
-# it, so the whole directory goes into share/piper/ and only the binary itself is symlinked
-# into bin/ (which is what ends up on PATH).
-mkdir -p "$STAGE/share/piper/runtime"
-mv "$STAGE/piper"/* "$STAGE/share/piper/runtime/"
-rm -f "$STAGE/piper.tar.gz"
-# The real binary stays in share/piper/runtime/ next to the shared libraries it needs at
-# runtime (rpath $ORIGIN expects them there) -- install-offline.sh puts a small wrapper
-# script on PATH instead of the binary itself, so LD_LIBRARY_PATH gets set correctly no
-# matter where this bundle ends up installed.
-
-echo "🔊 Fetching the $PIPER_VOICE voice..."
-VOICE_URL_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
-curl -fL "$VOICE_URL_BASE/${PIPER_VOICE}.onnx" -o "$STAGE/share/piper/voices/${PIPER_VOICE}.onnx"
-curl -fL "$VOICE_URL_BASE/${PIPER_VOICE}.onnx.json" -o "$STAGE/share/piper/voices/${PIPER_VOICE}.onnx.json"
+# Linux has no single built-in speech API shared by distributions. The system voice is
+# eSpeak NG, installed by the slim setup through the distribution package manager. The
+# offline installer cannot install system packages and reports if eSpeak NG is missing.
 
 echo "🎤 Building whisper.cpp $WHISPER_CPP_REF (STT)..."
 git clone --depth 1 --branch "$WHISPER_CPP_REF" https://github.com/ggml-org/whisper.cpp "$STAGE/whisper.cpp-src"
