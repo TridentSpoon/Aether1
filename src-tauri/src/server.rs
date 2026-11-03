@@ -273,6 +273,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/graft/install/status", get(graft_install_status))
         .route("/api/graft/install/forget", post(forget_graft_install))
         .route("/api/voice/download", post(start_voice_download))
+        .route("/api/voice/preview", get(voice_preview))
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
         .route("/api/audio/devices", get(audio_devices))
@@ -1959,6 +1960,39 @@ async fn start_voice_download(
             .await
             .expect("start_voice_download panicked"),
     )
+}
+
+/// One voice's preview clip, as the audio itself rather than as JSON.
+///
+/// The Tauri side hands the page a byte array because IPC is the only channel it has; over
+/// HTTP there is a perfectly good one already, and a hundred kilobytes of MP3 re-encoded as
+/// a JSON array of integers would be three times the size for no gain. The page makes a
+/// blob out of the response either way.
+///
+/// Which of the two kinds of clip this is travels as a header, because the body has to stay
+/// playable audio. The page says it out loud: "spoken here" and "a published recording" are
+/// different claims.
+///
+/// Spawned off the request thread: for an installed voice this runs Piper, and for one that
+/// is not installed it may fetch.
+async fn voice_preview(State(state): State<AppState>, Query(q): Query<VoiceQuery>) -> Response {
+    let engine = state.engine.clone();
+    let voice = q.voice.unwrap_or_default();
+    let made = tokio::task::spawn_blocking(move || crate::voice_preview::preview(&engine, &voice))
+        .await
+        .expect("voice_preview panicked");
+
+    match made {
+        Ok(preview) => Response::builder()
+            .header(header::CONTENT_TYPE, preview.mime)
+            .header("x-aether1-preview-source", preview.source)
+            // Never cached by the browser: an installed voice is re-spoken each press, and
+            // the operator's pronunciation list may have changed since the last one.
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(Body::from(preview.bytes))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+    }
 }
 
 async fn voice_download_status() -> Json<serde_json::Value> {

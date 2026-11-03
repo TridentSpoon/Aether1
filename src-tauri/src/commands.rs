@@ -436,6 +436,19 @@ pub fn start_voice_download(engine: &LlmEngine, voice: String) -> Value {
     }
 }
 
+/// A clip of one catalogue voice, for the play button beside it.
+///
+/// The two sources are not interchangeable and the answer says which one this is: a voice
+/// already on the machine is spoken by Piper here and now, so the clip *is* the voice; one
+/// that is not yet here can only be the project's published recording. See
+/// `voice_preview::preview`.
+pub fn voice_preview(engine: &LlmEngine, voice: String) -> Value {
+    match crate::voice_preview::preview(engine, &voice) {
+        Ok(preview) => serde_json::json!({ "ok": true, "preview": preview }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    }
+}
+
 /// Every voice download this session knows about. Polled about once a second while a bar is
 /// on screen, so it stays a cheap read for the same reason `download_status` does.
 pub fn voice_download_status() -> Value {

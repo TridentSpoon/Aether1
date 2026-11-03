@@ -440,3 +440,12 @@ jobs:
       # is how rev0.261101.276 shipped with fifty spawn sites and twelve of them quiet.
       - name: Check no process is spawned with a console window
         run: ./scripts/check_console_windows.sh
+
+      # The voice catalogue is a claim about somebody else's file server, and nothing in
+      # the crate can check a claim like that. `en_US-kathleen-medium` sat in the table
+      # while Piper only publishes kathleen at `low`, so the Download button produced a
+      # progress bar ending in "http status 404" -- a failure that looks like a broken app.
+      # This asks the Piper project's own index, and now also asks for the preview clip the
+      # picker offers to play. It skips rather than fails when the network is unreachable.
+      - name: Check every offered voice is a voice that exists
+        run: ./scripts/check_voice_catalogue.sh

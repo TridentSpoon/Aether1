@@ -70,6 +70,7 @@ mod terminal;
 mod tools;
 mod vault;
 mod voice_download;
+mod voice_preview;
 mod voice_setup;
 mod watchers;
 mod websearch;
@@ -2528,6 +2529,17 @@ fn speech_clip_rust(
     Ok(serde_json::json!({ "bytes": bytes, "mime": mime }))
 }
 
+/// One voice's preview clip, as bytes, for the play button in the voice picker.
+///
+/// Bytes over IPC rather than a path for exactly the reason `speech_clip_rust` gives: an
+/// `asset://` URL is a different origin, the page routes clips through a
+/// `MediaElementAudioSourceNode`, and WebKit mutes that node outright for anything that
+/// would taint the page's origin -- silence, with nothing in any log to say why.
+#[tauri::command(async)]
+fn voice_preview_rust(engine: tauri::State<LlmEngine>, voice: String) -> serde_json::Value {
+    commands::voice_preview(&engine, voice)
+}
+
 /// Builds (but does not show-if-already-open -- callers check first) the floating "desktop
 /// sprite" window: a small, transparent, undecorated, always-on-top webview showing just the
 /// hologram avatar (frontend/sprite.html reuses the same Three.js avatar code as the main
@@ -3347,6 +3359,7 @@ fn main() {
             download_status_rust,
             forget_download_rust,
             voice_catalogue_rust,
+            voice_preview_rust,
             start_graft_install_rust,
             graft_install_status_rust,
             forget_graft_install_rust,
