@@ -11540,8 +11540,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? ` (${(status.asset_size / 1e9).toFixed(1)} GB)`
                     : '';
                 const lines = [`<div class="text-yellow-400">⬆ ${status.latest_tag} is out; you are running ${status.version}.</div>`];
+                /* What is actually in it, before the Download button rather than behind a link
+                   to a web page. An update replaces a copy that works, and "a newer version
+                   exists" is not enough to decide that on -- least of all here, where the
+                   download is signed but installing it is still the operator's own last step.
+                   The lines are the release's pull request titles (see changes_from_notes in
+                   releases.rs), escaped: they are text GitHub sent us. */
+                if (status.changes && status.changes.length) {
+                    lines.push('<div class="text-[11px] text-slate-400 mt-1">What changed:</div>');
+                    status.changes.forEach((change) => {
+                        lines.push(`<div class="text-[11px] text-slate-300">• ${escapeHtml(change)}</div>`);
+                    });
+                } else {
+                    lines.push('<div class="text-[11px] text-slate-500">That release came with no notes, so there is nothing here saying what changed.</div>');
+                }
                 if (status.release_url) {
-                    lines.push(`<div class="text-[11px]"><a href="${status.release_url}" target="_blank" rel="noreferrer" class="underline text-cyan-300">What changed</a></div>`);
+                    lines.push(`<div class="text-[11px]"><a href="${status.release_url}" target="_blank" rel="noreferrer" class="underline text-cyan-300">Read it on GitHub</a></div>`);
                 }
                 if (!status.asset_name) {
                     lines.push('<div class="text-[11px] text-slate-500">That release has no bundle for this platform attached to it.</div>');

@@ -3087,6 +3087,23 @@ fn run_verify(path: &str) -> Result<String, String> {
 /// `aether1 update`: the comparison, and with `download`, the fetch. Never the install -- see
 /// releases.rs for why half a gigabyte replacing the running app is the operator's own last
 /// step.
+/// The release's change lines as a block to drop into a message, or nothing at all.
+///
+/// Said before the download instruction, not after: the operator is deciding whether to
+/// replace a copy that works, and a list printed under the command they have already run is
+/// a list they read too late. Silent when the release carried no notes -- an empty "What
+/// changed:" heading claims to have answered a question it did not.
+fn changes_block(changes: &[String]) -> String {
+    if changes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\nWhat changed:\n");
+    for change in changes {
+        out.push_str(&format!("  - {change}\n"));
+    }
+    out
+}
+
 fn run_update(download: bool) -> Result<String, String> {
     let mode = crate::releases::mode();
     if mode == crate::releases::Mode::Checkout {
@@ -3097,6 +3114,18 @@ fn run_update(download: bool) -> Result<String, String> {
                 .to_string(),
         );
     }
+    /* The release check is an outbound request, and `net::require_online` refuses one until
+    an entry point has handed the egress gate the settings database. Every other CLI
+    subcommand gets that for free by building an engine; this one needed none, so it asked
+    GitHub without a policy installed and the gate failed closed -- "Aether1 has not loaded
+    its network policy yet ... This is a bug rather than a setting", which it was.
+
+    It was invisible from a checkout, because `Mode::Checkout` returns above before anything
+    reaches the network. So the one shape of install that has a release to update *to* was
+    the only one that could hit it, and `aether1 update` has never worked there. The engine
+    is built for its side effect, which also gets local-only mode honoured here: an operator
+    who has nailed this machine shut is told so, instead of being told to file a bug. */
+    let _engine = crate::build_llm_engine();
     let release =
         crate::releases::latest(crate::UPDATE_REPO, crate::USER_AGENT).map_err(|e| e.message())?;
     let running = crate::APP_VERSION;
@@ -3104,8 +3133,9 @@ fn run_update(download: bool) -> Result<String, String> {
 
     if newer == Some(false) {
         return Ok(format!(
-            "Up to date: running {running}, and {} is the latest release.",
-            release.tag
+            "Up to date: running {running}, and {} is the latest release.{}",
+            release.tag,
+            changes_block(&release.changes)
         ));
     }
     if newer.is_none() {
@@ -3122,10 +3152,12 @@ fn run_update(download: bool) -> Result<String, String> {
             .map(|a| format!(" ({:.1} GB)", a.size as f64 / 1_000_000_000.0))
             .unwrap_or_default();
         return Ok(format!(
-            "{} is out; you are running {running}.\n{}\n\nRun `aether1 update download` to fetch \
-             it{size}. Nothing installs itself: you get a file whose signature has been \
+            "{} is out; you are running {running}.\n{}{}\n\nRun `aether1 update download` to \
+             fetch it{size}. Nothing installs itself: you get a file whose signature has been \
              checked.",
-            release.tag, release.html_url
+            release.tag,
+            changes_block(&release.changes),
+            release.html_url
         ));
     }
 

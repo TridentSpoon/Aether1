@@ -1130,6 +1130,18 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
     };
     serde_json::json!({
         "settings": settings,
+        /* Which of those keys are answers and which are this function's own defaults,
+        alongside the settings for the same reason `os` is: it is a fact about them, not one
+        of them, and inside `settings` it would come home on the next Save and be written as
+        a setting row called "answered".
+
+        The pane needs it because `settings` above is a merge -- stored rows first, then this
+        function's declared defaults filling the gaps -- and once merged the two are
+        indistinguishable. That is what let `tools_enabled` be drawn off while the engine ran
+        with tools on, and then turned off for real by the first Save of anything at all
+        (PR #261). A pane that can see this list can draw a default as a default and leave an
+        unanswered setting unanswered. See `MemoryDb::answered_settings`. */
+        "answered": engine.db().answered_settings().unwrap_or_default(),
         // What is remembered for each provider, so the form can restore a provider's own
         // address, model and key state the moment the dropdown changes rather than on the
         // next page load. See provider_accounts.
@@ -2872,6 +2884,70 @@ mod tests {
             serde_json::Value::Bool(true),
             "the pane would draw the switch off and write that off on the next Save"
         );
+    }
+
+    #[test]
+    fn a_default_is_not_reported_as_something_the_operator_chose() {
+        // The merge in `get_settings` makes a stored row and a declared default look
+        // identical in `settings`, which is what let the pane write a default back as an
+        // answer on the first Save (#261). `answered` is the only thing that tells them
+        // apart, so it has to be exactly the stored keys and nothing else.
+        let engine = resume_engine("answered_provenance");
+        let before = get_settings(&engine);
+        let answered = before["answered"]
+            .as_array()
+            .expect("the envelope carries the answered list");
+        assert!(
+            !answered.iter().any(|k| k == "tools_enabled"),
+            "nothing has chosen tools_enabled yet, but it is in `settings` as a default: \
+             {answered:?}"
+        );
+        assert_eq!(
+            before["settings"]["tools_enabled"],
+            serde_json::Value::Bool(true),
+            "the default still has to be sent, or the pane has nothing to draw"
+        );
+
+        engine
+            .db()
+            .set_setting("tools_enabled", &serde_json::Value::Bool(true))
+            .expect("store the same value the default already had");
+
+        let after = get_settings(&engine);
+        assert!(
+            after["answered"]
+                .as_array()
+                .expect("the answered list")
+                .iter()
+                .any(|k| k == "tools_enabled"),
+            "storing the value is the choice, even when it matches the default -- that is \
+             the distinction the row exists to record"
+        );
+        // And the value itself is unchanged, so this says nothing about what is stored,
+        // only about whether anybody stored it.
+        assert_eq!(
+            after["settings"]["tools_enabled"],
+            before["settings"]["tools_enabled"]
+        );
+    }
+
+    #[test]
+    fn a_stored_setting_is_listed_as_answered_by_its_own_name() {
+        let engine = resume_engine("answered_single");
+        assert!(!engine
+            .db()
+            .answered_settings()
+            .expect("the answered list")
+            .contains(&"agent_name".to_string()));
+        engine
+            .db()
+            .set_setting("agent_name", &serde_json::Value::from("AURORA"))
+            .expect("store a name");
+        assert!(engine
+            .db()
+            .answered_settings()
+            .expect("the answered list")
+            .contains(&"agent_name".to_string()));
     }
 
     /// The whole point of the change. An approved action's output has to come back as a

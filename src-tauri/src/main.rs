@@ -249,6 +249,10 @@ struct UpdateStatus {
     needs_sign_in: bool,
     /// The sign-in was offered once and turned down, and that answer is being kept.
     declined: bool,
+    /// Release mode: what is in the update that is being offered, one plain line each.
+    /// Empty when the check did not conclude or the release carried no notes -- the panel
+    /// then says so rather than implying nothing changed.
+    changes: Vec<String>,
 }
 
 /// Whether this install is in local-only mode. Read through the managed engine so the
@@ -295,6 +299,7 @@ fn base_status() -> UpdateStatus {
         sign_in_available: github_auth::configured(),
         needs_sign_in: false,
         declined: false,
+        changes: Vec::new(),
     }
 }
 
@@ -386,6 +391,11 @@ fn compute_release_status() -> UpdateStatus {
                     .asset
                     .as_ref()
                     .is_some_and(|a| a.signature_id.is_some()),
+                // Carried whichever way the comparison went. An operator who is already up
+                // to date is being told what they have, which is the same list read for a
+                // different reason, and it costs nothing: the notes arrived in the response
+                // that answered the version question.
+                changes: release.changes,
                 ..base_status()
             }
         }
